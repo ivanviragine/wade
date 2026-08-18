@@ -9,9 +9,15 @@ description: >
 
 # Dependency Analysis
 
-Analyze a set of GitHub issues and determine the dependency relationships
-between them. Output a structured file that `wade` will use to generate
-dependency graphs and update issue bodies.
+Analyze a set of tasks (GitHub Issues, or any provider whose task IDs are
+numeric) and determine the dependency relationships between them. Output a
+structured file that `wade` will use to generate dependency graphs and update
+task bodies.
+
+> **Scope:** dependency analysis is **numeric-ID only** — the output contract
+> below (`X -> Y`) and wade's parser accept only digits. Providers with opaque
+> task IDs (e.g. ClickUp, IDs like `abc123`) can't use this skill; link their
+> tasks with an epic instead (see the [task skill](../task/SKILL.md)).
 
 ## When to activate
 
@@ -79,9 +85,15 @@ Rules:
 
 ## Step 3: Confirm completion
 
-After writing the file, tell the user:
-> "Dependency file written to `<path>`. Exit this session so wade can apply
-> the dependencies to the issues."
+After writing the file, end with the shared session-summary block — a compact
+status, not a prose recap. Keep the blank `>` separators so the lines don't
+collapse into one paragraph:
+
+> ✅ Dependency file written to `<path>`
+>
+> ✅ Nothing needs your attention.
+>
+> **Next:** exit this session so wade applies the dependencies to the issues.
 
 ## Rules
 

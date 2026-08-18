@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.49.0] — 2026-08-18
+
+### Features
+
+- standardize WADE session summaries with emoji status and decisive dialog prompts (#444) (4c4d730)
+
+## [v0.48.5] — 2026-08-18
+
+### Documentation
+
+- align installed agent guidance with the plan-driven lifecycle (#442) (d5dbcfc)
+
 ## [v0.48.4] — 2026-08-18
 
 ### Bug Fixes

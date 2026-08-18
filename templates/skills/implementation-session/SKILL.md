@@ -20,15 +20,15 @@ start.
 ## Talking to the user
 
 {user_interaction_prompt}
-- After `done` succeeds: "Session complete — PR updated; exit now. Any further changes first?"
-- If review findings need user input: "Should I address this review finding?"
+- After `done` succeeds (dialog): `Exit now — wade takes over (recommended)` / `Keep editing — I have more changes`.
+- If a review finding needs your call (dialog): `Fix it now (recommended)` / `Skip — open a follow-up issue`.
 
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
-Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
-dependency analysis hooks.
+Using `gh` directly bypasses conventional-title enforcement, the configured
+issue label, and the task-provider abstraction.
 
 {review_enforcement_rule}
 
@@ -109,13 +109,13 @@ hook blocks pushes with no `.wade/done@<sha>` marker (`--no-verify` bypasses it)
 The worktree is **not** deleted (cleaned up after merge). **Mandatory**; if it
 fails, fix the cause, do NOT bypass.
 
-**Step 6 — Present results** (per the **Communication style** rule): the
-actionable handles — PR number/URL, that the issue closes on merge (unless
-`--no-close` was passed to `done`, then it stays open), the branch, and what's
-next (later feedback → `wade review pr-comments <issue>`; status → `wade status
-<issue>`). `done` has succeeded — tell the user plainly that the session is
-complete and to exit now, offering one escape: "any further changes first?" If
-so, apply and repeat Steps 1–6.
+**Step 6 — Present results:** end with the emoji step-status summary (steps:
+`Review · Docs · PR-SUMMARY · Sync · Done`) and its handles — PR number/URL,
+`closes #N on merge` (or `stays open` with `--no-close`), branch. `done` has
+succeeded, so present the exit decision as a **native dialog**: `Exit now — wade
+takes over (recommended)` (later feedback → `wade review pr-comments <issue>`;
+status → `wade status <issue>`) and `Keep editing — I have more changes` → apply
+and repeat Steps 1–6. See @.claude/skills/task/reference/session-summary-format.md.
 
 ## Wade-managed skills
 

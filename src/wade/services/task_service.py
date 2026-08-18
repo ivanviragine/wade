@@ -15,7 +15,16 @@ from crossby.models.ai import ModelBreakdown
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
-from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
+from wade.models.task import (
+    Complexity,
+    Label,
+    LabelType,
+    PlanFile,
+    Task,
+    TaskState,
+    parse_complexity_from_body,
+    parse_complexity_from_labels,
+)
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.ui.console import console
@@ -401,7 +410,11 @@ def create_task(
     """Create a GitHub Issue with the given title, body, and optional extra labels.
 
     The project issue label is always applied.  ``extra_labels`` are applied
-    in addition to it.
+    in addition to it. If ``body`` has a ``## Complexity`` section, a
+    ``complexity:X`` label is applied too (best-effort — failure doesn't fail
+    creation) — unless ``extra_labels`` already carries an explicit
+    ``complexity:X``, which takes precedence so the task never ends up with two
+    mutually exclusive complexity labels.
 
     Raises:
         ConventionalTitleError: If ``title`` is not a conventional-commit title.
@@ -428,10 +441,28 @@ def create_task(
         console.success(f"Created {console.issue_ref(task.id, task.title)}")
         if task.url:
             console.detail(task.url)
-        return task
     except Exception as e:
         console.error(f"Failed to create issue: {e}")
         return None
+
+    # Apply a body-derived complexity label only when the caller didn't pass an
+    # explicit ``complexity:X`` in ``extra_labels``. That explicit label already
+    # rode along in ``labels`` above and takes precedence; adding a second,
+    # body-derived one would leave two mutually exclusive complexity labels on the
+    # task, and provider readers (parse_complexity_from_labels) return the first —
+    # a coin-flip on the model tier a later ``wade implement`` selects.
+    explicit_complexity = parse_complexity_from_labels(
+        [Label(name=name) for name in (extra_labels or [])]
+    )
+    if not explicit_complexity:
+        complexity = parse_complexity_from_body(body)
+        if complexity:
+            try:
+                add_complexity_label(provider, task.id, complexity)
+            except Exception as e:
+                logger.warning("task.complexity_label_failed", task_id=task.id, error=str(e))
+
+    return task
 
 
 def create_interactive(

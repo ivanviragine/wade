@@ -1,11 +1,12 @@
 # Plan File Format
 
-Reference for the `.md` format used by `wade plan` to create issues and draft PRs.
+Reference for the `.md` plan format wade uses to create tasks — via
+`wade task create` (standalone) or `wade plan` (which also opens draft PRs).
 
 ## Structure
 
 ```markdown
-# Concise issue title (max 256 chars)
+# type: concise issue title (max 256 chars)
 
 ## Complexity
 medium
@@ -30,8 +31,8 @@ What to build / change.
 
 | Element | Rule |
 |---------|------|
-| **Title** | First `# Heading` line becomes the GitHub issue title. Required. Max 256 chars (truncated with a warning if exceeded). |
-| **Body** | Everything after the title heading becomes the draft PR plan content. The issue gets a lightweight summary. |
+| **Title** | First `# Heading` line becomes the task title. **Must start with a conventional-commit prefix** (`feat`, `fix`, `docs`, `refactor`, `chore`, `test`, `perf`, `ci`, `build`) followed by `:` and a space — e.g. `feat: add retry logic` — because the PR title derives from it verbatim. `wade task create` enforces this. Required. Max 256 chars (truncated with a warning if exceeded). |
+| **Body** | Everything after the title heading becomes the task body. With standalone `wade task create` it seeds `PLAN.md` when the issue is implemented; with `wade plan` it becomes the draft PR plan content and the issue keeps a lightweight summary. |
 | **Label** | Applied automatically from `.wade.yml` config (`issue_label`). |
 | **Complexity** | `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Required. Applied as a `complexity:X` label on the issue. Used by `wade implement` to auto-select the AI model. |
 | **Token Usage (Planning)** | When issues are created through `wade plan`, wade appends a managed `## Token Usage (Planning)` section to the GitHub issue body. It includes tool, model, token counts, and per-model breakdown rows (when available) — all in a single table. |

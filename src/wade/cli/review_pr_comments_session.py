@@ -88,8 +88,9 @@ def done(
 
         status = get_review_status()
         if status is not None:
-            # include_all_clear only matters when status.is_all_clear is True — the
-            # done()-specific guidance below covers that case, so always suppress it here.
+            # include_all_clear is suppressed because the report-by-exception
+            # guidance below already covers the all-clear reassurance (avoids the
+            # duplicate "nothing to address"/"SESSION COMPLETE" line — #402).
             messages = format_review_status_summary(status, include_all_clear=False)
             for level, message in messages:
                 if level == "success":
@@ -98,18 +99,27 @@ def done(
                     console.warn(message)
                 elif level == "info":
                     console.info(message)
-            if status.is_all_clear:
-                console.info(
-                    "Report by exception: give the PR/URL and what's next, and only call out "
-                    "anything that needs the developer's attention. Suggest they exit the session."
-                )
+            # Emit the summary + exit-decision guidance whether or not the status
+            # is all-clear. Attention items (unresolved threads, changes
+            # requested, pending reviewers, stale coverage) are surfaced in the
+            # summary via the warnings above; the exit dialog still belongs — the
+            # push already happened. (The guidance carries no "SESSION COMPLETE"
+            # all-clear text, so the stale-coverage suppression from #403 holds.)
+            console.info(
+                "Report by exception: end with the emoji step-status summary (Docs, "
+                "PR-SUMMARY, Sync, Done) and its handles — PR number/URL, threads "
+                "resolved/remaining — then present the exit decision as a native dialog "
+                "whose first option is "
+                "'Exit now — reviewers are notified (recommended)'. "
+                "Surface only what needs the developer's attention."
+            )
         else:
             console.warn(
                 "SESSION COMPLETE — push succeeded, but review status could not be verified. "
-                "Report by exception: give the PR/URL and what's next. Recommend checking the "
-                "review status directly on the PR page — easy fix — then ask via the native "
-                'question component with options "Check now (recommended)" first and "Exit" '
-                "second."
+                "Report by exception: end with the emoji step-status summary and its handles "
+                "(PR/URL, threads). Recommend checking the review status directly on the PR "
+                "page — easy fix — then present a native dialog: 'Check now (recommended)' / "
+                "'Exit anyway'."
             )
     raise typer.Exit(0 if success else 1)
 

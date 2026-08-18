@@ -54,7 +54,18 @@ from wade.skills.installer import (
 # minimal length and offset by trimming the "Present results" narration; this bump
 # is the explicit, reviewed adjustment the guard is designed to force, and it
 # still catches *silent* regressions.
-BUDGET_CHARS = 10500
+# Bumped 10500 -> 11000 for #443: the shared `{user_interaction_prompt}` partial
+# gained the standardized session-summary convention — end every session with an
+# emoji step-status summary (✅/⚠️/❌ per step, handles, an explicit attention line,
+# a bold `Next:` action) and make every finite-choice decision a native dialog with
+# a `(recommended)` first option whose labels name the next step (open-ended prompts
+# stay plain text). The detailed legend + worked examples live in the on-demand
+# reference file `task/reference/session-summary-format.md` (NOT budget-counted); only
+# a terse, self-sufficient trigger is inline, and the per-session "Present results"
+# steps were rewritten to the convention. The inline text was trimmed to its minimum
+# first; this bump is the explicit, reviewed adjustment the guard is designed to
+# force, and it still catches *silent* regressions.
+BUDGET_CHARS = 11000
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [
