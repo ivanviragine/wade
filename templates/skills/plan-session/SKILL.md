@@ -10,7 +10,7 @@ description: >
 
 You are in a **planning session** launched by `wade plan`. Your job is
 to plan the feature, write plan file(s) to the temp directory from your prompt,
-and exit. wade creates lightweight GitHub Issues and draft PRs automatically
+and exit. wade creates lightweight tasks and draft PRs automatically
 after you exit.
 
 ## Execution mode
@@ -27,10 +27,13 @@ start.
 - After validation passes (dialog): `Exit now — wade creates the issue(s) & draft PR(s) (recommended)` / `Keep editing — I have changes`.
 - Step 1 ("What would you like to plan?") is the plain-text exception — never a dialog.
 
-## Never use `gh issue create`
+## Planning sessions create no tasks
 
-**NEVER** use `gh issue create` or the GitHub API to create issues directly.
-Always use `wade task create` for interactive issue creation.
+Produce **plan files only**. Do **not** create tasks here — not with
+`gh issue create`, the GitHub API, or `wade task create`. wade creates the
+task(s) and draft PR(s) from your plan files after you exit. Standalone task
+creation is a separate skill (@.claude/skills/task/SKILL.md), used outside
+planning sessions.
 
 {knowledge_step}
 
@@ -77,7 +80,7 @@ creates after you exit is branched from and targeted at that base. See
 
 ## What NOT to do
 
-- Do not create GitHub Issues — wade does this after you exit
+- Do not create tasks/issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
 - Do not write files into the repo directory — only to the temp dir (`wade knowledge add` is **not** available in a planning session)

@@ -27,8 +27,8 @@ start.
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
-Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
-dependency analysis hooks.
+Using `gh` directly bypasses conventional-title enforcement, the configured
+issue label, and the task-provider abstraction.
 
 {review_enforcement_rule}
 
