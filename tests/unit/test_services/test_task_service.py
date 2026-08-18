@@ -333,6 +333,24 @@ class TestCreateTask:
         assert task is not None
         assert task.id == "42"
 
+    def test_explicit_complexity_label_wins_over_body(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """An explicit ``complexity:X`` in extra_labels suppresses the body-derived
+        one, so the task never gets two mutually exclusive complexity labels."""
+        create_task(
+            "feat: it",
+            body="## Complexity\nmedium\n",
+            extra_labels=["complexity:easy"],
+            config=config,
+            provider=mock_provider,
+        )
+        # The explicit label rode along in create_task's labels arg...
+        call_kwargs = mock_provider.create_task.call_args[1]
+        assert "complexity:easy" in call_kwargs["labels"]
+        # ...and no second, body-derived complexity:medium label was added.
+        mock_provider.add_label.assert_not_called()
+
 
 class TestCreateFromPlanFile:
     def test_create_success(
