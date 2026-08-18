@@ -430,7 +430,7 @@ def _merge_pr(
     # wording and default match the stakes.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
         dirty_paths = _get_dirty_file_paths(worktree_path)
-        artifacts = _identify_session_dirty_files(dirty_paths)
+        artifacts = _identify_session_dirty_files(dirty_paths, worktree_path)
         artifact_set = set(artifacts)
         genuine = [p for p in dirty_paths if p not in artifact_set]
 

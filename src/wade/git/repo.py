@@ -424,12 +424,16 @@ def get_dirty_status(path: Path) -> dict[str, int]:
 
 
 def get_dirty_file_paths(cwd: Path) -> list[str]:
-    """Return file paths from ``git status --porcelain``.
+    """Return file paths from ``git status --porcelain --untracked-files=all``.
 
+    ``--untracked-files=all`` forces git to list every file inside an untracked
+    directory individually instead of collapsing it to a single ``dir/`` line —
+    callers classify dirty paths file-by-file (e.g. wade session artifacts vs.
+    genuine user changes) and a collapsed directory defeats that.
     Handles renames (``old -> new``) and quoted paths.
     Returns an empty list on failure (git not available, not a repo, etc.).
     """
-    result = _run_git("status", "--porcelain", cwd=cwd, check=False)
+    result = _run_git("status", "--porcelain", "--untracked-files=all", cwd=cwd, check=False)
     if result.returncode != 0:
         return []
     paths: list[str] = []

@@ -199,7 +199,7 @@ def done(
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
         dirty_paths = _get_dirty_file_paths(cwd)
-        session_files = _identify_session_dirty_files(dirty_paths)
+        session_files = _identify_session_dirty_files(dirty_paths, cwd)
         console.error(f"Working tree is dirty ({detail_str})")
         if session_files:
             console.warn(
