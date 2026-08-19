@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.50.2] — 2026-08-19
+
+### Bug Fixes
+
+- list uncommitted files before the PR-merge "work will be lost" prompt (#454) (932c645)
+
 ## [v0.50.1] — 2026-08-18
 
 ### Chores
