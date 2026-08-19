@@ -27,6 +27,17 @@ def _agy_matcher(worktree_path: Path) -> str:
     return config["crossby-pretooluse"]["PreToolUse"][0]["matcher"]
 
 
+def _cursor_matcher(worktree_path: Path) -> str:
+    """Return the preToolUse matcher crossby wrote into Cursor's hooks.json.
+
+    Cursor is the tool where several canonical names collapse onto one native
+    name, so it — not agy, whose names all stay distinct — is where dedup is
+    observable.
+    """
+    config = json.loads((worktree_path / ".cursor" / "hooks.json").read_text())
+    return config["hooks"]["preToolUse"][0]["matcher"]
+
+
 class TestGuardWriteToolScope:
     """The canonical tool list feeding the guard matcher."""
 
@@ -53,15 +64,16 @@ class TestGuardWriteToolScope:
         assert "write_to_file" in alternatives
         assert "run_command" in alternatives
 
-    def test_matcher_alternatives_are_not_duplicated(self, tmp_path: Path) -> None:
-        """Adding ``MultiEdit`` must not double up a tool that collapses onto another.
+    def test_cursor_matcher_collapses_edit_family_without_duplicating(self, tmp_path: Path) -> None:
+        """Adding ``MultiEdit`` must not double up a name that collapses onto another.
 
-        crossby dedupes when several canonical names map to one native name, so
-        this pins that ``Edit``/``MultiEdit``/``Write`` collapsing (as they do on
-        Cursor) stays a single alternative rather than repeating one.
+        Cursor maps ``Edit``, ``MultiEdit`` and ``Write`` all onto ``Write``, so
+        it is the only tool here where crossby's dedup is observable — agy's
+        names all stay distinct, which would make this assertion vacuous there.
         """
         _install_guard_hooks(tmp_path, guard_type="worktree")
 
-        alternatives = _agy_matcher(tmp_path).split("|")
+        alternatives = _cursor_matcher(tmp_path).split("|")
 
+        assert alternatives.count("Write") == 1
         assert len(alternatives) == len(set(alternatives))
