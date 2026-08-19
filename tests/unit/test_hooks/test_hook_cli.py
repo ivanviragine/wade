@@ -96,8 +96,11 @@ class TestWorktreeGuardCLI:
             "antigravity-cli",
             json.dumps({"tool_name": "Write", "tool_input": {"path": "/etc/passwd"}}),
         )
-        assert r.returncode == 2
-        # DECISION dialect: agy blocks via a top-level {"decision": "deny"}.
+        # DECISION dialect: agy reads the block from the top-level
+        # {"decision": "deny"} body, not the exit code — so the process exits 0
+        # even on a deny (crossby >= 0.24.4; see crossby#147). The decision field,
+        # not the exit code, is the contract.
+        assert r.returncode == 0
         assert json.loads(r.stdout)["decision"] == "deny"
         assert "BLOCKED" in r.stderr
 
@@ -520,8 +523,74 @@ class TestShellGuardCLI:
             "antigravity-cli",
             json.dumps({"toolCall": {"name": "run_command", "args": {"command": "cp a /etc/x"}}}),
         )
-        assert r.returncode == 2
+        # agy signals the block via the decision body, not the exit code (exit 0).
+        assert r.returncode == 0
         assert json.loads(r.stdout)["decision"] == "deny"
+
+
+class TestAntigravityPascalCaseDialect:
+    """Pin the agy PascalCase tool-arg dialect at the wade-hook boundary.
+
+    agy nests tool args under ``toolCall.args`` and names them in PascalCase
+    (``TargetFile``/``CommandLine``), and it reads the guard verdict from a
+    top-level ``{"decision": ...}`` body (never the exit code). Before crossby
+    0.24.4 (crossby#147) those args went unread, so every write/command reached
+    wade's guards as an empty event — denying an agy plan session its own
+    ``PLAN.md`` and silently no-op'ing shell containment. The rest of the unit
+    suite feeds already-normalized events, so these are the only tests that
+    exercise the raw agy arg names; they guard against a dialect regression.
+    """
+
+    def _agy(self, guard: str, payload: dict[str, object]):
+        return _run_lean("pre_tool_use", guard, "antigravity-cli", json.dumps(payload))
+
+    def test_plan_write_targetfile_allowed(self) -> None:
+        # agy's write arg is ``TargetFile`` — a plan-artifact write must be allowed.
+        r = self._agy(
+            "plan",
+            {
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": f"{WT}/.wade/plans/PLAN.md", "CodeContent": "x"},
+                },
+                "stepIdx": 1,
+            },
+        )
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "allow"
+
+    def test_shell_read_commandline_allowed(self) -> None:
+        # agy's shell arg is ``CommandLine`` — a read command must be allowed and
+        # emit an explicit {"decision": "allow"} (a bare {} is read as deny by agy).
+        r = self._agy(
+            "plan",
+            {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": "wade knowledge get --search tools", "Cwd": WT},
+                },
+                "stepIdx": 2,
+            },
+        )
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "allow"
+
+    def test_shell_escape_commandline_denied(self) -> None:
+        # shell_containment must read ``CommandLine`` and block a redirect that
+        # resolves outside the worktree (the A2 gap in crossby#147).
+        r = self._agy(
+            "plan",
+            {
+                "toolCall": {
+                    "name": "run_command",
+                    "args": {"CommandLine": "echo x > /tmp/../etc/escape", "Cwd": WT},
+                },
+                "stepIdx": 3,
+            },
+        )
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "deny"
+        assert "BLOCKED" in r.stderr
 
 
 class TestPerToolDialectsMatchCrossby:
@@ -882,4 +951,7 @@ class TestMemoryAllowlistCLI:
         # another out-of-worktree write for it — denied.
         stdin = json.dumps({"tool_name": "Write", "tool_input": {"path": str(self._mem_target())}})
         r = _run_lean("pre_tool_use", "worktree", "antigravity-cli", stdin)
-        assert r.returncode == 2
+        # agy's DECISION dialect exits 0 for both allow and deny — the block lives
+        # in the {"decision": "deny"} body, so assert that rather than the exit code.
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "deny"
