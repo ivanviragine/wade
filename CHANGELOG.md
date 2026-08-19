@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.50.5] — 2026-08-19
+
+### Bug Fixes
+
+- scope the write guard to MultiEdit so batched edits can't bypass it (#457) (28cbf36)
+
 ## [v0.50.4] — 2026-08-19
 
 ### Chores
