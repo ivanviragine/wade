@@ -24,6 +24,11 @@ from wade.git.repo import GitError
 from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
+from wade.services.implementation_service.bootstrap import (
+    _format_uncommitted_summary,
+    _get_dirty_file_paths,
+    _identify_session_dirty_files,
+)
 from wade.services.implementation_service.cleanup import _preserve_session_data
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.ui import prompts
@@ -418,10 +423,43 @@ def _merge_pr(
     # main-checkout bookkeeping against a linked worktree root (see C2).
     main_root = git_repo.main_checkout_root(repo_root)
 
-    # Warn if the worktree has uncommitted changes before proceeding.
+    # Warn if the worktree has uncommitted changes before proceeding. Classify
+    # the dirty paths into genuine user work vs. regenerable wade session
+    # artifacts (the scaffold `done` re-exposes when it strips the worktree
+    # gitignore block), list every file, then ask an informed confirm whose
+    # wording and default match the stakes.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
-        console.warn("Worktree has uncommitted changes.")
-        if not prompts.confirm("Proceed anyway? Uncommitted work will be lost.", default=False):
+        dirty_paths = _get_dirty_file_paths(worktree_path)
+        artifacts = _identify_session_dirty_files(dirty_paths, worktree_path)
+        artifact_set = set(artifacts)
+        genuine = [p for p in dirty_paths if p not in artifact_set]
+
+        summary = _format_uncommitted_summary(worktree_path)
+        console.warn(f"Worktree has uncommitted changes ({summary}).")
+        if genuine:
+            console.detail("Your uncommitted changes:")
+            for path in genuine:
+                console.detail(f"  {path}", markup=False)
+        if artifacts:
+            console.detail("wade session files (regenerable):")
+            for path in artifacts:
+                console.detail(f"  {path}", markup=False)
+
+        # Default to the safe/regenerable wording (default=Yes) ONLY when we
+        # positively enumerated the dirty tree and every path is regenerable
+        # scaffold. If `git status` reported dirty (is_clean=False) but
+        # `_get_dirty_file_paths` came back empty (a transient git failure returns
+        # `[]`), we cannot vouch that it is all scaffold — fall back to the
+        # conservative fail-closed prompt so an empty list never reads as "safe".
+        if genuine or not dirty_paths:
+            question = "Uncommitted changes will be lost. Proceed with the merge?"
+            default = False
+        else:
+            question = (
+                "Only wade session files are uncommitted (regenerable). Proceed with the merge?"
+            )
+            default = True
+        if not prompts.confirm(question, default=default):
             return MergeStatus.NOT_MERGED
 
     # Guard the main checkout's HEAD state BEFORE the irreversible merge. `gh pr

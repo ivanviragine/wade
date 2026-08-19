@@ -403,8 +403,14 @@ def get_dirty_status(path: Path) -> dict[str, int]:
     """Get detailed dirty working tree status.
 
     Returns a dict with counts for staged, unstaged, and untracked files.
+
+    Uses ``--untracked-files=all`` so an untracked directory contributes one
+    count per file inside it, matching ``get_dirty_file_paths()`` — otherwise
+    a directory collapses to a single line here while the file list expands
+    it, producing a summary count that disagrees with the listed files (e.g.
+    "1 untracked" next to 3 listed files) in the same confirmation prompt.
     """
-    result = _run_git("status", "--porcelain", cwd=path)
+    result = _run_git("status", "--porcelain", "--untracked-files=all", cwd=path)
     staged = 0
     unstaged = 0
     untracked = 0
@@ -424,12 +430,16 @@ def get_dirty_status(path: Path) -> dict[str, int]:
 
 
 def get_dirty_file_paths(cwd: Path) -> list[str]:
-    """Return file paths from ``git status --porcelain``.
+    """Return file paths from ``git status --porcelain --untracked-files=all``.
 
+    ``--untracked-files=all`` forces git to list every file inside an untracked
+    directory individually instead of collapsing it to a single ``dir/`` line —
+    callers classify dirty paths file-by-file (e.g. wade session artifacts vs.
+    genuine user changes) and a collapsed directory defeats that.
     Handles renames (``old -> new``) and quoted paths.
     Returns an empty list on failure (git not available, not a repo, etc.).
     """
-    result = _run_git("status", "--porcelain", cwd=cwd, check=False)
+    result = _run_git("status", "--porcelain", "--untracked-files=all", cwd=cwd, check=False)
     if result.returncode != 0:
         return []
     paths: list[str] = []

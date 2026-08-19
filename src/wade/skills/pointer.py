@@ -72,41 +72,26 @@ def extract_pointer_content(file_path: Path) -> str | None:
     return extract_marker_block(content, MARKER_START, MARKER_END)
 
 
-def remove_pointer(file_path: Path) -> bool:
-    """Remove the pointer block from a file.
+def _content_without_pointer(content: str) -> tuple[str, bool] | None:
+    """Return (*content* with the pointer block removed, is_legacy_format).
 
-    Handles both marker-based and old-style (## Git Workflow) formats.
-    Returns True if the pointer was found and removed.
+    Returns None if no pointer block is found. Handles both marker-based and
+    old-style (bare ``## Git Workflow``) formats — the ``is_legacy_format``
+    flag lets ``remove_pointer()`` keep logging distinct events per format.
+    Shared by ``remove_pointer()`` (which writes the result back) and
+    ``is_pointer_only()`` (which only inspects it).
     """
-    if not file_path.is_file():
-        return False
-
-    content = file_path.read_text(encoding="utf-8")
-    _warn_if_multiple_markers(content, file_path)
-
     # Try marker-based removal (last pair — skip documentation examples)
     end_idx = content.rfind(MARKER_END)
     start_idx = content.rfind(MARKER_START, 0, end_idx) if end_idx != -1 else -1
 
     if start_idx != -1 and end_idx != -1:
-        # Remove the marker block including surrounding blank lines
         before = content[:start_idx].rstrip("\n")
         after = content[end_idx + len(MARKER_END) :].lstrip("\n")
-
         new_content = before
         if after.strip():
             new_content += "\n\n" + after
-        new_content = new_content.rstrip() + "\n" if new_content.strip() else ""
-
-        if not new_content.strip():
-            # File is empty after removal — remove the file
-            file_path.unlink()
-            logger.info("pointer.removed_empty_file", path=str(file_path))
-            return True
-
-        file_path.write_text(new_content, encoding="utf-8")
-        logger.info("pointer.removed", path=str(file_path))
-        return True
+        return (new_content.rstrip() + "\n" if new_content.strip() else "", False)
 
     # Fallback: old-style removal (## Git Workflow to next ## or EOF)
     lines = content.split("\n")
@@ -122,18 +107,60 @@ def remove_pointer(file_path: Path) -> bool:
         if not in_pointer:
             new_lines.append(line)
 
-    if in_pointer or len(new_lines) != len(lines):
-        # Pointer was found and removed
-        new_content = "\n".join(new_lines).rstrip() + "\n"
-        if not new_content.strip():
-            file_path.unlink()
-            logger.info("pointer.removed_empty_file", path=str(file_path))
-        else:
-            file_path.write_text(new_content, encoding="utf-8")
-            logger.info("pointer.removed_legacy", path=str(file_path))
+    if not in_pointer and len(new_lines) == len(lines):
+        return None  # no pointer found
+
+    return ("\n".join(new_lines).rstrip() + "\n", True)
+
+
+def is_pointer_only(file_path: Path) -> bool:
+    """True if a file's content is entirely the wade pointer, nothing else.
+
+    Used to decide whether an untracked ``AGENTS.md``/``CLAUDE.md`` is
+    disposable wade scaffold (safe to treat as a regenerable session
+    artifact) or contains user-authored content added around the pointer,
+    which must be treated as genuine work instead (#454 review).
+    """
+    if file_path.is_symlink() and not file_path.exists():
+        return True  # broken symlink — nothing to preserve
+    if not file_path.is_file():
+        return False
+
+    content = file_path.read_text(encoding="utf-8")
+    _warn_if_multiple_markers(content, file_path)
+    result = _content_without_pointer(content)
+    if result is None:
+        return False  # no pointer found — not wade's file to discard
+    remainder, _ = result
+    return not remainder.strip()
+
+
+def remove_pointer(file_path: Path) -> bool:
+    """Remove the pointer block from a file.
+
+    Handles both marker-based and old-style (## Git Workflow) formats.
+    Returns True if the pointer was found and removed.
+    """
+    if not file_path.is_file():
+        return False
+
+    content = file_path.read_text(encoding="utf-8")
+    _warn_if_multiple_markers(content, file_path)
+
+    result = _content_without_pointer(content)
+    if result is None:
+        return False
+    new_content, is_legacy = result
+
+    if not new_content.strip():
+        # File is empty after removal — remove the file
+        file_path.unlink()
+        logger.info("pointer.removed_empty_file", path=str(file_path))
         return True
 
-    return False
+    file_path.write_text(new_content, encoding="utf-8")
+    logger.info("pointer.removed_legacy" if is_legacy else "pointer.removed", path=str(file_path))
+    return True
 
 
 def write_pointer(file_path: Path) -> None:

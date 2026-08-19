@@ -24,6 +24,7 @@ from wade.models.config import (
 )
 from wade.models.hooks import SessionPhase, StopGuard
 from wade.models.task import Task
+from wade.skills.pointer import is_pointer_only
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
 logger = structlog.get_logger()
@@ -32,6 +33,7 @@ __all__ = [
     "WORKTREE_GITIGNORE_MARKER_END",
     "WORKTREE_GITIGNORE_MARKER_START",
     "_check_tracked_managed_files",
+    "_conditional_worktree_gitignore_entries",
     "_do_suppress_pointer_artifacts",
     "_effective_copy_files",
     "_format_uncommitted_summary",
@@ -78,24 +80,67 @@ def _format_uncommitted_summary(cwd: Path) -> str:
 
 
 def _get_dirty_file_paths(cwd: Path) -> list[str]:
-    """Return file paths from ``git status --porcelain``."""
+    """Return file paths from ``git status --porcelain --untracked-files=all``."""
     return git_repo.get_dirty_file_paths(cwd)
 
 
-def _identify_session_dirty_files(dirty_paths: list[str]) -> list[str]:
+def _conditional_worktree_gitignore_entries(worktree_path: Path) -> list[str]:
+    """Compute the entries ``write_worktree_gitignore()`` adds conditionally.
+
+    Cross-tool symlinks (only when wade created them) and untracked pointer
+    files depend on the target project's state, so they can't live in the
+    static ``get_worktree_gitignore_entries()`` list. Shared by
+    ``write_worktree_gitignore()`` and ``_identify_session_dirty_files()`` so
+    the two never recognize a different set of artifacts.
+    """
+    from wade.skills.installer import CROSS_TOOL_DIRS
+
+    entries: list[str] = []
+
+    for cross_dir in CROSS_TOOL_DIRS:
+        cross_path = worktree_path / cross_dir
+        if cross_path.is_symlink():
+            entries.append(cross_dir)
+
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        target = worktree_path / name
+        if not (target.exists() or target.is_symlink()):
+            continue
+        if git_repo.is_file_tracked(worktree_path, name):
+            continue
+        if is_pointer_only(target):
+            entries.append(name)
+
+    return entries
+
+
+def _identify_session_dirty_files(dirty_paths: list[str], worktree_path: Path) -> list[str]:
     """Return dirty file paths that are wade session artifacts.
 
-    Matches against ``get_worktree_gitignore_entries()`` — the same set
-    of paths the worktree gitignore block hides.
+    Matches against ``get_worktree_gitignore_entries()`` plus
+    ``_conditional_worktree_gitignore_entries()`` — the same set of paths
+    ``write_worktree_gitignore()`` hides, static and conditional alike.
+
+    A name match alone isn't enough: session artifacts are never committed, so
+    a matched path that is tracked in the git index is real content wearing an
+    artifact's name — a staged ``git mv user.txt PLAN.md`` reports only the new
+    path, and a tracked ``.claude/settings.json`` can be genuine repo content —
+    not regenerable scaffold. Excluding tracked matches here sends them through
+    ``genuine`` instead, so the caller falls back to the conservative prompt.
     """
     from wade.skills.installer import get_worktree_gitignore_entries
 
-    entries = get_worktree_gitignore_entries()
+    entries = list(get_worktree_gitignore_entries())
+    entries.extend(_conditional_worktree_gitignore_entries(worktree_path))
     dir_prefixes = [e for e in entries if e.endswith("/")]
     exact_paths = set(e for e in entries if not e.endswith("/"))
 
+    tracked = set(git_repo.list_tracked_files(worktree_path))
+
     matched: list[str] = []
     for path in dirty_paths:
+        if path in tracked:
+            continue
         if path in exact_paths or any(path.startswith(prefix) for prefix in dir_prefixes):
             matched.append(path)
 
@@ -752,23 +797,10 @@ def write_worktree_gitignore(worktree_path: Path) -> None:
     Also adds conditional entries for cross-tool symlinks (only when wade
     created them) and untracked pointer files.
     """
-    from wade.skills.installer import CROSS_TOOL_DIRS, get_worktree_gitignore_entries
+    from wade.skills.installer import get_worktree_gitignore_entries
 
     entries = list(get_worktree_gitignore_entries())
-
-    # Conditional cross-tool symlinks (only if wade created them as symlinks)
-    for cross_dir in CROSS_TOOL_DIRS:
-        cross_path = worktree_path / cross_dir
-        if cross_path.is_symlink():
-            entries.append(cross_dir)
-
-    # Untracked pointer files (replacing broken info/exclude approach)
-    for name in ("AGENTS.md", "CLAUDE.md"):
-        target = worktree_path / name
-        if not (target.exists() or target.is_symlink()):
-            continue
-        if not git_repo.is_file_tracked(worktree_path, name):
-            entries.append(name)
+    entries.extend(_conditional_worktree_gitignore_entries(worktree_path))
 
     block = (
         f"\n{WORKTREE_GITIGNORE_MARKER_START}\n"

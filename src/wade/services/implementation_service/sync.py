@@ -217,7 +217,7 @@ def _sync_preflight(
         )
 
     dirty_paths = _get_dirty_file_paths(cwd)
-    session_files = _identify_session_dirty_files(dirty_paths)
+    session_files = _identify_session_dirty_files(dirty_paths, cwd)
     non_session_paths = [p for p in dirty_paths if p not in set(session_files)]
 
     if not non_session_paths:
