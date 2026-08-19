@@ -226,8 +226,17 @@ def write_plan_md(
 # ``run_command``, Claude/Codex ``Bash`` unchanged), and ``wade-hook`` routes the
 # resulting payload to ``shell_containment`` because crossby deliberately reports
 # ``is_write=False`` for shell tool names.
+#
+# ``MultiEdit`` is the batched-edit counterpart of ``Edit`` and must be listed
+# separately: every tool matcher these compile to is matched **whole**, not by
+# substring, so agy's ``multi_replace_file_content`` is not covered by the
+# ``replace_file_content`` alternative that ``Edit`` produces — omitting it let a
+# batched agy edit through with no hook firing at all. crossby has mapped it
+# since 0.13 (agy ``multi_replace_file_content``, Cursor ``Write`` — deduped
+# against ``Edit``); on Claude/Codex it passes through unchanged and is simply
+# inert if the tool has no such name, which is the cheap side of the trade.
 _GUARD_SHELL_TOOL = "Bash"
-_GUARD_WRITE_TOOLS = ["Edit", "Write", "Delete", "NotebookEdit", _GUARD_SHELL_TOOL]
+_GUARD_WRITE_TOOLS = ["Edit", "MultiEdit", "Write", "Delete", "NotebookEdit", _GUARD_SHELL_TOOL]
 
 # Seconds before a tool abandons the PreToolUse guard. Deliberately short: this
 # runs on every write, and each tool's own default is generous enough (Cursor 60,
@@ -485,8 +494,10 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
 # Canonical write-family tool names the PostToolUse lint feedback fires on. Scoped
 # to file-write tools (not Bash: a shell call has no path to lint; not Delete: the
 # file is gone, so linting it only injects "file not found" noise). crossby's hook
-# writers translate these per tool.
-_LINT_FEEDBACK_TOOLS = ["Edit", "Write", "NotebookEdit"]
+# writers translate these per tool. ``MultiEdit`` qualifies under that same rule —
+# it leaves a real path behind — and, like the write guard above, needs naming
+# because matchers are whole-name.
+_LINT_FEEDBACK_TOOLS = ["Edit", "MultiEdit", "Write", "NotebookEdit"]
 
 
 def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> None:
