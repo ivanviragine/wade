@@ -592,6 +592,22 @@ class TestAntigravityPascalCaseDialect:
         assert json.loads(r.stdout)["decision"] == "deny"
         assert "BLOCKED" in r.stderr
 
+    def test_plan_write_source_file_denied(self) -> None:
+        # In plan mode, an agy write to a source file must be denied by WADE's guard.
+        r = self._agy(
+            "plan",
+            {
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": f"{WT}/src/foo.py", "CodeContent": "x"},
+                },
+                "stepIdx": 4,
+            },
+        )
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "deny"
+        assert "BLOCKED" in r.stderr
+
 
 class TestPerToolDialectsMatchCrossby:
     """The static dialect maps are copies — assert they still match crossby."""

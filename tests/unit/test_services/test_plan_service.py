@@ -11,7 +11,7 @@ import pytest
 from crossby.models.ai import TokenUsage
 
 from wade.git.pr import PRLookup, PRRef
-from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
+from wade.models.config import AIConfig, PermissionMode, ProjectConfig, ProjectSettings
 from wade.models.task import CloseReason, Complexity, PlanFile, Task
 from wade.models.worktree import Worktree
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
@@ -449,6 +449,75 @@ class TestTranscriptWiring:
             call_kwargs = adapter.build_launch_command.call_args.kwargs
             assert str(tmp_path) in call_kwargs["trusted_dirs"]
 
+    def test_antigravity_cli_planning_omits_mode_plan_and_receives_plan_context(
+        self, tmp_path: Path
+    ) -> None:
+        """Antigravity CLI planning omits --mode plan while receiving plan prompt & trusted dirs."""
+        transcript = tmp_path / ".transcript"
+        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
+            mock_rwt.return_value = 0
+            run_ai_planning_session(
+                ai_tool="antigravity-cli",
+                plan_dir=str(tmp_path),
+                model=None,
+                transcript_path=transcript,
+            )
+
+            cmd = mock_rwt.call_args[0][0]
+            # agy must NOT receive --mode plan because native plan mode sandboxes
+            # writes to its brain dir rather than the worktree
+            assert "--mode" not in cmd
+            assert "plan" not in cmd
+            assert "--prompt-interactive" in cmd
+            prompt_file = tmp_path / "prompt.txt"
+            assert prompt_file.is_file()
+            assert str(tmp_path) in prompt_file.read_text()
+
+    def test_unaffected_tools_receive_plan_mode_true(self, tmp_path: Path) -> None:
+        """Unaffected tools (claude, etc.) receive plan_mode=True with their native args."""
+        transcript = tmp_path / ".transcript"
+        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
+            mock_rwt.return_value = 0
+            run_ai_planning_session(
+                ai_tool="claude",
+                plan_dir=str(tmp_path),
+                model=None,
+                transcript_path=transcript,
+            )
+
+            cmd = mock_rwt.call_args[0][0]
+            assert "--permission-mode" in cmd
+            assert "plan" in cmd
+
+    def test_autonomy_mode_precedence_in_planning_session(self, tmp_path: Path) -> None:
+        """PermissionMode.YOLO supersedes native plan mode as expected."""
+        transcript = tmp_path / ".transcript"
+        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
+            mock_rwt.return_value = 0
+            # Antigravity CLI with YOLO
+            run_ai_planning_session(
+                ai_tool="antigravity-cli",
+                plan_dir=str(tmp_path),
+                model=None,
+                transcript_path=transcript,
+                permission_mode=PermissionMode.YOLO,
+            )
+            agy_cmd = mock_rwt.call_args[0][0]
+            assert "--dangerously-skip-permissions" in agy_cmd
+            assert "--mode" not in agy_cmd
+
+            # Claude with YOLO
+            run_ai_planning_session(
+                ai_tool="claude",
+                plan_dir=str(tmp_path),
+                model=None,
+                transcript_path=transcript,
+                permission_mode=PermissionMode.YOLO,
+            )
+            claude_cmd = mock_rwt.call_args[0][0]
+            assert "--dangerously-skip-permissions" in claude_cmd
+            assert "plan" not in claude_cmd
+
 
 # ---------------------------------------------------------------------------
 # Model compatibility tests
@@ -775,6 +844,130 @@ class TestPlanOrchestrator:
 
         provider.snapshot_task_numbers.assert_not_called()
         mock_finalize.assert_called_once()
+
+    def test_plan_antigravity_cli_fails_when_no_git_repo(self, tmp_path: Path) -> None:
+        """Antigravity CLI plan requires a git planning worktree; fails fast outside git."""
+        provider = MagicMock()
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="antigravity-cli")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="antigravity-cli"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("antigravity-cli", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.services.plan_service.run_ai_planning_session") as mock_launch,
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper") as mock_stop_title,
+            patch("wade.git.repo.get_repo_root", side_effect=Exception("Not a git repo")),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert plan(project_root=tmp_path) is False
+            mock_launch.assert_not_called()
+            mock_stop_title.assert_called_once()
+            mock_console.error.assert_called_once()
+            assert "guarded git planning worktree" in mock_console.error.call_args[0][0]
+
+    def test_plan_antigravity_cli_fails_and_cleans_up_when_worktree_bootstrap_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """Antigravity CLI planning fails and cleans up if planning worktree bootstrap fails."""
+        provider = MagicMock()
+        wt_path = tmp_path / "plan-wt"
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="antigravity-cli")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="antigravity-cli"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("antigravity-cli", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.create_detached_worktree", return_value=wt_path),
+            patch(
+                "wade.services.implementation_service.bootstrap_worktree",
+                side_effect=RuntimeError("bootstrap failed"),
+            ),
+            patch("wade.services.plan_service._remove_planning_worktree") as mock_remove_wt,
+            patch("wade.services.plan_service.run_ai_planning_session") as mock_launch,
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper") as mock_stop_title,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert plan(project_root=tmp_path) is False
+            mock_launch.assert_not_called()
+            mock_remove_wt.assert_called_once_with(tmp_path, wt_path)
+            mock_stop_title.assert_called_once()
+            mock_console.error.assert_called_once()
+            assert "guarded git planning worktree" in mock_console.error.call_args[0][0]
+
+    def test_plan_unaffected_tool_uses_temp_dir_fallback_when_no_git_repo(
+        self, tmp_path: Path
+    ) -> None:
+        """Unaffected tools (e.g. claude) still use temp plan dir when outside a git repo."""
+        provider = MagicMock()
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+        plan_file = PlanFile(
+            path=tmp_path / "plan-1.md",
+            title="feat: add feature",
+            body="## Complexity\neasy\n## Tasks\n- task 1\n",
+            sections={"complexity": "easy", "tasks": "- task 1"},
+        )
+
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch(
+                "wade.services.plan_service.run_ai_planning_session", return_value=0
+            ) as mock_launch,
+            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.plan_service._extract_token_usage",
+                return_value=TokenUsage(total_tokens=50),
+            ),
+            patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
+            patch(
+                "wade.services.plan_service.validate_plan_dir",
+                return_value=PlanValidationResult(),
+            ),
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["101"], []),
+            ),
+            patch("wade.services.plan_service._finalize_issues", return_value=None),
+            patch("wade.services.plan_service._cleanup_plan_dir"),
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper"),
+            patch("wade.git.repo.get_repo_root", side_effect=Exception("Not a git repo")),
+        ):
+            assert plan(project_root=tmp_path) is True
+            mock_launch.assert_called_once()
+            launch_plan_dir = mock_launch.call_args.kwargs["plan_dir"]
+            assert "wade-plan-" in launch_plan_dir
 
 
 # ---------------------------------------------------------------------------
