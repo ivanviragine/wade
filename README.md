@@ -250,6 +250,8 @@ per plan file, a comment and a `> **Superseded by ...**` banner are added to
 `--yolo`/non-interactive). If any plan file fails to become a task, `#N` is
 left open with a warning instead of superseding on a partial split.
 
+Antigravity CLI (`agy`) planning sessions launch in normal file-writing mode within a guarded git planning worktree rather than `agy`'s native `--mode plan` (which sandboxes writes to its own per-conversation artifact store outside the worktree). WADE's plan-artifact guard strictly confines writes to `.wade/plans/` and scratch paths, preserving planning safety while generating real plan files. Antigravity CLI planning therefore requires a guarded git planning worktree.
+
 ### Base branch
 
 By default WADE branches from and merges into the project's configured main branch (`project.main_branch` in `.wade.yml`, falling back to the repo's detected default). To target a different branch — e.g. `develop` or a `release/*` branch — declare it once, at planning time, in an optional `## Base Branch` section of the plan file:

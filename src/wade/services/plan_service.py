@@ -299,6 +299,16 @@ def run_ai_planning_session(
 
     deliver_prompt_if_needed(adapter, prompt)
 
+    # Derive whether to request native plan mode. Antigravity CLI's native
+    # --mode plan sandboxes file writes into its per-conversation brain
+    # directory (~/.gemini/antigravity-cli/brain/<id>/), rejecting worktree
+    # paths before WADE's plan_artifact_only PreToolUse guard can allow them.
+    # WADE requires real PLAN*.md files in the worktree/plan directory, so we
+    # launch agy with plan_mode=False and rely on WADE's plan-mode PreToolUse
+    # hook in the planning worktree for containment.
+    tool_id = getattr(adapter.capabilities(), "tool_id", None)
+    plan_mode = tool_id is not AIToolID.ANTIGRAVITY_CLI
+
     # Build command. crossby (>=0.17.1) places the initial_message as the FIRST
     # positional arg and appends the autonomy/effort/trusted-dir flags AFTER it
     # (see crossby.ai_tools.base.build_launch_command). plan_dir is included in
@@ -307,7 +317,7 @@ def run_ai_planning_session(
     # upstream in crossby's arg ordering — WADE cannot fix it here.
     cmd = adapter.build_launch_command(
         model=model,
-        plan_mode=True,
+        plan_mode=plan_mode,
         trusted_dirs=[str(session_cwd), tempfile.gettempdir(), plan_dir],
         initial_message=prompt,
         effort=effort,
@@ -492,12 +502,30 @@ def plan(
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:
             console.warn(f"Could not create planning worktree: {e}")
+            if planning_worktree is not None:
+                _remove_planning_worktree(repo_root, planning_worktree)
             planning_worktree = None
 
-    # Plan directory: when using a planning worktree, isolate outputs to a
-    # dedicated subdirectory so repo markdown files (e.g., README.md) are not
-    # misinterpreted as generated plans.
-    if planning_worktree is not None:
+    # Antigravity CLI's native plan mode sandboxes writes into its brain dir,
+    # so WADE launches it with normal file writes and relies on the planning
+    # worktree's PreToolUse guard for safety. That containment requires a
+    # successfully created and bootstrapped planning worktree.
+    if planning_worktree is None:
+        try:
+            is_agy_cli = AIToolID(resolved_tool) is AIToolID.ANTIGRAVITY_CLI
+        except (ValueError, KeyError):
+            is_agy_cli = False
+
+        if is_agy_cli:
+            console.error("Antigravity CLI planning requires a guarded git planning worktree.")
+            stop_title_keeper()
+            return False
+
+        plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
+    else:
+        # Plan directory: when using a planning worktree, isolate outputs to a
+        # dedicated subdirectory so repo markdown files (e.g., README.md) are not
+        # misinterpreted as generated plans.
         plan_output_dir = planning_worktree / ".wade" / "plans"
         plan_output_dir.mkdir(parents=True, exist_ok=True)
         plan_dir = str(plan_output_dir)
@@ -505,8 +533,6 @@ def plan(
         # can re-inject "which issue am I planning" via the SessionStart hook.
         if existing_issue is not None:
             _persist_plan_issue_ref(planning_worktree, existing_issue)
-    else:
-        plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
 
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
