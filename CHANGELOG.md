@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.50.6] — 2026-08-20
+
+### Bug Fixes
+
+- agy plan sessions fail: Antigravity CLI's plan mode sandboxes writes to its own brain dir, not the worktree (#459) (a483155)
+
 ## [v0.50.5] — 2026-08-19
 
 ### Bug Fixes
