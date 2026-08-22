@@ -501,8 +501,12 @@ def review_implementation(
         if isinstance(passes, int):
             _announce_review_pass_budget(passes, config.done.max_review_passes)
     else:
+        # ``DelegationResult`` cannot yet tell "never launched" from "launched
+        # and exited nonzero", so this covers both. Word it as what is actually
+        # known — the review did not complete — rather than claiming a launch
+        # failure that may not have happened.
         console.warn(
-            "Review did not start successfully, so no review-pass budget was consumed. "
+            "Review did not complete, so no review-pass budget was consumed. "
             "Restore the reviewer runtime and re-run `wade review implementation`."
         )
     # Record the review-ran marker on any non-hard-failure result (success),

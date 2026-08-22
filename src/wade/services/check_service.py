@@ -624,7 +624,11 @@ def check_session_readiness(
                 return fallback
         return result
 
-    if config is not None and requirements.requires_github:
+    # Deliberately not gated on ``config``: whether a phase needs GitHub comes
+    # from READINESS_REQUIREMENTS, never from project config. Gating it would
+    # let a caller that omits the optional config silently pass a
+    # GitHub-requiring phase without a single probe.
+    if requirements.requires_github:
         if not _github_cli_available(path):
             return _readiness_result(
                 result,

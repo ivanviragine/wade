@@ -276,6 +276,21 @@ class TestSessionReadiness:
         # sessions discover their missing `gh` authority only at `done`.
         assert result.status == CheckStatus.GITHUB_AUTH_BLOCKED
 
+    def test_github_probes_do_not_depend_on_a_supplied_config(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whether a phase needs GitHub comes from the phase, never from config.
+
+        ``config`` is optional, so gating the probes on it would let a caller
+        that omits it pass a GitHub-requiring phase without a single check.
+        """
+        worktree = _add_worktree(tmp_git_repo, name="no-config", branch="no-config")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree)
+
+        assert result.status == CheckStatus.GITHUB_CLI_BLOCKED
+
     @pytest.mark.parametrize("phase", [ReadinessPhase.PLAN, ReadinessPhase.DEPS])
     def test_detached_analysis_phases_skip_github_probes(
         self,
