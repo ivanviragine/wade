@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.50.7] — 2026-08-22
+
+### Bug Fixes
+
+- surface stderr from failed headless delegations (#461) (8fb852b)
+
 ## [v0.50.6] — 2026-08-20
 
 ### Bug Fixes
