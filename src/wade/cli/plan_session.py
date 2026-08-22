@@ -7,8 +7,21 @@ from pathlib import Path
 import typer
 
 plan_session_app = typer.Typer(
-    help="Plan session commands (done).",
+    help="Plan session commands (check, done).",
 )
+
+
+@plan_session_app.command()
+def check() -> None:
+    """Verify planning-session capabilities before writing plan artefacts.
+
+    Exit codes match the other session checks, with 4/5 for GitHub
+    authentication/API failures and 6 when detached knowledge-vote staging is
+    not writable.
+    """
+    from wade.cli.session_shared import run_check
+
+    run_check("plan")
 
 
 @plan_session_app.command()

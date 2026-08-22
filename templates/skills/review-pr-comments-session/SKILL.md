@@ -13,9 +13,7 @@ Read and follow them before performing any other action.
 
 ## Execution mode
 
-Run `wade` and `gh` commands with the required permissions/capabilities (not
-in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
-start.
+Keep the sandbox enabled; never grant main-checkout write access just to pass.
 
 ## Talking to the user
 
@@ -32,12 +30,16 @@ Always use `wade task create` for interactive issue creation.
 
 ## First action: check your context
 
-Run `wade review-pr-comments-session check` as your **first action**:
+Run `wade review-pr-comments-session check` first:
 
-- `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
+- `IN_WORKTREE` — proceed.
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden**. Tell the human
   to run `wade review pr-comments <issue>` from the main checkout.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
+- `WORKTREE_GIT_BLOCKED` — relaunch with only the named Git metadata path writable.
+- `GITHUB_AUTH_BLOCKED` / `GITHUB_API_BLOCKED` — relaunch with needed `gh` access.
+
+Read `reason=…`; ask for a trusted relaunch if needed.
 
 ## Triggering a fresh bot review (optional)
 

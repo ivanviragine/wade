@@ -23,7 +23,7 @@ class TestCheckCommand:
         assert result.returncode == 2
         assert "IN_MAIN_CHECKOUT" in result.stdout
 
-    def test_check_in_worktree(self, e2e_repo: Path) -> None:
+    def test_check_in_worktree(self, e2e_repo: Path, mock_gh_cli: object) -> None:
         """wade implementation-session check in worktree -> exit 0."""
         wt_dir = e2e_repo.parent / ".worktrees" / "42-test"
         _git(
@@ -43,6 +43,14 @@ class TestCheckCommand:
         result = _run(["implementation-session", "check"], cwd=bare_dir)
         assert result.returncode == 1
         assert "NOT_IN_GIT_REPO" in result.stdout
+
+    def test_plan_session_check_entrypoint(self, e2e_repo: Path) -> None:
+        """Plan sessions expose the same preflight before the AI writes a plan."""
+        result = _run(["plan-session", "check"], cwd=e2e_repo)
+
+        assert result.returncode == 2
+        assert "IN_MAIN_CHECKOUT" in result.stdout
+        assert "phase=plan" in result.stdout
 
 
 class TestCheckConfigCommand:

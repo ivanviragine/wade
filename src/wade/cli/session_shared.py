@@ -16,20 +16,38 @@ DOC_PASS_ADVISORY = (
 )
 
 
-def run_check() -> None:
-    """Verify worktree safety for AI agents.
+def run_check(phase: str) -> None:
+    """Verify the phase-specific capabilities an AI session needs.
 
     Exit codes:
       0  IN_WORKTREE          — safe to work
       1  NOT_IN_GIT_REPO      — not inside a git repository
       2  IN_MAIN_CHECKOUT     — unsafe for agent work
-      3  WORKTREE_GIT_BLOCKED — in a worktree, but its git metadata is not
-                                writable (git writes would fail); relaunch the
-                                session so the sandbox grants the git dirs
+      3  WORKTREE_GIT_BLOCKED — linked-worktree git metadata is not writable
+      4  GITHUB_AUTH_BLOCKED — GitHub CLI credentials are unavailable
+      5  GITHUB_API_BLOCKED — read-only GitHub API probe cannot reach GitHub
+      6  KNOWLEDGE_STAGING_BLOCKED — detached vote staging cannot be written
     """
-    from wade.services.check_service import check_worktree
+    from wade.config.loader import load_config
+    from wade.models.readiness import ReadinessPhase
+    from wade.services.check_service import check_session_readiness
 
-    result = check_worktree(Path.cwd())
+    readiness_phase = ReadinessPhase(phase)
+    try:
+        config = load_config()
+    except Exception:
+        # A bare repository can still use the legacy worktree check. Config
+        # validation has its own command and should not obscure the exact git
+        # context failure this preflight is responsible for.
+        config = None
+    command = {
+        ReadinessPhase.PLAN: "plan",
+        ReadinessPhase.IMPLEMENTATION: "implement",
+        ReadinessPhase.REVIEW_PR_COMMENTS: "review_pr_comments",
+        ReadinessPhase.DEPS: "deps",
+    }[readiness_phase]
+    tool = config.get_ai_tool(command) if config is not None else None
+    result = check_session_readiness(readiness_phase, Path.cwd(), config, tool)
     typer.echo(result.format_output())
     raise typer.Exit(result.exit_code)
 

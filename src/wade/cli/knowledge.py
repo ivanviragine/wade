@@ -193,9 +193,8 @@ def rate(
     from wade.config.loader import load_config
     from wade.services.knowledge_service import (
         find_entry_id,
-        record_rating,
+        record_rating_for_session,
         resolve_canonical_knowledge_path,
-        resolve_ratings_path,
     )
     from wade.ui.console import console
 
@@ -215,8 +214,7 @@ def rate(
             console.error(f"Entry ID '{entry_id}' not found in knowledge file.")
             raise typer.Exit(1)
 
-        ratings_path = resolve_ratings_path(knowledge_path)
-        record_rating(ratings_path, entry_id, direction)
+        record_rating_for_session(project_root, config.knowledge, entry_id, direction)
     except typer.Exit:
         raise
     except ValueError as exc:
@@ -256,7 +254,11 @@ def status() -> None:
         console.error(str(exc))
         raise typer.Exit(1) from exc
 
-    if not result.dirty_paths and not result.legacy_migration_pending:
+    if (
+        not result.dirty_paths
+        and not result.legacy_migration_pending
+        and not result.staged_vote_count
+    ):
         console.success("Knowledge is clean — no uncommitted knowledge or ratings changes.")
         return
 
@@ -268,6 +270,12 @@ def status() -> None:
         console.info(
             "A legacy ratings YAML file is pending migration to .ratings.jsonl "
             "(converts on the next `wade knowledge rate`)."
+        )
+    if result.staged_vote_count:
+        assert result.staging_path is not None
+        console.info(
+            f"{result.staged_vote_count} detached-session rating vote(s) staged at "
+            f"{result.staging_path}; wade will flush them before this session is removed."
         )
 
 

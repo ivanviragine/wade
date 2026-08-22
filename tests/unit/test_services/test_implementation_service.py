@@ -3227,6 +3227,68 @@ class TestCarryForwardPendingVotes:
         assert wt1_text.count(pending_line) == 1
         assert wt2_text.count(pending_line) == 0
 
+    def test_carries_verified_untracked_staged_vote_spool(self, tmp_path: Path) -> None:
+        """A first detached vote reaches an attached PR even with no prior sidecar."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        self._git(main, "add", "KNOWLEDGE.md")
+        self._git(main, "commit", "-m", "chore: init knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        (main / "KNOWLEDGE.ratings.jsonl").write_text(pending_line + "\n", encoding="utf-8")
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/first-rating", str(worktree))
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert pending_line in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_carries_staged_vote_through_legacy_ratings_migration(self, tmp_path: Path) -> None:
+        """The first detached vote migrates legacy YAML in the attached PR, not main."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+        from wade.services.knowledge_service import (
+            create_rating_event,
+            flush_staged_ratings,
+            read_ratings,
+            stage_rating_event,
+        )
+
+        main = tmp_path / "main"
+        plan_worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        plan_worktree.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 2}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        stage_rating_event(plan_worktree, create_rating_event("e", "up"))
+
+        handoff = flush_staged_ratings(plan_worktree, main, config.knowledge)
+        assert handoff.success
+        assert not (main / "KNOWLEDGE.ratings.yml").exists()
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/legacy-rating", str(worktree))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert (main / "KNOWLEDGE.ratings.yml").is_file()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+        assert not (worktree / "KNOWLEDGE.ratings.yml").exists()
+        assert read_ratings(worktree / "KNOWLEDGE.ratings.jsonl")["e"].up == 3
+
     def test_failed_main_restore_carries_nothing(self, tmp_path: Path) -> None:
         # If restoring main fails, the votes must NOT be carried into the worktree —
         # otherwise they stay in main and get re-carried into a second worktree,

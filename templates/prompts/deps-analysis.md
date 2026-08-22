@@ -1,5 +1,9 @@
 Analyze dependencies between the tasks in the context below.
 
+WADE ran the detached-session readiness check before launching this analysis. If
+it reported a missing capability, stop and follow its narrow remediation; do not
+disable the sandbox globally or request write access to the main checkout.
+
 Output requirements (strict):
 - Output ONLY dependency edges in this format: <number> -> <number> # reason
 - Each edge must include a short reason comment.

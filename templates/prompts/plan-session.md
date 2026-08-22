@@ -1,6 +1,10 @@
 Follow @.claude/skills/plan-session/SKILL.md for session rules — build a todo
 list from its workflow steps before starting work.
 
+**First action:** run `wade plan-session check` in this detached worktree. Do
+not write a plan or knowledge vote unless it reports `IN_WORKTREE`; follow its
+specific `reason=…` remediation rather than disabling your sandbox broadly.
+
 # Goal
 
 Plan a feature: break it into one or more tasks and write a plan file for

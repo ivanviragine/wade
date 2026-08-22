@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import shutil
 import subprocess
 from collections import Counter
@@ -683,6 +684,22 @@ def _multiset_difference(lines: list[str], subtract: list[str]) -> list[str]:
     return result
 
 
+def _is_durable_event_spool(lines: list[str]) -> bool:
+    """Whether untracked JSONL lines are safe #462 staged-vote transport data."""
+    try:
+        for line in lines:
+            record = json.loads(line)
+            if not (
+                isinstance(record, dict)
+                and isinstance(record.get("event_id"), str)
+                and bool(record["event_id"])
+            ):
+                return False
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return True
+
+
 def _carry_forward_pending_votes(
     worktree_path: Path, repo_root: Path, config: ProjectConfig
 ) -> None:
@@ -713,12 +730,15 @@ def _carry_forward_pending_votes(
         relpath = main_ratings.relative_to(repo_root).as_posix()
     except ValueError:
         return
-    # Only reconcile a TRACKED ratings file: the carry-forward reverts main's
-    # uncommitted vote lines via ``git checkout``, which only works for a tracked
-    # file. An untracked ratings file is not the throwaway-vote scenario — skip it
-    # rather than risk moving/deleting a file wade doesn't manage.
-    if not git_repo.is_file_tracked(repo_root, relpath):
-        return
+    tracked_in_main = git_repo.is_file_tracked(repo_root, relpath)
+    main_legacy = main_ratings.with_suffix(".yml")
+    try:
+        legacy_relpath = main_legacy.relative_to(repo_root).as_posix()
+    except ValueError:
+        legacy_relpath = None
+    legacy_tracked_in_main = bool(
+        legacy_relpath and git_repo.show_file_at_head(repo_root, legacy_relpath) is not None
+    )
 
     with file_lock(main_ratings):
         if not main_ratings.is_file():
@@ -730,8 +750,18 @@ def _carry_forward_pending_votes(
         working_lines = [
             ln for ln in main_ratings.read_text(encoding="utf-8").splitlines() if ln.strip()
         ]
-        committed_text = git_repo.show_file_at_head(repo_root, relpath)
-        committed = committed_text.splitlines() if committed_text is not None else []
+        if tracked_in_main:
+            committed_text = git_repo.show_file_at_head(repo_root, relpath)
+            committed = committed_text.splitlines() if committed_text is not None else []
+        else:
+            # #462's parent handoff can create the ratings sidecar before any
+            # attached session has ever committed one.  Treat it as a WADE spool
+            # only when every record has a durable event ID; never move an
+            # arbitrary untracked user file merely because it has this name.
+            if not _is_durable_event_spool(working_lines):
+                logger.warning("implementation.ratings_untracked_spool_rejected", path=relpath)
+                return
+            committed = []
         # Multiset (not set) difference: the append-only log may legitimately repeat a
         # serialized line, so subtracting the committed lines as a set would drop a
         # genuinely-new duplicate vote whose identical twin already lives in HEAD.
@@ -739,13 +769,22 @@ def _carry_forward_pending_votes(
         if not pending:
             return
 
-        # Restore main's tracked ratings to committed state FIRST, and only carry the
-        # votes into the worktree if that succeeded. Ordering matters: if we wrote to
-        # the worktree first and the restore then failed, the same lines would remain
-        # in main and be re-detected as "pending" at the next bootstrap — carried into
-        # a SECOND worktree and double-counted. A failed restore instead leaves the
-        # votes untouched in main for a later bootstrap to retry (no loss, no double).
-        if not git_repo.checkout_paths(repo_root, relpath):
+        # Restore main's tracked ratings (or remove the verified untracked
+        # #462 spool) FIRST, and only carry into the worktree if that succeeds.
+        # Otherwise the same events remain pending and could be delivered twice.
+        if tracked_in_main:
+            restored = git_repo.checkout_paths(repo_root, relpath)
+        else:
+            try:
+                main_ratings.unlink()
+                if legacy_tracked_in_main:
+                    assert legacy_relpath is not None
+                    restored = git_repo.restore_paths_to_head(repo_root, legacy_relpath)
+                else:
+                    restored = True
+            except OSError:
+                restored = False
+        if not restored:
             logger.warning("implementation.ratings_carry_restore_failed", path=relpath)
             return
 
@@ -773,9 +812,18 @@ def _carry_forward_pending_votes(
             prefix = "" if (content == "" or content.endswith("\n")) else "\n"
             with worktree_ratings.open("a", encoding="utf-8") as fd:
                 fd.write(prefix + "".join(f"{ln}\n" for ln in pending))
+            if legacy_tracked_in_main:
+                worktree_legacy = worktree_ratings.with_suffix(".yml")
+                worktree_legacy_relpath = worktree_legacy.relative_to(worktree_path).as_posix()
+                if not git_repo.rm_file(worktree_path, worktree_legacy_relpath):
+                    raise OSError(
+                        f"Could not stage legacy ratings removal: {worktree_legacy_relpath}"
+                    )
         except OSError:
             with contextlib.suppress(OSError):
                 main_ratings.write_bytes(original_main_bytes)
+            if legacy_tracked_in_main and legacy_relpath is not None:
+                git_repo.rm_file(repo_root, legacy_relpath)
             logger.warning("implementation.ratings_carry_transfer_failed", path=relpath)
             return
         logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))

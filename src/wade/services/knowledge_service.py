@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import statistics
 import uuid
@@ -42,6 +43,11 @@ Read this at the start of every session. Add new entries via `wade knowledge add
 _TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _TAG_MAX_LEN = 30
 
+# Detached plan/deps worktrees are deliberately disposable.  Ratings created in
+# one must therefore live in a WADE-owned, ignored session artefact until the
+# parent workflow can transfer them through main's existing ratings spool.
+STAGED_RATINGS_RELATIVE_PATH = ".wade/knowledge-ratings-staged.jsonl"
+
 
 class KnowledgeEntry(BaseModel, frozen=True):
     """Result of appending a knowledge entry."""
@@ -79,6 +85,39 @@ class KnowledgeStatus(BaseModel, frozen=True):
     root: Path
     dirty_paths: list[str] = []
     legacy_migration_pending: bool = False
+    staged_vote_count: int = 0
+    staging_path: Path | None = None
+
+
+class RatingEvent(BaseModel, frozen=True):
+    """One durable append-only knowledge-rating event.
+
+    The JSON record deliberately preserves the pre-#462 ``id`` / ``dir`` keys
+    so older readers keep working. ``event_id`` is new and permits a staged
+    event to be delivered more than once without changing the folded score.
+    """
+
+    event_id: str
+    entry_id: str
+    direction: str
+    timestamp: str
+
+    def to_record(self) -> dict[str, str]:
+        return {
+            "dir": self.direction,
+            "event_id": self.event_id,
+            "id": self.entry_id,
+            "ts": self.timestamp,
+        }
+
+
+class StagedRatingsFlushResult(BaseModel, frozen=True):
+    """Outcome of transferring detached-session rating events to main's spool."""
+
+    success: bool
+    staged_count: int = 0
+    appended_count: int = 0
+    message: str | None = None
 
 
 def _generate_entry_id() -> str:
@@ -149,6 +188,26 @@ def _resolve_knowledge_root(project_root: Path) -> Path:
     except OSError:
         return project_root
     return _canonical_project_root(project_root)
+
+
+def is_throwaway_knowledge_session(project_root: Path) -> bool:
+    """Whether *project_root* is a real detached plan/deps worktree.
+
+    ``is_head_attached`` alone also returns false outside a repository.  The
+    git-dir check is therefore load-bearing: only a detached checkout created
+    by WADE may stage votes instead of writing its canonical ratings sidecar.
+    """
+    from wade.git.repo import get_git_dir, is_head_attached
+
+    try:
+        return get_git_dir(project_root) is not None and not is_head_attached(project_root)
+    except OSError:
+        return False
+
+
+def staged_ratings_path(project_root: Path) -> Path:
+    """Return the untracked, worktree-local rating staging artefact path."""
+    return project_root / STAGED_RATINGS_RELATIVE_PATH
 
 
 def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
@@ -234,7 +293,19 @@ def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeSt
         root, str(knowledge_path), str(ratings_path), str(legacy_path)
     )
 
-    return KnowledgeStatus(root=root, dirty_paths=dirty, legacy_migration_pending=legacy_pending)
+    staging_path: Path | None = None
+    staged_vote_count = 0
+    if is_throwaway_knowledge_session(project_root):
+        staging_path = staged_ratings_path(project_root)
+        staged_vote_count = len(_load_staged_rating_records(staging_path))
+
+    return KnowledgeStatus(
+        root=root,
+        dirty_paths=dirty,
+        legacy_migration_pending=legacy_pending,
+        staged_vote_count=staged_vote_count,
+        staging_path=staging_path,
+    )
 
 
 def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
@@ -306,6 +377,7 @@ def _fold_jsonl_ratings(ratings_path: Path) -> dict[str, EntryRating]:
     """
     data: dict[str, EntryRating] = {}
     seeded: set[str] = set()
+    delivered_event_ids: set[str] = set()
     for raw_line in ratings_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line:
@@ -317,6 +389,11 @@ def _fold_jsonl_ratings(ratings_path: Path) -> dict[str, EntryRating]:
             continue
         if not isinstance(record, dict):
             continue
+        event_id = record.get("event_id")
+        if isinstance(event_id, str):
+            if event_id in delivered_event_ids:
+                continue
+            delivered_event_ids.add(event_id)
         entry_id = record.get("id")
         if not isinstance(entry_id, str):
             continue
@@ -406,6 +483,7 @@ def _materialize_migration_locked(ratings_path: Path) -> None:
     seed_lines = [
         json.dumps(
             {
+                "event_id": f"legacy-seed:{entry_id}",
                 "id": entry_id,
                 "seed": True,
                 "up": r.up,
@@ -424,42 +502,224 @@ def _materialize_migration_locked(ratings_path: Path) -> None:
     _git_rm(legacy)
 
 
-def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON record as a single line, migrating a legacy ``.yml`` first.
+def _append_jsonl_record(
+    path: Path,
+    record: dict[str, Any],
+    *,
+    materialize_legacy: bool,
+) -> None:
+    """Append one JSONL record under the canonical lock for *path*.
 
-    Wrapped in ``file_lock`` so the migration check + append is atomic against
-    concurrent writers in the same worktree. The append itself is a lone
-    ``O_APPEND`` line write — merging the log is pure concatenation, so no vote is
-    ever lost regardless of merge order or parallelism.
+    ``materialize_legacy`` is true only for the tracked ratings sidecar.  A
+    detached-session staging file is intentionally an isolated transport log;
+    it must never inspect, migrate, or copy a canonical knowledge file.
     """
-    with file_lock(ratings_path):
-        if ratings_path.exists() and ratings_path.is_dir():
-            raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
-        _materialize_migration_locked(ratings_path)
+    with file_lock(path):
+        if path.exists() and path.is_dir():
+            raise ValueError(f"Ratings path {path!s} points to a directory, not a file")
+        if materialize_legacy:
+            _materialize_migration_locked(path)
         line = json.dumps(record, sort_keys=True)
-        with ratings_path.open("a", encoding="utf-8") as fd:
+        with path.open("a", encoding="utf-8") as fd:
             fd.write(f"{line}\n")
+            fd.flush()
+            os.fsync(fd.fileno())
+
+
+def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
+    """Append one canonical ratings record, migrating legacy YAML if needed."""
+    _append_jsonl_record(ratings_path, record, materialize_legacy=True)
+
+
+def create_rating_event(entry_id: str, direction: str) -> RatingEvent:
+    """Validate and serialize-independently create one durable rating event."""
+    if direction not in ("up", "down", "stale"):
+        raise ValueError(f"Invalid direction {direction!r}: must be 'up', 'down', or 'stale'")
+    return RatingEvent(
+        event_id=uuid.uuid4().hex,
+        entry_id=entry_id,
+        direction=direction,
+        timestamp=datetime.now(tz=UTC).isoformat(),
+    )
 
 
 def record_rating(
     ratings_path: Path,
     entry_id: str,
     direction: str,
-) -> None:
+) -> RatingEvent:
     """Append an up/down/stale vote for an entry to the JSONL vote log.
 
     ``direction`` must be ``"up"``, ``"down"``, or ``"stale"``. A ``ts`` is stamped
     on the record — each vote is a distinct event (not a re-derivation), so votes
     are always distinct lines and both survive a union merge.
     """
-    if direction not in ("up", "down", "stale"):
-        raise ValueError(f"Invalid direction {direction!r}: must be 'up', 'down', or 'stale'")
-    record: dict[str, Any] = {
-        "dir": direction,
-        "id": entry_id,
-        "ts": datetime.now(tz=UTC).isoformat(),
-    }
-    _append_ratings_record(ratings_path, record)
+    event = create_rating_event(entry_id, direction)
+    _append_ratings_record(ratings_path, event.to_record())
+    return event
+
+
+def stage_rating_event(project_root: Path, event: RatingEvent) -> Path:
+    """Persist *event* only in a detached session's ignored transport log."""
+    path = staged_ratings_path(project_root)
+    _append_jsonl_record(path, event.to_record(), materialize_legacy=False)
+    return path
+
+
+def record_rating_for_session(
+    project_root: Path,
+    config: KnowledgeConfig,
+    entry_id: str,
+    direction: str,
+) -> RatingEvent:
+    """Record a rating through the appropriate attached/detached lifecycle.
+
+    Detached plan/deps sessions can write their own ``.wade`` directory but
+    must never write the main checkout merely to vote.  Attached worktrees
+    retain the existing direct tracked-sidecar behavior.
+    """
+    event = create_rating_event(entry_id, direction)
+    if is_throwaway_knowledge_session(project_root):
+        stage_rating_event(project_root, event)
+        return event
+    ratings_path = resolve_ratings_path(resolve_knowledge_path(project_root, config))
+    _append_ratings_record(ratings_path, event.to_record())
+    return event
+
+
+def _load_staged_rating_records(staging_path: Path) -> list[dict[str, Any]]:
+    """Read valid staged vote records, rejecting a malformed transport log.
+
+    Staging is written only by :func:`stage_rating_event`, so treating a bad
+    line as a handoff failure is safer than silently deleting a recoverable
+    artefact.  Canonical ratings reads remain deliberately forgiving of merge
+    damage; this stricter transport parser is only for the retryable handoff.
+    """
+    if not staging_path.exists():
+        return []
+    if staging_path.is_dir():
+        raise ValueError(f"Staged ratings path {staging_path!s} points to a directory")
+
+    records: list[dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
+    for line_number, raw_line in enumerate(
+        staging_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not raw_line.strip():
+            continue
+        try:
+            record: Any = json.loads(raw_line)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"Invalid staged rating record on line {line_number}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"Invalid staged rating record on line {line_number}")
+        event_id = record.get("event_id")
+        entry_id = record.get("id")
+        direction = record.get("dir")
+        timestamp = record.get("ts")
+        if not (
+            isinstance(event_id, str)
+            and event_id
+            and isinstance(entry_id, str)
+            and isinstance(direction, str)
+            and direction in ("up", "down", "stale")
+            and isinstance(timestamp, str)
+        ):
+            raise ValueError(f"Invalid staged rating record on line {line_number}")
+        if event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id)
+        records.append(record)
+    return records
+
+
+def _event_ids_in_jsonl(path: Path) -> set[str]:
+    """Return durable event IDs already present in a canonical ratings log."""
+    if not path.is_file():
+        return set()
+    event_ids: set[str] = set()
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record: Any = json.loads(raw_line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(record, dict) and isinstance(record.get("event_id"), str):
+            event_ids.add(record["event_id"])
+    return event_ids
+
+
+def flush_staged_ratings(
+    worktree_path: Path,
+    repo_root: Path,
+    config: KnowledgeConfig,
+) -> StagedRatingsFlushResult:
+    """Atomically hand detached-session votes to main's existing spool.
+
+    The main ratings path is the lock key used by the pre-#462 carry-forward
+    lifecycle.  Retrying after a crash is safe: durable event IDs already in
+    that spool are skipped, while the staging artefact is retained until it can
+    be removed after a successful durable append.
+    """
+    staging_path = staged_ratings_path(worktree_path)
+    if not staging_path.exists():
+        return StagedRatingsFlushResult(success=True)
+    try:
+        staged_records = _load_staged_rating_records(staging_path)
+    except (OSError, ValueError) as exc:
+        return StagedRatingsFlushResult(success=False, message=str(exc))
+    if not staged_records:
+        try:
+            staging_path.unlink()
+        except OSError as exc:
+            return StagedRatingsFlushResult(
+                success=False,
+                message=f"Empty staging cleanup failed: {exc}",
+            )
+        return StagedRatingsFlushResult(success=True)
+
+    try:
+        main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config))
+    except ValueError as exc:
+        return StagedRatingsFlushResult(success=False, message=str(exc))
+
+    try:
+        with file_lock(main_ratings):
+            if main_ratings.exists() and main_ratings.is_dir():
+                raise ValueError(f"Ratings path {main_ratings!s} points to a directory, not a file")
+            _materialize_migration_locked(main_ratings)
+            delivered = _event_ids_in_jsonl(main_ratings)
+            missing = [
+                record for record in staged_records if str(record["event_id"]) not in delivered
+            ]
+            if missing:
+                with main_ratings.open("a", encoding="utf-8") as fd:
+                    for record in missing:
+                        fd.write(f"{json.dumps(record, sort_keys=True)}\n")
+                    fd.flush()
+                    os.fsync(fd.fileno())
+    except (OSError, ValueError) as exc:
+        return StagedRatingsFlushResult(
+            success=False,
+            staged_count=len(staged_records),
+            message=str(exc),
+        )
+
+    try:
+        staging_path.unlink()
+    except OSError as exc:
+        # The durable main-spool transfer is already complete.  Keep the
+        # artefact for a later idempotent retry rather than claiming cleanup.
+        return StagedRatingsFlushResult(
+            success=False,
+            staged_count=len(staged_records),
+            appended_count=len(missing),
+            message=f"Ratings reached the main spool but staging cleanup failed: {exc}",
+        )
+    return StagedRatingsFlushResult(
+        success=True,
+        staged_count=len(staged_records),
+        appended_count=len(missing),
+    )
 
 
 def record_supersede(

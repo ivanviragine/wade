@@ -20,10 +20,12 @@ def check() -> None:
       1  NOT_IN_GIT_REPO      — not inside a git repository
       2  IN_MAIN_CHECKOUT     — unsafe for agent work
       3  WORKTREE_GIT_BLOCKED — worktree git metadata is not writable
+      4  GITHUB_AUTH_BLOCKED — GitHub CLI credentials are unavailable
+      5  GITHUB_API_BLOCKED — GitHub API is unreachable
     """
     from wade.cli.session_shared import run_check
 
-    run_check()
+    run_check("implementation")
 
 
 @implementation_session_app.command()

@@ -660,6 +660,19 @@ class TestThrowawaySessionGate:
             )
         assert result.exit_code == 0
 
+    def test_rate_stages_vote_instead_of_writing_canonical_sidecar(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
+
+        assert result.exit_code == 0
+        assert (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").is_file()
+        assert not (tmp_path / "KNOWLEDGE.ratings.jsonl").exists()
+
 
 class TestKnowledgeStatusCommand:
     def test_status_reports_pending_legacy_migration(self, tmp_path: Path) -> None:
@@ -682,3 +695,24 @@ class TestKnowledgeStatusCommand:
             result = runner.invoke(app, ["knowledge", "status"])
         assert result.exit_code == 0
         assert "clean" in result.output.lower()
+
+    def test_status_reports_staged_detached_votes(self, tmp_path: Path) -> None:
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        staged = tmp_path / ".wade" / "knowledge-ratings-staged.jsonl"
+        staged.parent.mkdir()
+        staged.write_text(
+            '{"dir": "up", "event_id": "event", "id": "entry", "ts": "now"}\n',
+            encoding="utf-8",
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(app, ["knowledge", "status"])
+
+        assert result.exit_code == 0
+        assert "1 detached-session rating vote" in result.output

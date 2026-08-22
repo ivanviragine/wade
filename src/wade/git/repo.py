@@ -515,6 +515,22 @@ def checkout_paths(cwd: Path, *paths: str) -> bool:
     return result.returncode == 0
 
 
+def restore_paths_to_head(cwd: Path, *paths: str) -> bool:
+    """Restore paths from ``HEAD`` in both the index and working tree.
+
+    Unlike :func:`checkout_paths`, this also repairs an index deletion.  That
+    matters when a temporary main-checkout spool has materialized a legacy
+    knowledge ratings migration with ``git rm`` and must return main exactly to
+    its committed state after carry-forward.
+    """
+    if not paths:
+        return True
+    result = _run_git(
+        "restore", "--source=HEAD", "--staged", "--worktree", "--", *paths, cwd=cwd, check=False
+    )
+    return result.returncode == 0
+
+
 def rm_file(cwd: Path, relpath: str) -> bool:
     """Stage the removal of ``relpath`` (``git rm --force --quiet -- <relpath>``).
 

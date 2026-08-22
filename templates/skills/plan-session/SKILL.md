@@ -15,9 +15,9 @@ after you exit.
 
 ## Execution mode
 
-Run `wade` and `gh` commands with the required permissions/capabilities (not
-in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
-start.
+Keep the sandbox enabled with only the capabilities this session needs. The
+readiness check identifies the missing capability and remediation; never grant
+broad main-checkout writes.
 
 ## Talking to the user
 
@@ -36,6 +36,18 @@ creation is a separate skill (@.claude/skills/task/SKILL.md), used outside
 planning sessions.
 
 {knowledge_step}
+
+## First action: check session readiness
+
+Run `wade plan-session check` as your **first action**. A detached worktree
+needs writable Git metadata, configured GitHub access, and local `.wade/` vote staging.
+
+- `IN_WORKTREE` — proceed with planning.
+- `WORKTREE_GIT_BLOCKED`, `GITHUB_AUTH_BLOCKED`, `GITHUB_API_BLOCKED`, or
+  `KNOWLEDGE_STAGING_BLOCKED` — do not write a plan or vote; follow its
+  `reason=…` hint and relaunch with only that capability.
+
+Do not disable a sandbox globally or request main-checkout writes.
 
 **Planning session limits:** a plan worktree is discarded at session end and has
 no PR, so `wade knowledge add`, `wade knowledge tag add`, and

@@ -520,6 +520,10 @@ def _has_form_values(args: list[str], *keys: str) -> bool:
 def _handle_api(args: list[str], state: dict[str, object]) -> int:
     if not args:
         return 1
+    # Session-readiness probe: authenticated, read-only API request.
+    if args[0] == "user":
+        print(json.dumps({"login": "e2e-user"}))
+        return 0
     if args[0] != "graphql":
         return 1
 

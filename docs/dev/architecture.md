@@ -476,6 +476,29 @@ picks (implement / batch / review). `None` (unset) still re-resolves per the
 routed command's own config, matching how a non-explicit `permission_mode` is
 threaded.
 
+### Phase-aware session readiness (#462)
+
+`check_service.check_session_readiness()` layers a phase (`plan`,
+`implementation`, `review-pr-comments`, or `deps`) over the legacy linked-worktree
+probe. Its stable result states preserve the original `IN_WORKTREE` / main /
+non-repo contracts and add `GITHUB_AUTH_BLOCKED` (4), `GITHUB_API_BLOCKED` (5),
+and `KNOWLEDGE_STAGING_BLOCKED` (6); each names a `ReadinessFailure` such as
+`github_api_reachability`. The GitHub probes are `gh auth status` and `gh api
+user --method GET`, so they never mutate a remote, and are skipped for a
+non-GitHub task provider. Detached plan/deps sessions additionally perform a
+self-cleaning probe of their local `.wade/` transport area.
+
+The session CLIs call this service before agent work, and `task deps` runs the
+same preflight immediately before its detached delegation. The capability
+remediation is intentionally tool-neutral: retain the sandbox and grant only
+the worktree Git metadata paths, GitHub credential/API route, or local staging
+path named by the failure. Codex continues to use explicit `network_access` and
+its additive worktree metadata grants; Claude/Cursor use their path/domain
+allowlists; Copilot/VS Code need host-networked `gh` credentials; OpenCode has
+host-authority shells and must be launched only in a trusted host context.
+Wade never rewrites those external tool settings or grants the main checkout
+write access as a readiness workaround.
+
 ### Session-start context injection (#351)
 
 The launch prompt injects the task **once**. Nothing re-injects it on **resume**
@@ -780,7 +803,20 @@ See knowledge `cc91cd11` for the generalized principle.
 
 **Repo-quality gates** (`HooksConfig` → `PreCommitConfig` / `CommitMsgConfig` / `PostToolUseConfig`, #352): three opt-in, off-by-default subsections. `pre_commit.{lint,test}` and `commit_msg.conventional` install per-worktree `pre-commit` / `commit-msg` git hooks (baked from config at bootstrap via placeholder substitution — no per-commit config load). They are reconciled together with the `done.pre_push_backstop` `pre-push` hook by `reconcile_worktree_git_hooks`, which installs the desired set in one batch (so every prior user hook is captured **before** wade sets `core.hooksPath` — per-hook `.chain-<hook_name>` files; a #349 unsuffixed `.chain` is migrated to `.chain-pre-push` on upgrade) **and** is idempotent across re-bootstraps of a reused worktree: a gate turned off since a prior session is neutralized (a chain-only passthrough that still runs any captured prior, or a full uninstall + `core.hooksPath` unset when nothing is managed), so disabling a gate actually disables it. `post_tool_use` installs a PostToolUse hook into context-capable tools only (dialect ≠ `DECISION`, so Antigravity CLI is skipped and its prior entry removed); the command is **stable** (`wade-hook post_tool_use --tool <id> --root <root>`) and resolves `lint_cmd`/timeout/scope from `.wade.yml` at runtime, so re-bootstrap dedups, a disabled gate's entry is removed (and a leftover hook self-noops), and it fails open — lints the just-edited file (`lint_cmd` file-scoped; falls back to `pre_commit.lint` whole-repo) and injects findings back as `additionalContext`, never blocking. All three, like `done`, derive their `check_service` validator allowlists from `*.model_fields` so config-key validity can't drift (knowledge `ca245d6a`). **Honesty:** `git commit --no-verify` bypasses the git hooks — these are quality gates, not enforcement boundaries.
 
-**Project knowledge** (worktree-local lifecycle, #358): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — a session edits the copy in the worktree it is standing in, and the change rides to `main` with its PR. They are **not** copied into worktrees (a copy would manufacture a stale snapshot); `_resolve_knowledge_root` keys off the HEAD-attachment state, redirecting only a throwaway detached-HEAD worktree (a `plan` / `task deps` session) back to the main checkout. Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `rate` appends an up/down/stale vote (allowed everywhere; a throwaway session's vote is carried into the next attached session's PR by a ratings-only reconcile at bootstrap), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`. (Attached-session knowledge edits are worktree-local, so an attached session never dirties `main`. The one exception is a detached `plan` / `task deps` session: its `rate` vote appends to main's tracked ratings JSONL and stays uncommitted there until the next attached bootstrap's ratings-only reconcile carries it forward and restores main. The stash/pop branch in `_pull_main_after_merge` therefore still matters — it covers that transient detached-ratings dirt as well as non-knowledge dirt.)
+**Project knowledge** (worktree-local lifecycle, #358/#462): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — an attached session edits the copy in its worktree and the change rides to `main` with its PR. They are never copied into worktrees (a copy would manufacture a stale snapshot). Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`.
+
+**Detached-vote staging (#462):** `record_rating_for_session()` validates
+and serializes a durable `RatingEvent` but, in a detached plan/deps worktree,
+appends it only to `.wade/knowledge-ratings-staged.jsonl`. The parent plan/deps
+lifecycle calls `flush_staged_ratings()` before cleanup, locks the existing main
+ratings spool, appends only event IDs not already present, fsyncs, and removes
+the staging artifact only afterward. A failed or partially completed handoff
+leaves the throwaway worktree and its generated output in place for retry;
+duplicate delivery of a new event is folded once, while legacy no-ID JSONL vote
+records retain their historical duplicate-vote semantics. The next attached
+bootstrap's existing ratings-only carry-forward remains the sole path that puts
+tracked ratings into a PR. `knowledge status` reports staged votes from a
+detached session in addition to canonical sidecar dirt.
 
 ## Config Migration Pipeline
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import subprocess
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from wade.models.config import (
     is_valid_bot_name,
 )
 from wade.models.delegation import DelegationMode
+from wade.models.readiness import ReadinessFailure, ReadinessPhase
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 
@@ -48,6 +50,9 @@ class CheckStatus(StrEnum):
     IN_MAIN_CHECKOUT = "IN_MAIN_CHECKOUT"
     NOT_IN_GIT_REPO = "NOT_IN_GIT_REPO"
     WORKTREE_GIT_BLOCKED = "WORKTREE_GIT_BLOCKED"
+    GITHUB_AUTH_BLOCKED = "GITHUB_AUTH_BLOCKED"
+    GITHUB_API_BLOCKED = "GITHUB_API_BLOCKED"
+    KNOWLEDGE_STAGING_BLOCKED = "KNOWLEDGE_STAGING_BLOCKED"
 
 
 class CheckExitCode(IntEnum):
@@ -63,6 +68,9 @@ class CheckExitCode(IntEnum):
     # agent can react. (3 is free in run_check's 0/1/2 space; handle_sync_result
     # uses 4 but that is a different command's exit space — no collision.)
     WORKTREE_GIT_BLOCKED = 3
+    GITHUB_AUTH_BLOCKED = 4
+    GITHUB_API_BLOCKED = 5
+    KNOWLEDGE_STAGING_BLOCKED = 6
 
 
 class ConfigExitCode(IntEnum):
@@ -83,6 +91,11 @@ class CheckResult(BaseModel):
     git_dir: str | None = None
     # Git-metadata dirs that failed the write probe (WORKTREE_GIT_BLOCKED only).
     blocked_paths: list[str] = Field(default_factory=list)
+    # Session readiness context. ``None`` preserves the legacy bare-worktree
+    # check contract for direct service callers.
+    phase: ReadinessPhase | None = None
+    failure: ReadinessFailure | None = None
+    tool: str | None = None
 
     def format_output(self) -> str:
         """Format as structured text output matching Bash behavior."""
@@ -93,6 +106,12 @@ class CheckResult(BaseModel):
             lines.append(f"branch={self.branch}")
         if self.git_dir is not None:
             lines.append(f"gitdir={self.git_dir}")
+        if self.phase is not None:
+            lines.append(f"phase={self.phase.value}")
+        if self.tool is not None:
+            lines.append(f"tool={self.tool}")
+        if self.failure is not None:
+            lines.append(f"reason={self.failure.value}")
         for blocked in self.blocked_paths:
             lines.append(f"blocked={blocked}")
         if self.status == CheckStatus.WORKTREE_GIT_BLOCKED:
@@ -102,9 +121,29 @@ class CheckResult(BaseModel):
                 "so git writes (index, refs, objects) and wade sync/done will fail."
             )
             lines.append(
-                "hint: relaunch this AI session via `wade implement` / `wade review` "
-                "on an up-to-date wade + crossby so Codex grants the git-metadata "
-                "dirs as sandbox writable roots. Do not edit files until this passes."
+                "hint: relaunch with this worktree's private/common git metadata dirs "
+                "writable. Keep the main checkout read-only; do not edit files until this passes."
+            )
+        elif self.status == CheckStatus.GITHUB_AUTH_BLOCKED:
+            lines.append("error: GitHub CLI authentication is unavailable for this session.")
+            lines.append(
+                "hint: authenticate `gh` in the trusted host runtime, then relaunch with "
+                "that credential available; do not grant the AI main-checkout write access."
+            )
+        elif self.status == CheckStatus.GITHUB_API_BLOCKED:
+            lines.append("error: GitHub API reachability is unavailable for this session.")
+            lines.append(
+                "hint: allow only GitHub API access required by this workflow (for example "
+                "api.github.com), then relaunch; do not globally disable sandboxing."
+            )
+        elif self.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED:
+            lines.append(
+                "error: the detached session cannot write its WADE-managed "
+                "knowledge-vote staging area."
+            )
+            lines.append(
+                "hint: relaunch with this worktree's `.wade/` path writable; staged votes "
+                "must not be redirected to the main checkout."
             )
         return "\n".join(lines)
 
@@ -285,6 +324,7 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
                 branch=branch,
                 git_dir=git_dir,
                 blocked_paths=blocked,
+                failure=ReadinessFailure.GIT_METADATA_WRITE,
             )
 
         logger.info("check.in_worktree", branch=branch, toplevel=toplevel)
@@ -303,6 +343,142 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
         toplevel=toplevel,
         branch=branch,
     )
+
+
+def _github_auth_available(cwd: Path) -> bool:
+    """Check local GitHub CLI credentials without contacting a repository API."""
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status", "--hostname", "github.com"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _github_api_reachable(cwd: Path) -> bool:
+    """Verify read-only GitHub API reachability for a session that requires it."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", "user", "--method", "GET"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _probe_staging_path(project_root: Path) -> bool:
+    """Self-cleaningly verify the detached session's staging directory is writable."""
+    from wade.services.knowledge_service import staged_ratings_path
+
+    staging_path = staged_ratings_path(project_root)
+    parent = staging_path.parent
+    created: list[Path] = []
+    try:
+        missing: list[Path] = []
+        cursor = parent
+        while not cursor.exists():
+            missing.append(cursor)
+            cursor = cursor.parent
+        for directory in reversed(missing):
+            directory.mkdir()
+            created.append(directory)
+        if staging_path.exists() and staging_path.is_dir():
+            return False
+        return _probe_dir_writable(parent)
+    except OSError:
+        return False
+    finally:
+        for directory in reversed(created):
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+
+
+def _readiness_result(
+    base: CheckResult,
+    *,
+    phase: ReadinessPhase,
+    tool: str | None,
+    status: CheckStatus | None = None,
+    exit_code: CheckExitCode | None = None,
+    failure: ReadinessFailure | None = None,
+) -> CheckResult:
+    """Attach phase context to a worktree result without losing legacy fields."""
+    return base.model_copy(
+        update={
+            "phase": phase,
+            "tool": tool,
+            "status": status or base.status,
+            "exit_code": int(exit_code if exit_code is not None else base.exit_code),
+            "failure": failure if failure is not None else base.failure,
+        }
+    )
+
+
+def check_session_readiness(
+    phase: ReadinessPhase,
+    cwd: Path | None = None,
+    config: ProjectConfig | None = None,
+    tool: str | None = None,
+) -> CheckResult:
+    """Check the narrow capabilities a session needs before it starts edits.
+
+    The base worktree check remains independently callable and retains its
+    established exit codes.  Phase-aware callers receive the same status plus
+    explicit GitHub/staging failures only when their configured provider and
+    lifecycle require those capabilities.  Every GitHub probe is read-only.
+    """
+    path = cwd or Path.cwd()
+    base = check_worktree(path)
+    result = _readiness_result(base, phase=phase, tool=tool)
+    if result.status != CheckStatus.IN_WORKTREE:
+        return result
+
+    if config is not None and config.provider.name.value == "github":
+        if not _github_auth_available(path):
+            return _readiness_result(
+                result,
+                phase=phase,
+                tool=tool,
+                status=CheckStatus.GITHUB_AUTH_BLOCKED,
+                exit_code=CheckExitCode.GITHUB_AUTH_BLOCKED,
+                failure=ReadinessFailure.GITHUB_AUTHENTICATION,
+            )
+        if not _github_api_reachable(path):
+            return _readiness_result(
+                result,
+                phase=phase,
+                tool=tool,
+                status=CheckStatus.GITHUB_API_BLOCKED,
+                exit_code=CheckExitCode.GITHUB_API_BLOCKED,
+                failure=ReadinessFailure.GITHUB_API_REACHABILITY,
+            )
+
+    if (
+        config is not None
+        and config.knowledge.enabled
+        and phase in (ReadinessPhase.PLAN, ReadinessPhase.DEPS)
+    ):
+        from wade.services.knowledge_service import is_throwaway_knowledge_session
+
+        if is_throwaway_knowledge_session(path) and not _probe_staging_path(path):
+            return _readiness_result(
+                result,
+                phase=phase,
+                tool=tool,
+                status=CheckStatus.KNOWLEDGE_STAGING_BLOCKED,
+                exit_code=CheckExitCode.KNOWLEDGE_STAGING_BLOCKED,
+                failure=ReadinessFailure.KNOWLEDGE_VOTE_STAGING,
+            )
+    return result
 
 
 # ---------------------------------------------------------------------------

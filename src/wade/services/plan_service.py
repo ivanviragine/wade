@@ -569,7 +569,11 @@ def plan(
             console.info("Plan directory preserved — review output manually.")
             console.hint(f"Plan dir: {plan_dir}")
             stop_title_keeper()
-            _remove_planning_worktree(repo_root, planning_worktree)
+            _remove_planning_worktree(
+                repo_root,
+                planning_worktree,
+                config if config.knowledge.enabled else None,
+            )
             return False
 
     # Post-session: extract token usage (skip for non-blocking tools)
@@ -608,7 +612,7 @@ def plan(
                         # worktree merge-target pin could not be reconciled. Preserve
                         # the freshly generated plan and abort — finalizing here would
                         # discard it when the worktree is force-removed below (#376).
-                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                         stop_title_keeper()
                         return False
                     finalize_issue_numbers = [existing_issue.id]
@@ -624,7 +628,7 @@ def plan(
                 stop_title_keeper()
                 if not finalize_issue_numbers:
                     console.warn("No issues were created from plan files.")
-                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
                     return False
                 offer_result = _finalize_issues(
                     provider=provider,
@@ -638,7 +642,7 @@ def plan(
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                 )
-                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
                 if offer_result is not None:
                     return offer_result
                 return True
@@ -646,12 +650,12 @@ def plan(
             # partial run). Preserve the generated files — the helper already
             # surfaced the reason — so a validation miss doesn't force a full
             # AI re-planning run.
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
         # Reached only when the session produced no plan files (nothing to
         # preserve) — clean up like every other failure path.
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
         stop_title_keeper()
         return False
 
@@ -696,9 +700,9 @@ def plan(
                         f"{len(failed_files)} plan(s) could not be persisted to a draft "
                         f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
                     )
-                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                 else:
-                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
                 if offer_result is not None:
                     return offer_result
                 return True
@@ -709,7 +713,7 @@ def plan(
                     f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
                     f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
                 )
-                _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                 stop_title_keeper()
                 return False
             console.warn("No issues were created from plan files.")
@@ -718,14 +722,14 @@ def plan(
             # partial run). Preserve the generated files — the helper already
             # surfaced the reason — so a validation miss doesn't force a full
             # AI re-planning run.
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
     else:
         console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
 
-    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
     stop_title_keeper()
     return False
 
@@ -1255,6 +1259,21 @@ def _finalize_issues(
     Returns a bool if the user accepted the offer to implement (single issue),
     or None if no interactive offer was made.
     """
+    # A successful plan may offer an implementation session immediately below.
+    # Flush detached votes before that bootstrap, otherwise its carry-forward
+    # step would run too early and the vote would wait for a later PR.
+    if planning_worktree is not None and repo_root is not None and config.knowledge.enabled:
+        from wade.services.knowledge_service import flush_staged_ratings
+
+        handoff = flush_staged_ratings(planning_worktree, repo_root, config.knowledge)
+        if not handoff.success:
+            console.error(
+                "Could not hand off staged knowledge votes; preserving the planning "
+                f"worktree at {planning_worktree}. "
+                f"{handoff.message or 'Retry after restoring access.'}"
+            )
+            return False
+
     # Apply token usage to issue bodies
     if usage:
         apply_plan_token_usage(
@@ -1385,26 +1404,43 @@ def _offer_to_implement(issue_number: str) -> bool | None:
         return False
 
 
-def _remove_planning_worktree(repo_root: Path | None, worktree: Path | None) -> None:
-    """Remove a planning worktree if it exists."""
+def _remove_planning_worktree(
+    repo_root: Path | None,
+    worktree: Path | None,
+    config: ProjectConfig | None = None,
+) -> bool:
+    """Flush staged rating votes, then remove a planning worktree if it exists."""
     if repo_root is None or worktree is None:
-        return
+        return True
+    if config is not None and config.knowledge.enabled:
+        from wade.services.knowledge_service import flush_staged_ratings
+
+        result = flush_staged_ratings(worktree, repo_root, config.knowledge)
+        if not result.success:
+            console.error(
+                "Could not hand off staged knowledge votes; preserving the planning "
+                f"worktree at {worktree}. {result.message or 'Retry after restoring access.'}"
+            )
+            return False
     with contextlib.suppress(Exception):
         from wade.git import worktree as git_worktree
 
         git_worktree.remove_worktree(repo_root, worktree, force=True)
+    return True
 
 
 def _cleanup_plan_dir_or_worktree(
     plan_dir: str,
     repo_root: Path | None,
     planning_worktree: Path | None,
-) -> None:
+    config: ProjectConfig | None = None,
+) -> bool:
     """Clean up the plan directory — either a worktree or a temp dir."""
     if planning_worktree is not None:
-        _remove_planning_worktree(repo_root, planning_worktree)
+        return _remove_planning_worktree(repo_root, planning_worktree, config)
     else:
         _cleanup_plan_dir(plan_dir)
+        return True
 
 
 def _cleanup_plan_dir(plan_dir: str) -> None:
@@ -1417,6 +1453,7 @@ def _preserve_generated_plans(
     plan_dir: str,
     repo_root: Path | None,
     planning_worktree: Path | None,
+    config: ProjectConfig | None = None,
 ) -> None:
     """Salvage generated ``PLAN*.md`` before the normal cleanup, then clean up.
 
@@ -1432,7 +1469,10 @@ def _preserve_generated_plans(
     generated = discover_plan_files(Path(plan_dir))
     if not generated:
         # Nothing to salvage — the usual cleanup can run unconditionally.
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        if config is None:
+            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        else:
+            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
         return
 
     try:
@@ -1451,7 +1491,10 @@ def _preserve_generated_plans(
     # Every file copied cleanly — the stable copy now stands in for the source,
     # so the normal cleanup can remove the worktree/temp dir.
     _report_preserved_plans(len(generated), preserved)
-    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+    if config is None:
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+    else:
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
 
 def _report_preserved_plans(count: int, location: Path) -> None:

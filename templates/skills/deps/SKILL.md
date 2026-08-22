@@ -25,6 +25,11 @@ task bodies.
 - When `wade task deps` is run on existing issues
 - When the user asks to analyze dependencies between issues
 
+`wade task deps` runs its detached-session readiness check before launching this
+analysis. If it reports a missing Git metadata, GitHub, or local vote-staging
+capability, stop and use the printed narrow remediation; never disable the
+sandbox globally or request main-checkout write access.
+
 > **Note:** `wade task deps` first attempts headless analysis (AI tools that
 > support `--print`/`--prompt`). If headless fails, it falls back to interactive
 > mode: passes the analysis prompt directly to the AI tool as an initial message,

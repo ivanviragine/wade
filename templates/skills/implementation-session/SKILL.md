@@ -13,9 +13,9 @@ Read and follow them before performing any other action.
 
 ## Execution mode
 
-Run `wade` and `gh` commands with the required permissions/capabilities (not
-in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
-start.
+Keep the sandbox enabled with only the capabilities this session needs. The
+readiness check identifies missing worktree Git or configured GitHub access.
+Never grant write access to the main checkout just to make it pass.
 
 ## Talking to the user
 
@@ -46,8 +46,13 @@ Run `wade implementation-session check` as your **first action**:
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 - `WORKTREE_GIT_BLOCKED` — in a worktree, but its git metadata (the `blocked=…`
   path) is **not writable**, so git writes and `wade sync`/`done` will fail. Do
-  not edit files; tell the human to relaunch the session (an AI sandbox started
-  without write access to the worktree's out-of-root git dirs).
+  not edit files; relaunch with only that metadata path writable.
+- `GITHUB_AUTH_BLOCKED` / `GITHUB_API_BLOCKED` — GitHub credentials or the
+  read-only API route required by this configured provider are unavailable. Do
+  not edit files; relaunch with only the required `gh` access.
+
+Read its machine-readable `reason=…` and exact remediation. If it cannot be
+granted narrowly, stop before edits and ask for a trusted relaunch.
 
 `wade implement` auto-syncs your branch with the base branch at startup. If that
 catchup — or the closing sync — reports a conflict or error, see

@@ -222,12 +222,13 @@ These are invoked by the AI during a session — you normally don't run them by 
 
 | Command | Description |
 |---------|-------------|
-| `wade implementation-session check` | Verify the AI is in a writable worktree before it edits anything |
+| `wade implementation-session check` | Verify the implementation session's Git, GitHub, and required local capabilities before edits |
 | `wade implementation-session sync` | Sync the branch onto the base branch |
 | `wade implementation-session done` | Completion gate — runs the gates, pushes, and opens/updates the PR |
 | `wade review-pr-comments-session check \| sync \| done` | Same lifecycle for a review session |
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
+| `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
@@ -646,11 +647,31 @@ flag enables it there. Precedence for the commands that honor it is
 enable network for a WADE-managed sandbox. Enabling network never disables the
 sandbox and never changes approval-policy semantics.
 
-`wade implementation-session check` (and the review equivalent) verifies this is
-actually working: on top of `IN_WORKTREE` / `IN_MAIN_CHECKOUT` /
-`NOT_IN_GIT_REPO`, it now reports **`WORKTREE_GIT_BLOCKED`** (exit code **3**)
-when a worktree's git metadata is not writable — naming the blocked path — so a
-session launched without the correct grant is caught before it wastes work.
+### Session readiness and least-privilege remediation
+
+Run the phase-specific readiness check before an AI edits files:
+`wade plan-session check`, `wade implementation-session check`, or
+`wade review-pr-comments-session check`. Alongside the existing repository
+states, it reports stable capability failures: `WORKTREE_GIT_BLOCKED` (3),
+`GITHUB_AUTH_BLOCKED` (4), `GITHUB_API_BLOCKED` (5), and, for detached
+planning/deps worktrees, `KNOWLEDGE_STAGING_BLOCKED` (6). The output includes a
+machine-readable `reason=…` plus a narrow remediation; do not disable a sandbox
+globally or give the AI write access to the main checkout.
+
+For Codex, keep `--sandbox workspace-write`, grant only the linked worktree's
+private/common Git metadata directories, and enable `network_access` explicitly
+only when the GitHub check identifies a needed network route. For Claude Code
+and Cursor, allowlist the worktree/Git metadata paths and the necessary GitHub
+domains rather than choosing unrestricted shell access. Copilot and VS Code
+also need network access plus usable `gh` credentials in their host runtime.
+OpenCode shells execute with host authority, so treat the selected host runtime
+and its credentials as the boundary rather than assuming a worktree is one.
+
+Detached plan and dependency sessions stage knowledge-rating events in their own
+ignored `.wade/` area. Wade flushes those durable-ID events into the main ratings
+spool before removing the throwaway worktree; a failed handoff preserves the
+worktree for retry, and the next attached worktree remains the only path that
+commits the ratings log into a PR.
 
 ## Supported AI Tools
 

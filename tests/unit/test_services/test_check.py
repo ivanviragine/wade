@@ -15,11 +15,16 @@ from wade.models.config import (
     HooksConfig,
     PostToolUseConfig,
     PreCommitConfig,
+    ProjectConfig,
+    ProviderConfig,
+    ProviderID,
 )
+from wade.models.readiness import ReadinessFailure, ReadinessPhase
 from wade.services.check_service import (
     CheckExitCode,
     CheckStatus,
     ConfigExitCode,
+    check_session_readiness,
     check_worktree,
     validate_config,
 )
@@ -180,6 +185,71 @@ class TestWorktreeGitReadinessProbe:
         result = check_worktree(tmp_git_repo)
         assert result.status == CheckStatus.IN_MAIN_CHECKOUT
         assert result.exit_code == CheckExitCode.IN_MAIN_CHECKOUT
+
+
+class TestSessionReadiness:
+    """Phase-aware probes preserve the legacy worktree contract and name failures."""
+
+    def test_github_auth_failure_has_stable_reason(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="auth-worktree", branch="auth-branch")
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.GITHUB_AUTH_BLOCKED
+        assert result.exit_code == CheckExitCode.GITHUB_AUTH_BLOCKED
+        assert result.failure == ReadinessFailure.GITHUB_AUTHENTICATION
+        assert "reason=github_authentication" in result.format_output()
+
+    def test_github_api_failure_runs_after_auth(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="api-worktree", branch="api-branch")
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: True)
+        monkeypatch.setattr("wade.services.check_service._github_api_reachable", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.GITHUB_API_BLOCKED
+        assert result.exit_code == CheckExitCode.GITHUB_API_BLOCKED
+        assert result.failure == ReadinessFailure.GITHUB_API_REACHABILITY
+
+    def test_non_github_provider_skips_network_probes(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="markdown-worktree", branch="markdown-branch")
+
+        def must_not_probe(_: Path) -> bool:
+            raise AssertionError("irrelevant provider must not probe GitHub")
+
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", must_not_probe)
+        monkeypatch.setattr("wade.services.check_service._github_api_reachable", must_not_probe)
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.MARKDOWN))
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, config)
+
+        assert result.status == CheckStatus.IN_WORKTREE
+
+    def test_detached_stage_failure_is_named_before_planning(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="plan-worktree", branch="plan-branch")
+        config = ProjectConfig(
+            provider=ProviderConfig(name=ProviderID.MARKDOWN),
+            knowledge={"enabled": True},
+        )
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        monkeypatch.setattr("wade.services.check_service._probe_staging_path", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, worktree, config)
+
+        assert result.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED
+        assert result.exit_code == CheckExitCode.KNOWLEDGE_STAGING_BLOCKED
+        assert result.failure == ReadinessFailure.KNOWLEDGE_VOTE_STAGING
 
 
 # ---------------------------------------------------------------------------

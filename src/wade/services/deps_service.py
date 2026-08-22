@@ -423,7 +423,6 @@ def analyze_deps(
 
     Returns the DependencyGraph, or None on failure.
     """
-    import contextlib
     import os
 
     config = load_config(project_root)
@@ -537,6 +536,22 @@ def analyze_deps(
             logger.warning("deps.worktree_create_failed", error=str(e))
             # Fall through — deps_cwd stays None, analysis runs in CWD
 
+    # A detached deps worktree is still an AI session: verify only the
+    # capabilities this phase will actually use before launching the agent.
+    if standalone_worktree is not None:
+        from wade.models.readiness import ReadinessPhase
+        from wade.services.check_service import CheckStatus, check_session_readiness
+
+        readiness = check_session_readiness(
+            ReadinessPhase.DEPS,
+            deps_cwd,
+            config,
+            resolved_tool,
+        )
+        if readiness.status != CheckStatus.IN_WORKTREE:
+            console.error(readiness.format_output())
+            return None
+
     # Build context
     context = build_context(provider, issue_numbers)
     prompt = build_deps_prompt(context)
@@ -633,12 +648,33 @@ def analyze_deps(
 
     # Clean up standalone worktree (planning worktree is cleaned by plan_service)
     if standalone_worktree is not None:
-        with contextlib.suppress(Exception):
+        try:
             from wade.git import repo as git_repo
             from wade.git import worktree as git_worktree
+            from wade.services.knowledge_service import flush_staged_ratings
 
             repo_root = git_repo.get_repo_root(project_root or Path.cwd())
+            if config.knowledge.enabled:
+                handoff = flush_staged_ratings(standalone_worktree, repo_root, config.knowledge)
+                if not handoff.success:
+                    console.error(
+                        "Could not hand off staged knowledge votes; preserving dependency "
+                        f"worktree at {standalone_worktree}. "
+                        f"{handoff.message or 'Retry after restoring access.'}"
+                    )
+                    return None
             git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
+        except Exception as exc:
+            logger.warning(
+                "deps.worktree_cleanup_failed",
+                worktree=str(standalone_worktree),
+                error=str(exc),
+            )
+            console.error(
+                "Could not clean up the dependency worktree; it was preserved at "
+                f"{standalone_worktree}. Retry after restoring access."
+            )
+            return None
 
     # A timeout is a hard failure (not "no deps found"), so return None rather
     # than an empty graph — callers must not treat it as an authoritative result.
