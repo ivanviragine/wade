@@ -139,16 +139,14 @@ this file; it is a gitignored session artifact.
 
 **Step 3 — Sync with main:**
 
-Re-run the current-runtime check immediately before `sync`, and before `done`
-after a resume or permission/network change. `wade`, `git`, and `gh` inherit
-this sandbox and its credentials/network policy:
+`fetch`, `resolve`, `sync`, and `done` enforce the same read-only runtime
+check. After a resume or permission/network change, inspect it first:
 
 ```bash
 wade review-pr-comments-session check
 ```
 
-If it is not `IN_WORKTREE`, stop and use its hint — do not retry through raw
-`git`/`gh` or grant main-checkout access.
+If blocked, use its hint; never bypass it with raw `git`/`gh`.
 
 ```bash
 wade review-pr-comments-session sync --json

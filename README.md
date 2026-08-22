@@ -656,9 +656,11 @@ credentials, and the effects of any command or hook approval. WADE does not
 become privileged because it launched the session: a `wade … done` call and its
 own `git`/`gh` subprocesses are subject to the same containment.
 
-Run the phase-specific readiness check as the first agent action — and re-run
-the implementation/review check immediately before `sync` or `done` after a
-resume or permission/network change. It reports stable capability failures:
+Run the phase-specific readiness check as the first agent action. The
+implementation and PR-comment lifecycle commands also repeat the same
+non-mutating check immediately before `catchup`, `sync`, `done`, `fetch`, or
+`resolve`, so a resumed session cannot turn a changed sandbox/PATH/credential
+state into a late raw Git or GitHub failure. It reports stable capability failures:
 `WORKTREE_GIT_BLOCKED` (3), `GITHUB_CLI_BLOCKED` (4),
 `GITHUB_AUTH_BLOCKED` (5), `GITHUB_API_BLOCKED` (6), and
 `KNOWLEDGE_STAGING_BLOCKED` (7). The result includes a

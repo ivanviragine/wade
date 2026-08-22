@@ -642,7 +642,14 @@ def plan(
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                 )
-                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+                if not _cleanup_plan_dir_or_worktree(
+                    plan_dir, repo_root, planning_worktree, config
+                ):
+                    # A failed staging handoff deliberately preserves the detached
+                    # worktree. Do not report the overall plan as successful: an
+                    # automation caller must be able to retry the parent-side
+                    # recovery rather than treating the retained vote as delivered.
+                    return False
                 if offer_result is not None:
                     return offer_result
                 return True
@@ -700,9 +707,17 @@ def plan(
                         f"{len(failed_files)} plan(s) could not be persisted to a draft "
                         f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
                     )
-                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+                    cleanup_succeeded = _preserve_generated_plans(
+                        plan_dir, repo_root, planning_worktree, config
+                    )
                 else:
-                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+                    cleanup_succeeded = _cleanup_plan_dir_or_worktree(
+                        plan_dir, repo_root, planning_worktree, config
+                    )
+                if not cleanup_succeeded:
+                    # The helper has already preserved the generated plan and/or
+                    # detached vote artifact and printed its recovery location.
+                    return False
                 if offer_result is not None:
                     return offer_result
                 return True
@@ -1454,7 +1469,7 @@ def _preserve_generated_plans(
     repo_root: Path | None,
     planning_worktree: Path | None,
     config: ProjectConfig | None = None,
-) -> None:
+) -> bool:
     """Salvage generated ``PLAN*.md`` before the normal cleanup, then clean up.
 
     Used when the strict gate (:func:`_select_valid_plans`) rejects a batch — every
@@ -1470,10 +1485,8 @@ def _preserve_generated_plans(
     if not generated:
         # Nothing to salvage — the usual cleanup can run unconditionally.
         if config is None:
-            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-        else:
-            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
-        return
+            return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
     try:
         preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
@@ -1486,15 +1499,14 @@ def _preserve_generated_plans(
         # user at the untouched originals still sitting in ``plan_dir``.
         logger.warning("plan.preserve_generated_failed", exc_info=True)
         _report_preserved_plans(len(generated), Path(plan_dir))
-        return
+        return False
 
     # Every file copied cleanly — the stable copy now stands in for the source,
     # so the normal cleanup can remove the worktree/temp dir.
     _report_preserved_plans(len(generated), preserved)
     if config is None:
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-    else:
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+        return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+    return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
 
 def _report_preserved_plans(count: int, location: Path) -> None:

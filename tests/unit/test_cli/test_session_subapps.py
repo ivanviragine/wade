@@ -47,12 +47,37 @@ class TestImplementationSessionSubApp:
         result = runner.invoke(app, ["implementation-session", "sync"])
         # Not in a worktree → preflight failure (exit 4)
         assert result.exit_code == 4
+        assert "NOT_IN_GIT_REPO" in result.output
 
     def test_done_no_issue(self) -> None:
-        with patch("wade.git.repo.get_current_branch", return_value="main"):
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch("wade.git.repo.get_current_branch", return_value="main"),
+        ):
             result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output
+
+    def test_done_blocks_before_completion_when_runtime_loses_github_access(self) -> None:
+        """A stale first-action check must not let `done` reach a push or PR write."""
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        blocked = CheckResult(
+            status=CheckStatus.GITHUB_AUTH_BLOCKED,
+            exit_code=CheckExitCode.GITHUB_AUTH_BLOCKED,
+        )
+        with (
+            patch(
+                "wade.services.check_service.check_session_readiness",
+                return_value=blocked,
+            ),
+            patch("wade.services.implementation_service.done") as mock_done,
+        ):
+            result = runner.invoke(app, ["implementation-session", "done"])
+
+        assert result.exit_code == 1
+        assert "GITHUB_AUTH_BLOCKED" in result.output
+        mock_done.assert_not_called()
 
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["implementation-session", "--help"])
@@ -79,9 +104,13 @@ class TestReviewPrCommentsSessionSubApp:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["review-pr-comments-session", "sync"])
         assert result.exit_code == 4
+        assert "NOT_IN_GIT_REPO" in result.output
 
     def test_done_no_issue(self) -> None:
-        with patch("wade.git.repo.get_current_branch", return_value="main"):
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch("wade.git.repo.get_current_branch", return_value="main"),
+        ):
             result = runner.invoke(app, ["review-pr-comments-session", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output

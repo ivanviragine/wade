@@ -43,10 +43,13 @@ def catchup(
     ),
 ) -> None:
     """Sync current branch with base branch (early catchup at session startup)."""
-    from wade.cli.session_shared import handle_sync_result
+    from wade.cli.session_shared import handle_sync_result, require_ready
     from wade.models.session import SyncEventType
     from wade.services.implementation_service import catchup as do_catchup
 
+    # ``wade`` shares the caller's sandbox.  Do not begin a fetch/merge merely
+    # because the first-action check happened in an earlier environment.
+    require_ready("implementation", exit_code=4)
     result = do_catchup(
         dry_run=dry_run,
         main_branch=main_branch,
@@ -94,9 +97,10 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
-    from wade.cli.session_shared import handle_sync_result
+    from wade.cli.session_shared import handle_sync_result, require_ready
     from wade.services.implementation_service import sync as do_sync
 
+    require_ready("implementation", exit_code=4)
     result = do_sync(
         dry_run=dry_run,
         main_branch=main_branch,
@@ -120,8 +124,10 @@ def done(
     ),
 ) -> None:
     """Finalize implementation — run the completion gates, push, and update the PR."""
+    from wade.cli.session_shared import require_ready
     from wade.services.implementation_service import done as do_done
 
+    require_ready("implementation", exit_code=1)
     success = do_done(
         target=target,
         plan_file=Path(plan) if plan else None,

@@ -98,16 +98,14 @@ file already exists, update it.
 
 **Step 4 — Sync with main:**
 
-Re-run the current-runtime check immediately before `sync`, and before `done`
-after a resume or permission/network change. `wade`, `git`, and `gh` inherit
-this sandbox and its credentials/network policy:
+`sync` and `done` enforce the same read-only runtime check. After a resume or
+permission/network change, inspect it first:
 
 ```bash
 wade implementation-session check
 ```
 
-If it is not `IN_WORKTREE`, stop and use its hint — do not fall back to raw
-`git`/`gh` or broaden main-checkout access.
+If blocked, use its hint; never bypass it with raw `git`/`gh`.
 
 ```bash
 wade implementation-session sync --json

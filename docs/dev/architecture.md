@@ -852,6 +852,17 @@ bootstrap's existing ratings-only carry-forward remains the sole path that puts
 tracked ratings into a PR. `knowledge status` reports staged votes from a
 detached session in addition to canonical sidecar dirt.
 
+**Lifecycle readiness enforcement (#462):** The first-action check remains the
+agent-facing diagnostic, but `implementation-session catchup`/`sync`/`done` and
+`review-pr-comments-session sync`/`done`/`fetch`/`resolve` invoke the same
+read-only phase check again in the process that is about to act. This matters
+after a resume or an approval-policy/PATH/credential/network change: the Wade
+process is contained by the same runtime as the AI agent and cannot assume the
+launcher had more authority. A blocked lifecycle command prints the stable
+readiness result before issuing its Git/GitHub operation; sync/catchup retain
+their established preflight exit code while the other commands retain their
+ordinary failure exit contract.
+
 ## Config Migration Pipeline
 
 `config/migrations.py` provides a single migration run during `wade update`:

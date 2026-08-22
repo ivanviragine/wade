@@ -1919,6 +1919,36 @@ class TestPlanExistingIssueBranch:
         mock_finalize.assert_called_once()
         assert mock_finalize.call_args.kwargs["issue_numbers"] == ["101", "102"]
 
+    def test_handoff_cleanup_failure_makes_plan_fail_for_retry(self, tmp_path: Path) -> None:
+        """A retained staged vote must never be hidden behind a successful plan exit."""
+        provider = MagicMock()
+        existing_issue = Task(id="330", title="Some bug", body="Original body")
+        provider.read_task.return_value = existing_issue
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [plan_file]):
+                stack.enter_context(p)
+            stack.enter_context(patch("wade.services.plan_service._attach_plan_to_existing_issue"))
+            stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+            cleanup = stack.enter_context(
+                patch(
+                    "wade.services.plan_service._cleanup_plan_dir_or_worktree",
+                    return_value=False,
+                )
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is False
+
+        cleanup.assert_called_once()
+
     def test_supersede_with_no_created_issues_skips_finalize(self, tmp_path: Path) -> None:
         """If supersede created nothing at all, plan() must not call _finalize_issues."""
         provider = MagicMock()
@@ -2075,6 +2105,24 @@ class TestPreserveGeneratedPlans:
 
         mock_mkdtemp.assert_not_called()  # nothing to preserve
         mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+
+    def test_propagates_cleanup_failure_after_preserving_files(self, tmp_path: Path) -> None:
+        """A copied plan is recoverable, but an undelivered vote is still a failure."""
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()
+        (plan_dir / "PLAN.md").write_text(_GATE_VALID)
+        preserved_dir = tmp_path / "preserved"
+        preserved_dir.mkdir()
+
+        with (
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(preserved_dir)),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=False),
+            patch("wade.services.plan_service.console"),
+        ):
+            result = _preserve_generated_plans(str(plan_dir), tmp_path, tmp_path)
+
+        assert result is False
+        assert (preserved_dir / "PLAN.md").is_file()
 
     def test_copy_failure_retains_source_and_skips_cleanup(self, tmp_path: Path) -> None:
         # A mid-copy failure must never cost the user their generated plans: the

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from wade.cli.main import app
@@ -13,6 +14,13 @@ runner = CliRunner()
 # Console word-wraps long lines, so match a short, unwrapped substring rather
 # than the full DOC_PASS_ADVISORY sentence.
 ADVISORY_MARKER = "Documentation pass not confirmed"
+
+
+@pytest.fixture(autouse=True)
+def ready_runtime() -> object:
+    """Keep these output-only tests focused on post-``done`` advice."""
+    with patch("wade.cli.session_shared.require_ready"):
+        yield
 
 
 class TestImplementationSessionDoneDocPassAdvisory:

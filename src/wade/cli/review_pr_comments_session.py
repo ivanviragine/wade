@@ -43,9 +43,10 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
-    from wade.cli.session_shared import handle_sync_result
+    from wade.cli.session_shared import handle_sync_result, require_ready
     from wade.services.implementation_service import sync as do_sync
 
+    require_ready("review-pr-comments", exit_code=4)
     result = do_sync(
         dry_run=dry_run,
         main_branch=main_branch,
@@ -71,8 +72,10 @@ def done(
     ),
 ) -> None:
     """Finalize review — run the completion gates, push, and update the PR."""
+    from wade.cli.session_shared import require_ready
     from wade.services.implementation_service import done as do_done
 
+    require_ready("review-pr-comments", exit_code=1)
     success = do_done(
         target=target,
         plan_file=Path(plan) if plan else None,
@@ -132,8 +135,10 @@ def fetch(
     target: str = typer.Argument(..., help="Issue number."),
 ) -> None:
     """Fetch unresolved PR review comments and print formatted markdown to stdout."""
+    from wade.cli.session_shared import require_ready
     from wade.services.review_service import fetch_reviews
 
+    require_ready("review-pr-comments", exit_code=1)
     success = fetch_reviews(target=target)
     raise typer.Exit(0 if success else 1)
 
@@ -143,7 +148,9 @@ def resolve(
     thread_id: str = typer.Argument(..., help="GitHub review thread node ID."),
 ) -> None:
     """Mark a PR review thread as resolved on GitHub."""
+    from wade.cli.session_shared import require_ready
     from wade.services.review_service import resolve_thread
 
+    require_ready("review-pr-comments", exit_code=1)
     success = resolve_thread(thread_id=thread_id)
     raise typer.Exit(0 if success else 1)
