@@ -863,6 +863,11 @@ readiness result before issuing its Git/GitHub operation; sync/catchup retain
 their established preflight exit code while the other commands retain their
 ordinary failure exit contract.
 
+The `gh --version`, `gh auth status`, and read-only `gh api user` probes share
+a short five-second subprocess timeout. A runtime that blackholes an executable
+or network packet therefore returns the phase's named unavailable-capability
+status rather than indefinitely blocking the session's first action.
+
 ## Config Migration Pipeline
 
 `config/migrations.py` provides a single migration run during `wade update`:

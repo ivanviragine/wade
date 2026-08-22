@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import structlog
@@ -1274,21 +1275,6 @@ def _finalize_issues(
     Returns a bool if the user accepted the offer to implement (single issue),
     or None if no interactive offer was made.
     """
-    # A successful plan may offer an implementation session immediately below.
-    # Flush detached votes before that bootstrap, otherwise its carry-forward
-    # step would run too early and the vote would wait for a later PR.
-    if planning_worktree is not None and repo_root is not None and config.knowledge.enabled:
-        from wade.services.knowledge_service import flush_staged_ratings
-
-        handoff = flush_staged_ratings(planning_worktree, repo_root, config.knowledge)
-        if not handoff.success:
-            console.error(
-                "Could not hand off staged knowledge votes; preserving the planning "
-                f"worktree at {planning_worktree}. "
-                f"{handoff.message or 'Retry after restoring access.'}"
-            )
-            return False
-
     # Apply token usage to issue bodies
     if usage:
         apply_plan_token_usage(
@@ -1377,7 +1363,19 @@ def _finalize_issues(
     # Hint for next steps
     console.empty()
     if len(issue_numbers) == 1:
-        result = _offer_to_implement(issue_numbers[0])
+        if planning_worktree is not None and repo_root is not None and config.knowledge.enabled:
+            # The next attached implementation bootstrap carries main's pending
+            # ratings into its PR. Delay the handoff until every plan-finalizing
+            # side effect above succeeded, but run it immediately before that
+            # bootstrap so this detached vote is not left behind.
+            result = _offer_to_implement(
+                issue_numbers[0],
+                before_start=lambda: _flush_planning_votes_before_implementation(
+                    planning_worktree, repo_root, config
+                ),
+            )
+        else:
+            result = _offer_to_implement(issue_numbers[0])
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -1393,7 +1391,29 @@ def _print_implement_hint(issue_number: str) -> None:
     console.detail(f"wade implement {issue_number}")
 
 
-def _offer_to_implement(issue_number: str) -> bool | None:
+def _flush_planning_votes_before_implementation(
+    planning_worktree: Path,
+    repo_root: Path,
+    config: ProjectConfig,
+) -> bool:
+    """Flush completed plan-session votes just before an attached bootstrap."""
+    from wade.services.knowledge_service import flush_staged_ratings
+
+    handoff = flush_staged_ratings(planning_worktree, repo_root, config.knowledge)
+    if handoff.success:
+        return True
+    console.error(
+        "Could not hand off staged knowledge votes; preserving the planning "
+        f"worktree at {planning_worktree}. {handoff.message or 'Retry after restoring access.'}"
+    )
+    return False
+
+
+def _offer_to_implement(
+    issue_number: str,
+    *,
+    before_start: Callable[[], bool] | None = None,
+) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
@@ -1410,6 +1430,9 @@ def _offer_to_implement(issue_number: str) -> bool | None:
     if not accepted:
         _print_implement_hint(issue_number)
         return None
+
+    if before_start is not None and not before_start():
+        return False
 
     try:
         result = start_implementation_session(target=issue_number)

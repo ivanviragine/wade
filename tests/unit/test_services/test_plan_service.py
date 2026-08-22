@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -647,6 +648,54 @@ class TestFinalizeIssues:
         assert call_kwargs["ai_explicit"] is False
         assert call_kwargs["model_explicit"] is False
 
+    def test_vote_handoff_failure_waits_until_other_finalization_completes(
+        self, tmp_path: Path
+    ) -> None:
+        """A transient main-write failure must not lose completed plan bookkeeping."""
+        from wade.models.config import KnowledgeConfig
+        from wade.services.knowledge_service import StagedRatingsFlushResult
+
+        provider = MagicMock()
+        task = MagicMock(id="1", title="Issue", body="")
+        provider.read_task.return_value = task
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True))
+        usage = TokenUsage(total_tokens=42)
+
+        def offer_and_run_handoff(
+            _issue_number: str, *, before_start: Callable[[], bool] | None = None
+        ) -> bool:
+            assert before_start is not None
+            return before_start()
+
+        with (
+            patch("wade.services.plan_service.apply_plan_token_usage") as apply_usage,
+            patch("wade.services.plan_service.add_planned_by_labels") as add_labels,
+            patch(
+                "wade.services.knowledge_service.flush_staged_ratings",
+                return_value=StagedRatingsFlushResult(
+                    success=False, message="main checkout is read-only"
+                ),
+            ),
+            patch(
+                "wade.services.plan_service._offer_to_implement",
+                side_effect=offer_and_run_handoff,
+            ),
+            patch("wade.services.plan_service.console"),
+        ):
+            result = _finalize_issues(
+                provider=provider,
+                config=config,
+                issue_numbers=["1"],
+                ai_tool="claude",
+                usage=usage,
+                repo_root=tmp_path,
+                planning_worktree=tmp_path / "planning-worktree",
+            )
+
+        assert result is False
+        apply_usage.assert_called_once()
+        add_labels.assert_called_once_with(provider, "1", "claude", None)
+
 
 # ---------------------------------------------------------------------------
 # validate_plan_dir tests
@@ -997,7 +1046,8 @@ class TestOfferToImplement:
             mock_start.assert_called_once_with(target="42")
 
     def test_user_declines_returns_none(self) -> None:
-        """Declining the prompt returns None without calling start."""
+        """Declining the prompt returns None without flushing or starting."""
+        before_start = MagicMock(return_value=True)
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
             patch("wade.services.plan_service.start_implementation_session") as mock_start,
@@ -1006,9 +1056,10 @@ class TestOfferToImplement:
             mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = False
 
-            result = _offer_to_implement("42")
+            result = _offer_to_implement("42", before_start=before_start)
 
             assert result is None
+            before_start.assert_not_called()
             mock_start.assert_not_called()
 
     def test_non_tty_prints_static_hint(self) -> None:

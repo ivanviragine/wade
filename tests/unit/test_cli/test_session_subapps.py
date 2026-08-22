@@ -42,6 +42,17 @@ class TestImplementationSessionSubApp:
         assert result.exit_code == 1
         assert "NOT_IN_GIT_REPO" in result.output
 
+    def test_readiness_does_not_silently_ignore_invalid_config(self) -> None:
+        """Defaults are for an absent config, never for a malformed existing one."""
+        from wade.cli.session_shared import _session_readiness_result
+        from wade.config.loader import ConfigError
+
+        with (
+            patch("wade.config.loader.load_config", side_effect=ConfigError("invalid config")),
+            pytest.raises(ConfigError, match="invalid config"),
+        ):
+            _session_readiness_result("implementation")
+
     def test_sync_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["implementation-session", "sync"])

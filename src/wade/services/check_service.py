@@ -42,6 +42,11 @@ from wade.providers import registered_provider_names
 
 logger = structlog.get_logger()
 
+# A readiness check is the first action in an agent session. Keep every local
+# or network-backed ``gh`` probe bounded so a packet-dropping sandbox produces a
+# named failure instead of hanging the entire session indefinitely.
+READINESS_PROBE_TIMEOUT_SECONDS = 5
+
 
 class CheckStatus(StrEnum):
     """Worktree check result."""
@@ -378,8 +383,9 @@ def _github_auth_available(cwd: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            timeout=READINESS_PROBE_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 
@@ -400,8 +406,9 @@ def _github_cli_available(cwd: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            timeout=READINESS_PROBE_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 
@@ -415,8 +422,9 @@ def _github_api_reachable(cwd: Path) -> bool:
             capture_output=True,
             text=True,
             check=False,
+            timeout=READINESS_PROBE_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 

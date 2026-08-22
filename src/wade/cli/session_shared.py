@@ -30,20 +30,17 @@ def _session_readiness_result(phase: str) -> CheckResult:
     from wade.services.check_service import check_session_readiness
 
     readiness_phase = ReadinessPhase(phase)
-    try:
-        config = load_config()
-    except Exception:
-        # A bare repository can still use the legacy worktree check. Config
-        # validation has its own command and should not obscure the exact git
-        # context failure this preflight is responsible for.
-        config = None
+    # ``load_config`` already returns defaults when a project has no config.
+    # Do not weaken capability checks when a present config is malformed or
+    # unreadable: let the normal CLI ConfigError path name that defect instead.
+    config = load_config()
     command = {
         ReadinessPhase.PLAN: "plan",
         ReadinessPhase.IMPLEMENTATION: "implement",
         ReadinessPhase.REVIEW_PR_COMMENTS: "review_pr_comments",
         ReadinessPhase.DEPS: "deps",
     }[readiness_phase]
-    tool = config.get_ai_tool(command) if config is not None else None
+    tool = config.get_ai_tool(command)
     return check_session_readiness(readiness_phase, Path.cwd(), config, tool)
 
 

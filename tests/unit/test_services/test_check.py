@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,9 +24,13 @@ from wade.models.config import (
 )
 from wade.models.readiness import ReadinessFailure, ReadinessPhase
 from wade.services.check_service import (
+    READINESS_PROBE_TIMEOUT_SECONDS,
     CheckExitCode,
     CheckStatus,
     ConfigExitCode,
+    _github_api_reachable,
+    _github_auth_available,
+    _github_cli_available,
     check_session_readiness,
     check_worktree,
     validate_config,
@@ -236,6 +243,23 @@ class TestSessionReadiness:
         assert result.status == CheckStatus.GITHUB_API_BLOCKED
         assert result.exit_code == CheckExitCode.GITHUB_API_BLOCKED
         assert result.failure == ReadinessFailure.GITHUB_API_REACHABILITY
+
+    @pytest.mark.parametrize(
+        "probe",
+        [_github_cli_available, _github_auth_available, _github_api_reachable],
+    )
+    def test_github_probes_are_bounded_and_treat_timeout_as_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        probe: Callable[[Path], bool],
+    ) -> None:
+        """Packet-dropping sandboxes cannot hang the first-action check forever."""
+        run = MagicMock(side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=5))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+
+        assert probe(tmp_path) is False
+        assert run.call_args.kwargs["timeout"] == READINESS_PROBE_TIMEOUT_SECONDS
 
     def test_pr_sessions_require_github_even_for_non_github_task_provider(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch

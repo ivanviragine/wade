@@ -679,9 +679,10 @@ provider: Markdown and ClickUp can own tasks, but PR creation, review threads,
 and `done` still use GitHub. The check first verifies that `gh` can start in the
 actual runtime (`GITHUB_CLI_BLOCKED` distinguishes a missing/blocked executable
 from bad credentials), then runs `gh auth status` and `gh api user --method
-GET`; all three are non-mutating. It cannot prove credentials for an arbitrary
-Git remote, test dependencies, or a project-specific hook — those run later
-under the same sandbox and surface their own exact error.
+GET`; all three are non-mutating and have a short bounded timeout. It cannot
+prove credentials for an arbitrary Git remote, test dependencies, or a
+project-specific hook — those run later under the same sandbox and surface
+their own exact error.
 
 `permissions.allowed_commands` and a tool's approval UI only decide whether the
 agent may launch a command such as `wade`; they do not grant filesystem or
