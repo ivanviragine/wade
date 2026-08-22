@@ -1679,6 +1679,61 @@ class TestStagedRatingEvents:
         assert "not writable" in (result.message or "")
         assert staged_ratings_path(worktree).is_file()
 
+    def test_malformed_staging_log_retains_artefact_and_writes_nothing(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        """A corrupt transport log is a retryable handoff failure, not garbage to drop."""
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        stage_rating_event(worktree, create_rating_event("entry", "up"))
+        staging = staged_ratings_path(worktree)
+        with staging.open("a", encoding="utf-8") as fd:
+            fd.write("not json at all\n")
+
+        result = flush_staged_ratings(worktree, main, config)
+
+        assert not result.success
+        assert staging.is_file()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+
+class TestStagingContainment:
+    """A vote must never be redirected out of the throwaway session worktree."""
+
+    def test_symlinked_staging_dir_is_refused_by_the_writer(self, tmp_path: Path) -> None:
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        worktree.mkdir()
+        outside.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="outside the session worktree"):
+            stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        assert list(outside.iterdir()) == []
+
+    def test_contained_staging_dir_is_accepted(self, tmp_path: Path) -> None:
+        worktree = tmp_path / "plan-worktree"
+        worktree.mkdir()
+
+        path = stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        assert path == staged_ratings_path(worktree)
+        assert path.is_file()
+
+    def test_readiness_probe_rejects_a_symlinked_staging_dir(self, tmp_path: Path) -> None:
+        from wade.services.check_service import _probe_staging_path
+
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        worktree.mkdir()
+        outside.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        assert _probe_staging_path(worktree) is False
+
 
 class TestDetachedKnowledgeReads:
     """Read-only plan/deps commands must not cross into the main checkout."""
@@ -1850,3 +1905,20 @@ class TestKnowledgeStatus:
 
         assert result.staged_vote_count == 1
         assert result.staging_path == staged_ratings_path(tmp_path)
+
+    def test_corrupt_staging_log_still_reports_the_rest_of_the_status(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`status` is the diagnostic for a failed handoff — it must not fail with it."""
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        (tmp_path / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        staged_ratings_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+        staged_ratings_path(tmp_path).write_text("not json at all\n", encoding="utf-8")
+
+        result = knowledge_status(tmp_path, config)
+
+        assert result.staged_vote_count == 0
+        assert result.staging_path == staged_ratings_path(tmp_path)
+        assert result.legacy_migration_pending is True

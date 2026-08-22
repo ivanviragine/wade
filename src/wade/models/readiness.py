@@ -6,6 +6,14 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
+# Set by ``wade plan`` **only** on its supported temp-directory fallback — when
+# no planning worktree could be created (bootstrap failed, or the caller is not
+# in a git repo at all) and the agent therefore runs from the caller's checkout
+# writing plan files to a throwaway directory. Its presence is what lets the
+# plan readiness check tell that legitimate mode apart from an agent that simply
+# started in the main checkout.
+PLAN_DIR_ENV_VAR = "WADE_PLAN_DIR"
+
 
 class ReadinessPhase(StrEnum):
     """A WADE session phase whose capabilities can be checked before edits."""
@@ -24,6 +32,7 @@ class ReadinessFailure(StrEnum):
     GITHUB_AUTHENTICATION = "github_authentication"
     GITHUB_API_REACHABILITY = "github_api_reachability"
     KNOWLEDGE_VOTE_STAGING = "knowledge_vote_staging"
+    PLAN_OUTPUT_WRITE = "plan_output_write"
 
 
 class ReadinessRequirements(BaseModel, frozen=True):

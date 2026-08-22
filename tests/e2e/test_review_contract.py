@@ -862,7 +862,7 @@ class TestReviewPrCommentsSessionCommands:
         issue_number = 53
         issue_title = "Fetch review comment context"
         branch_name = "feat/53-fetch-review-comment-context"
-        _worktree_path, pr_number = _bootstrap_review_target(
+        worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
@@ -899,9 +899,12 @@ class TestReviewPrCommentsSessionCommands:
             ],
         )
 
+        # Run from the session worktree: `fetch` enforces the same phase
+        # readiness check as the rest of the lifecycle (#462), so the main
+        # checkout is correctly rejected.
         result = _run(
             ["review-pr-comments-session", "fetch", str(issue_number)],
-            cwd=e2e_repo,
+            cwd=worktree_path,
         )
 
         assert result.returncode == 0
@@ -922,7 +925,7 @@ class TestReviewPrCommentsSessionCommands:
         issue_number = 54
         issue_title = "Resolve review thread from session"
         branch_name = "feat/54-resolve-review-thread-from-session"
-        _worktree_path, pr_number = _bootstrap_review_target(
+        worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
@@ -953,7 +956,7 @@ class TestReviewPrCommentsSessionCommands:
 
         result = _run(
             ["review-pr-comments-session", "resolve", thread_id],
-            cwd=e2e_repo,
+            cwd=worktree_path,
         )
 
         assert result.returncode == 0

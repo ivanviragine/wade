@@ -585,7 +585,10 @@ def analyze_deps(
 
     # A detached deps worktree is still an AI session: verify only the
     # capabilities this phase will actually use before launching the agent.
-    if standalone_worktree is not None:
+    # Every non-prompt cwd is checked, including a reused planning worktree —
+    # blocked `.wade/` staging must stop delegation there too, not only for a
+    # worktree this call created.
+    if deps_cwd is not None:
         from wade.models.readiness import ReadinessPhase
         from wade.services.check_service import CheckStatus, check_session_readiness
 
@@ -597,6 +600,11 @@ def analyze_deps(
         )
         if readiness.status != CheckStatus.IN_WORKTREE:
             console.error(readiness.format_output())
+            if standalone_worktree is None:
+                # A reused planning worktree belongs to the parent `wade plan`
+                # lifecycle, which flushes its staged votes and removes it.
+                # Never delete it from here.
+                return None
             # This is a pre-launch failure: no AI output or vote exists yet,
             # so remove the empty session rather than leaking a worktree. A
             # post-launch handoff failure below deliberately preserves it.

@@ -736,9 +736,18 @@ def _carry_forward_pending_votes(
         legacy_relpath = main_legacy.relative_to(repo_root).as_posix()
     except ValueError:
         legacy_relpath = None
-    legacy_tracked_in_main = bool(
-        legacy_relpath and git_repo.show_file_at_head(repo_root, legacy_relpath) is not None
+    # Tri-state on purpose. ``show_file_at_head`` returns None both for "absent
+    # at HEAD" and "git call failed", and the untracked branch below deletes
+    # main's spool based on this answer: a transient git failure read as "no
+    # legacy file" would skip the HEAD restore and leave main's staged legacy
+    # deletion behind. ``None`` therefore means "unresolvable" and aborts the
+    # carry instead of guessing.
+    legacy_at_head: bool | None = (
+        git_repo.path_exists_at_head(repo_root, legacy_relpath)
+        if legacy_relpath is not None
+        else False
     )
+    legacy_tracked_in_main = legacy_at_head is True
 
     with file_lock(main_ratings):
         if not main_ratings.is_file():
@@ -774,6 +783,11 @@ def _carry_forward_pending_votes(
         # Otherwise the same events remain pending and could be delivered twice.
         if tracked_in_main:
             restored = git_repo.checkout_paths(repo_root, relpath)
+        elif legacy_at_head is None:
+            # Cannot tell whether main owes a legacy-file restore. Leave the
+            # spool intact; the next bootstrap retries once git answers.
+            logger.warning("implementation.ratings_carry_legacy_state_unresolved", path=relpath)
+            return
         else:
             try:
                 main_ratings.unlink()
@@ -792,13 +806,24 @@ def _carry_forward_pending_votes(
         # worktree copy from here must roll main back to its snapshot so the votes are
         # not lost from BOTH locations. The transfer is only "successful" once the
         # worktree write completes.
+        worktree_ratings: Path | None = None
+        original_worktree_bytes: bytes | None = None
         try:
             worktree_ratings = resolve_ratings_path(
                 resolve_knowledge_path(worktree_path, config.knowledge)
             )
             worktree_ratings.parent.mkdir(parents=True, exist_ok=True)
+            # Snapshot the worktree side too. The append below completes before
+            # the legacy removal, so a failure there must undo BOTH halves —
+            # otherwise the same votes sit in main and in the branch, and the
+            # next bootstrap carries main's copy across a second time.
+            original_worktree_bytes = (
+                worktree_ratings.read_bytes() if worktree_ratings.is_file() else None
+            )
             content = (
-                worktree_ratings.read_text(encoding="utf-8") if worktree_ratings.is_file() else ""
+                original_worktree_bytes.decode("utf-8")
+                if original_worktree_bytes is not None
+                else ""
             )
             # Append EVERY pending vote — do NOT dedupe against the worktree's committed
             # records. ``pending`` is already exactly main's uncommitted votes (working
@@ -807,8 +832,8 @@ def _carry_forward_pending_votes(
             # Subtracting the worktree's copy here would drop that vote, yet the main
             # restore above already removed it — losing it from both places. Transferring
             # the same physical line twice is impossible regardless: main is reset to HEAD
-            # (pending removed) BEFORE this append, and a failed append rolls main back, so
-            # each pending line rides across at most once.
+            # (pending removed) BEFORE this append, and any failure below rolls BOTH sides
+            # back, so each pending line rides across at most once.
             prefix = "" if (content == "" or content.endswith("\n")) else "\n"
             with worktree_ratings.open("a", encoding="utf-8") as fd:
                 fd.write(prefix + "".join(f"{ln}\n" for ln in pending))
@@ -820,6 +845,14 @@ def _carry_forward_pending_votes(
                         f"Could not stage legacy ratings removal: {worktree_legacy_relpath}"
                     )
         except OSError:
+            # Undo the worktree append first, then restore main, so the votes
+            # end up in exactly one place — main, where they started.
+            if worktree_ratings is not None:
+                with contextlib.suppress(OSError):
+                    if original_worktree_bytes is not None:
+                        worktree_ratings.write_bytes(original_worktree_bytes)
+                    elif worktree_ratings.exists():
+                        worktree_ratings.unlink()
             with contextlib.suppress(OSError):
                 main_ratings.write_bytes(original_main_bytes)
             if legacy_tracked_in_main and legacy_relpath is not None:

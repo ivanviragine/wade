@@ -503,6 +503,22 @@ def show_file_at_head(cwd: Path, relpath: str) -> str | None:
     return show_file_at_ref(cwd, "HEAD", relpath)
 
 
+def path_exists_at_head(cwd: Path, relpath: str) -> bool | None:
+    """Whether ``HEAD`` contains *relpath* — ``None`` when git cannot answer.
+
+    :func:`show_file_at_head` deliberately collapses "absent at HEAD" and "git
+    failed" into ``None``. A caller that decides whether to *delete* or
+    *restore* a file cannot treat those the same: a transient git failure would
+    look like "there was never a committed version". ``ls-tree`` separates them
+    — exit 0 with empty output means genuinely absent, a non-zero exit means
+    the state is unresolvable.
+    """
+    result = _run_git("ls-tree", "--name-only", "HEAD", "--", relpath, cwd=cwd, check=False)
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
+
+
 def checkout_paths(cwd: Path, *paths: str) -> bool:
     """Restore ``paths`` to their committed state (``git checkout -- <paths>``).
 

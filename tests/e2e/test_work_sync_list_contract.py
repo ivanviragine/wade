@@ -117,16 +117,27 @@ class TestWorkSyncCommand:
             assert "event" in parsed
 
     def test_sync_from_main_rejected(self, e2e_repo: Path) -> None:
-        """implementation-session sync from main -> exit 4 preflight failure."""
+        """implementation-session sync from main -> exit 4 preflight failure.
+
+        Since #462 the phase readiness re-check runs first and rejects the main
+        checkout before the sync preflight can report ``on_main_branch``. The
+        exit code and the line-delimited JSON contract are unchanged; only the
+        machine-readable reason is now the readiness verdict.
+        """
         result = _run(["implementation-session", "sync", "--json"], cwd=e2e_repo)
         assert result.returncode == 4
         non_empty_lines = [line for line in result.stdout.splitlines() if line.strip()]
         assert non_empty_lines, "Expected JSON events for preflight failure"
+        for line in non_empty_lines:
+            assert line.lstrip().startswith("{"), (
+                f"Non-JSON line leaked into --json output: {line!r}\nFull stdout: {result.stdout!r}"
+            )
         events = [json.loads(line) for line in non_empty_lines]
         error_events = [event for event in events if event.get("event") == "error"]
         assert error_events, f"Expected error event, got: {events!r}"
-        assert any(event.get("reason") == "on_main_branch" for event in error_events), (
-            f"Expected on_main_branch preflight reason, got: {error_events!r}"
+        reasons = {event.get("reason") for event in error_events}
+        assert reasons & {"in_main_checkout", "on_main_branch"}, (
+            f"Expected a main-checkout rejection reason, got: {error_events!r}"
         )
 
 

@@ -458,8 +458,29 @@ class TestRunDelegation:
 # ---------------------------------------------------------------------------
 
 
+def _stub_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a ready runtime so mode/timeout tests exercise delegation, not readiness.
+
+    These tests hand ``analyze_deps`` a bare ``tmp_path`` as the reused planning
+    worktree; the real check would correctly reject it as not-a-worktree.
+    """
+    from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+    monkeypatch.setattr(
+        "wade.services.check_service.check_session_readiness",
+        lambda *_args, **_kwargs: CheckResult(
+            status=CheckStatus.IN_WORKTREE,
+            exit_code=CheckExitCode.IN_WORKTREE,
+        ),
+    )
+
+
 class TestAnalyzeDepsMode:
     """Tests for analyze_deps with mode parameter and prompt-mode early return."""
+
+    @pytest.fixture(autouse=True)
+    def _ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _stub_ready(monkeypatch)
 
     @patch("wade.services.deps_service.console.out.print")
     @patch("wade.services.deps_service.create_tracking_issue")
@@ -944,6 +965,41 @@ class TestAnalyzeDepsIsolationFailure:
         delegate.assert_not_called()
         remove.assert_called_once_with(tmp_path, worktree, force=True)
 
+    def test_blocked_planning_worktree_stops_delegation_without_removing_it(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reused planning worktree is checked too — and never deleted from here."""
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate)
+        planning_worktree = tmp_path / "plan-worktree"
+        planning_worktree.mkdir()
+        remove = MagicMock()
+        monkeypatch.setattr(
+            "wade.services.check_service.check_session_readiness",
+            lambda *_args, **_kwargs: CheckResult(
+                status=CheckStatus.KNOWLEDGE_STAGING_BLOCKED,
+                exit_code=CheckExitCode.KNOWLEDGE_STAGING_BLOCKED,
+            ),
+        )
+        monkeypatch.setattr("wade.git.worktree.remove_worktree", remove)
+
+        result = analyze_deps(
+            ["1", "2"],
+            mode="headless",
+            project_root=tmp_path,
+            planning_worktree=planning_worktree,
+        )
+
+        assert result is None
+        delegate.assert_not_called()
+        # Owned by the parent `wade plan` lifecycle, which flushes its votes.
+        remove.assert_not_called()
+        assert planning_worktree.is_dir()
+
     def test_handoff_failure_preserves_durable_dependency_output(
         self,
         tmp_path: Path,
@@ -1012,6 +1068,10 @@ def _echo_confirm(
 
 
 class TestAnalyzeDepsPermissionMode:
+    @pytest.fixture(autouse=True)
+    def _ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _stub_ready(monkeypatch)
+
     @patch("wade.services.deps_service.create_tracking_issue")
     @patch("wade.services.deps_service.apply_deps_to_issues")
     @patch("wade.services.deps_service.delegate")

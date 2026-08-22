@@ -44,7 +44,12 @@ def _session_readiness_result(phase: str) -> CheckResult:
     return check_session_readiness(readiness_phase, Path.cwd(), config, tool)
 
 
-def require_ready(phase: str, *, exit_code: int | None = None) -> None:
+def require_ready(
+    phase: str,
+    *,
+    exit_code: int | None = None,
+    json_output: bool = False,
+) -> None:
     """Stop a mutating session endpoint before its runtime is known-ready.
 
     ``wade`` is not privileged relative to the AI process that invokes it.
@@ -53,11 +58,28 @@ def require_ready(phase: str, *, exit_code: int | None = None) -> None:
     network change.  ``exit_code`` lets existing command-level contracts (for
     example sync's preflight exit 4) remain stable while the output carries the
     specific machine-readable readiness reason.
+
+    ``json_output`` keeps sync's line-delimited JSON contract intact: a caller
+    that asked for JSON must never receive the human-readable readiness block
+    on stdout, so the same verdict is emitted as one ``error`` event instead.
     """
     result = _session_readiness_result(phase)
     if result.exit_code == 0:
         return
-    typer.echo(result.format_output())
+    if json_output:
+        import json
+
+        reason = result.failure.value if result.failure else result.status.value.lower()
+        payload: dict[str, str] = {
+            "event": "error",
+            "reason": reason,
+            "status": result.status.value,
+        }
+        if result.phase is not None:
+            payload["phase"] = result.phase.value
+        typer.echo(json.dumps(payload))
+    else:
+        typer.echo(result.format_output())
     raise typer.Exit(result.exit_code if exit_code is None else exit_code)
 
 

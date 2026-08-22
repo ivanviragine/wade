@@ -46,7 +46,7 @@ def sync(
     from wade.cli.session_shared import handle_sync_result, require_ready
     from wade.services.implementation_service import sync as do_sync
 
-    require_ready("review-pr-comments", exit_code=4)
+    require_ready("review-pr-comments", exit_code=4, json_output=json_output)
     result = do_sync(
         dry_run=dry_run,
         main_branch=main_branch,

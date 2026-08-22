@@ -36,7 +36,12 @@ from wade.models.config import (
     is_valid_bot_name,
 )
 from wade.models.delegation import DelegationMode
-from wade.models.readiness import READINESS_REQUIREMENTS, ReadinessFailure, ReadinessPhase
+from wade.models.readiness import (
+    PLAN_DIR_ENV_VAR,
+    READINESS_REQUIREMENTS,
+    ReadinessFailure,
+    ReadinessPhase,
+)
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 
@@ -59,6 +64,10 @@ class CheckStatus(StrEnum):
     GITHUB_AUTH_BLOCKED = "GITHUB_AUTH_BLOCKED"
     GITHUB_API_BLOCKED = "GITHUB_API_BLOCKED"
     KNOWLEDGE_STAGING_BLOCKED = "KNOWLEDGE_STAGING_BLOCKED"
+    # `wade plan`'s temp-dir fallback: no planning worktree exists, so the agent
+    # runs from the caller's checkout and may write only the plan directory.
+    PLAN_DIR_ONLY = "PLAN_DIR_ONLY"
+    PLAN_DIR_BLOCKED = "PLAN_DIR_BLOCKED"
 
 
 class CheckExitCode(IntEnum):
@@ -78,6 +87,11 @@ class CheckExitCode(IntEnum):
     GITHUB_AUTH_BLOCKED = 5
     GITHUB_API_BLOCKED = 6
     KNOWLEDGE_STAGING_BLOCKED = 7
+    # `wade plan`'s worktree-less fallback could not write its plan directory.
+    # The ready counterpart (``PLAN_DIR_ONLY``) deliberately reuses
+    # ``IN_WORKTREE``'s 0: both mean "proceed", and only the status name
+    # distinguishes the narrower write scope.
+    PLAN_DIR_BLOCKED = 8
 
 
 class ConfigExitCode(IntEnum):
@@ -103,6 +117,8 @@ class CheckResult(BaseModel):
     phase: ReadinessPhase | None = None
     failure: ReadinessFailure | None = None
     tool: str | None = None
+    # The writable plan-output directory, set only for the two PLAN_DIR_* states.
+    plan_dir: str | None = None
 
     def format_output(self) -> str:
         """Format as structured text output matching Bash behavior."""
@@ -117,6 +133,8 @@ class CheckResult(BaseModel):
             lines.append(f"phase={self.phase.value}")
         if self.tool is not None:
             lines.append(f"tool={self.tool}")
+        if self.plan_dir is not None:
+            lines.append(f"plandir={self.plan_dir}")
         if self.failure is not None:
             lines.append(f"reason={self.failure.value}")
         for blocked in self.blocked_paths:
@@ -160,6 +178,25 @@ class CheckResult(BaseModel):
             lines.append(
                 "hint: relaunch with this worktree's `.wade/` path writable; staged votes "
                 "must not be redirected to the main checkout."
+            )
+        elif self.status == CheckStatus.PLAN_DIR_ONLY:
+            lines.append(
+                "note: no planning worktree exists for this session, so `wade plan` is "
+                "running its supported plan-directory fallback. Planning may proceed."
+            )
+            lines.append(
+                "hint: write plan files ONLY to the plan directory above — treat the "
+                "surrounding checkout as read-only. `wade knowledge rate` may be "
+                "unavailable here; record any learning in the plan file instead."
+            )
+        elif self.status == CheckStatus.PLAN_DIR_BLOCKED:
+            lines.append(
+                "error: this session's plan-output directory is not writable, so the "
+                "planning session cannot produce plan files."
+            )
+            lines.append(
+                "hint: relaunch with the plan directory above writable (for most tools "
+                "that means granting the system temp dir); do not request checkout writes."
             )
         return "\n".join(lines)
 
@@ -375,18 +412,41 @@ def check_worktree(
 
 
 def _github_auth_available(cwd: Path) -> bool:
-    """Check local GitHub CLI credentials without contacting a repository API."""
-    try:
-        result = subprocess.run(
-            ["gh", "auth", "status", "--hostname", "github.com"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=READINESS_PROBE_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    """Check local GitHub CLI credentials without contacting a repository API.
+
+    ``--active`` is load-bearing: ``gh auth status`` exits 1 when *any* account
+    known for the host has an issue, so a single stale secondary login would
+    block every implementation/review session even though every real ``gh``
+    call would happily use the healthy active account. Only the active account
+    is the credential this session will actually use.
+
+    ``--active`` predates the ``gh`` versions wade targets, but an older CLI
+    would reject it as an unknown flag and turn a working login into a hard
+    session block — so fall back to the unfiltered probe in that one case.
+    """
+
+    def _probe(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                args,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=READINESS_PROBE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    base = ["gh", "auth", "status", "--hostname", "github.com"]
+    result = _probe([*base, "--active"])
+    if result is None:
         return False
+    if result.returncode != 0 and "unknown flag" in result.stderr.lower():
+        legacy = _probe(base)
+        if legacy is None:
+            return False
+        return legacy.returncode == 0
     return result.returncode == 0
 
 
@@ -430,8 +490,18 @@ def _github_api_reachable(cwd: Path) -> bool:
 
 
 def _probe_staging_path(project_root: Path) -> bool:
-    """Self-cleaningly verify the detached session's staging directory is writable."""
-    from wade.services.knowledge_service import staged_ratings_path
+    """Self-cleaningly verify the detached session's staging directory is writable.
+
+    Containment is checked before the write probe: a ``.wade/`` symlink (a
+    checked-out path, so repository-controlled) would otherwise make this probe
+    write into — and report as ready — a location outside the throwaway
+    worktree. ``stage_rating_event`` repeats the same check at write time,
+    because no preflight can rule out a symlink planted afterwards.
+    """
+    from wade.services.knowledge_service import (
+        staged_ratings_path,
+        staging_path_escapes_session,
+    )
 
     staging_path = staged_ratings_path(project_root)
     parent = staging_path.parent
@@ -445,6 +515,9 @@ def _probe_staging_path(project_root: Path) -> bool:
         for directory in reversed(missing):
             directory.mkdir()
             created.append(directory)
+        if staging_path_escapes_session(project_root, staging_path):
+            logger.warning("check.staging_path_escapes_session", path=str(staging_path))
+            return False
         if staging_path.exists() and staging_path.is_dir():
             return False
         return _probe_dir_writable(parent)
@@ -464,6 +537,7 @@ def _readiness_result(
     status: CheckStatus | None = None,
     exit_code: CheckExitCode | None = None,
     failure: ReadinessFailure | None = None,
+    plan_dir: str | None = None,
 ) -> CheckResult:
     """Attach phase context to a worktree result without losing legacy fields."""
     return base.model_copy(
@@ -473,7 +547,51 @@ def _readiness_result(
             "status": status or base.status,
             "exit_code": int(exit_code if exit_code is not None else base.exit_code),
             "failure": failure if failure is not None else base.failure,
+            "plan_dir": plan_dir if plan_dir is not None else base.plan_dir,
         }
+    )
+
+
+def _plan_dir_fallback_result(
+    base: CheckResult,
+    *,
+    tool: str | None,
+) -> CheckResult | None:
+    """Resolve readiness for ``wade plan``'s worktree-less fallback, else None.
+
+    When no planning worktree could be created — bootstrap failed, or the
+    caller is not in a git repo — ``wade plan`` deliberately keeps planning
+    available by pointing the agent at a throwaway plan directory and launching
+    it from the caller's checkout. That is a supported mode, not a misplaced
+    agent, so a bare ``IN_MAIN_CHECKOUT`` / ``NOT_IN_GIT_REPO`` would wrongly
+    tell the agent to stop. Only the parent sets ``WADE_PLAN_DIR``, so its
+    presence is what distinguishes the two; returns ``None`` (keep the base
+    verdict) whenever it is absent.
+
+    The single capability this mode needs is a writable plan directory, so it
+    is probed with a real write exactly like every other readiness capability.
+    """
+    raw = os.environ.get(PLAN_DIR_ENV_VAR)
+    if not raw:
+        return None
+    plan_dir = Path(raw)
+    if not plan_dir.is_dir() or not _probe_dir_writable(plan_dir):
+        return _readiness_result(
+            base,
+            phase=ReadinessPhase.PLAN,
+            tool=tool,
+            status=CheckStatus.PLAN_DIR_BLOCKED,
+            exit_code=CheckExitCode.PLAN_DIR_BLOCKED,
+            failure=ReadinessFailure.PLAN_OUTPUT_WRITE,
+            plan_dir=raw,
+        )
+    return _readiness_result(
+        base,
+        phase=ReadinessPhase.PLAN,
+        tool=tool,
+        status=CheckStatus.PLAN_DIR_ONLY,
+        exit_code=CheckExitCode.IN_WORKTREE,
+        plan_dir=raw,
     )
 
 
@@ -500,6 +618,10 @@ def check_session_readiness(
     )
     result = _readiness_result(base, phase=phase, tool=tool)
     if result.status != CheckStatus.IN_WORKTREE:
+        if phase is ReadinessPhase.PLAN:
+            fallback = _plan_dir_fallback_result(result, tool=tool)
+            if fallback is not None:
+                return fallback
         return result
 
     if config is not None and requirements.requires_github:

@@ -49,7 +49,7 @@ def catchup(
 
     # ``wade`` shares the caller's sandbox.  Do not begin a fetch/merge merely
     # because the first-action check happened in an earlier environment.
-    require_ready("implementation", exit_code=4)
+    require_ready("implementation", exit_code=4, json_output=json_output)
     result = do_catchup(
         dry_run=dry_run,
         main_branch=main_branch,
@@ -100,7 +100,7 @@ def sync(
     from wade.cli.session_shared import handle_sync_result, require_ready
     from wade.services.implementation_service import sync as do_sync
 
-    require_ready("implementation", exit_code=4)
+    require_ready("implementation", exit_code=4, json_output=json_output)
     result = do_sync(
         dry_run=dry_run,
         main_branch=main_branch,

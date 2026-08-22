@@ -167,6 +167,63 @@ class TestPlanSessionSubApp:
         for cmd in ("check", "done"):
             assert cmd in result.output
 
+    def test_check_reports_plan_dir_only_in_the_worktree_less_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.models.readiness import PLAN_DIR_ENV_VAR
+
+        plan_dir = tmp_path / "wade-plan-xyz"
+        plan_dir.mkdir()
+        caller = tmp_path / "caller"
+        caller.mkdir()
+        monkeypatch.chdir(caller)
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+
+        result = runner.invoke(app, ["plan-session", "check"])
+
+        assert result.exit_code == 0
+        assert "PLAN_DIR_ONLY" in result.output
+        assert f"plandir={plan_dir}" in result.output
+
+
+class TestRequireReadyJsonContract:
+    """A ``--json`` caller must never receive the human-readable readiness block."""
+
+    def test_blocked_sync_emits_a_single_json_error_event(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["implementation-session", "sync", "--json"])
+
+        assert result.exit_code == 4
+        # CliRunner merges the stderr version banner into ``output``; real
+        # ``--json`` consumers read stdout only.
+        lines = [
+            line
+            for line in result.output.splitlines()
+            if line.strip() and not line.strip().startswith("wade v")
+        ]
+        assert lines
+        for line in lines:
+            assert line.lstrip().startswith("{"), f"non-JSON leaked: {line!r}"
+        events = [json.loads(line) for line in lines]
+        assert events[0]["event"] == "error"
+        assert events[0]["reason"] == "not_in_git_repo"
+        assert events[0]["phase"] == "implementation"
+
+    def test_blocked_sync_without_json_keeps_the_readable_block(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["implementation-session", "sync"])
+
+        assert result.exit_code == 4
+        assert "NOT_IN_GIT_REPO" in result.output
+
 
 # ---------------------------------------------------------------------------
 # Detached dependency-analysis session sub-app

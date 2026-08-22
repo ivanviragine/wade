@@ -3251,6 +3251,112 @@ class TestCarryForwardPendingVotes:
         assert pending_line in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
         assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
 
+    def test_untracked_spool_without_event_ids_is_left_in_main(self, tmp_path: Path) -> None:
+        """The durable-spool guard is what stops an arbitrary untracked file moving.
+
+        Without ``event_id`` on every line the file is not a WADE handoff spool,
+        so it must stay exactly where it is — never relocated into a branch.
+        """
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        self._git(main, "add", "KNOWLEDGE.md")
+        self._git(main, "commit", "-m", "chore: init knowledge")
+        foreign_line = '{"dir": "up", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(foreign_line + "\n", encoding="utf-8")
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/no-event-id", str(worktree))
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert main_ratings.read_text(encoding="utf-8") == foreign_line + "\n"
+        assert not (worktree / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_unresolvable_legacy_head_state_leaves_main_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A git lookup failure must not read as "there was never a legacy file".
+
+        The untracked branch deletes main's spool and relies on the legacy
+        answer to decide whether main still owes a HEAD restore. When git cannot
+        answer, abort the carry so a later bootstrap can retry.
+        """
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        self._git(main, "add", "KNOWLEDGE.md")
+        self._git(main, "commit", "-m", "chore: init knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/unresolvable", str(worktree))
+
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.path_exists_at_head",
+            lambda *_args, **_kwargs: None,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Votes stay put; nothing is half-moved.
+        assert main_ratings.read_text(encoding="utf-8") == pending_line + "\n"
+        assert not (worktree / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_failed_legacy_removal_rolls_back_the_worktree_append(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failure after the append must undo both sides, not just main."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        self._git(main, "rm", "--cached", "--quiet", "KNOWLEDGE.ratings.yml")
+        (main / "KNOWLEDGE.ratings.yml").unlink()
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/rollback", str(worktree))
+
+        # The append succeeds, then staging the legacy removal fails.
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.rm_file",
+            lambda *_args, **_kwargs: False,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Main keeps the votes, and the worktree append is undone — not both.
+        assert pending_line in main_ratings.read_text(encoding="utf-8")
+        worktree_ratings = worktree / "KNOWLEDGE.ratings.jsonl"
+        carried = ""
+        if worktree_ratings.is_file():
+            carried = worktree_ratings.read_text(encoding="utf-8")
+        assert pending_line not in carried
+
     def test_carries_staged_vote_through_legacy_ratings_migration(self, tmp_path: Path) -> None:
         """The first detached vote migrates legacy YAML in the attached PR, not main."""
         from wade.models.config import KnowledgeConfig, ProjectConfig

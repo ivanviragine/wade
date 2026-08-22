@@ -662,10 +662,17 @@ non-mutating check immediately before `catchup`, `sync`, `done`, `fetch`, or
 `resolve`, so a resumed session cannot turn a changed sandbox/PATH/credential
 state into a late raw Git or GitHub failure. It reports stable capability failures:
 `WORKTREE_GIT_BLOCKED` (3), `GITHUB_CLI_BLOCKED` (4),
-`GITHUB_AUTH_BLOCKED` (5), `GITHUB_API_BLOCKED` (6), and
-`KNOWLEDGE_STAGING_BLOCKED` (7). The result includes a
+`GITHUB_AUTH_BLOCKED` (5), `GITHUB_API_BLOCKED` (6),
+`KNOWLEDGE_STAGING_BLOCKED` (7), and `PLAN_DIR_BLOCKED` (8). The result includes a
 machine-readable `reason=…` and narrow remediation; do not disable a sandbox
 globally or give the AI write access to the main checkout.
+
+When `wade plan` cannot create a planning worktree — bootstrap failed, or you
+are not in a git repo — it falls back to a standalone plan directory and runs
+the agent from your checkout. That supported mode reports `PLAN_DIR_ONLY`
+(exit 0) with a `plandir=…`: planning proceeds, but the agent may write only
+that directory. `PLAN_DIR_BLOCKED` means even the plan directory is not
+writable.
 
 | Agent session | Run in the AI runtime | Required there | Intentionally not required there |
 |---|---|---|---|

@@ -490,11 +490,31 @@ network policy, credentials, and hook environment.
 
 The stable result states preserve the original `IN_WORKTREE` / main / non-repo
 contracts and add `GITHUB_CLI_BLOCKED` (4), `GITHUB_AUTH_BLOCKED` (5),
-`GITHUB_API_BLOCKED` (6), and `KNOWLEDGE_STAGING_BLOCKED` (7); each names a
+`GITHUB_API_BLOCKED` (6), `KNOWLEDGE_STAGING_BLOCKED` (7), and
+`PLAN_DIR_BLOCKED` (8); each names a
 `ReadinessFailure` such as `github_cli_executable` or
 `github_api_reachability`. GitHub readiness first runs local `gh --version` so
 a missing or exec-blocked CLI is not misreported as failed authentication, then
-runs `gh auth status` and `gh api user --method GET`; none mutate a remote.
+runs `gh auth status --active` and `gh api user --method GET`; none mutate a
+remote. `--active` is deliberate — plain `gh auth status` exits 1 when *any*
+account known for the host is unhealthy, so one stale secondary login would
+block every session even though `gh` operations use the healthy active account.
+An older `gh` that rejects the flag falls back to the unfiltered probe rather
+than turning a working login into a hard block.
+
+**Plan-directory fallback.** `plan()` keeps a supported worktree-less mode: if
+the detached planning worktree cannot be created (bootstrap failure, or no git
+repo at all), it writes plan files to a throwaway directory and launches the
+agent from the caller's checkout. A bare worktree check would report
+`IN_MAIN_CHECKOUT` / `NOT_IN_GIT_REPO` there and the mandatory first action
+would tell the agent to stop, making the fallback unusable. `plan()` therefore
+exports `WADE_PLAN_DIR` (`PLAN_DIR_ENV_VAR`) for the duration of that launch
+only; PLAN readiness consults it exclusively when the base check did **not**
+return `IN_WORKTREE`, write-probes the directory, and returns `PLAN_DIR_ONLY`
+(exit 0, `plandir=…`) or `PLAN_DIR_BLOCKED` (8, `plan_output_write`). Because
+only the parent sets the marker, a genuinely misplaced agent still gets
+`IN_MAIN_CHECKOUT`, and a real worktree-mode failure (e.g. blocked staging) is
+never masked.
 They apply to implementation and PR-comment sessions **regardless of the task
 provider**, because PRs, review threads, and `done` are GitHub-backed even when
 tasks are Markdown or ClickUp. Those two phases also require writable linked-worktree Git metadata:
@@ -842,7 +862,12 @@ Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot
 they never cross into the main checkout. The parent plan/deps lifecycle calls
 `flush_staged_ratings()` before cleanup, locks the existing main ratings spool,
 appends only event IDs not already present, fsyncs, and removes the staging
-artifact only afterward. A failed or partially completed handoff leaves the
+artifact only afterward. Both the readiness probe and the writer reject a
+staging parent that is a symlink or resolves outside the session root
+(`staging_path_escapes_session`): `.wade/` is an ordinary checked-out path, so a
+symlink there would silently redirect a vote into the main checkout, and a
+preflight alone cannot stop one planted afterwards. A failed or partially
+completed handoff leaves the
 throwaway worktree and its generated output in place for retry. Standalone deps
 also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
 handoff, because stdout alone would be lost with the parent process. Duplicate
@@ -851,6 +876,13 @@ retain their historical duplicate-vote semantics. The next attached
 bootstrap's existing ratings-only carry-forward remains the sole path that puts
 tracked ratings into a PR. `knowledge status` reports staged votes from a
 detached session in addition to canonical sidecar dirt.
+
+`wade task deps` runs the `DEPS` check for **every** non-prompt agent cwd, not
+only a worktree it created itself — a reused planning worktree with blocked
+`.wade/` staging must stop delegation too. Cleanup differs by owner: a
+standalone worktree this call created is removed (nothing was produced yet),
+while a planning worktree is preserved for the parent `wade plan` lifecycle that
+flushes its votes.
 
 **Lifecycle readiness enforcement (#462):** The first-action check remains the
 agent-facing diagnostic, but `implementation-session catchup`/`sync`/`done` and
@@ -863,7 +895,7 @@ readiness result before issuing its Git/GitHub operation; sync/catchup retain
 their established preflight exit code while the other commands retain their
 ordinary failure exit contract.
 
-The `gh --version`, `gh auth status`, and read-only `gh api user` probes share
+The `gh --version`, `gh auth status --active`, and read-only `gh api user` probes share
 a short five-second subprocess timeout. A runtime that blackholes an executable
 or network packet therefore returns the phase's named unavailable-capability
 status rather than indefinitely blocking the session's first action.

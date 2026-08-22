@@ -2141,7 +2141,7 @@ class TestPreserveGeneratedPlans:
         # afterwards so no worktree/temp dir lingers.
         assert (preserved_dir / "PLAN.md").is_file()
         assert (preserved_dir / "PLAN-2.md").is_file()
-        mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+        mock_cleanup.assert_called_once_with(str(plan_dir), None, None, None)
 
     def test_no_files_skips_copy_but_still_cleans(self, tmp_path: Path) -> None:
         plan_dir = tmp_path / "plans"
@@ -2155,7 +2155,7 @@ class TestPreserveGeneratedPlans:
             _preserve_generated_plans(str(plan_dir), None, None)
 
         mock_mkdtemp.assert_not_called()  # nothing to preserve
-        mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+        mock_cleanup.assert_called_once_with(str(plan_dir), None, None, None)
 
     def test_propagates_cleanup_failure_after_preserving_files(self, tmp_path: Path) -> None:
         """A copied plan is recoverable, but an undelivered vote is still a failure."""

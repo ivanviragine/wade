@@ -13,7 +13,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import structlog
@@ -245,6 +246,36 @@ def _select_valid_plans(
 # ---------------------------------------------------------------------------
 # AI session runner
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _plan_dir_fallback_env(plan_dir: str, planning_worktree: Path | None) -> Iterator[None]:
+    """Advertise the plan directory to the child only in worktree-less fallback mode.
+
+    ``wade plan-session check`` runs inside the AI tool and sees only its own
+    cwd, which in this mode is the caller's checkout — indistinguishable from an
+    agent that simply started in the wrong place. Exporting the plan directory
+    for the duration of the launch is what lets the check recognise the
+    supported fallback (``PLAN_DIR_ONLY``) instead of telling the agent to stop.
+
+    With a planning worktree the check succeeds on its own, so nothing is
+    exported — the variable never leaks into the normal path. The previous value
+    is restored afterwards so a nested/parent ``wade`` process is unaffected.
+    """
+    from wade.models.readiness import PLAN_DIR_ENV_VAR
+
+    if planning_worktree is not None:
+        yield
+        return
+    previous = os.environ.get(PLAN_DIR_ENV_VAR)
+    os.environ[PLAN_DIR_ENV_VAR] = plan_dir
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(PLAN_DIR_ENV_VAR, None)
+        else:
+            os.environ[PLAN_DIR_ENV_VAR] = previous
 
 
 def run_ai_planning_session(
@@ -543,17 +574,18 @@ def plan(
     console.empty()
     issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
     session_cwd = planning_worktree or Path.cwd()
-    exit_code = run_ai_planning_session(
-        ai_tool=resolved_tool,
-        plan_dir=plan_dir,
-        model=resolved_model,
-        transcript_path=transcript_path,
-        issue_context=issue_context,
-        effort=resolved_effort,
-        allowed_commands=config.permissions.allowed_commands,
-        cwd=session_cwd,
-        permission_mode=resolved_permission_mode,
-    )
+    with _plan_dir_fallback_env(plan_dir, planning_worktree):
+        exit_code = run_ai_planning_session(
+            ai_tool=resolved_tool,
+            plan_dir=plan_dir,
+            model=resolved_model,
+            transcript_path=transcript_path,
+            issue_context=issue_context,
+            effort=resolved_effort,
+            allowed_commands=config.permissions.allowed_commands,
+            cwd=session_cwd,
+            permission_mode=resolved_permission_mode,
+        )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
     # Non-blocking tools (VS Code, Antigravity) return immediately.
@@ -1460,10 +1492,17 @@ def _remove_planning_worktree(
                 f"worktree at {worktree}. {result.message or 'Retry after restoring access.'}"
             )
             return False
-    with contextlib.suppress(Exception):
-        from wade.git import worktree as git_worktree
+    from wade.git import worktree as git_worktree
 
+    try:
         git_worktree.remove_worktree(repo_root, worktree, force=True)
+    except Exception as exc:
+        # The return value is the caller's cleanup contract — a swallowed
+        # failure here would leave the worktree behind while `plan()` reports
+        # success, so surface it and let the caller decide.
+        logger.warning("plan.planning_worktree_remove_failed", error=str(exc))
+        console.warn(f"Could not remove the planning worktree at {worktree}: {exc}")
+        return False
     return True
 
 
@@ -1507,8 +1546,6 @@ def _preserve_generated_plans(
     generated = discover_plan_files(Path(plan_dir))
     if not generated:
         # Nothing to salvage — the usual cleanup can run unconditionally.
-        if config is None:
-            return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
         return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
     try:
@@ -1527,8 +1564,6 @@ def _preserve_generated_plans(
     # Every file copied cleanly — the stable copy now stands in for the source,
     # so the normal cleanup can remove the worktree/temp dir.
     _report_preserved_plans(len(generated), preserved)
-    if config is None:
-        return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
     return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
 

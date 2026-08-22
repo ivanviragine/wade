@@ -22,7 +22,7 @@ from wade.models.config import (
     ProviderConfig,
     ProviderID,
 )
-from wade.models.readiness import ReadinessFailure, ReadinessPhase
+from wade.models.readiness import PLAN_DIR_ENV_VAR, ReadinessFailure, ReadinessPhase
 from wade.services.check_service import (
     READINESS_PROBE_TIMEOUT_SECONDS,
     CheckExitCode,
@@ -345,6 +345,127 @@ class TestSessionReadiness:
         assert result.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED
         assert result.exit_code == CheckExitCode.KNOWLEDGE_STAGING_BLOCKED
         assert result.failure == ReadinessFailure.KNOWLEDGE_VOTE_STAGING
+
+
+class TestGitHubAuthProbe:
+    """Only the account this session will actually use decides authentication."""
+
+    def test_restricts_the_status_check_to_the_active_account(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+
+        assert _github_auth_available(tmp_path) is True
+        # Without --active a single stale secondary login exits 1 and would
+        # block every session, even though gh operations use the active one.
+        assert "--active" in run.call_args.args[0]
+
+    def test_falls_back_when_the_installed_gh_rejects_active(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            if "--active" in args:
+                return subprocess.CompletedProcess(
+                    args, 1, stdout="", stderr="unknown flag: --active"
+                )
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", fake_run)
+
+        # An older gh must degrade to the unfiltered probe, not turn a working
+        # login into a hard session block.
+        assert _github_auth_available(tmp_path) is True
+        assert len(calls) == 2
+
+    def test_a_genuine_auth_failure_is_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = MagicMock(
+            return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="not logged in")
+        )
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+
+        assert _github_auth_available(tmp_path) is False
+        assert run.call_count == 1
+
+
+class TestPlanDirFallbackReadiness:
+    """`wade plan`'s supported worktree-less fallback stays usable."""
+
+    def test_plan_dir_mode_reports_ready_outside_a_worktree(
+        self, tmp_git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_dir = tmp_path / "wade-plan-abc"
+        plan_dir.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+
+        result = check_session_readiness(ReadinessPhase.PLAN, tmp_git_repo, ProjectConfig())
+
+        assert result.status == CheckStatus.PLAN_DIR_ONLY
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+        assert result.failure is None
+        assert f"plandir={plan_dir}" in result.format_output()
+
+    def test_plan_dir_mode_works_outside_a_git_repo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_dir = tmp_path / "wade-plan-def"
+        plan_dir.mkdir()
+        caller = tmp_path / "not-a-repo"
+        caller.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+
+        result = check_session_readiness(ReadinessPhase.PLAN, caller, ProjectConfig())
+
+        assert result.status == CheckStatus.PLAN_DIR_ONLY
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+
+    def test_unwritable_plan_dir_is_named_not_silently_ready(
+        self, tmp_git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_dir = tmp_path / "wade-plan-ghi"
+        plan_dir.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+        monkeypatch.setattr("wade.services.check_service._probe_dir_writable", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, tmp_git_repo, ProjectConfig())
+
+        assert result.status == CheckStatus.PLAN_DIR_BLOCKED
+        assert result.exit_code == CheckExitCode.PLAN_DIR_BLOCKED
+        assert result.failure == ReadinessFailure.PLAN_OUTPUT_WRITE
+        assert "reason=plan_output_write" in result.format_output()
+
+    def test_a_main_checkout_without_the_marker_still_fails(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Only `wade plan` sets the marker, so a plain misplaced agent must not
+        # be able to talk its way into planning from the main checkout.
+        monkeypatch.delenv(PLAN_DIR_ENV_VAR, raising=False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, tmp_git_repo, ProjectConfig())
+
+        assert result.status == CheckStatus.IN_MAIN_CHECKOUT
+
+    def test_the_marker_never_masks_a_real_worktree_failure(
+        self, tmp_git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="plan-marker", branch="plan-marker")
+        plan_dir = tmp_path / "wade-plan-jkl"
+        plan_dir.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+        config = ProjectConfig(knowledge={"enabled": True})
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        monkeypatch.setattr("wade.services.check_service._probe_staging_path", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, worktree, config)
+
+        assert result.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED
 
 
 # ---------------------------------------------------------------------------

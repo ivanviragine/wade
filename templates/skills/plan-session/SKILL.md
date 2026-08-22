@@ -46,6 +46,8 @@ out-of-worktree Git metadata: after you exit, the trusted parent `wade plan`
 process creates tasks and draft PRs.
 
 - `IN_WORKTREE` — proceed with planning.
+- `PLAN_DIR_ONLY` — no planning worktree; proceed, but write **only** to its
+  `plandir=…` and rate no knowledge (put the learning in the plan file).
 - `KNOWLEDGE_STAGING_BLOCKED` — do not write a vote; follow its `reason=…`
   hint and relaunch with only local `.wade/` write access. You may not work
   around it by granting the main checkout.
@@ -100,7 +102,7 @@ creates after you exit is branched from and targeted at that base. See
 - Do not create tasks/issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
-- Do not write files into the repo directory — only to the temp dir (`wade knowledge add` is **not** available in a planning session)
+- Do not write source or plan files into the repo directory — only the plan/temp dir from your prompt, plus the ignored `.wade/` (where `wade knowledge rate` stages votes). `wade knowledge add` is **not** available
 - Do not skip the review step or `wade plan-session done` — always present a plan summary, invite modifications, and validate before telling the user to exit
 - **⚠️ After exiting plan mode:** if your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 

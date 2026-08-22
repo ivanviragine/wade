@@ -210,6 +210,31 @@ def staged_ratings_path(project_root: Path) -> Path:
     return project_root / STAGED_RATINGS_RELATIVE_PATH
 
 
+def staging_path_escapes_session(project_root: Path, staging_path: Path) -> bool:
+    """Whether *staging_path* would write outside the detached session root.
+
+    ``.wade/`` is an ordinary checked-out path, so a repository (or a later
+    local edit) can replace it with a symlink pointing at the main checkout or
+    any other writable location. Following it would silently defeat the whole
+    point of staging: a detached session must never write outside its own
+    throwaway worktree merely to record a vote. Both the readiness probe and
+    the writer call this so a symlink planted *after* a passing preflight is
+    still refused at write time.
+
+    An unresolvable path (``OSError`` from ``resolve``) counts as an escape —
+    fail closed rather than write into an unknown location.
+    """
+    parent = staging_path.parent
+    try:
+        if parent.is_symlink() or staging_path.is_symlink():
+            return True
+        root = project_root.resolve()
+        # ``strict=False``: the staging dir may not exist yet on the probe path.
+        return not parent.resolve().is_relative_to(root)
+    except OSError:
+        return True
+
+
 def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
     """Resolve the knowledge path for the current session's resolved root.
 
@@ -298,7 +323,15 @@ def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeSt
     staged_vote_count = 0
     if is_throwaway_knowledge_session(project_root):
         staging_path = staged_ratings_path(project_root)
-        staged_vote_count = len(_load_staged_rating_records(staging_path))
+        try:
+            staged_vote_count = len(_load_staged_rating_records(staging_path))
+        except (OSError, ValueError) as exc:
+            # A corrupt or unreadable transport log is exactly when someone runs
+            # `wade knowledge status` to diagnose a failed handoff. Report zero
+            # staged votes rather than hiding dirty_paths and the pending legacy
+            # migration behind an exit 1.
+            logger.warning("knowledge.staged_ratings_unreadable", error=str(exc))
+            staged_vote_count = 0
 
     return KnowledgeStatus(
         root=root,
@@ -561,8 +594,17 @@ def record_rating(
 
 
 def stage_rating_event(project_root: Path, event: RatingEvent) -> Path:
-    """Persist *event* only in a detached session's ignored transport log."""
+    """Persist *event* only in a detached session's ignored transport log.
+
+    Re-validates containment at write time: a readiness preflight cannot stop a
+    symlink planted at ``.wade/`` afterwards from redirecting the append out of
+    the throwaway worktree.
+    """
     path = staged_ratings_path(project_root)
+    if staging_path_escapes_session(project_root, path):
+        raise ValueError(
+            f"Refusing to stage a knowledge vote outside the session worktree: {path!s}"
+        )
     _append_jsonl_record(path, event.to_record(), materialize_legacy=False)
     return path
 
