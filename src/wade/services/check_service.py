@@ -908,14 +908,15 @@ def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
 def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) -> None:
     """Validate the ``bot_review`` external-bot trigger section (#431).
 
-    ``auto_trigger`` is a boolean; ``bots`` is a list of ``{name, trigger,
-    enabled?}`` mappings with non-empty string ``name`` / ``trigger``. Mirrors
-    the loader's parse rules so ``wade check`` catches a malformed section before
-    it reaches ``load_config``.
+    ``auto_trigger`` / ``offer_on_done`` are booleans; ``bots`` is a list of
+    ``{name, trigger, enabled?}`` mappings with non-empty string ``name`` /
+    ``trigger``. Mirrors the loader's parse rules so ``wade check`` catches a
+    malformed section before it reaches ``load_config``.
     """
-    auto_trigger = bot_review.get("auto_trigger")
-    if auto_trigger is not None and not isinstance(auto_trigger, bool):
-        errors.append("bot_review.auto_trigger: must be true or false")
+    for flag in ("auto_trigger", "offer_on_done"):
+        value = bot_review.get(flag)
+        if value is not None and not isinstance(value, bool):
+            errors.append(f"bot_review.{flag}: must be true or false")
 
     # arrival_timeout / ack_timeout (#448): strict positive integers (reject bool,
     # which is an int subclass) mirroring the ``BotReviewConfig`` StrictInt fields.
@@ -943,7 +944,7 @@ def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) 
         else:
             _validate_bot_review_bots(bots, errors)
 
-    valid_keys = {"auto_trigger", "arrival_timeout", "ack_timeout", "bots"}
+    valid_keys = {"auto_trigger", "offer_on_done", "arrival_timeout", "ack_timeout", "bots"}
     supported = ", ".join(sorted(valid_keys))
     for key in bot_review:
         if key not in valid_keys:

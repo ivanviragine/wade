@@ -59,6 +59,21 @@ class TestImplementationSessionSubApp:
         for cmd in ("check", "sync", "done"):
             assert cmd in result.output
 
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [
+            ([], None),
+            (["--trigger-bots"], True),
+            (["--no-trigger-bots"], False),
+        ],
+    )
+    def test_done_trigger_bots_flag(self, argv: list[str], expected: bool | None) -> None:
+        """--trigger-bots / --no-trigger-bots reach the service as a tri-state (#464)."""
+        with patch("wade.services.implementation_service.done", return_value=True) as mock_done:
+            result = runner.invoke(app, ["implementation-session", "done", "42", *argv])
+        assert result.exit_code == 0
+        assert mock_done.call_args.kwargs["trigger_bots"] is expected
+
 
 # ---------------------------------------------------------------------------
 # Review PR comments session sub-app
@@ -100,6 +115,21 @@ class TestReviewPrCommentsSessionSubApp:
         assert result.exit_code == 0
         for cmd in ("check", "sync", "done", "fetch", "resolve"):
             assert cmd in result.output
+
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [
+            ([], None),
+            (["--trigger-bots"], True),
+            (["--no-trigger-bots"], False),
+        ],
+    )
+    def test_done_trigger_bots_flag(self, argv: list[str], expected: bool | None) -> None:
+        """The review session's done carries the same tri-state override (#464)."""
+        with patch("wade.services.implementation_service.done", return_value=False) as mock_done:
+            result = runner.invoke(app, ["review-pr-comments-session", "done", "42", *argv])
+        assert result.exit_code == 1  # service returned False; the flag still landed
+        assert mock_done.call_args.kwargs["trigger_bots"] is expected
 
 
 # ---------------------------------------------------------------------------

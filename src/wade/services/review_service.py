@@ -43,6 +43,7 @@ from wade.models.review import (
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import bot_trigger
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
@@ -1453,7 +1454,22 @@ def _quiet_next_steps_prompt(
             if allow_merge
             else ["Keep polling", "Exit without merging"]
         )
+        # A quiet PR is exactly where an un-triggered bot shows up as silence, so
+        # offer the trigger before the user decides to keep waiting (#464). The
+        # entry is appended, never inserted, so the existing choices keep their
+        # indexes. Hidden once every enabled bot has fired for this commit.
+        bot_config, trigger_option = bot_trigger.menu_entry(
+            repo_root, branch, worktree_path, config=config
+        )
+        if trigger_option:
+            options.append(trigger_option)
         choice = prompts.select(f"PR #{pr_number} — what next?", options)
+
+        if trigger_option and bot_config is not None and choice == len(options) - 1:
+            bot_trigger.post_pending_triggers(
+                bot_config, repo_root, branch, pr_number, worktree_path or repo_root
+            )
+            continue  # Re-display the menu — the user can now keep polling.
 
         if choice == 0:  # Keep polling
             outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
@@ -1523,10 +1539,23 @@ def _post_review_lifecycle(
         return
 
     console.empty()
-    choice = prompts.select(
-        f"PR #{pr_number} — what next?",
-        ["Merge PR", "Wait for new reviews"],
+    # Same offer as the post-implementation menu (#464): the review session's
+    # `done` pushed fixups, and with `auto_trigger` off nothing asked the bots to
+    # look again — which is precisely when "wait for new reviews" waits forever.
+    bot_config, trigger_option = bot_trigger.menu_entry(
+        repo_root, branch, worktree_path, suffix=", then wait", config=config
     )
+    options = ["Merge PR", "Wait for new reviews"]
+    if trigger_option:
+        options.append(trigger_option)
+
+    choice = prompts.select(f"PR #{pr_number} — what next?", options)
+
+    if trigger_option and bot_config is not None and choice == len(options) - 1:
+        bot_trigger.post_pending_triggers(
+            bot_config, repo_root, branch, pr_number, worktree_path or repo_root
+        )
+        choice = 1  # ...then fall through into the wait-for-new-reviews flow.
 
     if choice == 1:  # Wait for new reviews
         outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)

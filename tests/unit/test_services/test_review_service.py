@@ -2329,6 +2329,49 @@ class TestQuietNextStepsPrompt:
         assert mock_select.call_count == 2
         assert mock_poll.call_count == 1
 
+    @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
+    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_quiet_menu_offers_bot_triggers_then_reshows(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_status: MagicMock,
+        _mock_rev_parse: MagicMock,
+        mock_comment: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A quiet PR is where an un-triggered bot shows up as silence (#464)."""
+        from wade.models.config import ProjectConfig
+        from wade.models.review import PRReviewStatus
+
+        mock_status.return_value = PRReviewStatus()
+        # Pick the appended trigger entry, then "Exit without merging".
+        mock_select.side_effect = [3, 2]
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(
+            tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider, config=ProjectConfig()
+        )
+
+        first_options = mock_select.call_args_list[0].args[1]
+        assert first_options[:3] == ["Keep polling", "Merge PR", "Exit without merging"]
+        assert first_options[3] == "Trigger bot reviews (coderabbit, codex, bugbot)"
+        assert mock_comment.call_count == 3
+        # Posting re-displays the menu instead of polling on its own.
+        assert mock_select.call_count == 2
+        mock_poll.assert_not_called()
+        # Second pass: every bot has a marker now, so the entry is gone.
+        assert mock_select.call_args_list[1].args[1] == [
+            "Keep polling",
+            "Merge PR",
+            "Exit without merging",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # _post_review_lifecycle()
@@ -2384,6 +2427,38 @@ class TestPostReviewLifecycle:
         mock_poll.return_value = PollOutcome.INTERRUPTED
         provider = MagicMock()
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_merge.assert_not_called()
+        mock_poll.assert_called_once()
+
+    @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
+    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=2)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_trigger_choice_posts_then_waits(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        _mock_rev_parse: MagicMock,
+        mock_comment: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """After a review session's fixups, offer a re-review before waiting (#464)."""
+        from wade.models.config import ProjectConfig
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.INTERRUPTED
+        provider = MagicMock()
+        _post_review_lifecycle(
+            tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider, config=ProjectConfig()
+        )
+        options = mock_select.call_args.args[1]
+        assert options[:2] == ["Merge PR", "Wait for new reviews"]
+        assert options[2] == "Trigger bot reviews (coderabbit, codex, bugbot), then wait"
+        assert mock_comment.call_count == 3
         mock_merge.assert_not_called()
         mock_poll.assert_called_once()
 

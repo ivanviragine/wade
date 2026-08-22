@@ -104,11 +104,15 @@ def _show_init_summary(
     if knowledge_setup.get("enabled"):
         console.kv("Knowledge file", knowledge_setup.get("path", "KNOWLEDGE.md"))
 
-    # Bot review triggers (#431)
+    # Bot review triggers (#431, #464) — report the resolved mode, not two flags.
     if bot_review_setup is not None:
-        console.kv(
-            "Bot review auto-trigger", str(bool(bot_review_setup.get("auto_trigger"))).lower()
-        )
+        if bot_review_setup.get("auto_trigger"):
+            mode = "automatic"
+        elif bot_review_setup.get("offer_on_done", True):
+            mode = "offer after done"
+        else:
+            mode = "manual (wade review trigger)"
+        console.kv("Bot review triggers", mode)
 
 
 def _read_manifest_version(root: Path) -> str | None:

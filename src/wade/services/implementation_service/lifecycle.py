@@ -24,6 +24,7 @@ from wade.git.repo import GitError
 from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
+from wade.services import bot_trigger
 from wade.services.implementation_service.bootstrap import (
     _format_uncommitted_summary,
     _get_dirty_file_paths,
@@ -362,10 +363,25 @@ def _post_implementation_lifecycle_pr(
     if not prompts.is_tty():
         return MergeStatus.NOT_MERGED
 
-    choice = prompts.select(
-        f"PR #{pr_number} — what next?",
-        ["Merge PR", "Wait for reviews"],
+    # Offer the bot-review triggers here too (#464): with `auto_trigger` off, the
+    # agent's `done` did not post them, and this menu is the human's first TTY
+    # moment afterwards — waiting for a review no one asked for is the failure
+    # mode this avoids. Hidden when every enabled bot already fired for this
+    # commit (see `bot_trigger.pending_names`).
+    bot_config, trigger_option = bot_trigger.menu_entry(
+        repo_root, branch, worktree_path, suffix=", then wait"
     )
+    options = ["Merge PR", "Wait for reviews"]
+    if trigger_option:
+        options.append(trigger_option)
+
+    choice = prompts.select(f"PR #{pr_number} — what next?", options)
+
+    if trigger_option and bot_config is not None and choice == len(options) - 1:
+        bot_trigger.post_pending_triggers(
+            bot_config, repo_root, branch, int(pr_number), worktree_path or repo_root
+        )
+        choice = 1  # ...then fall through into the wait-for-reviews flow.
 
     if choice == 1:  # Wait for reviews
         from wade.models.review import PollOutcome

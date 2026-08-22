@@ -348,6 +348,83 @@ class TestWorkDoneCommand:
             == 1
         )
 
+    def _done_ready_worktree(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+        *,
+        issue_number: int,
+        title: str,
+    ) -> Path:
+        """Seed an issue, start a session, and commit work so `done` can finalize."""
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=title,
+            body="## Tasks\n- Finish implementation\n",
+        )
+        _init_origin_remote(e2e_repo)
+
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0
+        worktree_path = Path(start_result.stdout.strip())
+
+        (worktree_path / "PR-SUMMARY.md").write_text("Bot trigger contract.\n", encoding="utf-8")
+        (worktree_path / "implementation.txt").write_text("bot trigger\n", encoding="utf-8")
+        _git(["add", "-A"], cwd=worktree_path)
+        _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+        return worktree_path
+
+    def test_done_offers_bot_triggers_without_posting(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """#464: auto_trigger off + no TTY → nothing posted, but the offer is surfaced."""
+        issue_number = 47
+        worktree_path = self._done_ready_worktree(
+            e2e_repo,
+            mock_gh_cli,
+            issue_number=issue_number,
+            title="fix: offer bot review triggers after done",
+        )
+
+        result = _run(["implementation-session", "done", "--skip-review"], cwd=worktree_path)
+
+        assert result.returncode == 0
+        out = " ".join((result.stdout + result.stderr).split())
+        assert "Bot review triggers NOT posted" in out
+        assert f"wade review trigger {issue_number}" in out
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment"]) == 0
+
+    def test_done_trigger_bots_flag_posts_every_enabled_bot(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """#464: `--trigger-bots` posts the triggers even with auto_trigger off."""
+        issue_number = 48
+        branch_name = "feat/48-fix-post-bot-review-triggers-from-done"
+        worktree_path = self._done_ready_worktree(
+            e2e_repo,
+            mock_gh_cli,
+            issue_number=issue_number,
+            title="fix: post bot review triggers from done",
+        )
+
+        result = _run(
+            ["implementation-session", "done", "--skip-review", "--trigger-bots"],
+            cwd=worktree_path,
+        )
+
+        assert result.returncode == 0
+        pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment", pr_number]) == 3
+        for body in ("@coderabbitai review", "@codex review", "bugbot run"):
+            _assert_gh_called_with(
+                mock_gh_cli["log_file"], ["pr", "comment", pr_number, "--body", body]
+            )
+
     def test_work_done_links_parent_tracking_issue_from_backticked_checklist(
         self,
         e2e_repo: Path,

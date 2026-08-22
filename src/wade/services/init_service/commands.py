@@ -216,6 +216,9 @@ def init(
     _cur_bot_review_auto: bool = (
         existing_config.bot_review.auto_trigger if existing_config else False
     )
+    _cur_bot_review_offer: bool = (
+        existing_config.bot_review.offer_on_done if existing_config else True
+    )
 
     while True:
         # 4a. Provider
@@ -294,10 +297,11 @@ def init(
             current_path=_cur_knowledge_path,
         )
 
-        # 4i. Bot review triggers (auto-trigger opt-in; default off)
+        # 4i. Bot review triggers (auto / offer-after-done / manual; default offer)
         bot_review_setup = _prompt_bot_review_setup(
             non_interactive,
             current_auto_trigger=_cur_bot_review_auto,
+            current_offer_on_done=_cur_bot_review_offer,
         )
 
         # 4j. Summary + Yes / Modify / Cancel
@@ -351,6 +355,7 @@ def init(
             _cur_knowledge_enabled = bool(knowledge_setup.get("enabled"))
             _cur_knowledge_path = str(knowledge_setup.get("path", "KNOWLEDGE.md"))
             _cur_bot_review_auto = bool(bot_review_setup.get("auto_trigger"))
+            _cur_bot_review_offer = bool(bot_review_setup.get("offer_on_done", True))
             continue
         break  # "Write .wade.yml" — proceed to write phase
 

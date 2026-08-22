@@ -66,6 +66,12 @@ def done(
     skip_review: bool = typer.Option(
         False, "--skip-review", help="Skip the review-ran completion gate."
     ),
+    trigger_bots: bool | None = typer.Option(
+        None,
+        "--trigger-bots/--no-trigger-bots",
+        help="Post (or suppress) the configured bot-review trigger comments after "
+        "the push. Overrides bot_review.auto_trigger for this run.",
+    ),
 ) -> None:
     """Finalize review — run the completion gates, push, and update the PR."""
     from wade.services.implementation_service import done as do_done
@@ -77,6 +83,7 @@ def done(
         draft=draft,
         session_type="review-pr-comments",
         skip_review=skip_review,
+        trigger_bots=trigger_bots,
     )
     if success:
         from wade.cli.session_shared import DOC_PASS_ADVISORY

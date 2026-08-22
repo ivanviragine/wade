@@ -186,6 +186,7 @@ def test_cli_plan_flag_passes_to_service() -> None:
         draft=False,
         session_type="implementation",
         skip_review=False,
+        trigger_bots=None,  # neither --trigger-bots nor --no-trigger-bots given
     )
 
 
