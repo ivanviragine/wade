@@ -54,6 +54,9 @@ TIMEOUT_RETRY_MULTIPLIER = 1.5
 # needs to help most. ~3750s (62.5 min) at current constants.
 TOTAL_TIMEOUT_CAP = TIMEOUT_CEILING + round(TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER)
 
+MAX_HEADLESS_STDERR_LINES = 20
+MAX_HEADLESS_STDERR_CHARS = 4_000
+
 
 def scaled_timeout(payload_bytes: int, effort: str | None = None) -> int:
     """Scale a headless budget from payload size and effort, bounded floor..ceiling."""
@@ -162,6 +165,28 @@ def _timeout_result(partial: str) -> DelegationResult:
     )
 
 
+def _format_headless_failure(stdout: str, stderr: str) -> str:
+    """Combine failed headless output while bounding stderr diagnostics."""
+    stdout = stdout.strip()
+    stderr_lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    stderr_truncated = len(stderr_lines) > MAX_HEADLESS_STDERR_LINES
+    stderr_lines = stderr_lines[-MAX_HEADLESS_STDERR_LINES:]
+    stderr_output = "\n".join(stderr_lines)
+
+    if len(stderr_output) > MAX_HEADLESS_STDERR_CHARS:
+        stderr_output = stderr_output[-MAX_HEADLESS_STDERR_CHARS:]
+        stderr_truncated = True
+
+    if not stderr_output:
+        return stdout or "Headless session failed with no output"
+
+    stderr_label = "Headless session stderr"
+    if stderr_truncated:
+        stderr_label += " (truncated)"
+    stderr_feedback = f"{stderr_label}:\n{stderr_output}"
+    return f"{stdout}\n\n{stderr_feedback}" if stdout else stderr_feedback
+
+
 def _crash_result(exc: CommandError) -> DelegationResult:
     """A non-success result for a headless crash — ``timed_out`` stays False (never retried)."""
     return DelegationResult(
@@ -179,7 +204,7 @@ def _run_headless_once(cmd: list[str], timeout: int, session_cwd: Path) -> Deleg
     ``CommandError`` propagate so the caller can decide whether to retry.
     """
     result = run(cmd, check=False, timeout=timeout, cwd=session_cwd)
-    stdout = result.stdout.strip() if result.stdout else ""
+    stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
     if result.returncode == 0:
         return DelegationResult(
             success=True,
@@ -187,9 +212,10 @@ def _run_headless_once(cmd: list[str], timeout: int, session_cwd: Path) -> Deleg
             mode=DelegationMode.HEADLESS,
             exit_code=0,
         )
+    stderr = result.stderr if isinstance(result.stderr, str) else ""
     return DelegationResult(
         success=False,
-        feedback=stdout or "Headless session failed with no output",
+        feedback=_format_headless_failure(stdout, stderr),
         mode=DelegationMode.HEADLESS,
         exit_code=result.returncode,
     )

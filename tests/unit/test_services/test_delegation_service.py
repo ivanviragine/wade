@@ -114,7 +114,11 @@ class TestDelegateHeadless:
 
     @patch("wade.services.delegation_service.run")
     def test_successful_headless_run(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="All looks good!\n")
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="All looks good!\n",
+            stderr="A warning that is not feedback\n",
+        )
         req = DelegationRequest(
             mode=DelegationMode.HEADLESS,
             prompt="Review the code",
@@ -147,7 +151,7 @@ class TestDelegateHeadless:
 
     @patch("wade.services.delegation_service.run")
     def test_headless_nonzero_exit(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(returncode=1, stdout="Error occurred")
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
         req = DelegationRequest(
             mode=DelegationMode.HEADLESS,
             prompt="Review",
@@ -156,6 +160,82 @@ class TestDelegateHeadless:
         result = _delegate_headless(req)
         assert result.success is False
         assert result.exit_code == 1
+        assert result.feedback == "Headless session failed with no output"
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_stderr_only_failure(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="fatal: app-server permission denied\n",
+        )
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+        )
+
+        result = _delegate_headless(req)
+
+        assert result.success is False
+        assert result.feedback == ("Headless session stderr:\nfatal: app-server permission denied")
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_failure_combines_stdout_and_stderr(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="The reviewer started, then failed.\n",
+            stderr="fatal: app-server permission denied\n",
+        )
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+        )
+
+        result = _delegate_headless(req)
+
+        assert result.feedback == (
+            "The reviewer started, then failed.\n\n"
+            "Headless session stderr:\n"
+            "fatal: app-server permission denied"
+        )
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_failure_truncates_stderr_lines(self, mock_run: MagicMock) -> None:
+        stderr = "\n".join(f"diagnostic-{index}" for index in range(1, 23))
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr=stderr)
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+        )
+
+        result = _delegate_headless(req)
+
+        assert result.feedback.startswith("Headless session stderr (truncated):\n")
+        diagnostic_lines = result.feedback.splitlines()[1:]
+        assert "diagnostic-1" not in diagnostic_lines
+        assert "diagnostic-2" not in diagnostic_lines
+        assert "diagnostic-3" in diagnostic_lines
+        assert "diagnostic-22" in diagnostic_lines
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_failure_truncates_stderr_characters(self, mock_run: MagicMock) -> None:
+        stderr = "diagnostic-start " + ("x" * 5_000)
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr=stderr)
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+        )
+
+        result = _delegate_headless(req)
+
+        diagnostic = result.feedback.split("\n", 1)[1]
+        assert result.feedback.startswith("Headless session stderr (truncated):\n")
+        assert len(diagnostic) == 4_000
+        assert diagnostic == "x" * 4_000
 
     @patch("wade.services.delegation_service.console")
     @patch("wade.services.delegation_service.run")

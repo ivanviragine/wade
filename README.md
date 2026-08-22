@@ -600,6 +600,10 @@ review prompt states the current attempt's budget in seconds, so it can
 prioritize the highest-severity findings and wrap up before being cut off
 rather than getting killed mid-thought. Interactive and self-review (prompt)
 reviews have no subprocess kill, so they get "no hard deadline" wording instead.
+When a headless subprocess exits non-zero, wade retains trimmed stdout and
+appends a clearly labeled stderr tail containing at most the final 20 non-empty
+lines and 4,000 characters; if stdout is empty, that diagnostic is shown as the
+failure feedback, and any truncation is labeled.
 
 ### Codex sandbox & network policy
 
