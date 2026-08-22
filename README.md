@@ -687,6 +687,12 @@ network authority to the child process. Likewise, WADE's installed hooks are
 guardrails, not privilege escalation: a failing hook may block a command, but
 cannot make `gh`, Git metadata, or a network route available.
 
+If `wade review implementation` cannot launch its reviewer because of missing
+credentials, PATH, or sandbox execution access, it does not consume a
+`done.max_review_passes` slot: repair the runtime and retry. A real headless
+timeout still counts as a bounded review attempt, so the review/fix loop cannot
+run forever.
+
 For Codex, keep `--sandbox workspace-write`; WADE/crossby add only the linked
 worktree's private/common Git metadata directories, and you must enable
 `network_access` explicitly for implementation/review sessions that need GitHub.

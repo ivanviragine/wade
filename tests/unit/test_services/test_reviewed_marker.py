@@ -103,7 +103,7 @@ class TestReviewImplementationWritesMarker:
 
 
 class TestRecordReviewPass:
-    """The review-pass cap marker (#384): counts delegation-backed passes."""
+    """The review-pass cap marker (#384): counts meaningful review attempts."""
 
     def test_writes_review_pass_for_head(self, tmp_path: Path, monkeypatch) -> None:
         repo = tmp_path / "r"
@@ -158,6 +158,28 @@ class TestRecordReviewPass:
             rds.review_implementation()
         mock_pass.assert_called_once()
         mock_mark.assert_not_called()
+
+    def test_reviewer_launch_failure_does_not_record_pass(self, tmp_path: Path) -> None:
+        """Missing credentials/sandbox launch failure must not bypass `done` later."""
+        failure = DelegationResult(
+            success=False,
+            feedback="Not logged in · Please run /login",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            timed_out=False,
+        )
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation", return_value=failure),
+            patch.object(rds, "_record_review_pass") as mock_pass,
+            patch.object(rds, "_mark_reviewed") as mock_mark,
+            patch.object(rds.console, "warn") as mock_warn,
+        ):
+            rds.review_implementation()
+        mock_pass.assert_not_called()
+        mock_mark.assert_not_called()
+        assert "no review-pass budget" in mock_warn.call_args.args[0]
 
     def test_no_diff_path_does_not_record_pass(self, tmp_path: Path) -> None:
         # The no-diff early return writes the exact-sha `reviewed` marker (which

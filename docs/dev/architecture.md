@@ -514,6 +514,12 @@ sandbox and report their own failure. Tool command allowlists authorize an agent
 to start `wade`; they do not grant that child new filesystem/network authority,
 and hooks are guardrails rather than privilege escalation.
 
+The implementation-review pass cap distinguishes an attempted, bounded review
+from a reviewer that never launched: success and a true headless timeout count
+toward `done.max_review_passes`, but missing credentials/PATH or a sandbox exec
+denial do not. Otherwise an unavailable reviewer could exhaust the cap and let
+`done` bypass its review gate without any review attempt.
+
 The capability remediation is intentionally tool-neutral: retain the sandbox
 and grant only the worktree Git metadata paths, GitHub credential/API route, or
 local staging path named by the failure. Codex continues to use explicit
