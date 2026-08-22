@@ -1461,11 +1461,14 @@ def _quiet_next_steps_prompt(
         bot_config, trigger_option = bot_trigger.menu_entry(
             repo_root, branch, worktree_path, config=config
         )
+        # Index bound at append time so a later option can't steal this branch.
+        trigger_index = -1
         if trigger_option:
+            trigger_index = len(options)
             options.append(trigger_option)
         choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
-        if trigger_option and bot_config is not None and choice == len(options) - 1:
+        if bot_config is not None and choice == trigger_index:
             bot_trigger.post_pending_triggers(
                 bot_config, repo_root, branch, pr_number, worktree_path or repo_root
             )
@@ -1546,12 +1549,15 @@ def _post_review_lifecycle(
         repo_root, branch, worktree_path, suffix=", then wait", config=config
     )
     options = ["Merge PR", "Wait for new reviews"]
+    # Index bound at append time so a later option can't steal this branch.
+    trigger_index = -1
     if trigger_option:
+        trigger_index = len(options)
         options.append(trigger_option)
 
     choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
-    if trigger_option and bot_config is not None and choice == len(options) - 1:
+    if bot_config is not None and choice == trigger_index:
         bot_trigger.post_pending_triggers(
             bot_config, repo_root, branch, pr_number, worktree_path or repo_root
         )

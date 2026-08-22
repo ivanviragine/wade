@@ -372,12 +372,16 @@ def _post_implementation_lifecycle_pr(
         repo_root, branch, worktree_path, suffix=", then wait"
     )
     options = ["Merge PR", "Wait for reviews"]
+    # Bind the entry's index at append time (not `len(options) - 1` at read time)
+    # so a future option appended after it can't silently steal the branch below.
+    trigger_index = -1
     if trigger_option:
+        trigger_index = len(options)
         options.append(trigger_option)
 
     choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
-    if trigger_option and bot_config is not None and choice == len(options) - 1:
+    if bot_config is not None and choice == trigger_index:
         bot_trigger.post_pending_triggers(
             bot_config, repo_root, branch, int(pr_number), worktree_path or repo_root
         )
