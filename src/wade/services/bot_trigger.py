@@ -87,7 +87,13 @@ def pending_bots(config: ProjectConfig, marker_root: Path, sha: str) -> list[Rev
 
 
 def format_bot_names(bots: list[ReviewBotConfig]) -> str:
-    """Comma-joined bot names, markup-escaped for a styled console line."""
+    """Comma-joined bot names for a console line or a menu label.
+
+    ``escape_markup`` is belt-and-suspenders: a ``name`` is a validated safe
+    identifier, so escaping is a no-op today — which is why the same rendering is
+    safe both inside a Rich-styled string and in a questionary menu label (where
+    escaped markup would otherwise show up literally).
+    """
     return ", ".join(console.escape_markup(bot.name) for bot in bots)
 
 
