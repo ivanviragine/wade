@@ -39,13 +39,16 @@ planning sessions.
 
 ## First action: check session readiness
 
-Run `wade plan-session check` as your **first action**. A detached worktree
-needs writable Git metadata, configured GitHub access, and local `.wade/` vote staging.
+Run `wade plan-session check` as your **first action**. A detached planning
+agent needs only its worktree for plan output and, when knowledge is enabled,
+local `.wade/` vote staging. It does **not** need GitHub access or writable
+out-of-worktree Git metadata: after you exit, the trusted parent `wade plan`
+process creates tasks and draft PRs.
 
 - `IN_WORKTREE` — proceed with planning.
-- `WORKTREE_GIT_BLOCKED`, `GITHUB_AUTH_BLOCKED`, `GITHUB_API_BLOCKED`, or
-  `KNOWLEDGE_STAGING_BLOCKED` — do not write a plan or vote; follow its
-  `reason=…` hint and relaunch with only that capability.
+- `KNOWLEDGE_STAGING_BLOCKED` — do not write a vote; follow its `reason=…`
+  hint and relaunch with only local `.wade/` write access. You may not work
+  around it by granting the main checkout.
 
 Do not disable a sandbox globally or request main-checkout writes.
 

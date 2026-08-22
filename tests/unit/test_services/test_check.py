@@ -190,10 +190,30 @@ class TestWorktreeGitReadinessProbe:
 class TestSessionReadiness:
     """Phase-aware probes preserve the legacy worktree contract and name failures."""
 
+    def test_github_cli_failure_is_distinct_from_authentication(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="cli-worktree", branch="cli-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: False)
+
+        def auth_must_not_run(_: Path) -> bool:
+            raise AssertionError("auth probe must not mask an unavailable gh executable")
+
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", auth_must_not_run)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.GITHUB_CLI_BLOCKED
+        assert result.exit_code == CheckExitCode.GITHUB_CLI_BLOCKED
+        assert result.failure == ReadinessFailure.GITHUB_CLI_EXECUTABLE
+        assert "reason=github_cli_executable" in result.format_output()
+        assert "PATH" in result.format_output()
+
     def test_github_auth_failure_has_stable_reason(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         worktree = _add_worktree(tmp_git_repo, name="auth-worktree", branch="auth-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: True)
         monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: False)
 
         result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
@@ -207,6 +227,7 @@ class TestSessionReadiness:
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         worktree = _add_worktree(tmp_git_repo, name="api-worktree", branch="api-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: True)
         monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: True)
         monkeypatch.setattr("wade.services.check_service._github_api_reachable", lambda _: False)
 
@@ -216,21 +237,71 @@ class TestSessionReadiness:
         assert result.exit_code == CheckExitCode.GITHUB_API_BLOCKED
         assert result.failure == ReadinessFailure.GITHUB_API_REACHABILITY
 
-    def test_non_github_provider_skips_network_probes(
+    def test_pr_sessions_require_github_even_for_non_github_task_provider(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         worktree = _add_worktree(tmp_git_repo, name="markdown-worktree", branch="markdown-branch")
-
-        def must_not_probe(_: Path) -> bool:
-            raise AssertionError("irrelevant provider must not probe GitHub")
-
-        monkeypatch.setattr("wade.services.check_service._github_auth_available", must_not_probe)
-        monkeypatch.setattr("wade.services.check_service._github_api_reachable", must_not_probe)
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: True)
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: False)
         config = ProjectConfig(provider=ProviderConfig(name=ProviderID.MARKDOWN))
 
         result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, config)
 
+        # Task providers are pluggable, but implementation/review completion
+        # still creates and updates GitHub PRs. Do not let Markdown/ClickUp
+        # sessions discover their missing `gh` authority only at `done`.
+        assert result.status == CheckStatus.GITHUB_AUTH_BLOCKED
+
+    @pytest.mark.parametrize("phase", [ReadinessPhase.PLAN, ReadinessPhase.DEPS])
+    def test_detached_analysis_phases_skip_github_probes(
+        self,
+        tmp_git_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        phase: ReadinessPhase,
+    ) -> None:
+        worktree = _add_worktree(
+            tmp_git_repo,
+            name=f"{phase.value}-worktree",
+            branch=f"{phase.value}-branch",
+        )
+
+        def must_not_probe(_: Path) -> bool:
+            raise AssertionError("offline detached analysis must not probe GitHub")
+
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", must_not_probe)
+        monkeypatch.setattr("wade.services.check_service._github_api_reachable", must_not_probe)
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", must_not_probe)
+
+        result = check_session_readiness(phase, worktree, ProjectConfig())
+
         assert result.status == CheckStatus.IN_WORKTREE
+
+    @pytest.mark.parametrize("phase", [ReadinessPhase.PLAN, ReadinessPhase.DEPS])
+    def test_detached_analysis_does_not_probe_git_metadata_writes(
+        self,
+        tmp_git_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        phase: ReadinessPhase,
+    ) -> None:
+        worktree = _add_worktree(
+            tmp_git_repo,
+            name=f"{phase.value}-git-blocked",
+            branch=f"{phase.value}-git-blocked",
+        )
+
+        def metadata_probe_must_not_run(_: Path) -> list[str]:
+            raise AssertionError("plan/deps must not attempt an irrelevant gitdir write probe")
+
+        monkeypatch.setattr(
+            "wade.services.check_service._blocked_git_metadata_dirs",
+            metadata_probe_must_not_run,
+        )
+
+        result = check_session_readiness(phase, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.IN_WORKTREE
+        assert result.failure is None
+        assert result.blocked_paths == []
 
     def test_detached_stage_failure_is_named_before_planning(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch

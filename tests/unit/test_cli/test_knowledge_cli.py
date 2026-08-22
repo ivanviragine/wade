@@ -666,6 +666,10 @@ class TestThrowawaySessionGate:
             patch("wade.config.loader.load_config", return_value=config),
             patch("wade.git.repo.get_git_dir", return_value=".git"),
             patch("wade.git.repo.is_head_attached", return_value=False),
+            patch(
+                "wade.services.knowledge_service.resolve_canonical_knowledge_path",
+                side_effect=AssertionError("detached rating must not access the main checkout"),
+            ),
         ):
             result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
 

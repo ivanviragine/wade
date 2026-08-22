@@ -1680,6 +1680,50 @@ class TestStagedRatingEvents:
         assert staged_ratings_path(worktree).is_file()
 
 
+class TestDetachedKnowledgeReads:
+    """Read-only plan/deps commands must not cross into the main checkout."""
+
+    def test_annotated_get_uses_local_snapshot_without_canonical_resolution(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            KNOWLEDGE_TEMPLATE
+            + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nLocal detached knowledge.\n\n---\n",
+            encoding="utf-8",
+        )
+
+        def main_checkout_must_not_be_read(_: Path) -> Path:
+            raise AssertionError("read-only detached knowledge command escaped its worktree")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._resolve_knowledge_root",
+            main_checkout_must_not_be_read,
+        )
+
+        result = get_annotated_knowledge(tmp_path, config, no_filter=True)
+
+        assert result.content is not None
+        assert "Local detached knowledge." in result.content
+
+    def test_status_uses_local_snapshot_without_canonical_resolution(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "KNOWLEDGE.ratings.yml").write_text("entry: {up: 1}\n", encoding="utf-8")
+
+        def main_checkout_must_not_be_read(_: Path) -> Path:
+            raise AssertionError("status escaped its detached worktree")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._resolve_knowledge_root",
+            main_checkout_must_not_be_read,
+        )
+
+        result = knowledge_status(tmp_path, config)
+
+        assert result.root == tmp_path
+        assert result.legacy_migration_pending is True
+
+
 class TestValidateKnowledgeFile:
     def test_valid_file_has_no_problems(self, tmp_path: Path) -> None:
         path = tmp_path / "KNOWLEDGE.md"

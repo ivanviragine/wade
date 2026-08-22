@@ -655,6 +655,9 @@ def main() -> int:
         return 0
     state = _load_state()
 
+    if argv[0] == "--version":
+        print("gh version 99.0.0 (mock)")
+        return 0
     if argv[0] == "auth":
         print("Logged in to github.com")
         return 0

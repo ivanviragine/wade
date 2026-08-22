@@ -3,7 +3,8 @@
 Covers the new CLI modules introduced in #109:
 - implementation-session (check, sync, done)
 - review-pr-comments-session (check, sync, done, fetch, resolve)
-- plan-session (done)
+- plan-session (check, done)
+- deps-session (check)
 - worktree (list, remove, cd)
 - top-level cd
 - hidden short aliases (p, i, r)
@@ -120,10 +121,31 @@ class TestPlanSessionSubApp:
         result = runner.invoke(app, ["plan-session", "done", str(missing)])
         assert result.exit_code == 1
 
-    def test_help_shows_done(self) -> None:
+    def test_help_shows_check_and_done(self) -> None:
         result = runner.invoke(app, ["plan-session", "--help"])
         assert result.exit_code == 0
-        assert "done" in result.output
+        for cmd in ("check", "done"):
+            assert cmd in result.output
+
+
+# ---------------------------------------------------------------------------
+# Detached dependency-analysis session sub-app
+# ---------------------------------------------------------------------------
+
+
+class TestDepsSessionSubApp:
+    """Tests for ``wade deps-session`` (agent-side offline preflight)."""
+
+    def test_check_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(app, ["deps-session", "check"])
+        assert result.exit_code == 1
+        assert "NOT_IN_GIT_REPO" in result.output
+
+    def test_help_shows_check(self) -> None:
+        result = runner.invoke(app, ["deps-session", "--help"])
+        assert result.exit_code == 0
+        assert "check" in result.output
 
 
 # ---------------------------------------------------------------------------

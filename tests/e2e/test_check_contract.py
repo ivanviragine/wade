@@ -52,6 +52,14 @@ class TestCheckCommand:
         assert "IN_MAIN_CHECKOUT" in result.stdout
         assert "phase=plan" in result.stdout
 
+    def test_deps_session_check_entrypoint(self, e2e_repo: Path) -> None:
+        """Detached dependency agents have their own actual-runtime check."""
+        result = _run(["deps-session", "check"], cwd=e2e_repo)
+
+        assert result.returncode == 2
+        assert "IN_MAIN_CHECKOUT" in result.stdout
+        assert "phase=deps" in result.stdout
+
 
 class TestCheckConfigCommand:
     """Test `wade check-config` via CLI subprocess."""

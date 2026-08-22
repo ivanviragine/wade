@@ -194,7 +194,7 @@ def rate(
     from wade.services.knowledge_service import (
         find_entry_id,
         record_rating_for_session,
-        resolve_canonical_knowledge_path,
+        resolve_knowledge_path,
     )
     from wade.ui.console import console
 
@@ -209,7 +209,10 @@ def rate(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
+        # A detached plan/deps worktree has the committed knowledge snapshot in
+        # its own tree. Validate there so an otherwise-contained vote never
+        # needs even read access to the main checkout before it can be staged.
+        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
         if not find_entry_id(knowledge_path, entry_id):
             console.error(f"Entry ID '{entry_id}' not found in knowledge file.")
             raise typer.Exit(1)
@@ -235,7 +238,7 @@ def rate(
 
 @knowledge_app.command()
 def status() -> None:
-    """Report uncommitted knowledge/ratings changes on the resolved root."""
+    """Report local knowledge/ratings state, including detached staged votes."""
     from pathlib import Path
 
     from wade.config.loader import load_config
@@ -411,7 +414,7 @@ def tag_list(
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import list_tags, resolve_canonical_knowledge_path
+    from wade.services.knowledge_service import list_tags, resolve_knowledge_path
     from wade.ui.console import console
 
     config = load_config()
@@ -421,7 +424,7 @@ def tag_list(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
         result = list_tags(knowledge_path, entry_id=entry_id)
         if not result:
             print("No tags found.", file=sys.stderr)

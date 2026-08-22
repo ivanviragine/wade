@@ -1,8 +1,9 @@
 Analyze dependencies between the tasks in the context below.
 
-WADE ran the detached-session readiness check before launching this analysis. If
-it reported a missing capability, stop and follow its narrow remediation; do not
-disable the sandbox globally or request write access to the main checkout.
+First action in this detached session: run `wade deps-session check`. Proceed
+only on `IN_WORKTREE`; if it reports `KNOWLEDGE_STAGING_BLOCKED`, stop and
+follow its narrow remediation. Do not disable the sandbox globally or request
+write access to the main checkout.
 
 Output requirements (strict):
 - Output ONLY dependency edges in this format: <number> -> <number> # reason

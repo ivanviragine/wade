@@ -230,6 +230,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
 | `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
+| `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
@@ -649,29 +650,61 @@ sandbox and never changes approval-policy semantics.
 
 ### Session readiness and least-privilege remediation
 
-Run the phase-specific readiness check before an AI edits files:
-`wade plan-session check`, `wade implementation-session check`, or
-`wade review-pr-comments-session check`. Alongside the existing repository
-states, it reports stable capability failures: `WORKTREE_GIT_BLOCKED` (3),
-`GITHUB_AUTH_BLOCKED` (4), `GITHUB_API_BLOCKED` (5), and, for detached
-planning/deps worktrees, `KNOWLEDGE_STAGING_BLOCKED` (6). The output includes a
-machine-readable `reason=…` plus a narrow remediation; do not disable a sandbox
+Every `wade` command an agent runs is a child of the AI tool. It inherits that
+tool runtime's filesystem sandbox, environment/PATH, network policy, `gh`
+credentials, and the effects of any command or hook approval. WADE does not
+become privileged because it launched the session: a `wade … done` call and its
+own `git`/`gh` subprocesses are subject to the same containment.
+
+Run the phase-specific readiness check as the first agent action — and re-run
+the implementation/review check immediately before `sync` or `done` after a
+resume or permission/network change. It reports stable capability failures:
+`WORKTREE_GIT_BLOCKED` (3), `GITHUB_CLI_BLOCKED` (4),
+`GITHUB_AUTH_BLOCKED` (5), `GITHUB_API_BLOCKED` (6), and
+`KNOWLEDGE_STAGING_BLOCKED` (7). The result includes a
+machine-readable `reason=…` and narrow remediation; do not disable a sandbox
 globally or give the AI write access to the main checkout.
 
-For Codex, keep `--sandbox workspace-write`, grant only the linked worktree's
-private/common Git metadata directories, and enable `network_access` explicitly
-only when the GitHub check identifies a needed network route. For Claude Code
-and Cursor, allowlist the worktree/Git metadata paths and the necessary GitHub
-domains rather than choosing unrestricted shell access. Copilot and VS Code
-also need network access plus usable `gh` credentials in their host runtime.
-OpenCode shells execute with host authority, so treat the selected host runtime
-and its credentials as the boundary rather than assuming a worktree is one.
+| Agent session | Run in the AI runtime | Required there | Intentionally not required there |
+|---|---|---|---|
+| Planning | `wade plan-session check` | worktree and, when knowledge is enabled, local `.wade/` vote staging | GitHub, remote network, and writable out-of-worktree Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
+| Dependency analysis | `wade deps-session check` | worktree output and optional local vote staging | GitHub and Git metadata writes — the parent `wade task deps` reads/updates task data after exit |
+| Implementation | `wade implementation-session check` | worktree plus Git metadata writes, usable `gh` authentication, and a read-only GitHub API route | main-checkout writes |
+| PR comments | `wade review-pr-comments-session check` | the same Git/GitHub capabilities as implementation, because it fetches threads, syncs, resolves, and completes a PR | main-checkout writes |
+
+Implementation and PR-comment checks require GitHub regardless of the task
+provider: Markdown and ClickUp can own tasks, but PR creation, review threads,
+and `done` still use GitHub. The check first verifies that `gh` can start in the
+actual runtime (`GITHUB_CLI_BLOCKED` distinguishes a missing/blocked executable
+from bad credentials), then runs `gh auth status` and `gh api user --method
+GET`; all three are non-mutating. It cannot prove credentials for an arbitrary
+Git remote, test dependencies, or a project-specific hook — those run later
+under the same sandbox and surface their own exact error.
+
+`permissions.allowed_commands` and a tool's approval UI only decide whether the
+agent may launch a command such as `wade`; they do not grant filesystem or
+network authority to the child process. Likewise, WADE's installed hooks are
+guardrails, not privilege escalation: a failing hook may block a command, but
+cannot make `gh`, Git metadata, or a network route available.
+
+For Codex, keep `--sandbox workspace-write`; WADE/crossby add only the linked
+worktree's private/common Git metadata directories, and you must enable
+`network_access` explicitly for implementation/review sessions that need GitHub.
+For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
+the GitHub domains needed by the session rather than choosing unrestricted shell
+access. Copilot and VS Code need network plus usable `gh` credentials in their
+host runtime. OpenCode shells execute with host authority, so treat the selected
+host runtime and its credentials as the boundary rather than assuming a
+worktree is one. These are external tool/runtime settings; WADE reports missing
+capabilities but never rewrites them.
 
 Detached plan and dependency sessions stage knowledge-rating events in their own
 ignored `.wade/` area. Wade flushes those durable-ID events into the main ratings
 spool before removing the throwaway worktree; a failed handoff preserves the
-worktree for retry, and the next attached worktree remains the only path that
-commits the ratings log into a PR.
+worktree for retry. Dependency sessions also save their returned edge analysis
+there before handoff, so a blocked main checkout does not discard the generated
+output. The next attached worktree remains the only path that commits the
+ratings log into a PR.
 
 ## Supported AI Tools
 

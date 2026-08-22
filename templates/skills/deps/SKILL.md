@@ -25,10 +25,14 @@ task bodies.
 - When `wade task deps` is run on existing issues
 - When the user asks to analyze dependencies between issues
 
-`wade task deps` runs its detached-session readiness check before launching this
-analysis. If it reports a missing Git metadata, GitHub, or local vote-staging
-capability, stop and use the printed narrow remediation; never disable the
-sandbox globally or request main-checkout write access.
+As your **first action** in the detached analysis worktree, run
+`wade deps-session check`. It verifies the local worktree and (when knowledge
+is enabled) `.wade/` vote staging in the **actual AI runtime**. Dependency
+analysis itself does not need GitHub or writable out-of-worktree Git metadata:
+the trusted parent `wade task deps` process reads and updates task-provider data
+after this session exits. If the check reports `KNOWLEDGE_STAGING_BLOCKED`, stop
+and use the printed narrow remediation; never disable the sandbox globally or
+request main-checkout write access.
 
 > **Note:** `wade task deps` first attempts headless analysis (AI tools that
 > support `--print`/`--prompt`). If headless fails, it falls back to interactive

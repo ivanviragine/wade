@@ -36,7 +36,7 @@ from wade.models.config import (
     is_valid_bot_name,
 )
 from wade.models.delegation import DelegationMode
-from wade.models.readiness import ReadinessFailure, ReadinessPhase
+from wade.models.readiness import READINESS_REQUIREMENTS, ReadinessFailure, ReadinessPhase
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 
@@ -50,6 +50,7 @@ class CheckStatus(StrEnum):
     IN_MAIN_CHECKOUT = "IN_MAIN_CHECKOUT"
     NOT_IN_GIT_REPO = "NOT_IN_GIT_REPO"
     WORKTREE_GIT_BLOCKED = "WORKTREE_GIT_BLOCKED"
+    GITHUB_CLI_BLOCKED = "GITHUB_CLI_BLOCKED"
     GITHUB_AUTH_BLOCKED = "GITHUB_AUTH_BLOCKED"
     GITHUB_API_BLOCKED = "GITHUB_API_BLOCKED"
     KNOWLEDGE_STAGING_BLOCKED = "KNOWLEDGE_STAGING_BLOCKED"
@@ -68,9 +69,10 @@ class CheckExitCode(IntEnum):
     # agent can react. (3 is free in run_check's 0/1/2 space; handle_sync_result
     # uses 4 but that is a different command's exit space — no collision.)
     WORKTREE_GIT_BLOCKED = 3
-    GITHUB_AUTH_BLOCKED = 4
-    GITHUB_API_BLOCKED = 5
-    KNOWLEDGE_STAGING_BLOCKED = 6
+    GITHUB_CLI_BLOCKED = 4
+    GITHUB_AUTH_BLOCKED = 5
+    GITHUB_API_BLOCKED = 6
+    KNOWLEDGE_STAGING_BLOCKED = 7
 
 
 class ConfigExitCode(IntEnum):
@@ -123,6 +125,15 @@ class CheckResult(BaseModel):
             lines.append(
                 "hint: relaunch with this worktree's private/common git metadata dirs "
                 "writable. Keep the main checkout read-only; do not edit files until this passes."
+            )
+        elif self.status == CheckStatus.GITHUB_CLI_BLOCKED:
+            lines.append(
+                "error: the GitHub CLI cannot be started in this AI runtime "
+                "(missing from PATH or blocked by its sandbox)."
+            )
+            lines.append(
+                "hint: make the trusted host's `gh` executable available in this runtime; "
+                "an approval to launch `wade` does not grant its child process PATH or exec access."
             )
         elif self.status == CheckStatus.GITHUB_AUTH_BLOCKED:
             lines.append("error: GitHub CLI authentication is unavailable for this session.")
@@ -273,7 +284,11 @@ def _blocked_git_metadata_dirs(path: Path) -> list[str]:
     return sorted(blocked)
 
 
-def check_worktree(cwd: Path | None = None) -> CheckResult:
+def check_worktree(
+    cwd: Path | None = None,
+    *,
+    probe_git_metadata: bool = True,
+) -> CheckResult:
     """Check if the current directory is in a worktree.
 
     Returns CheckResult with status and exit code:
@@ -282,6 +297,13 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
       2 / IN_MAIN_CHECKOUT     — in main checkout, only planning allowed
       3 / WORKTREE_GIT_BLOCKED — a linked worktree whose out-of-root git
                                  metadata is not writable (git writes would fail)
+
+    ``probe_git_metadata`` preserves the established strict default for direct
+    callers.  A phase-aware caller can disable it only when its *child agent*
+    will never make a git metadata write (the detached plan/deps analysis
+    phases).  Avoiding the probe in that case matters: the probe itself is a
+    self-cleaning write, and a correctly-contained analysis sandbox should not
+    need to attempt an out-of-root write merely to be told it is optional.
     """
     path = cwd or Path.cwd()
 
@@ -305,27 +327,29 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
     if repo.is_worktree(path):
         git_dir = repo.get_git_dir(path)
 
-        # Readiness probe: a linked worktree's git metadata lives outside the
-        # tree, so a sandbox that confines writes to the worktree (Codex
-        # workspace-write) blocks every git write unless those dirs are granted
-        # as writable roots. Verify with a real write, not just "is a worktree".
-        blocked = _blocked_git_metadata_dirs(path)
-        if blocked:
-            logger.warning(
-                "check.worktree_git_blocked",
-                branch=branch,
-                toplevel=toplevel,
-                blocked=blocked,
-            )
-            return CheckResult(
-                status=CheckStatus.WORKTREE_GIT_BLOCKED,
-                exit_code=CheckExitCode.WORKTREE_GIT_BLOCKED,
-                toplevel=toplevel,
-                branch=branch,
-                git_dir=git_dir,
-                blocked_paths=blocked,
-                failure=ReadinessFailure.GIT_METADATA_WRITE,
-            )
+        if probe_git_metadata:
+            # Readiness probe: a linked worktree's git metadata lives outside
+            # the tree, so a sandbox that confines writes to the worktree
+            # (Codex workspace-write) blocks every git write unless those dirs
+            # are granted as writable roots. Verify with a real write, not just
+            # "is a worktree".
+            blocked = _blocked_git_metadata_dirs(path)
+            if blocked:
+                logger.warning(
+                    "check.worktree_git_blocked",
+                    branch=branch,
+                    toplevel=toplevel,
+                    blocked=blocked,
+                )
+                return CheckResult(
+                    status=CheckStatus.WORKTREE_GIT_BLOCKED,
+                    exit_code=CheckExitCode.WORKTREE_GIT_BLOCKED,
+                    toplevel=toplevel,
+                    branch=branch,
+                    git_dir=git_dir,
+                    blocked_paths=blocked,
+                    failure=ReadinessFailure.GIT_METADATA_WRITE,
+                )
 
         logger.info("check.in_worktree", branch=branch, toplevel=toplevel)
         return CheckResult(
@@ -350,6 +374,28 @@ def _github_auth_available(cwd: Path) -> bool:
     try:
         result = subprocess.run(
             ["gh", "auth", "status", "--hostname", "github.com"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _github_cli_available(cwd: Path) -> bool:
+    """Verify that the child runtime can locate and execute ``gh`` at all.
+
+    ``gh auth status`` alone collapses a missing executable, an exec-denying
+    sandbox, and an unauthenticated executable into the same nonzero outcome.
+    These have different least-privilege remediations, so make a local,
+    non-network version probe first.  It deliberately uses the same ``cwd``
+    and inherited environment as the later ``wade sync``/``done`` subprocesses.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "--version"],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -432,17 +478,32 @@ def check_session_readiness(
     """Check the narrow capabilities a session needs before it starts edits.
 
     The base worktree check remains independently callable and retains its
-    established exit codes.  Phase-aware callers receive the same status plus
-    explicit GitHub/staging failures only when their configured provider and
-    lifecycle require those capabilities.  Every GitHub probe is read-only.
+    established exit codes. Phase-aware callers interpret a blocked linked
+    worktree gitdir only when that phase will make Git metadata writes itself.
+    GitHub requirements are tied to the PR lifecycle, not task-provider choice:
+    PRs and PR reviews use GitHub even for Markdown/ClickUp tasks. Every GitHub
+    probe is read-only.
     """
     path = cwd or Path.cwd()
-    base = check_worktree(path)
+    requirements = READINESS_REQUIREMENTS[phase]
+    base = check_worktree(
+        path,
+        probe_git_metadata=requirements.requires_git_metadata_write,
+    )
     result = _readiness_result(base, phase=phase, tool=tool)
     if result.status != CheckStatus.IN_WORKTREE:
         return result
 
-    if config is not None and config.provider.name.value == "github":
+    if config is not None and requirements.requires_github:
+        if not _github_cli_available(path):
+            return _readiness_result(
+                result,
+                phase=phase,
+                tool=tool,
+                status=CheckStatus.GITHUB_CLI_BLOCKED,
+                exit_code=CheckExitCode.GITHUB_CLI_BLOCKED,
+                failure=ReadinessFailure.GITHUB_CLI_EXECUTABLE,
+            )
         if not _github_auth_available(path):
             return _readiness_result(
                 result,
@@ -465,7 +526,7 @@ def check_session_readiness(
     if (
         config is not None
         and config.knowledge.enabled
-        and phase in (ReadinessPhase.PLAN, ReadinessPhase.DEPS)
+        and requirements.supports_staged_knowledge_votes
     ):
         from wade.services.knowledge_service import is_throwaway_knowledge_session
 

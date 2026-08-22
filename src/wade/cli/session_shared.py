@@ -24,9 +24,10 @@ def run_check(phase: str) -> None:
       1  NOT_IN_GIT_REPO      — not inside a git repository
       2  IN_MAIN_CHECKOUT     — unsafe for agent work
       3  WORKTREE_GIT_BLOCKED — linked-worktree git metadata is not writable
-      4  GITHUB_AUTH_BLOCKED — GitHub CLI credentials are unavailable
-      5  GITHUB_API_BLOCKED — read-only GitHub API probe cannot reach GitHub
-      6  KNOWLEDGE_STAGING_BLOCKED — detached vote staging cannot be written
+      4  GITHUB_CLI_BLOCKED — GitHub CLI cannot start in this runtime
+      5  GITHUB_AUTH_BLOCKED — GitHub CLI credentials are unavailable
+      6  GITHUB_API_BLOCKED — read-only GitHub API probe cannot reach GitHub
+      7  KNOWLEDGE_STAGING_BLOCKED — detached vote staging cannot be written
     """
     from wade.config.loader import load_config
     from wade.models.readiness import ReadinessPhase

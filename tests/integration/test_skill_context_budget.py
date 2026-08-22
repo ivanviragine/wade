@@ -86,7 +86,12 @@ from wade.skills.installer import (
 # skip *defers to human review* instead of shipping unreviewed. Both were
 # trimmed to minimum before bumping; this is the explicit, reviewed adjustment
 # the guard is designed to force, and it still catches *silent* regressions.
-BUDGET_CHARS = 14100
+# Bumped 14100 -> 14500 for #462: phase readiness now distinguishes the
+# agent-child sandbox from Wade's trusted parent. The skills gained a compact,
+# load-bearing reminder to re-check before `sync`/`done`, because those `wade`,
+# `git`, and `gh` children inherit the AI runtime's sandbox and credentials.
+# The detailed capability matrix is deliberately kept in README/architecture.
+BUDGET_CHARS = 14500
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

@@ -37,7 +37,8 @@ Run `wade review-pr-comments-session check` first:
   to run `wade review pr-comments <issue>` from the main checkout.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 - `WORKTREE_GIT_BLOCKED` — relaunch with only the named Git metadata path writable.
-- `GITHUB_AUTH_BLOCKED` / `GITHUB_API_BLOCKED` — relaunch with needed `gh` access.
+- `GITHUB_CLI_BLOCKED` — `gh` unavailable; fix PATH/runtime sandbox.
+- `GITHUB_AUTH_BLOCKED` / `GITHUB_API_BLOCKED` — relaunch with `gh` access.
 
 Read `reason=…`; ask for a trusted relaunch if needed.
 
@@ -137,6 +138,17 @@ unresolved with reasoning. `done` reads it to update the PR body. Never commit
 this file; it is a gitignored session artifact.
 
 **Step 3 — Sync with main:**
+
+Re-run the current-runtime check immediately before `sync`, and before `done`
+after a resume or permission/network change. `wade`, `git`, and `gh` inherit
+this sandbox and its credentials/network policy:
+
+```bash
+wade review-pr-comments-session check
+```
+
+If it is not `IN_WORKTREE`, stop and use its hint — do not retry through raw
+`git`/`gh` or grant main-checkout access.
 
 ```bash
 wade review-pr-comments-session sync --json

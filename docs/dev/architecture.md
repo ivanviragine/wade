@@ -58,7 +58,8 @@ src/wade/
 │   ├── implementation_session.py  # implementation-session check/sync/done
 │   ├── review_pr_comments_session.py # review-pr-comments-session check/sync/done/fetch/resolve
 │   ├── review.py        # review plan/implementation/pr-comments/batch
-│   ├── plan_session.py  # plan-session done
+│   ├── plan_session.py  # plan-session check/done
+│   ├── deps_session.py  # deps-session check (actual detached-agent runtime)
 │   ├── hook.py          # `wade hook` — write-guard entry point for AI tool hooks
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
@@ -67,6 +68,7 @@ src/wade/
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
 │   ├── delegation.py    # DelegationRequest, DelegationResult, DelegationMode
 │   ├── permission.py    # PermissionMode (autonomy axis), launch-kwargs helpers
+│   ├── readiness.py     # phase capability requirements + stable failure IDs
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
@@ -478,26 +480,48 @@ threaded.
 
 ### Phase-aware session readiness (#462)
 
-`check_service.check_session_readiness()` layers a phase (`plan`,
-`implementation`, `review-pr-comments`, or `deps`) over the legacy linked-worktree
-probe. Its stable result states preserve the original `IN_WORKTREE` / main /
-non-repo contracts and add `GITHUB_AUTH_BLOCKED` (4), `GITHUB_API_BLOCKED` (5),
-and `KNOWLEDGE_STAGING_BLOCKED` (6); each names a `ReadinessFailure` such as
-`github_api_reachability`. The GitHub probes are `gh auth status` and `gh api
-user --method GET`, so they never mutate a remote, and are skipped for a
-non-GitHub task provider. Detached plan/deps sessions additionally perform a
-self-cleaning probe of their local `.wade/` transport area.
+`check_service.check_session_readiness()` applies the declarative
+`READINESS_REQUIREMENTS` model to the **agent child runtime** for `plan`,
+`implementation`, `review-pr-comments`, and `deps`. This is deliberately not a
+description of the parent `wade` process: a parent can call a task provider once
+an offline detached agent exits, while a `wade` command issued *by* an agent
+inherits its tool's filesystem sandbox, environment/PATH, command approvals,
+network policy, credentials, and hook environment.
 
-The session CLIs call this service before agent work, and `task deps` runs the
-same preflight immediately before its detached delegation. The capability
-remediation is intentionally tool-neutral: retain the sandbox and grant only
-the worktree Git metadata paths, GitHub credential/API route, or local staging
-path named by the failure. Codex continues to use explicit `network_access` and
-its additive worktree metadata grants; Claude/Cursor use their path/domain
-allowlists; Copilot/VS Code need host-networked `gh` credentials; OpenCode has
-host-authority shells and must be launched only in a trusted host context.
-Wade never rewrites those external tool settings or grants the main checkout
-write access as a readiness workaround.
+The stable result states preserve the original `IN_WORKTREE` / main / non-repo
+contracts and add `GITHUB_CLI_BLOCKED` (4), `GITHUB_AUTH_BLOCKED` (5),
+`GITHUB_API_BLOCKED` (6), and `KNOWLEDGE_STAGING_BLOCKED` (7); each names a
+`ReadinessFailure` such as `github_cli_executable` or
+`github_api_reachability`. GitHub readiness first runs local `gh --version` so
+a missing or exec-blocked CLI is not misreported as failed authentication, then
+runs `gh auth status` and `gh api user --method GET`; none mutate a remote.
+They apply to implementation and PR-comment sessions **regardless of the task
+provider**, because PRs, review threads, and `done` are GitHub-backed even when
+tasks are Markdown or ClickUp. Those two phases also require writable linked-worktree Git metadata:
+they execute fetch/sync/done. Detached planning and dependency analysis require
+only their local output area plus (when knowledge is enabled) a self-cleaning
+probe of `.wade/` vote staging; they intentionally do not require GitHub,
+network, or writable out-of-root Git metadata because the trusted parent
+performs provider finalization after the child exits.
+
+The session CLIs expose `plan-session check`, `deps-session check`,
+`implementation-session check`, and `review-pr-comments-session check`. The
+templates require the first check in the actual AI runtime and a re-check before
+implementation/review `sync` or `done` after a resume or capability change. The
+check cannot prove access to an arbitrary Git remote, project test dependencies,
+or a project-specific hook: those later subprocesses still inherit the same
+sandbox and report their own failure. Tool command allowlists authorize an agent
+to start `wade`; they do not grant that child new filesystem/network authority,
+and hooks are guardrails rather than privilege escalation.
+
+The capability remediation is intentionally tool-neutral: retain the sandbox
+and grant only the worktree Git metadata paths, GitHub credential/API route, or
+local staging path named by the failure. Codex continues to use explicit
+`network_access` and additive worktree metadata grants; Claude/Cursor use
+path/domain allowlists; Copilot/VS Code need host-networked `gh` credentials;
+OpenCode has host-authority shells and must be launched only in a trusted host
+context. Wade never rewrites those external tool settings or grants the main
+checkout write access as a readiness workaround.
 
 ### Session-start context injection (#351)
 
@@ -658,7 +682,7 @@ boundary.
 
 ## Command Dispatch
 
-`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`, `knowledge`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias (for `task`) and `address-reviews-session` (for `review-pr-comments-session`) are hidden Typer groups pointing at the same apps, and `hook` is a hidden write-guard entry point invoked by AI tools. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `deps-session`, `implementation-session`, `review-pr-comments-session`, `review`, `knowledge`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias (for `task`) and `address-reviews-session` (for `review-pr-comments-session`) are hidden Typer groups pointing at the same apps, and `hook` is a hidden write-guard entry point invoked by AI tools. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
@@ -805,15 +829,19 @@ See knowledge `cc91cd11` for the generalized principle.
 
 **Project knowledge** (worktree-local lifecycle, #358/#462): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — an attached session edits the copy in its worktree and the change rides to `main` with its PR. They are never copied into worktrees (a copy would manufacture a stale snapshot). Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`.
 
-**Detached-vote staging (#462):** `record_rating_for_session()` validates
-and serializes a durable `RatingEvent` but, in a detached plan/deps worktree,
-appends it only to `.wade/knowledge-ratings-staged.jsonl`. The parent plan/deps
-lifecycle calls `flush_staged_ratings()` before cleanup, locks the existing main
-ratings spool, appends only event IDs not already present, fsyncs, and removes
-the staging artifact only afterward. A failed or partially completed handoff
-leaves the throwaway worktree and its generated output in place for retry;
-duplicate delivery of a new event is folded once, while legacy no-ID JSONL vote
-records retain their historical duplicate-vote semantics. The next attached
+**Detached-vote staging (#462):** `record_rating_for_session()` first validates
+the entry against the detached worktree's committed knowledge snapshot, then
+serializes a durable `RatingEvent` only to `.wade/knowledge-ratings-staged.jsonl`.
+Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
+they never cross into the main checkout. The parent plan/deps lifecycle calls
+`flush_staged_ratings()` before cleanup, locks the existing main ratings spool,
+appends only event IDs not already present, fsyncs, and removes the staging
+artifact only afterward. A failed or partially completed handoff leaves the
+throwaway worktree and its generated output in place for retry. Standalone deps
+also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
+handoff, because stdout alone would be lost with the parent process. Duplicate
+delivery of a new event is folded once, while legacy no-ID JSONL vote records
+retain their historical duplicate-vote semantics. The next attached
 bootstrap's existing ratings-only carry-forward remains the sole path that puts
 tracked ratings into a PR. `knowledge status` reports staged votes from a
 detached session in addition to canonical sidecar dirt.

@@ -15,9 +15,10 @@ plan_session_app = typer.Typer(
 def check() -> None:
     """Verify planning-session capabilities before writing plan artefacts.
 
-    Exit codes match the other session checks, with 4/5 for GitHub
-    authentication/API failures and 6 when detached knowledge-vote staging is
-    not writable.
+    Planning is deliberately offline in the agent runtime: it checks the
+    detached checkout plus local vote staging only. Exit 7 means the latter is
+    not writable; GitHub finalization happens later in the trusted parent
+    ``wade plan`` process.
     """
     from wade.cli.session_shared import run_check
 

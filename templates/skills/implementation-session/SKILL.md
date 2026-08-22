@@ -47,9 +47,12 @@ Run `wade implementation-session check` as your **first action**:
 - `WORKTREE_GIT_BLOCKED` — in a worktree, but its git metadata (the `blocked=…`
   path) is **not writable**, so git writes and `wade sync`/`done` will fail. Do
   not edit files; relaunch with only that metadata path writable.
+- `GITHUB_CLI_BLOCKED` — `gh` cannot start in this runtime (PATH or sandbox
+  execution restriction). Relaunch with the trusted host's executable available.
 - `GITHUB_AUTH_BLOCKED` / `GITHUB_API_BLOCKED` — GitHub credentials or the
-  read-only API route required by this configured provider are unavailable. Do
-  not edit files; relaunch with only the required `gh` access.
+  read-only API route required by the PR lifecycle are unavailable (even for
+  Markdown/ClickUp tasks). Do not edit files; relaunch with only required `gh`
+  access.
 
 Read its machine-readable `reason=…` and exact remediation. If it cannot be
 granted narrowly, stop before edits and ask for a trusted relaunch.
@@ -94,6 +97,17 @@ changes (format + the "never commit this file" fix:
 file already exists, update it.
 
 **Step 4 — Sync with main:**
+
+Re-run the current-runtime check immediately before `sync`, and before `done`
+after a resume or permission/network change. `wade`, `git`, and `gh` inherit
+this sandbox and its credentials/network policy:
+
+```bash
+wade implementation-session check
+```
+
+If it is not `IN_WORKTREE`, stop and use its hint — do not fall back to raw
+`git`/`gh` or broaden main-checkout access.
 
 ```bash
 wade implementation-session sync --json

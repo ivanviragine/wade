@@ -7,6 +7,8 @@ and creating tracking issues.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 from pathlib import Path
 
@@ -37,6 +39,12 @@ from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
 
 logger = structlog.get_logger()
+
+# A detached dependency agent normally returns its edges through stdout.  Keep
+# an ignored local copy before the parent attempts a rating-vote handoff: if
+# main is unavailable at that moment, preserving only the worktree would not
+# otherwise preserve the analysis the user needs to retry/recover.
+DEPS_ANALYSIS_OUTPUT_RELATIVE_PATH = ".wade/deps-analysis-output.txt"
 
 # ---------------------------------------------------------------------------
 # Prompt template
@@ -384,6 +392,26 @@ def _run_delegation(
     return result
 
 
+def _persist_dependency_output(worktree_path: Path, output: str) -> Path:
+    """Durably save a detached agent's returned analysis for handoff recovery.
+
+    This is a session-local, ignored transport/debug artefact, never a task or
+    tracked repository file.  The explicit flush makes the failure ordering
+    meaningful: a later failed vote handoff can safely tell the user that both
+    the staged vote and the generated dependency output remain recoverable in
+    the retained worktree.
+    """
+    path = worktree_path / DEPS_ANALYSIS_OUTPUT_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fd:
+        fd.write(output)
+        if output and not output.endswith("\n"):
+            fd.write("\n")
+        fd.flush()
+        os.fsync(fd.fileno())
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
@@ -423,8 +451,6 @@ def analyze_deps(
 
     Returns the DependencyGraph, or None on failure.
     """
-    import os
-
     config = load_config(project_root)
     provider = get_provider(config)
 
@@ -502,6 +528,7 @@ def analyze_deps(
 
     # Set up worktree for deps analysis
     standalone_worktree: Path | None = None
+    standalone_repo_root: Path | None = None
     deps_cwd: Path | None = None
 
     if delegation_mode == DelegationMode.PROMPT:
@@ -522,6 +549,7 @@ def analyze_deps(
             from wade.skills.installer import DEPS_SKILLS
 
             repo_root = git_repo.get_repo_root(cwd)
+            standalone_repo_root = repo_root
             worktrees_dir = _resolve_worktrees_dir(config, repo_root)
             repo_name = repo_root.name
             short_id = os.urandom(4).hex()
@@ -534,7 +562,26 @@ def analyze_deps(
             deps_cwd = standalone_worktree
         except Exception as e:
             logger.warning("deps.worktree_create_failed", error=str(e))
-            # Fall through — deps_cwd stays None, analysis runs in CWD
+            # Never fall through to the caller's checkout.  In particular, a
+            # sandboxed child that cannot create its isolated detached
+            # worktree must not silently receive the main checkout as its cwd.
+            # That used to make the same `wade task deps` command appear to
+            # work in one session and run with fundamentally different
+            # containment in another.
+            if standalone_worktree is not None and standalone_repo_root is not None:
+                with contextlib.suppress(Exception):
+                    from wade.git import worktree as git_worktree
+
+                    git_worktree.remove_worktree(
+                        standalone_repo_root,
+                        standalone_worktree,
+                        force=True,
+                    )
+            console.error(
+                "Could not create an isolated dependency worktree; dependency analysis "
+                "was not launched. Retry after restoring worktree access."
+            )
+            return None
 
     # A detached deps worktree is still an AI session: verify only the
     # capabilities this phase will actually use before launching the agent.
@@ -550,6 +597,28 @@ def analyze_deps(
         )
         if readiness.status != CheckStatus.IN_WORKTREE:
             console.error(readiness.format_output())
+            # This is a pre-launch failure: no AI output or vote exists yet,
+            # so remove the empty session rather than leaking a worktree. A
+            # post-launch handoff failure below deliberately preserves it.
+            assert standalone_repo_root is not None
+            try:
+                from wade.git import worktree as git_worktree
+
+                git_worktree.remove_worktree(
+                    standalone_repo_root,
+                    standalone_worktree,
+                    force=True,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "deps.readiness_cleanup_failed",
+                    worktree=str(standalone_worktree),
+                    error=str(exc),
+                )
+                console.error(
+                    "Could not clean up the blocked dependency worktree; it was preserved at "
+                    f"{standalone_worktree}. Retry after restoring access."
+                )
             return None
 
     # Build context
@@ -629,6 +698,26 @@ def analyze_deps(
         console.error("Could not generate dependency analysis prompt.")
         return None
 
+    # Save the raw returned analysis before any parent-side vote handoff or
+    # worktree removal.  A throwaway worker's stdout otherwise dies with this
+    # process, leaving no useful dependency output to recover after a blocked
+    # main-checkout handoff.
+    if output and deps_cwd is not None:
+        try:
+            snapshot = _persist_dependency_output(deps_cwd, output)
+        except OSError as exc:
+            logger.warning(
+                "deps.output_snapshot_failed",
+                worktree=str(deps_cwd),
+                error=str(exc),
+            )
+            console.error(
+                "Could not durably save dependency analysis output; preserving the "
+                f"worktree at {deps_cwd}. Retry after restoring local write access."
+            )
+            return None
+        logger.debug("deps.output_snapshot_saved", path=str(snapshot))
+
     if output:
         console.success(f"Analysis complete ({delegation_mode.value} mode).")
     elif delegation_result.timed_out:
@@ -653,7 +742,7 @@ def analyze_deps(
             from wade.git import worktree as git_worktree
             from wade.services.knowledge_service import flush_staged_ratings
 
-            repo_root = git_repo.get_repo_root(project_root or Path.cwd())
+            repo_root = standalone_repo_root or git_repo.get_repo_root(project_root or Path.cwd())
             if config.knowledge.enabled:
                 handoff = flush_staged_ratings(standalone_worktree, repo_root, config.knowledge)
                 if not handoff.success:

@@ -273,17 +273,18 @@ def _legacy_ratings_path(ratings_path: Path) -> Path:
 
 
 def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeStatus:
-    """Report uncommitted knowledge/ratings changes on the resolved root.
+    """Report local knowledge/ratings state without escaping a session worktree.
 
-    Resolves the root the same way reads/writes do (:func:`_resolve_knowledge_root`),
-    then scopes ``git status --porcelain`` to **only** the knowledge file and its
-    ratings siblings, so unrelated working-tree dirt is never reported as knowledge
-    state. Surfaces pending throwaway-session votes (in the main checkout) and any
-    legacy ``.ratings.yml`` still awaiting on-disk migration.
+    Read-only commands in a detached plan/deps worktree deliberately use the
+    checked-out knowledge snapshot, not the main checkout.  That snapshot is
+    enough to search, validate an entry ID, and display staged votes; reaching
+    into main would make those harmless operations fail in a correctly
+    constrained sandbox.  Attached worktrees keep their existing local status
+    behaviour.
     """
     from wade.git import repo as git_repo
 
-    root = _resolve_knowledge_root(project_root)
+    root = project_root
     knowledge_path = resolve_knowledge_path(root, config)
     ratings_path = resolve_ratings_path(knowledge_path)
     legacy_path = _legacy_ratings_path(ratings_path)
@@ -798,7 +799,6 @@ def get_annotated_knowledge(
     """
     from wade.services.knowledge_search import evaluate_query, parse_query
 
-    project_root = _resolve_knowledge_root(project_root)
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
         return AnnotatedKnowledgeResult(content=None, entries_count=0)
