@@ -423,7 +423,16 @@ def _github_auth_available(cwd: Path) -> bool:
     ``--active`` predates the ``gh`` versions wade targets, but an older CLI
     would reject it as an unknown flag and turn a working login into a hard
     session block — so fall back to the unfiltered probe in that one case.
+
+    The host is deliberately **not** pinned to ``github.com``. Every other
+    ``gh`` call wade makes (``gh api``, ``gh pr``, the provider) lets ``gh``
+    resolve the host from the repo remote or ``GH_HOST``; pinning it here would
+    block every GitHub Enterprise session on a missing github.com login while
+    the operations those sessions actually run work fine. An explicit
+    ``GH_HOST`` is forwarded so a multi-host setup is checked against the host
+    this session will use.
     """
+    host = os.environ.get("GH_HOST")
 
     def _probe(args: list[str]) -> subprocess.CompletedProcess[str] | None:
         try:
@@ -438,7 +447,7 @@ def _github_auth_available(cwd: Path) -> bool:
         except (OSError, subprocess.TimeoutExpired):
             return None
 
-    base = ["gh", "auth", "status", "--hostname", "github.com"]
+    base = ["gh", "auth", "status", *(["--hostname", host] if host else [])]
     result = _probe([*base, "--active"])
     if result is None:
         return False

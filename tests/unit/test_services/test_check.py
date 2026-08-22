@@ -370,11 +370,34 @@ class TestGitHubAuthProbe:
     ) -> None:
         run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
         monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.delenv("GH_HOST", raising=False)
 
         assert _github_auth_available(tmp_path) is True
         # Without --active a single stale secondary login exits 1 and would
         # block every session, even though gh operations use the active one.
         assert "--active" in run.call_args.args[0]
+
+    def test_does_not_pin_the_host_so_enterprise_sessions_are_not_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every other wade `gh` call lets gh resolve the host; so does this one."""
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.delenv("GH_HOST", raising=False)
+
+        assert _github_auth_available(tmp_path) is True
+        assert "--hostname" not in run.call_args.args[0]
+
+    def test_forwards_an_explicit_gh_host(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setenv("GH_HOST", "ghe.example.com")
+
+        assert _github_auth_available(tmp_path) is True
+        args = run.call_args.args[0]
+        assert args[args.index("--hostname") + 1] == "ghe.example.com"
 
     def test_falls_back_when_the_installed_gh_rejects_active(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

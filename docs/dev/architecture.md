@@ -500,7 +500,10 @@ remote. `--active` is deliberate — plain `gh auth status` exits 1 when *any*
 account known for the host is unhealthy, so one stale secondary login would
 block every session even though `gh` operations use the healthy active account.
 An older `gh` that rejects the flag falls back to the unfiltered probe rather
-than turning a working login into a hard block.
+than turning a working login into a hard block. The host is **not** pinned:
+like every other wade `gh` call, resolution is left to `gh` (repo remote /
+`GH_HOST`, which is forwarded when set), so a GitHub Enterprise session is not
+blocked on a missing github.com login.
 
 **Plan-directory fallback.** `plan()` keeps a supported worktree-less mode: if
 the detached planning worktree cannot be created (bootstrap failure, or no git
