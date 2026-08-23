@@ -71,6 +71,22 @@ def _write_dir_fd_supported() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _close_quietly(fd: int | None) -> None:
+    """Close *fd* if open, suppressing a failing ``os.close`` (best-effort cleanup).
+
+    Every primitive here opens a ``.wade`` directory descriptor and closes it in a
+    ``finally``. A raising ``os.close`` there (a rare EIO/EBADF) would escape an
+    otherwise-successful read/write — and because these run in the finalized
+    ``done`` flow (the completion gate, pre-push backstop, and Stop hook all read
+    markers), a cleanup failure could fail an already-complete session. Suppressing
+    it keeps the module's fail-toward-absent / best-effort contract on the cleanup
+    path too.
+    """
+    if fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
 def _present(worktree_root: Path, relname: str) -> bool:
     """True if ``.wade/<relname>`` is a *trusted* regular file (race-safe)."""
     if not _read_dir_fd_supported():
@@ -82,8 +98,7 @@ def _present(worktree_root: Path, relname: str) -> bool:
     except OSError:
         return False
     finally:
-        if dir_fd is not None:
-            os.close(dir_fd)
+        _close_quietly(dir_fd)
     return stat_module.S_ISREG(st.st_mode)
 
 
@@ -110,8 +125,7 @@ def _touch(worktree_root: Path, relname: str) -> bool:
     except OSError:
         return False
     finally:
-        if dir_fd is not None:
-            os.close(dir_fd)
+        _close_quietly(dir_fd)
 
 
 def _atomic_write(worktree_root: Path, relname: str) -> bool:
@@ -164,8 +178,7 @@ def _atomic_write(worktree_root: Path, relname: str) -> bool:
                 os.unlink(tmp_name, dir_fd=dir_fd)
         return False
     finally:
-        if dir_fd is not None:
-            os.close(dir_fd)
+        _close_quietly(dir_fd)
 
 
 def _clear_prefix(worktree_root: Path, prefix: str) -> None:
@@ -182,8 +195,7 @@ def _clear_prefix(worktree_root: Path, prefix: str) -> None:
         except OSError:
             return
         finally:
-            if dir_fd is not None:
-                os.close(dir_fd)
+            _close_quietly(dir_fd)
         return
     # Fallback: plain path iteration.
     try:
@@ -278,8 +290,7 @@ def count_review_passes(worktree_root: Path) -> int:
         except OSError:
             return 0
         finally:
-            if dir_fd is not None:
-                os.close(dir_fd)
+            _close_quietly(dir_fd)
     else:
         # No safe, descriptor-based directory read available. Fail closed rather
         # than fall back to path-based ``iterdir()``, which follows a symlinked
