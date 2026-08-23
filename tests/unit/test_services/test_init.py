@@ -296,6 +296,8 @@ class TestInit:
         assert init(project_root=tmp_git_repo, non_interactive=True)
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["bot_review"]["auto_trigger"] is False
+        # ...and offers them after `done` instead of staying silent (#464).
+        assert config["bot_review"]["offer_on_done"] is True
         names = [bot["name"] for bot in config["bot_review"]["bots"]]
         assert names == ["coderabbit", "codex", "bugbot"]
         # And it round-trips through the loader to the model defaults.
@@ -303,6 +305,7 @@ class TestInit:
 
         loaded = parse_config_file(tmp_git_repo / ".wade.yml")
         assert loaded.bot_review.auto_trigger is False
+        assert loaded.bot_review.offer_on_done is True
         assert len(loaded.bot_review.bots) == 3
 
     def test_init_does_not_create_gitignore_block(self, tmp_git_repo: Path) -> None:
@@ -970,6 +973,21 @@ class TestPatchConfig:
             "codex",
             "bugbot",
         ]
+
+    def test_bot_review_setup_writes_offer_on_done(self, tmp_path: Path) -> None:
+        """The wizard's "never ask" pick is persisted, not just its auto/on pick (#464)."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            force=True,
+            bot_review_setup={"auto_trigger": False, "offer_on_done": False},
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["bot_review"]["auto_trigger"] is False
+        assert config["bot_review"]["offer_on_done"] is False
 
     def test_bot_review_setup_preserves_custom_bots(self, tmp_path: Path) -> None:
         """A user-customized bots list survives a re-init; only auto_trigger is patched."""
@@ -1825,6 +1843,55 @@ class TestPromptHooksSetup:
         result = _prompt_hooks_setup(non_interactive=False)
         assert result["post_worktree_create"] is None
         assert result["copy_to_worktree"] == []
+
+
+# ---------------------------------------------------------------------------
+# _prompt_bot_review_setup tests (#464)
+# ---------------------------------------------------------------------------
+
+
+class TestPromptBotReviewSetup:
+    """The wizard's one three-way pick maps onto two config flags."""
+
+    def test_non_interactive_keeps_current_values(self) -> None:
+        from wade.services.init_service.prompts_setup import _prompt_bot_review_setup
+
+        result = _prompt_bot_review_setup(
+            non_interactive=True, current_auto_trigger=True, current_offer_on_done=False
+        )
+        assert result == {"auto_trigger": True, "offer_on_done": False}
+
+    @pytest.mark.parametrize(
+        ("choice", "expected"),
+        [
+            (0, {"auto_trigger": False, "offer_on_done": True}),  # offer (default)
+            (1, {"auto_trigger": True, "offer_on_done": False}),  # automatic
+            (2, {"auto_trigger": False, "offer_on_done": False}),  # manual
+        ],
+    )
+    def test_each_mode_maps_to_its_flags(self, choice: int, expected: dict[str, bool]) -> None:
+        from wade.services.init_service.prompts_setup import _prompt_bot_review_setup
+
+        with patch("wade.ui.prompts.select", return_value=choice):
+            assert _prompt_bot_review_setup(non_interactive=False) == expected
+
+    @pytest.mark.parametrize(
+        ("auto", "offer", "expected_default"),
+        [(False, True, 0), (True, False, 1), (False, False, 2)],
+    )
+    def test_current_mode_preselects_its_option(
+        self, auto: bool, offer: bool, expected_default: int
+    ) -> None:
+        """A re-init lands on the mode already in .wade.yml."""
+        from wade.services.init_service.prompts_setup import _prompt_bot_review_setup
+
+        with patch("wade.ui.prompts.select", return_value=0) as mock_select:
+            _prompt_bot_review_setup(
+                non_interactive=False,
+                current_auto_trigger=auto,
+                current_offer_on_done=offer,
+            )
+        assert mock_select.call_args.kwargs["default"] == expected_default
 
 
 # ---------------------------------------------------------------------------

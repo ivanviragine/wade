@@ -386,27 +386,50 @@ def _prompt_bot_review_setup(
     non_interactive: bool,
     *,
     current_auto_trigger: bool = False,
+    current_offer_on_done: bool = True,
 ) -> dict[str, Any]:
-    """Collect the bot-review auto-trigger setting (#431).
+    """Collect what ``done`` should do about bot-review triggers (#431, #464).
 
-    A simple yes/no defaulting to **off** (consistent with the knowledge-base
-    learning that confusing YOLO-style prompts are undesirable). The three
-    built-in bot triggers are always written; only auto-trigger is prompted here.
-    Non-interactive/CI takes the safe default without prompting — the model
-    default already provides ``auto_trigger: false``, so the missing answer never
-    errors. Returns a dict with key: ``auto_trigger`` (bool).
+    One three-way pick rather than two yes/no questions (consistent with the
+    knowledge-base learning that confusing YOLO-style prompts are undesirable):
+    post them automatically, **offer** them (the default — ``done`` asks, or hands
+    the option to the agent's closing dialog), or stay silent and leave
+    ``wade review trigger`` to the user. The three built-in bot triggers are
+    always written whichever is picked.
+
+    Non-interactive/CI takes the current/default answer without prompting — the
+    model defaults already provide ``auto_trigger: false`` /
+    ``offer_on_done: true``, so a missing answer never errors. Returns a dict with
+    keys: ``auto_trigger`` (bool), ``offer_on_done`` (bool).
     """
     from wade.ui import prompts
 
-    defaults: dict[str, Any] = {"auto_trigger": current_auto_trigger}
+    defaults: dict[str, Any] = {
+        "auto_trigger": current_auto_trigger,
+        "offer_on_done": current_offer_on_done,
+    }
     if non_interactive:
         return defaults
 
     console.rule("Bot review triggers")
-    defaults["auto_trigger"] = prompts.confirm(
-        "Auto-trigger external bot reviews (CodeRabbit/Codex/Bugbot) after `done` pushes?",
-        default=current_auto_trigger,
+    modes = [
+        "Offer them — ask after `done` pushes",
+        "Post them automatically after `done` pushes",
+        "Never — I'll run `wade review trigger` myself",
+    ]
+    if current_auto_trigger:
+        current_index = 1
+    elif current_offer_on_done:
+        current_index = 0
+    else:
+        current_index = 2
+    choice = prompts.select(
+        "External bot reviews (CodeRabbit/Codex/Bugbot) after a session finishes:",
+        modes,
+        default=current_index,
     )
+    defaults["auto_trigger"] = choice == 1
+    defaults["offer_on_done"] = choice == 0
     return defaults
 
 

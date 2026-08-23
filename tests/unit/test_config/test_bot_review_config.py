@@ -51,6 +51,10 @@ class TestBotReviewModels:
     def test_review_bot_enabled_defaults_true(self) -> None:
         assert ReviewBotConfig(name="x", trigger="y").enabled is True
 
+    def test_offer_on_done_defaults_true(self) -> None:
+        """Out of the box `done` offers the triggers rather than staying silent (#464)."""
+        assert ProjectConfig().bot_review.offer_on_done is True
+
     @pytest.mark.parametrize("good", ["coderabbit", "codex-2", "my_bot", "bot.v1", "A1"])
     def test_safe_bot_names_accepted(self, good: str) -> None:
         assert ReviewBotConfig(name=good, trigger="t").name == good
@@ -105,6 +109,17 @@ class TestBotReviewLoader:
     def test_null_auto_trigger_normalizes_to_false(self, tmp_path: Path) -> None:
         config = parse_config_file(_write(tmp_path, "version: 2\nbot_review:\n  auto_trigger:\n"))
         assert config.bot_review.auto_trigger is False
+
+    def test_offer_on_done_parses(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "version: 2\nbot_review:\n  offer_on_done: false\n")
+        config = parse_config_file(path)
+        assert config.bot_review.offer_on_done is False
+        assert config.bot_review.auto_trigger is False  # independent knobs
+
+    def test_null_offer_on_done_normalizes_to_true(self, tmp_path: Path) -> None:
+        """An empty value keeps the default, matching every other bot_review key."""
+        path = _write(tmp_path, "version: 2\nbot_review:\n  offer_on_done:\n")
+        assert parse_config_file(path).bot_review.offer_on_done is True
 
     def test_bots_not_a_list_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError):
@@ -172,10 +187,15 @@ class TestBotReviewValidation:
         errors = _validate_config_file(path)
         assert not any("unsupported key 'bot_review'" in e for e in errors)
 
-    def test_non_bool_auto_trigger_errors(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "version: 2\nbot_review:\n  auto_trigger: nope\n")
+    @pytest.mark.parametrize("flag", ["auto_trigger", "offer_on_done"])
+    def test_non_bool_flag_errors(self, tmp_path: Path, flag: str) -> None:
+        path = _write(tmp_path, f"version: 2\nbot_review:\n  {flag}: nope\n")
         errors = _validate_config_file(path)
-        assert any("bot_review.auto_trigger" in e for e in errors)
+        assert any(f"bot_review.{flag}" in e for e in errors)
+
+    def test_offer_on_done_is_a_supported_key(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, "version: 2\nbot_review:\n  offer_on_done: false\n")
+        assert _validate_config_file(path) == []
 
     def test_bots_not_a_list_errors(self, tmp_path: Path) -> None:
         errors = _validate_config_file(_write(tmp_path, "version: 2\nbot_review:\n  bots: nope\n"))

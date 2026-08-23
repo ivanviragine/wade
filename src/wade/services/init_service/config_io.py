@@ -176,10 +176,11 @@ def _tier_yaml_value(model: str | None, effort: str | None) -> dict[str, Any] | 
     return {"model": model, "effort": effort or None}
 
 
-def _bot_review_config_dict(auto_trigger: bool) -> dict[str, Any]:
-    """Build the ``bot_review`` YAML block: chosen auto_trigger + default bots (#431).
+def _bot_review_config_dict(auto_trigger: bool, offer_on_done: bool = True) -> dict[str, Any]:
+    """Build the ``bot_review`` YAML block: the chosen trigger mode + default bots.
 
-    The bots list and the arrival/ack timeouts are derived from
+    ``auto_trigger`` / ``offer_on_done`` come from the wizard's three-way pick
+    (#431, #464). The bots list and the arrival/ack timeouts are derived from
     :class:`BotReviewConfig`'s model defaults so the written block always matches
     the built-in CodeRabbit/Codex/Bugbot defaults — one source of truth,
     discoverable and fully overridable in ``.wade.yml``.
@@ -187,6 +188,7 @@ def _bot_review_config_dict(auto_trigger: bool) -> dict[str, Any]:
     defaults = BotReviewConfig()
     return {
         "auto_trigger": bool(auto_trigger),
+        "offer_on_done": bool(offer_on_done),
         "arrival_timeout": defaults.arrival_timeout,
         "ack_timeout": defaults.ack_timeout,
         "bots": [bot.model_dump() for bot in defaults.bots],
@@ -307,7 +309,8 @@ def _write_config(
     # default it safely when the block is absent.
     if bot_review_setup is not None:
         config_dict["bot_review"] = _bot_review_config_dict(
-            bool(bot_review_setup.get("auto_trigger"))
+            bool(bot_review_setup.get("auto_trigger")),
+            bool(bot_review_setup.get("offer_on_done", True)),
         )
 
     config_path.write_text(
@@ -562,19 +565,20 @@ def _patch_config(
             changed = True
         raw["knowledge"] = knowledge
 
-    # Patch bot_review section (#431). Set auto_trigger from the wizard (force
-    # overwrites; otherwise only fill when absent) and seed the default bots list
-    # only when the key is entirely absent, so a re-init makes a fresh block
-    # discoverable/overridable. A user-customized bots list — including a
-    # deliberate empty ``bots: []`` (disable all triggers) — is never clobbered;
+    # Patch bot_review section (#431, #464). Set auto_trigger / offer_on_done from
+    # the wizard (force overwrites; otherwise only fill when absent) and seed the
+    # default bots list only when the key is entirely absent, so a re-init makes a
+    # fresh block discoverable/overridable. A user-customized bots list — including
+    # a deliberate empty ``bots: []`` (disable all triggers) — is never clobbered;
     # `"bots" not in section` (not a falsy check) is what preserves the empty list.
     if bot_review_setup is not None:
         existing_bot_review = raw.get("bot_review")
         section = existing_bot_review if isinstance(existing_bot_review, dict) else {}
-        auto_trigger = bool(bot_review_setup.get("auto_trigger"))
-        if (force or "auto_trigger" not in section) and section.get("auto_trigger") != auto_trigger:
-            section["auto_trigger"] = auto_trigger
-            changed = True
+        for flag, default in (("auto_trigger", False), ("offer_on_done", True)):
+            value = bool(bot_review_setup.get(flag, default))
+            if (force or flag not in section) and section.get(flag) != value:
+                section[flag] = value
+                changed = True
         if "bots" not in section:
             section["bots"] = [bot.model_dump() for bot in BotReviewConfig().bots]
             changed = True

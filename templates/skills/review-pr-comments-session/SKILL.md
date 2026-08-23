@@ -22,6 +22,7 @@ start.
 {user_interaction_prompt}
 - After `done` succeeds (dialog): `Exit now — reviewers are notified (recommended)` / `Keep editing — I have more changes`.
 - If a comment is ambiguous (dialog): name the concrete handling options, e.g. `Apply as suggested (recommended)` / `Push back — I disagree` / `Ask the reviewer`.
+- Only if `done` says bot review triggers were **not** posted, add a third exit-dialog option: `Post bot review triggers` → `wade review trigger <issue-number>`.
 
 ## Never use `gh issue create`
 

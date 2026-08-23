@@ -2884,6 +2884,7 @@ class TestPostImplementationLifecyclePr:
         from wade.models.review import PollOutcome
 
         mock_provider = MagicMock()
+        config = ProjectConfig()
         with (
             patch(
                 "wade.git.pr.get_pr_for_branch",
@@ -2892,6 +2893,7 @@ class TestPostImplementationLifecyclePr:
                 ),
             ),
             patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
+            patch("wade.config.loader.load_config", return_value=config),
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.QUIET_TIMEOUT,
@@ -2934,6 +2936,7 @@ class TestPostImplementationLifecyclePr:
             permission_mode="yolo",
             permission_mode_explicit=False,
             network_access=True,
+            config=config,
         )
 
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:

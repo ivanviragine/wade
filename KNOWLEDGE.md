@@ -677,3 +677,15 @@ The plain non-interactive Rich-printed list rows (task_service.list_tasks, imple
 Review completion must be *expectation-verified*, not presence-inferred: absence of a blocking bot signal does NOT mean the review is done. WADE must verify each *enabled* bot (bot_review.bots) has posted a review covering HEAD before reporting all-clear. Generalizes cc91cd11 (a CodeRabbit COMPLETED marker != done posting). Implementation (#448): models/review.py holds a pure compute_bot_arrivals() returning per-bot ARRIVED/AWAITING/ACKNOWLEDGED/MISSING, plus bot_login_matches() (verified logins: coderabbitai[bot], chatgpt-codex-connector; bugbot is a best-effort cursor/bugbot guess). review_covers_latest_commit gates on blocking_bots when expected_bots is set. The service (annotate_bot_expectations) is the ONLY layer with config+clock, so it populates expected_bots and computes the arrival map (window measured from later of commit push and a .wade/bot-triggered marker; falls back to commit push). The arrival window (arrival_timeout=300s / ack_timeout=900s config) bounds the wait so an enabled-but-not-installed bot cannot hang the session — past its window it stops blocking but is reported distinctly (never swallowed into done). A bot's PR-level reaction (Codex posts THUMBS_UP/+1, NOT a comment-level eyes as first assumed) is an ack that extends its window to ack_timeout. Every completion surface must read the map: poll_for_reviews, start(), fetch_reviews(), format_review_status_summary.
 
 ---
+
+## 9d1174462f4f | 2026-08-22 | implementation | tags: review, review-polling, coderabbit | Issue #464
+
+annotate_bot_expectations' marker_root is inconsistent across call sites in review_service.py: three pass repo_root (219/528/718) but the .wade/bot-triggered-<name>@<sha> markers are ALWAYS written under the worktree root (marker_root = worktree_path or repo_root in done.py and services/bot_trigger.py), so those three silently miss the markers and the bot arrival window falls back to commit-push time. Only line 1008 (fetch_reviews) passes worktree_path. Harmless-but-latent: the fallback is the conservative shorter window, never a longer wait. Any new trigger surface must keep writing markers at the worktree root so the one correct reader keeps working.
+
+---
+
+## 4d5fa933ffe6 | 2026-08-22 | implementation | tags: skills, testing | Issue #464
+
+The three session skills are hard-capped by tests/integration/test_skill_context_budget.py (BUDGET_CHARS covers launch prompt + rendered SKILL.md with partials expanded); the review-pr-comments skill had only ~170 chars of headroom in v0.50.7, so any new skill rule must be paid for by trimming an existing one. Measure with the rendered size, not the raw template — _partials/ expansion (user-interaction, review-budget, doc-update-step) roughly doubles it.
+
+---

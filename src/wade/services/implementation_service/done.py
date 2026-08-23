@@ -16,6 +16,7 @@ from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import bot_trigger
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
     find_worktree_path,
@@ -58,6 +59,7 @@ logger = structlog.get_logger()
 __all__ = [
     "_classify_review",
     "_done_via_pr",
+    "_maybe_trigger_bot_reviews",
     "done",
 ]
 
@@ -75,6 +77,7 @@ def done(
     *,
     session_type: SessionType | str = SessionType.IMPLEMENTATION,
     skip_review: bool = False,
+    trigger_bots: bool | None = None,
 ) -> bool:
     """Complete a session — run the completion gates, push, and finalize the PR.
 
@@ -102,6 +105,8 @@ def done(
         session_type: ``"implementation"`` or ``"review-pr-comments"`` — selects
             the gate set.
         skip_review: Escape hatch for the review-ran gate (``--skip-review``).
+        trigger_bots: ``--trigger-bots`` / ``--no-trigger-bots`` override for the
+            post-push bot-review triggers; ``None`` follows ``bot_review`` config.
     """
     config = load_config(project_root)
     provider = get_provider(config)
@@ -315,6 +320,7 @@ def done(
         config=config,
         worktree_path=wt_path,
         review_status=review_status,
+        trigger_bots=trigger_bots,
     )
     if not ok:
         # Finalize failed — leave the worktree exactly as we found it (gitignore
@@ -922,71 +928,102 @@ def _push_branch_with_recovery(
     return False
 
 
-def _auto_trigger_bot_reviews(
+def _maybe_trigger_bot_reviews(
     config: ProjectConfig,
     repo_root: Path,
     branch: str,
     pr_number: int,
     marker_root: Path,
+    issue_number: str,
+    trigger_bots: bool | None = None,
 ) -> None:
-    """Post the enabled bots' review triggers after a successful ``done`` push (#431).
+    """Post — or offer — the enabled bots' review triggers after a ``done`` push.
 
-    Opt-in via ``bot_review.auto_trigger``; a no-op otherwise. One CLI hook here
-    covers **both** ``done`` commands (implementation and review-pr-comments),
-    since both funnel through :func:`done` → :func:`_done_via_pr`.
+    One hook here covers **both** ``done`` commands (implementation and
+    review-pr-comments), since both funnel through :func:`done` →
+    :func:`_done_via_pr`.
 
-    **Idempotent, per-bot, per-commit.** Fires each bot at most once per commit
-    sha via a ``.wade/bot-triggered-<name>@<sha>`` marker: the marker is checked
-    before posting and written **only after** that bot's post succeeds. So a
-    repeated ``done``/``sync`` on the same sha posts nothing further for a bot
-    already triggered, while a bot whose post *failed* (no marker written)
-    retries next time. Each post is isolated in its own try/except
-    (``comment_on_pr`` is fail-fast), and any failure here is best-effort — it
-    never fails an otherwise-complete ``done``.
+    Resolution order (#431, #464), first match wins:
 
-    If the marker *write* itself fails (``write_marker`` returns ``False``), the
-    comment was already posted but the trigger is **not** durably recorded, so we
-    warn rather than report plain success — a later ``done`` at the same sha may
-    re-post it. (Bot ``name`` is a validated safe identifier, so a ``/`` can no
-    longer break the marker path; a ``False`` here now means a genuine I/O
-    failure.) Provider/exception text is escaped before rendering — it is untrusted
-    and could carry a Rich control token that would otherwise raise ``MarkupError``
-    in the markup-enabled console; the name is escaped too, as belt-and-suspenders.
+    1. ``trigger_bots`` — the explicit ``--trigger-bots`` / ``--no-trigger-bots``
+       flag. ``False`` suppresses even with ``auto_trigger: true``; ``True`` posts
+       even with it off.
+    2. ``bot_review.auto_trigger: true`` — post.
+    3. ``bot_review.offer_on_done`` (default ``true``) — **offer**: a confirm on a
+       TTY, otherwise a printed offer the agent can put in its closing dialog.
+       This is the "not configured to auto-trigger, but don't make me remember
+       ``wade review trigger``" middle ground.
+    4. Otherwise — silent no-op (today's pre-#464 behavior).
+
+    **Idempotent, per-bot, per-commit.** Only bots with no
+    ``.wade/bot-triggered-<name>@<sha>`` marker are ever posted or offered (see
+    :mod:`wade.services.bot_trigger`), so a repeated ``done``/``sync`` on the same
+    sha neither re-posts nor re-asks. An unresolvable sha means the markers cannot
+    dedupe, so nothing is posted rather than risk a comment on every pass.
+
+    Failures are best-effort throughout — this runs after the push and PR
+    finalize, so it must never turn an otherwise-complete ``done`` into a failure.
     """
-    if not config.bot_review.auto_trigger:
+    if trigger_bots is False:
         return
-    enabled_bots = [bot for bot in config.bot_review.bots if bot.enabled]
-    if not enabled_bots:
-        return
-    try:
-        sha = git_repo.rev_parse(repo_root, branch)
-    except GitError:
-        logger.debug("done.auto_trigger_sha_failed", exc_info=True)
+    if not any(bot.enabled for bot in config.bot_review.bots):
         return
 
-    for bot in enabled_bots:
-        safe_name = console.escape_markup(bot.name)
-        marker_name = f"bot-triggered-{bot.name}"
-        if markers.marker_present(marker_root, marker_name, sha):
-            continue
-        try:
-            git_pr.comment_on_pr(repo_root, pr_number, bot.trigger)
-        except Exception as e:  # fail-fast primitive — isolate + best-effort.
-            console.warn(
-                f"Could not auto-trigger {safe_name} review: {console.escape_markup(str(e))}"
+    sha = bot_trigger.resolve_branch_sha(repo_root, branch)
+    if sha is None:
+        return
+    pending = bot_trigger.pending_bots(config, marker_root, sha)
+
+    if trigger_bots or config.bot_review.auto_trigger:
+        if not pending:
+            # Only worth saying when the user *asked* for it and got silence.
+            if trigger_bots:
+                console.detail(
+                    "Bot review triggers already posted for this commit — "
+                    f"run `wade review trigger {issue_number}` to post them again."
+                )
+            return
+        bot_trigger.post_bot_triggers(
+            repo_root, pr_number, pending, marker_root=marker_root, sha=sha
+        )
+        return
+
+    if not config.bot_review.offer_on_done or not pending:
+        return
+
+    names = bot_trigger.format_bot_names(pending)
+    if prompts.is_tty():
+        # This offer runs *after* the push and PR finalize, so a Ctrl+C at the
+        # confirm must never abort done() (which would report failure and skip its
+        # worktree-gitignore cleanup even though the remote already succeeded).
+        # `cancel_default=False` treats a cancel as a declined optional offer — the
+        # best-effort contract this function's docstring promises.
+        if prompts.confirm(
+            f"Post the bot-review triggers now ({names})?",
+            default=True,
+            cancel_default=False,
+        ):
+            bot_trigger.post_bot_triggers(
+                repo_root, pr_number, pending, marker_root=marker_root, sha=sha
             )
-            logger.warning("done.auto_trigger_failed", bot=bot.name, error=str(e))
-            continue
-        if markers.write_marker(marker_root, marker_name, sha):
-            console.detail(f"Triggered {safe_name} review.")
         else:
-            # Comment is posted but the marker isn't durable — say so, don't
-            # claim success. A later done at this sha may re-post it.
-            console.warn(
-                f"Triggered {safe_name} review, but could not record its "
-                "anti-spam marker — a repeat done at this commit may re-post it."
+            console.detail(
+                f"Skipped — run `wade review trigger {issue_number}` when you want them."
             )
-            logger.warning("done.auto_trigger_marker_write_failed", bot=bot.name, sha=sha)
+        return
+
+    # Non-TTY: the AI agent runs `done`, so hand it the decision to surface —
+    # it is the one talking to the developer at the end of the session.
+    bot_args = " ".join(f"--bot {bot.name}" for bot in pending)
+    console.info(
+        f"Bot review triggers NOT posted ({names}) — `bot_review.auto_trigger` is off. "
+        "Add an extra option to your closing dialog, after the recommended exit one: "
+        f"'Post bot review triggers' → `wade review trigger {issue_number} {bot_args}`."
+    )
+    console.hint(
+        "Always post them: `bot_review.auto_trigger: true` (or `done --trigger-bots`). "
+        "Never ask again: `bot_review.offer_on_done: false`."
+    )
 
 
 def _done_via_pr(
@@ -1000,6 +1037,7 @@ def _done_via_pr(
     worktree_path: Path | None = None,
     *,
     review_status: ReviewStatus | None = None,
+    trigger_bots: bool | None = None,
 ) -> bool:
     """Finalize implementation — update existing draft PR or create a new one.
 
@@ -1009,9 +1047,13 @@ def _done_via_pr(
     2. Appends PR-SUMMARY content to the existing PR body
     3. Writes the review-status block (#367) into the PR body
     4. Marks the draft PR as ready for review
+    5. Posts (or offers) the configured bot-review triggers
 
     ``review_status`` is optional so direct callers/tests need not build one;
     ``done()`` always supplies it, so a real PR always carries the block.
+    ``trigger_bots`` is the ``--trigger-bots`` / ``--no-trigger-bots`` override
+    (``None`` = follow ``bot_review`` config) — see
+    :func:`_maybe_trigger_bot_reviews`.
     """
     provider = get_provider(config)
     pr_url = ""
@@ -1246,12 +1288,15 @@ def _done_via_pr(
     with contextlib.suppress(Exception):
         remove_in_progress_label(provider, issue_number)
 
-    # Opt-in bot-review auto-trigger (#431). Runs only after the push and PR
-    # finalize have succeeded, so the triggers land on a live, ready PR. Per-bot
-    # once-per-sha markers (under the same `marker_root` as the push marker) keep
-    # repeated done/sync runs from re-spamming the PR. `pr_number` is bound by both
-    # branches above (existing PR or freshly created).
-    _auto_trigger_bot_reviews(config, repo_root, branch, pr_number, marker_root)
+    # Bot-review triggers — auto-post, offer, or suppress (#431, #464). Runs only
+    # after the push and PR finalize have succeeded, so the triggers land on a
+    # live, ready PR. Per-bot once-per-sha markers (under the same `marker_root`
+    # as the push marker) keep repeated done/sync runs from re-spamming the PR (or
+    # re-asking). `pr_number` is bound by both branches above (existing PR or
+    # freshly created).
+    _maybe_trigger_bot_reviews(
+        config, repo_root, branch, pr_number, marker_root, issue_number, trigger_bots
+    )
 
     lines = []
     lines.append(f"  PR      [url]{pr_url}[/]")

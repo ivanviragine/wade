@@ -806,3 +806,124 @@ def test_merge_pr_scaffold_only_proceed_merges(
     assert result == MergeStatus.MERGED
     assert mock_confirm.call_args.kwargs["default"] is True
     mock_merge.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Bot-review trigger offer in the post-session menu (#464)
+# ---------------------------------------------------------------------------
+
+_BT = "wade.services.bot_trigger"
+
+
+def _run_menu_with_bot_offer(
+    tmp_path: Path,
+    *,
+    choice: int,
+    config: ProjectConfig,
+    comment: MagicMock,
+) -> tuple[MergeStatus, list[str], MagicMock]:
+    """Drive the post-implementation menu with the bot-trigger offer resolvable."""
+    from wade.models.review import PollOutcome
+
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir(exist_ok=True)
+    poll = MagicMock(return_value=PollOutcome.INTERRUPTED)
+    with (
+        patch(
+            f"{_LC}.git_pr.get_pr_for_branch",
+            return_value=PRLookup(
+                found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+            ),
+        ),
+        patch(f"{_LC}.prompts.is_tty", return_value=True),
+        patch(f"{_LC}.prompts.confirm", return_value=False),  # don't open the browser
+        patch(f"{_LC}.prompts.select", return_value=choice) as mock_select,
+        patch("wade.config.loader.load_config", return_value=config),
+        patch(f"{_BT}.git_pr.get_pr_head_sha", return_value="sha1"),
+        patch(f"{_BT}.git_pr.comment_on_pr", comment),
+        patch("wade.services.review_service.poll_for_reviews", poll),
+    ):
+        status = _post_implementation_lifecycle(
+            tmp_path / "repo", "feat/42-test", 42, wt_path, MagicMock()
+        )
+    return status, list(mock_select.call_args[0][1]), poll
+
+
+def test_menu_offers_bot_triggers_and_posts_then_waits(tmp_path: Path) -> None:
+    """Picking the offer posts every pending trigger, then falls into the wait flow."""
+    comment = MagicMock()
+    config = ProjectConfig()
+    status, options, poll = _run_menu_with_bot_offer(
+        tmp_path, choice=2, config=config, comment=comment
+    )
+    assert options[:2] == ["Merge PR", "Wait for reviews"]
+    assert options[2] == "Trigger bot reviews (coderabbit, codex, bugbot), then wait"
+    assert comment.call_count == 3
+    assert poll.call_args.kwargs["config"] is config
+    assert poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
+    assert status == MergeStatus.NOT_MERGED
+
+
+def test_menu_bot_trigger_offer_does_not_wait_when_every_post_fails(tmp_path: Path) -> None:
+    """A GitHub outage (every trigger post raises) must not drop into the wait poll.
+
+    Picking the offer while ``comment_on_pr`` fails for every bot posts nothing, so
+    the lifecycle returns instead of silently waiting for a review no bot was asked
+    for (#464 review) — poll_for_reviews is never reached.
+    """
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir(exist_ok=True)
+    poll = MagicMock()
+    with (
+        patch(
+            f"{_LC}.git_pr.get_pr_for_branch",
+            return_value=PRLookup(
+                found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+            ),
+        ),
+        patch(f"{_LC}.prompts.is_tty", return_value=True),
+        patch(f"{_LC}.prompts.confirm", return_value=False),  # don't open the browser
+        patch(f"{_LC}.prompts.select", return_value=2),  # the "Trigger bot reviews" entry
+        patch("wade.config.loader.load_config", return_value=ProjectConfig()),
+        patch(f"{_BT}.git_pr.get_pr_head_sha", return_value="sha1"),
+        patch(f"{_BT}.git_pr.comment_on_pr", side_effect=RuntimeError("gh down")),
+        patch("wade.services.review_service.poll_for_reviews", poll),
+    ):
+        status = _post_implementation_lifecycle(
+            tmp_path / "repo", "feat/42-test", 42, wt_path, MagicMock()
+        )
+    assert status == MergeStatus.NOT_MERGED
+    assert poll.called is False
+
+
+def test_menu_hides_bot_trigger_offer_when_opted_out(tmp_path: Path) -> None:
+    from wade.models.config import BotReviewConfig
+
+    config = ProjectConfig(bot_review=BotReviewConfig(offer_on_done=False))
+    comment = MagicMock()
+    _status, options, _poll = _run_menu_with_bot_offer(
+        tmp_path, choice=1, config=config, comment=comment
+    )
+    assert options == ["Merge PR", "Wait for reviews"]
+    assert comment.call_count == 0
+
+
+def test_menu_bot_trigger_offer_does_not_shift_existing_choices(tmp_path: Path) -> None:
+    """The entry is appended, so 'Merge PR'/'Wait for reviews' keep indexes 0/1."""
+    comment = MagicMock()
+    _status, options, _poll = _run_menu_with_bot_offer(
+        tmp_path, choice=1, config=ProjectConfig(), comment=comment
+    )
+    assert options[0] == "Merge PR"
+    assert options[1] == "Wait for reviews"
+    assert comment.call_count == 0  # picking "Wait for reviews" posts nothing
+
+
+def test_menu_wait_keeps_config_for_bot_expectation_gating(tmp_path: Path) -> None:
+    """The ordinary wait path must honor expected bots already configured for the PR."""
+    config = ProjectConfig()
+    _status, _options, poll = _run_menu_with_bot_offer(
+        tmp_path, choice=1, config=config, comment=MagicMock()
+    )
+    assert poll.call_args.kwargs["config"] is config
+    assert poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
