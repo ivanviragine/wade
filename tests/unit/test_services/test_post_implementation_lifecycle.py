@@ -917,3 +917,13 @@ def test_menu_bot_trigger_offer_does_not_shift_existing_choices(tmp_path: Path) 
     assert options[0] == "Merge PR"
     assert options[1] == "Wait for reviews"
     assert comment.call_count == 0  # picking "Wait for reviews" posts nothing
+
+
+def test_menu_wait_keeps_config_for_bot_expectation_gating(tmp_path: Path) -> None:
+    """The ordinary wait path must honor expected bots already configured for the PR."""
+    config = ProjectConfig()
+    _status, _options, poll = _run_menu_with_bot_offer(
+        tmp_path, choice=1, config=config, comment=MagicMock()
+    )
+    assert poll.call_args.kwargs["config"] is config
+    assert poll.call_args.kwargs["marker_root"] == tmp_path / "wt"

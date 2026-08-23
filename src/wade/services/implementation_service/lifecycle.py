@@ -21,6 +21,7 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
+from wade.models.config import ProjectConfig
 from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
@@ -363,14 +364,30 @@ def _post_implementation_lifecycle_pr(
     if not prompts.is_tty():
         return MergeStatus.NOT_MERGED
 
+    # Keep the config attached to every poll, not just the trigger branch: an
+    # ordinary "Wait for reviews" still needs its expected-bot gating (#448).
+    # Config load failure remains non-fatal so a convenience menu never blocks
+    # an otherwise valid merge/wait lifecycle.
+    poll_config: ProjectConfig | None = None
+    try:
+        from wade.config.loader import load_config
+
+        poll_config = load_config(repo_root)
+    except Exception:
+        logger.debug("bot_trigger.poll_config_load_failed", exc_info=True)
+
     # Offer the bot-review triggers here too (#464): with `auto_trigger` off, the
     # agent's `done` did not post them, and this menu is the human's first TTY
     # moment afterwards — waiting for a review no one asked for is the failure
     # mode this avoids. Hidden when every enabled bot already fired for this
     # commit (see `bot_trigger.pending_names`).
     bot_config, trigger_option = bot_trigger.menu_entry(
-        repo_root, pr_number, worktree_path, suffix=", then wait"
+        repo_root, pr_number, worktree_path, suffix=", then wait", config=poll_config
     )
+    if bot_config is not None:
+        # ``menu_entry`` may have retried config loading after the best-effort
+        # load above; reuse that successful result for the ordinary wait path.
+        poll_config = bot_config
     options = ["Merge PR", "Wait for reviews"]
     # Bind the entry's index at append time (not `len(options) - 1` at read time)
     # so a future option appended after it can't silently steal the branch below.
@@ -381,7 +398,6 @@ def _post_implementation_lifecycle_pr(
 
     choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
-    poll_config = None
     if bot_config is not None and choice == trigger_index:
         if bot_trigger.post_pending_triggers(
             bot_config, repo_root, int(pr_number), worktree_path or repo_root
