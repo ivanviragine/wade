@@ -660,10 +660,13 @@ Run the phase-specific readiness check as the first agent action. The
 implementation and PR-comment lifecycle commands also repeat the same
 non-mutating check immediately before `catchup`, `sync`, `done`, `fetch`, or
 `resolve`, so a resumed session cannot turn a changed sandbox/PATH/credential
-state into a late raw Git or GitHub failure. It reports stable capability failures:
+state into a late raw Git or GitHub failure. `done` checks the worktree it will
+act on, so running it from the main checkout with a worktree/issue target or
+`--plan` still works. It reports stable capability failures:
 `WORKTREE_GIT_BLOCKED` (3), `GITHUB_CLI_BLOCKED` (4),
 `GITHUB_AUTH_BLOCKED` (5), `GITHUB_API_BLOCKED` (6),
-`KNOWLEDGE_STAGING_BLOCKED` (7), and `PLAN_DIR_BLOCKED` (8). The result includes a
+`KNOWLEDGE_STAGING_BLOCKED` (7), and `PLAN_DIR_BLOCKED` (8) — plus one
+non-failure state, `PLAN_DIR_ONLY` (exit 0), described next. The result includes a
 machine-readable `reason=…` and narrow remediation; do not disable a sandbox
 globally or give the AI write access to the main checkout.
 
@@ -676,7 +679,7 @@ writable.
 
 | Agent session | Run in the AI runtime | Required there | Intentionally not required there |
 |---|---|---|---|
-| Planning | `wade plan-session check` | worktree and, when knowledge is enabled, local `.wade/` vote staging | GitHub, remote network, and writable out-of-worktree Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
+| Planning | `wade plan-session check` | a worktree and, when knowledge is enabled, local `.wade/` vote staging — or, in the `PLAN_DIR_ONLY` fallback, just a writable plan directory (no worktree, no vote staging) | GitHub, remote network, and writable out-of-worktree Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
 | Dependency analysis | `wade deps-session check` | worktree output and optional local vote staging | GitHub and Git metadata writes — the parent `wade task deps` reads/updates task data after exit |
 | Implementation | `wade implementation-session check` | worktree plus Git metadata writes, usable `gh` authentication, and a read-only GitHub API route | main-checkout writes |
 | PR comments | `wade review-pr-comments-session check` | the same Git/GitHub capabilities as implementation, because it fetches threads, syncs, resolves, and completes a PR | main-checkout writes |
@@ -717,7 +720,11 @@ capabilities but never rewrites them.
 Detached plan and dependency sessions stage knowledge-rating events in their own
 ignored `.wade/` area. Wade flushes those durable-ID events into the main ratings
 spool before removing the throwaway worktree; a failed handoff preserves the
-worktree for retry. Dependency sessions also save their returned edge analysis
+worktree for retry. Only a worktree wade itself created for one of those two
+lifecycles stages votes — it is marked at creation by the same parent that will
+flush it. Any other detached checkout (a CI checkout, `git checkout <sha>`, your
+own `git worktree add --detach`) records votes normally, so nothing is left
+staged with no one to deliver it. Dependency sessions also save their returned edge analysis
 there before handoff, so a blocked main checkout does not discard the generated
 output. The next attached worktree remains the only path that commits the
 ratings log into a PR.

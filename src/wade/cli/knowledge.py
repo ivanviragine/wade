@@ -261,6 +261,10 @@ def status() -> None:
         not result.dirty_paths
         and not result.legacy_migration_pending
         and not result.staged_vote_count
+        # An unreadable staging log is a dirty session, not a clean one: the
+        # handoff to main's spool will fail, and this command is how that gets
+        # diagnosed (#462 review).
+        and not result.staging_error
     ):
         console.success("Knowledge is clean — no uncommitted knowledge or ratings changes.")
         return
@@ -280,6 +284,16 @@ def status() -> None:
             f"{result.staged_vote_count} detached-session rating vote(s) staged at "
             f"{result.staging_path}; wade will flush them before this session is removed."
         )
+    if result.staging_error:
+        console.warn(
+            f"Staged rating votes cannot be read ({result.staging_error}); the handoff to "
+            "the main ratings spool will fail until this is repaired."
+        )
+        if result.staging_path is not None:
+            console.hint(
+                f"Inspect {result.staging_path} — repair or remove the offending line(s). "
+                "Removing the file discards those votes."
+            )
 
 
 @knowledge_app.command()

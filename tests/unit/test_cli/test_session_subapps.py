@@ -90,6 +90,40 @@ class TestImplementationSessionSubApp:
         assert "GITHUB_AUTH_BLOCKED" in result.output
         mock_done.assert_not_called()
 
+    def test_done_checks_the_resolved_worktree(self, tmp_path: Path) -> None:
+        """`done <worktree>` from main must gate on that worktree (#462 review).
+
+        The recovery/finalization forms (`done <issue|worktree>` and
+        `done --plan`) resolve and switch to another worktree, so checking the
+        caller's cwd would always report IN_MAIN_CHECKOUT and make them unusable.
+        """
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        target_worktree = tmp_path / "wt-42"
+        target_worktree.mkdir()
+        seen: dict[str, Path] = {}
+
+        def _readiness(phase: object, path: Path, *args: object, **kwargs: object) -> CheckResult:
+            seen["path"] = path
+            return CheckResult(status=CheckStatus.IN_WORKTREE, exit_code=CheckExitCode.IN_WORKTREE)
+
+        with (
+            patch(
+                "wade.services.implementation_service.resolve_done_worktree",
+                return_value=target_worktree,
+            ),
+            patch(
+                "wade.services.check_service.check_session_readiness",
+                side_effect=_readiness,
+            ),
+            patch("wade.services.implementation_service.done", return_value=True) as mock_done,
+        ):
+            result = runner.invoke(app, ["implementation-session", "done", "42"])
+
+        assert result.exit_code == 0
+        assert seen["path"] == target_worktree
+        mock_done.assert_called_once()
+
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["implementation-session", "--help"])
         assert result.exit_code == 0
@@ -125,6 +159,34 @@ class TestReviewPrCommentsSessionSubApp:
             result = runner.invoke(app, ["review-pr-comments-session", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output
+
+    def test_done_checks_the_resolved_worktree(self, tmp_path: Path) -> None:
+        """Same resolved-target readiness contract as the implementation endpoint."""
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        target_worktree = tmp_path / "wt-42"
+        target_worktree.mkdir()
+        seen: dict[str, Path] = {}
+
+        def _readiness(phase: object, path: Path, *args: object, **kwargs: object) -> CheckResult:
+            seen["path"] = path
+            return CheckResult(status=CheckStatus.IN_WORKTREE, exit_code=CheckExitCode.IN_WORKTREE)
+
+        with (
+            patch(
+                "wade.services.implementation_service.resolve_done_worktree",
+                return_value=target_worktree,
+            ),
+            patch(
+                "wade.services.check_service.check_session_readiness",
+                side_effect=_readiness,
+            ),
+            patch("wade.services.implementation_service.done", return_value=False),
+        ):
+            result = runner.invoke(app, ["review-pr-comments-session", "done", "42"])
+
+        assert result.exit_code == 1
+        assert seen["path"] == target_worktree
 
     def test_fetch_requires_target(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "fetch"])

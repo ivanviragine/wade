@@ -499,6 +499,7 @@ def plan(
     from wade.git import repo as git_repo
     from wade.git import worktree as git_worktree
     from wade.services.implementation_service import _resolve_worktrees_dir, bootstrap_worktree
+    from wade.services.knowledge_service import mark_throwaway_knowledge_session
     from wade.skills.installer import PLAN_SKILLS
 
     cwd = project_root or Path.cwd()
@@ -531,6 +532,11 @@ def plan(
                 plan_mode=True,
                 session_phase=SessionPhase.PLAN,
             )
+            # This process flushes the worktree's staged votes on the way out
+            # (``_flush_planning_ratings``), so it is entitled to authorize
+            # staging in it. Without the marker a vote would be written to the
+            # canonical sidecar of a worktree that is about to be deleted.
+            mark_throwaway_knowledge_session(planning_worktree)
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:
             console.warn(f"Could not create planning worktree: {e}")

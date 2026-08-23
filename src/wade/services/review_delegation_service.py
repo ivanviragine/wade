@@ -502,12 +502,15 @@ def review_implementation(
             _announce_review_pass_budget(passes, config.done.max_review_passes)
     else:
         # ``DelegationResult`` cannot yet tell "never launched" from "launched
-        # and exited nonzero", so this covers both. Word it as what is actually
-        # known — the review did not complete — rather than claiming a launch
-        # failure that may not have happened.
+        # and exited nonzero", so this covers both. Word both the finding and
+        # the remedy as what is actually known: prescribing "restore the
+        # reviewer runtime" would be wrong advice for a reviewer that started
+        # fine and then failed (#462 review).
         console.warn(
             "Review did not complete, so no review-pass budget was consumed. "
-            "Restore the reviewer runtime and re-run `wade review implementation`."
+            "Check the reviewer output above for the cause — a launch failure "
+            "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
+            "then re-run `wade review implementation`."
         )
     # Record the review-ran marker on any non-hard-failure result (success),
     # keyed to the current HEAD sha. The `done` review-ran gate reads it.

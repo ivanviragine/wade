@@ -106,7 +106,11 @@ class TestKnowledgeCommands:
     def test_detached_rate_stages_then_parent_handoff_preserves_vote(self, e2e_repo: Path) -> None:
         """A real detached child never dirties main and reaches its parent spool once."""
         from wade.models.config import KnowledgeConfig
-        from wade.services.knowledge_service import flush_staged_ratings, read_ratings
+        from wade.services.knowledge_service import (
+            flush_staged_ratings,
+            mark_throwaway_knowledge_session,
+            read_ratings,
+        )
 
         _write_knowledge_config(e2e_repo)
         knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
@@ -122,6 +126,9 @@ class TestKnowledgeCommands:
         _git(["commit", "-m", "chore: seed detached knowledge"], cwd=e2e_repo)
         detached = e2e_repo.parent / "detached-plan"
         _git(["worktree", "add", "--detach", str(detached)], cwd=e2e_repo)
+        # Stand in for the parent `wade plan` / `wade task deps` process: only a
+        # marked worktree may stage votes, because only such a parent flushes them.
+        mark_throwaway_knowledge_session(detached)
 
         result = _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=detached)
 

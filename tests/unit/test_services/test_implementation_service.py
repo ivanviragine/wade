@@ -521,6 +521,55 @@ class TestFindWorktreePath:
         assert path is None
 
 
+class TestResolveDoneWorktree:
+    """The read-only preview the readiness gate in front of `done` uses (#462)."""
+
+    def test_resolves_the_targeted_worktree(self, tmp_git_repo: Path) -> None:
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import resolve_done_worktree
+
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
+
+        resolved = resolve_done_worktree(target="42", project_root=tmp_git_repo)
+        assert resolved is not None
+        assert resolved.resolve() == wt_dir.resolve()
+
+    def test_no_target_returns_none(self, tmp_git_repo: Path) -> None:
+        from wade.services.implementation_service import resolve_done_worktree
+
+        assert resolve_done_worktree(project_root=tmp_git_repo) is None
+
+    def test_unknown_target_returns_none(self, tmp_git_repo: Path) -> None:
+        from wade.services.implementation_service import resolve_done_worktree
+
+        assert resolve_done_worktree(target="999", project_root=tmp_git_repo) is None
+
+    def test_unresolvable_plan_file_returns_none_instead_of_raising(
+        self, tmp_git_repo: Path
+    ) -> None:
+        # `done` owns the error message for a bad plan file; the preview must
+        # stay silent and non-raising so it can never pre-empt it.
+        from wade.services.implementation_service import resolve_done_worktree
+
+        assert (
+            resolve_done_worktree(
+                plan_file=tmp_git_repo / "missing-plan.md", project_root=tmp_git_repo
+            )
+            is None
+        )
+
+    def test_plan_file_target_returns_none(self, tmp_git_repo: Path) -> None:
+        # A plan *file* target makes `done` create the issue first, so there is
+        # no worktree to check yet.
+        from wade.services.implementation_service import resolve_done_worktree
+
+        plan = tmp_git_repo / "PLAN-new.md"
+        plan.write_text("# feat: something\n", encoding="utf-8")
+
+        assert resolve_done_worktree(target=str(plan), project_root=tmp_git_repo) is None
+
+
 # ---------------------------------------------------------------------------
 # Command assembly tests — verify exact subprocess.run cmd lists
 # ---------------------------------------------------------------------------

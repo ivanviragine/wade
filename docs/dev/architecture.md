@@ -493,7 +493,9 @@ contracts and add `GITHUB_CLI_BLOCKED` (4), `GITHUB_AUTH_BLOCKED` (5),
 `GITHUB_API_BLOCKED` (6), `KNOWLEDGE_STAGING_BLOCKED` (7), and
 `PLAN_DIR_BLOCKED` (8); each names a
 `ReadinessFailure` such as `github_cli_executable` or
-`github_api_reachability`. GitHub readiness first runs local `gh --version` so
+`github_api_reachability`. One further state, `PLAN_DIR_ONLY`, is added as a
+**success** (exit 0, no `ReadinessFailure`) — see *Plan-directory fallback*
+below. GitHub readiness first runs local `gh --version` so
 a missing or exec-blocked CLI is not misreported as failed authentication, then
 runs `gh auth status --active` and `gh api user --method GET`; none mutate a
 remote. `--active` is deliberate — plain `gh auth status` exits 1 when *any*
@@ -861,6 +863,15 @@ See knowledge `cc91cd11` for the generalized principle.
 **Detached-vote staging (#462):** `record_rating_for_session()` first validates
 the entry against the detached worktree's committed knowledge snapshot, then
 serializes a durable `RatingEvent` only to `.wade/knowledge-ratings-staged.jsonl`.
+What *authorizes* staging is `is_throwaway_knowledge_session()`: a
+`.wade/throwaway-session` marker **plus** a linked worktree on a detached HEAD.
+The marker is written by the two parents that create such a worktree
+(`plan()` and standalone `task deps`, via `mark_throwaway_knowledge_session`) —
+i.e. exactly the two lifecycles that later call `flush_staged_ratings()`. A bare
+detached HEAD is deliberately not enough: a primary checkout parked on one (CI,
+`git checkout <sha>`, bisect) or a hand-made `git worktree add --detach` has no
+parent that would ever flush the artefact, so a vote staged there would be
+stranded — those write the ordinary ratings sidecar instead.
 Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
 they never cross into the main checkout. The parent plan/deps lifecycle calls
 `flush_staged_ratings()` before cleanup, locks the existing main ratings spool,
@@ -878,7 +889,10 @@ delivery of a new event is folded once, while legacy no-ID JSONL vote records
 retain their historical duplicate-vote semantics. The next attached
 bootstrap's existing ratings-only carry-forward remains the sole path that puts
 tracked ratings into a PR. `knowledge status` reports staged votes from a
-detached session in addition to canonical sidecar dirt.
+detached session in addition to canonical sidecar dirt, and carries an
+unreadable staging log as its own `staging_error` state — a corrupt transport
+log is a *failing handoff*, so it must never be collapsed into "0 staged votes"
+and reported as a clean session.
 
 `wade task deps` runs the `DEPS` check for **every** non-prompt agent cwd, not
 only a worktree it created itself — a reused planning worktree with blocked
@@ -897,6 +911,16 @@ launcher had more authority. A blocked lifecycle command prints the stable
 readiness result before issuing its Git/GitHub operation; sync/catchup retain
 their established preflight exit code while the other commands retain their
 ordinary failure exit contract.
+
+`done` is the one endpoint whose subject may not be the cwd: it is deliberately
+runnable from the main checkout with a worktree-name/issue target or `--plan`,
+where it resolves that worktree and operates there. Its gate therefore checks
+the **resolved** worktree — `resolve_done_worktree()` previews it read-only and
+non-raising (it never creates the issue a plan-*file* target would, and it
+leaves every error message to `done` itself), and `require_ready(cwd=…)` runs
+the phase check against it. Checking the cwd instead would report
+`IN_MAIN_CHECKOUT` and make both recovery forms unusable. `None` — no target,
+or nothing resolvable — falls back to the process cwd.
 
 The `gh --version`, `gh auth status --active`, and read-only `gh api user` probes share
 a short five-second subprocess timeout. A runtime that blackholes an executable

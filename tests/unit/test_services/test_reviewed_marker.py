@@ -179,7 +179,13 @@ class TestRecordReviewPass:
             rds.review_implementation()
         mock_pass.assert_not_called()
         mock_mark.assert_not_called()
-        assert "no review-pass budget" in mock_warn.call_args.args[0]
+        warning = mock_warn.call_args.args[0]
+        assert "no review-pass budget" in warning
+        # This branch also covers a reviewer that launched fine and then exited
+        # nonzero, so the remedy must not prescribe restoring the runtime (#462
+        # review) — it names both causes and points at the reviewer output.
+        assert "Restore the reviewer runtime" not in warning
+        assert "nonzero exit" in warning
 
     def test_no_diff_path_does_not_record_pass(self, tmp_path: Path) -> None:
         # The no-diff early return writes the exact-sha `reviewed` marker (which

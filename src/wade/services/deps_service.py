@@ -546,6 +546,7 @@ def analyze_deps(
                 _resolve_worktrees_dir,
                 bootstrap_worktree,
             )
+            from wade.services.knowledge_service import mark_throwaway_knowledge_session
             from wade.skills.installer import DEPS_SKILLS
 
             repo_root = git_repo.get_repo_root(cwd)
@@ -559,6 +560,10 @@ def analyze_deps(
                 worktree_dir=wt_dir,
             )
             bootstrap_worktree(standalone_worktree, config, repo_root, skills=DEPS_SKILLS)
+            # This process flushes the worktree's staged votes before removing
+            # it, so it may authorize staging there (a plain detached HEAD may
+            # not — nothing would ever flush it).
+            mark_throwaway_knowledge_session(standalone_worktree)
             deps_cwd = standalone_worktree
         except Exception as e:
             logger.warning("deps.worktree_create_failed", error=str(e))

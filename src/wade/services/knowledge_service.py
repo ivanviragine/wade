@@ -48,6 +48,12 @@ _TAG_MAX_LEN = 30
 # parent workflow can transfer them through main's existing ratings spool.
 STAGED_RATINGS_RELATIVE_PATH = ".wade/knowledge-ratings-staged.jsonl"
 
+# Written by the parent that creates a throwaway plan/deps worktree, and read by
+# :func:`is_throwaway_knowledge_session`.  Staging only makes sense when such a
+# parent exists to flush it, so the marker — not a bare detached HEAD — is what
+# authorizes it (#462 review).  Lives under the worktree-gitignored ``.wade/``.
+THROWAWAY_SESSION_MARKER_RELATIVE_PATH = ".wade/throwaway-session"
+
 
 class KnowledgeEntry(BaseModel, frozen=True):
     """Result of appending a knowledge entry."""
@@ -80,6 +86,11 @@ class KnowledgeStatus(BaseModel, frozen=True):
     not mislabeled "knowledge state". ``legacy_migration_pending`` is True when a
     pre-#358 ``.ratings.yml`` is still on disk with no ``.ratings.jsonl`` yet (it
     converts on the next ratings write).
+
+    ``staging_error`` carries the reason a detached session's staged-vote log
+    could not be read. It is a distinct state from "no staged votes": the log
+    exists but the handoff will fail, which is precisely the case a session must
+    never be reported clean for (#462 review).
     """
 
     root: Path
@@ -87,6 +98,7 @@ class KnowledgeStatus(BaseModel, frozen=True):
     legacy_migration_pending: bool = False
     staged_vote_count: int = 0
     staging_path: Path | None = None
+    staging_error: str | None = None
 
 
 class RatingEvent(BaseModel, frozen=True):
@@ -190,17 +202,46 @@ def _resolve_knowledge_root(project_root: Path) -> Path:
     return _canonical_project_root(project_root)
 
 
-def is_throwaway_knowledge_session(project_root: Path) -> bool:
-    """Whether *project_root* is a real detached plan/deps worktree.
+def throwaway_session_marker_path(worktree_path: Path) -> Path:
+    """Return the marker path that authorizes vote staging in *worktree_path*."""
+    return worktree_path / THROWAWAY_SESSION_MARKER_RELATIVE_PATH
 
-    ``is_head_attached`` alone also returns false outside a repository.  The
-    git-dir check is therefore load-bearing: only a detached checkout created
-    by WADE may stage votes instead of writing its canonical ratings sidecar.
+
+def mark_throwaway_knowledge_session(worktree_path: Path) -> Path:
+    """Declare *worktree_path* a WADE throwaway session with a flushing parent.
+
+    Called by ``wade plan`` / ``wade task deps`` right after they create their
+    detached worktree, before the agent is launched — those are exactly the two
+    lifecycles that call :func:`flush_staged_ratings` on the way out.
     """
-    from wade.git.repo import get_git_dir, is_head_attached
+    marker = throwaway_session_marker_path(worktree_path)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        "wade throwaway session — knowledge votes stage here and are flushed by "
+        "the parent `wade plan` / `wade task deps` process.\n",
+        encoding="utf-8",
+    )
+    return marker
+
+
+def is_throwaway_knowledge_session(project_root: Path) -> bool:
+    """Whether *project_root* is a WADE-created detached plan/deps worktree.
+
+    Detached HEAD alone is **not** enough: a primary checkout parked on a
+    detached HEAD (a CI checkout, ``git checkout <sha>``, a bisect) and a
+    hand-made ``git worktree add --detach`` both satisfy it, yet neither has a
+    WADE parent that would ever flush ``.wade/knowledge-ratings-staged.jsonl``
+    — a vote staged there would be stranded forever (#462 review). So require
+    all three: the marker its parent writes
+    (:func:`mark_throwaway_knowledge_session`), a **linked** worktree, and a
+    detached HEAD.
+    """
+    from wade.git.repo import is_head_attached, is_worktree
 
     try:
-        return get_git_dir(project_root) is not None and not is_head_attached(project_root)
+        if not throwaway_session_marker_path(project_root).is_file():
+            return False
+        return is_worktree(project_root) and not is_head_attached(project_root)
     except OSError:
         return False
 
@@ -321,17 +362,21 @@ def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeSt
 
     staging_path: Path | None = None
     staged_vote_count = 0
+    staging_error: str | None = None
     if is_throwaway_knowledge_session(project_root):
         staging_path = staged_ratings_path(project_root)
         try:
             staged_vote_count = len(_load_staged_rating_records(staging_path))
         except (OSError, ValueError) as exc:
             # A corrupt or unreadable transport log is exactly when someone runs
-            # `wade knowledge status` to diagnose a failed handoff. Report zero
-            # staged votes rather than hiding dirty_paths and the pending legacy
-            # migration behind an exit 1.
+            # `wade knowledge status` to diagnose a failed handoff. Keep it out
+            # of the exit code — dirty_paths and the pending legacy migration
+            # must still be reportable — but carry the failure explicitly so the
+            # caller cannot mistake it for "no staged votes" and call the
+            # session clean when the handoff is about to fail.
             logger.warning("knowledge.staged_ratings_unreadable", error=str(exc))
             staged_vote_count = 0
+            staging_error = str(exc)
 
     return KnowledgeStatus(
         root=root,
@@ -339,6 +384,7 @@ def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeSt
         legacy_migration_pending=legacy_pending,
         staged_vote_count=staged_vote_count,
         staging_path=staging_path,
+        staging_error=staging_error,
     )
 
 

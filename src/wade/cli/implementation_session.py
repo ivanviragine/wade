@@ -126,11 +126,20 @@ def done(
     """Finalize implementation — run the completion gates, push, and update the PR."""
     from wade.cli.session_shared import require_ready
     from wade.services.implementation_service import done as do_done
+    from wade.services.implementation_service import resolve_done_worktree
 
-    require_ready("implementation", exit_code=1)
+    plan_file = Path(plan) if plan else None
+    # `done` supports being run from the main checkout with a worktree/issue
+    # target or `--plan`; gate readiness on the worktree it will switch to, not
+    # on the cwd — otherwise those recovery forms always fail IN_MAIN_CHECKOUT.
+    require_ready(
+        "implementation",
+        exit_code=1,
+        cwd=resolve_done_worktree(target=target, plan_file=plan_file),
+    )
     success = do_done(
         target=target,
-        plan_file=Path(plan) if plan else None,
+        plan_file=plan_file,
         no_close=no_close,
         draft=draft,
         session_type="implementation",

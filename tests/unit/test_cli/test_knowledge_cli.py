@@ -661,10 +661,13 @@ class TestThrowawaySessionGate:
         assert result.exit_code == 0
 
     def test_rate_stages_vote_instead_of_writing_canonical_sidecar(self, tmp_path: Path) -> None:
+        from wade.services.knowledge_service import mark_throwaway_knowledge_session
+
         config = self._config(tmp_path)
+        mark_throwaway_knowledge_session(tmp_path)
         with (
             patch("wade.config.loader.load_config", return_value=config),
-            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_worktree", return_value=True),
             patch("wade.git.repo.is_head_attached", return_value=False),
             patch(
                 "wade.services.knowledge_service.resolve_canonical_knowledge_path",
@@ -676,6 +679,42 @@ class TestThrowawaySessionGate:
         assert result.exit_code == 0
         assert (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").is_file()
         assert not (tmp_path / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_rate_in_unmarked_detached_checkout_writes_the_local_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        # A primary checkout parked on a detached HEAD (CI checkout, bisect,
+        # `git checkout <sha>`) has no WADE parent to flush a staged vote — a
+        # vote staged there would be stranded forever, so it must land in the
+        # ordinary ratings sidecar instead (#462 review).
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.is_worktree", return_value=False),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
+
+        assert result.exit_code == 0
+        assert not (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").exists()
+        assert (tmp_path / "KNOWLEDGE.ratings.jsonl").is_file()
+
+    def test_rate_in_unmarked_detached_worktree_writes_the_local_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        # Same for a hand-made `git worktree add --detach`: no marker, no parent
+        # that would ever flush it, so never stage.
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.is_worktree", return_value=True),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
+
+        assert result.exit_code == 0
+        assert not (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").exists()
+        assert (tmp_path / "KNOWLEDGE.ratings.jsonl").is_file()
 
 
 class TestKnowledgeStatusCommand:
@@ -701,22 +740,51 @@ class TestKnowledgeStatusCommand:
         assert "clean" in result.output.lower()
 
     def test_status_reports_staged_detached_votes(self, tmp_path: Path) -> None:
+        from wade.services.knowledge_service import mark_throwaway_knowledge_session
+
         config = ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
         )
+        mark_throwaway_knowledge_session(tmp_path)
         staged = tmp_path / ".wade" / "knowledge-ratings-staged.jsonl"
-        staged.parent.mkdir()
         staged.write_text(
             '{"dir": "up", "event_id": "event", "id": "entry", "ts": "now"}\n',
             encoding="utf-8",
         )
         with (
             patch("wade.config.loader.load_config", return_value=config),
-            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_worktree", return_value=True),
             patch("wade.git.repo.is_head_attached", return_value=False),
         ):
             result = runner.invoke(app, ["knowledge", "status"])
 
         assert result.exit_code == 0
         assert "1 detached-session rating vote" in result.output
+
+    def test_status_reports_unreadable_staging_instead_of_clean(self, tmp_path: Path) -> None:
+        # A corrupt transport log with no other knowledge dirt must never be
+        # reported clean — that is exactly the failed-handoff case someone runs
+        # `wade knowledge status` to diagnose (#462 review).
+        from wade.services.knowledge_service import mark_throwaway_knowledge_session
+
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        mark_throwaway_knowledge_session(tmp_path)
+        staged = tmp_path / ".wade" / "knowledge-ratings-staged.jsonl"
+        staged.write_text("{not json\n", encoding="utf-8")
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.is_worktree", return_value=True),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(app, ["knowledge", "status"])
+
+        assert result.exit_code == 0
+        assert "clean" not in result.output.lower()
+        assert "cannot be read" in result.output
+        # Console wrapping can split the absolute path across lines; the file
+        # name is enough to prove the staging artefact was named.
+        assert staged.name in result.output.replace("\n", "")

@@ -146,7 +146,11 @@ class TestPhaseContent:
         # the plan reminder (including the plan-dir arg to ``done``) still emits.
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
         assert "Issue #" not in ctx
-        assert "wade plan-session done .wade/plans" in ctx
+        assert "wade plan-session done <plan dir>" in ctx
+        # Both plan-dir forms are named: the worktree default and the
+        # PLAN_DIR_ONLY fallback's reported plandir (#462 review).
+        assert "`.wade/plans` in a worktree" in ctx
+        assert "`plandir=…` in `PLAN_DIR_ONLY`" in ctx
         assert "## Complexity" in ctx
 
     def test_plan_reinjects_persisted_issue_ref(self, tmp_path: Path) -> None:
@@ -156,7 +160,7 @@ class TestPhaseContent:
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
         assert "Issue #351" in ctx
         assert _ISSUE_TITLE in ctx
-        assert "wade plan-session done .wade/plans" in ctx
+        assert "wade plan-session done <plan dir>" in ctx
 
 
 class TestReviewDisabledOverride:
