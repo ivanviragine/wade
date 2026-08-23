@@ -458,8 +458,29 @@ class TestRunDelegation:
 # ---------------------------------------------------------------------------
 
 
+def _stub_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a ready runtime so mode/timeout tests exercise delegation, not readiness.
+
+    These tests hand ``analyze_deps`` a bare ``tmp_path`` as the reused planning
+    worktree; the real check would correctly reject it as not-a-worktree.
+    """
+    from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+    monkeypatch.setattr(
+        "wade.services.check_service.check_session_readiness",
+        lambda *_args, **_kwargs: CheckResult(
+            status=CheckStatus.IN_WORKTREE,
+            exit_code=CheckExitCode.IN_WORKTREE,
+        ),
+    )
+
+
 class TestAnalyzeDepsMode:
     """Tests for analyze_deps with mode parameter and prompt-mode early return."""
+
+    @pytest.fixture(autouse=True)
+    def _ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _stub_ready(monkeypatch)
 
     @patch("wade.services.deps_service.console.out.print")
     @patch("wade.services.deps_service.create_tracking_issue")
@@ -582,6 +603,7 @@ class TestAnalyzeDepsMode:
         mock_delegate: MagicMock,
         mock_apply: MagicMock,
         mock_tracking: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Explicit mode='headless' should override config mode."""
         from wade.models.config import AICommandConfig, AIConfig
@@ -609,7 +631,7 @@ class TestAnalyzeDepsMode:
         mock_apply.return_value = 2
         mock_tracking.return_value = "10"
 
-        result = analyze_deps(["1", "2"], mode="headless")
+        result = analyze_deps(["1", "2"], mode="headless", planning_worktree=tmp_path)
         assert result is not None
         # Should have parsed the edge since not in prompt mode
         assert len(result.edges) == 1
@@ -636,6 +658,7 @@ class TestAnalyzeDepsMode:
         mock_delegate: MagicMock,
         mock_apply: MagicMock,
         mock_tracking: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """ai.deps.timeout should be forwarded into the DelegationRequest."""
         from wade.models.config import AICommandConfig, AIConfig
@@ -663,7 +686,7 @@ class TestAnalyzeDepsMode:
         mock_apply.return_value = 2
         mock_tracking.return_value = "10"
 
-        result = analyze_deps(["1", "2"])
+        result = analyze_deps(["1", "2"], planning_worktree=tmp_path)
         assert result is not None
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.HEADLESS
@@ -689,6 +712,7 @@ class TestAnalyzeDepsMode:
         mock_delegate: MagicMock,
         mock_apply: MagicMock,
         mock_tracking: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """With ai.deps.timeout unset, analyze_deps scales the budget from the prompt."""
         from wade.models.config import AICommandConfig, AIConfig
@@ -717,7 +741,7 @@ class TestAnalyzeDepsMode:
         mock_apply.return_value = 2
         mock_tracking.return_value = "10"
 
-        result = analyze_deps(["1", "2"])
+        result = analyze_deps(["1", "2"], planning_worktree=tmp_path)
         assert result is not None
         call_args = mock_delegate.call_args[0][0]
         # Timeout is the scaled value for this exact prompt (not a flat default).
@@ -746,6 +770,7 @@ class TestAnalyzeDepsMode:
         mock_apply: MagicMock,
         mock_tracking: MagicMock,
         mock_console: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """#366 review: headless deps must announce the worst-case budget pre-launch,
 
@@ -778,7 +803,7 @@ class TestAnalyzeDepsMode:
         mock_apply.return_value = 2
         mock_tracking.return_value = "10"
 
-        result = analyze_deps(["1", "2"])
+        result = analyze_deps(["1", "2"], planning_worktree=tmp_path)
         assert result is not None
         call_args = mock_delegate.call_args[0][0]
         budget = effective_timeout(call_args.prompt, None, None)
@@ -812,6 +837,7 @@ class TestAnalyzeDepsMode:
         mock_apply: MagicMock,
         mock_tracking: MagicMock,
         mock_console: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """A timed-out deps run returns None, warns (timeout, not crash), applies nothing."""
         from wade.models.config import AICommandConfig, AIConfig
@@ -839,7 +865,7 @@ class TestAnalyzeDepsMode:
             timed_out=True,
         )
 
-        result = analyze_deps(["1", "2"], mode="headless")
+        result = analyze_deps(["1", "2"], mode="headless", planning_worktree=tmp_path)
 
         assert result is None
         mock_apply.assert_not_called()
@@ -851,6 +877,206 @@ class TestAnalyzeDepsMode:
 # ---------------------------------------------------------------------------
 # analyze_deps permission-mode resolution + forwarding
 # ---------------------------------------------------------------------------
+
+
+class TestAnalyzeDepsIsolationFailure:
+    """A failed detached-worktree setup must never launch in the caller's cwd."""
+
+    @staticmethod
+    def _configure_headless(
+        monkeypatch: pytest.MonkeyPatch,
+        delegate: MagicMock,
+        *,
+        knowledge_enabled: bool = False,
+    ) -> None:
+        from wade.models.config import AICommandConfig, AIConfig, KnowledgeConfig
+
+        config = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless")),
+            knowledge=KnowledgeConfig(enabled=knowledge_enabled),
+        )
+        monkeypatch.setattr("wade.services.deps_service.load_config", lambda *_: config)
+        monkeypatch.setattr("wade.services.deps_service.get_provider", lambda _: MagicMock())
+        monkeypatch.setattr(
+            "wade.services.deps_service.resolve_ai_tool", lambda *_args, **_kwargs: "claude"
+        )
+        monkeypatch.setattr(
+            "wade.services.deps_service.resolve_model", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            "wade.services.deps_service.resolve_effort", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            "wade.services.deps_service.confirm_ai_selection",
+            lambda *_args, **_kwargs: ("claude", None, None, PermissionMode.DEFAULT),
+        )
+        monkeypatch.setattr("wade.services.deps_service.delegate", delegate)
+
+    def test_creation_failure_does_not_fall_back_to_caller_checkout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate)
+        monkeypatch.setattr("wade.git.repo.get_repo_root", lambda _: tmp_path)
+        monkeypatch.setattr(
+            "wade.git.worktree.create_detached_worktree",
+            lambda **_kwargs: (_ for _ in ()).throw(OSError("sandbox denied worktree setup")),
+        )
+
+        result = analyze_deps(["1", "2"], mode="headless", project_root=tmp_path)
+
+        assert result is None
+        delegate.assert_not_called()
+
+    def test_readiness_failure_removes_empty_worktree_before_agent_launch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate)
+        worktree = tmp_path / "deps-worktree"
+        remove = MagicMock()
+        monkeypatch.setattr("wade.git.repo.get_repo_root", lambda _: tmp_path)
+        monkeypatch.setattr(
+            "wade.git.worktree.create_detached_worktree",
+            lambda **_kwargs: worktree,
+        )
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap_worktree",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "wade.services.check_service.check_session_readiness",
+            lambda *_args, **_kwargs: CheckResult(
+                status=CheckStatus.KNOWLEDGE_STAGING_BLOCKED,
+                exit_code=CheckExitCode.KNOWLEDGE_STAGING_BLOCKED,
+            ),
+        )
+        monkeypatch.setattr("wade.git.worktree.remove_worktree", remove)
+
+        result = analyze_deps(["1", "2"], mode="headless", project_root=tmp_path)
+
+        assert result is None
+        delegate.assert_not_called()
+        remove.assert_called_once_with(tmp_path, worktree, force=True)
+
+    def test_blocked_planning_worktree_stops_delegation_without_removing_it(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reused planning worktree is checked too — and never deleted from here."""
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate)
+        planning_worktree = tmp_path / "plan-worktree"
+        planning_worktree.mkdir()
+        remove = MagicMock()
+        monkeypatch.setattr(
+            "wade.services.check_service.check_session_readiness",
+            lambda *_args, **_kwargs: CheckResult(
+                status=CheckStatus.KNOWLEDGE_STAGING_BLOCKED,
+                exit_code=CheckExitCode.KNOWLEDGE_STAGING_BLOCKED,
+            ),
+        )
+        monkeypatch.setattr("wade.git.worktree.remove_worktree", remove)
+
+        result = analyze_deps(
+            ["1", "2"],
+            mode="headless",
+            project_root=tmp_path,
+            planning_worktree=planning_worktree,
+        )
+
+        assert result is None
+        delegate.assert_not_called()
+        # Owned by the parent `wade plan` lifecycle, which flushes its votes.
+        remove.assert_not_called()
+        assert planning_worktree.is_dir()
+
+    def test_handoff_failure_preserves_durable_dependency_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+        from wade.services.knowledge_service import StagedRatingsFlushResult
+
+        delegate = MagicMock(
+            return_value=DelegationResult(
+                success=True,
+                feedback="1 -> 2 # schema must precede API",
+                mode=DelegationMode.HEADLESS,
+            )
+        )
+        self._configure_headless(monkeypatch, delegate, knowledge_enabled=True)
+        worktree = tmp_path / "deps-worktree"
+        worktree.mkdir()
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="1", title="Schema", body="Create schema")
+        remove = MagicMock()
+        monkeypatch.setattr("wade.services.deps_service.get_provider", lambda _: provider)
+        monkeypatch.setattr("wade.git.repo.get_repo_root", lambda _: tmp_path)
+        monkeypatch.setattr(
+            "wade.git.worktree.create_detached_worktree",
+            lambda **_kwargs: worktree,
+        )
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap_worktree",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "wade.services.check_service.check_session_readiness",
+            lambda *_args, **_kwargs: CheckResult(
+                status=CheckStatus.IN_WORKTREE,
+                exit_code=CheckExitCode.IN_WORKTREE,
+            ),
+        )
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.flush_staged_ratings",
+            lambda *_args, **_kwargs: StagedRatingsFlushResult(
+                success=False,
+                message="main checkout is read-only",
+            ),
+        )
+        monkeypatch.setattr("wade.git.worktree.remove_worktree", remove)
+
+        result = analyze_deps(["1", "2"], mode="headless", project_root=tmp_path)
+
+        assert result is None
+        snapshot = worktree / ".wade" / "deps-analysis-output.txt"
+        assert snapshot.read_text(encoding="utf-8") == "1 -> 2 # schema must precede API\n"
+        remove.assert_not_called()
+
+    def test_retained_votes_are_swept_before_a_new_worktree_is_created(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Otherwise a preserved worktree's votes have nothing that ever retries them."""
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate, knowledge_enabled=True)
+        sweep = MagicMock()
+        monkeypatch.setattr("wade.services.deps_service.report_retained_vote_recovery", sweep)
+        monkeypatch.setattr("wade.git.repo.get_repo_root", lambda _: tmp_path)
+        monkeypatch.setattr(
+            "wade.git.worktree.create_detached_worktree",
+            lambda **_kwargs: (_ for _ in ()).throw(OSError("sandbox denied worktree setup")),
+        )
+
+        result = analyze_deps(["1", "2"], mode="headless", project_root=tmp_path)
+
+        # Ran even though this session then failed to start: recovery is about
+        # the *previous* session's votes, not this one's.
+        assert result is None
+        sweep.assert_called_once()
+        assert sweep.call_args.args[0] == tmp_path
 
 
 def _echo_confirm(
@@ -866,6 +1092,10 @@ def _echo_confirm(
 
 
 class TestAnalyzeDepsPermissionMode:
+    @pytest.fixture(autouse=True)
+    def _ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _stub_ready(monkeypatch)
+
     @patch("wade.services.deps_service.create_tracking_issue")
     @patch("wade.services.deps_service.apply_deps_to_issues")
     @patch("wade.services.deps_service.delegate")

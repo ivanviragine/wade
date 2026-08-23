@@ -31,10 +31,13 @@ def _sync_result(
 
 class TestWorkSyncExitCodes:
     def test_sync_success_maps_to_exit_zero(self) -> None:
-        with patch(
-            "wade.services.implementation_service.sync",
-            return_value=_sync_result(success=True),
-        ) as mock_sync:
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch(
+                "wade.services.implementation_service.sync",
+                return_value=_sync_result(success=True),
+            ) as mock_sync,
+        ):
             result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 0
         mock_sync.assert_called_once_with(
@@ -46,10 +49,13 @@ class TestWorkSyncExitCodes:
         )
 
     def test_sync_conflicts_map_to_exit_two(self) -> None:
-        with patch(
-            "wade.services.implementation_service.sync",
-            return_value=_sync_result(success=False, conflicts=["README.md"]),
-        ) as mock_sync:
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch(
+                "wade.services.implementation_service.sync",
+                return_value=_sync_result(success=False, conflicts=["README.md"]),
+            ) as mock_sync,
+        ):
             result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 2
         mock_sync.assert_called_once_with(
@@ -65,10 +71,13 @@ class TestWorkSyncExitCodes:
             event=SyncEventType.ERROR,
             data={"reason": "on_main_branch"},
         )
-        with patch(
-            "wade.services.implementation_service.sync",
-            return_value=_sync_result(success=False, events=[preflight_event]),
-        ) as mock_sync:
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch(
+                "wade.services.implementation_service.sync",
+                return_value=_sync_result(success=False, events=[preflight_event]),
+            ) as mock_sync,
+        ):
             result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 4
         mock_sync.assert_called_once_with(
@@ -84,10 +93,13 @@ class TestWorkSyncExitCodes:
             event=SyncEventType.ERROR,
             data={"reason": "unknown"},
         )
-        with patch(
-            "wade.services.implementation_service.sync",
-            return_value=_sync_result(success=False, events=[generic_error]),
-        ) as mock_sync:
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch(
+                "wade.services.implementation_service.sync",
+                return_value=_sync_result(success=False, events=[generic_error]),
+            ) as mock_sync,
+        ):
             result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 1
         mock_sync.assert_called_once_with(

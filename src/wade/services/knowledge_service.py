@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import statistics
 import uuid
@@ -42,6 +43,17 @@ Read this at the start of every session. Add new entries via `wade knowledge add
 _TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _TAG_MAX_LEN = 30
 
+# Detached plan/deps worktrees are deliberately disposable.  Ratings created in
+# one must therefore live in a WADE-owned, ignored session artefact until the
+# parent workflow can transfer them through main's existing ratings spool.
+STAGED_RATINGS_RELATIVE_PATH = ".wade/knowledge-ratings-staged.jsonl"
+
+# Written by the parent that creates a throwaway plan/deps worktree, and read by
+# :func:`is_throwaway_knowledge_session`.  Staging only makes sense when such a
+# parent exists to flush it, so the marker — not a bare detached HEAD — is what
+# authorizes it (#462 review).  Lives under the worktree-gitignored ``.wade/``.
+THROWAWAY_SESSION_MARKER_RELATIVE_PATH = ".wade/throwaway-session"
+
 
 class KnowledgeEntry(BaseModel, frozen=True):
     """Result of appending a knowledge entry."""
@@ -74,11 +86,56 @@ class KnowledgeStatus(BaseModel, frozen=True):
     not mislabeled "knowledge state". ``legacy_migration_pending`` is True when a
     pre-#358 ``.ratings.yml`` is still on disk with no ``.ratings.jsonl`` yet (it
     converts on the next ratings write).
+
+    ``staging_error`` carries the reason a detached session's staged-vote log
+    could not be read. It is a distinct state from "no staged votes": the log
+    exists but the handoff will fail, which is precisely the case a session must
+    never be reported clean for (#462 review).
     """
 
     root: Path
     dirty_paths: list[str] = []
     legacy_migration_pending: bool = False
+    staged_vote_count: int = 0
+    staging_path: Path | None = None
+    staging_error: str | None = None
+
+
+class RatingEvent(BaseModel, frozen=True):
+    """One durable append-only knowledge-rating event.
+
+    The JSON record deliberately preserves the pre-#462 ``id`` / ``dir`` keys
+    so older readers keep working. ``event_id`` is new and permits a staged
+    event to be delivered more than once without changing the folded score.
+    """
+
+    event_id: str
+    entry_id: str
+    direction: str
+    timestamp: str
+
+    def to_record(self) -> dict[str, str]:
+        return {
+            "dir": self.direction,
+            "event_id": self.event_id,
+            "id": self.entry_id,
+            "ts": self.timestamp,
+        }
+
+
+class StagedRatingsFlushResult(BaseModel, frozen=True):
+    """Outcome of transferring detached-session rating events to main's spool.
+
+    ``worktree`` names the session the votes came from, so a sweep over
+    *retained* worktrees (:func:`flush_retained_staged_ratings`) can report
+    which one each outcome belongs to.
+    """
+
+    success: bool
+    staged_count: int = 0
+    appended_count: int = 0
+    message: str | None = None
+    worktree: Path | None = None
 
 
 def _generate_entry_id() -> str:
@@ -151,6 +208,91 @@ def _resolve_knowledge_root(project_root: Path) -> Path:
     return _canonical_project_root(project_root)
 
 
+def throwaway_session_marker_path(worktree_path: Path) -> Path:
+    """Return the marker path that authorizes vote staging in *worktree_path*."""
+    return worktree_path / THROWAWAY_SESSION_MARKER_RELATIVE_PATH
+
+
+def mark_throwaway_knowledge_session(worktree_path: Path) -> Path:
+    """Declare *worktree_path* a WADE throwaway session with a flushing parent.
+
+    Called by ``wade plan`` / ``wade task deps`` right after they create their
+    detached worktree, before the agent is launched — those are exactly the two
+    lifecycles that call :func:`flush_staged_ratings` on the way out.
+
+    Raises ``ValueError`` when the marker would land outside *worktree_path*: it
+    lives under the same repo-controlled ``.wade/`` as the staging log, so a
+    symlink there would make this ``mkdir`` + ``write_text`` an arbitrary write
+    outside the throwaway worktree — and would leave the marker behind in
+    whatever directory it pointed at. Both callers treat the raise as "no
+    throwaway session", which is the safe outcome.
+    """
+    marker = throwaway_session_marker_path(worktree_path)
+    if path_escapes_session(worktree_path, marker):
+        raise ValueError(f"Refusing to mark a throwaway session outside the worktree: {marker!s}")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        "wade throwaway session — knowledge votes stage here and are flushed by "
+        "the parent `wade plan` / `wade task deps` process.\n",
+        encoding="utf-8",
+    )
+    return marker
+
+
+def is_throwaway_knowledge_session(project_root: Path) -> bool:
+    """Whether *project_root* is a WADE-created detached plan/deps worktree.
+
+    Detached HEAD alone is **not** enough: a primary checkout parked on a
+    detached HEAD (a CI checkout, ``git checkout <sha>``, a bisect) and a
+    hand-made ``git worktree add --detach`` both satisfy it, yet neither has a
+    WADE parent that would ever flush ``.wade/knowledge-ratings-staged.jsonl``
+    — a vote staged there would be stranded forever (#462 review). So require
+    all three: the marker its parent writes
+    (:func:`mark_throwaway_knowledge_session`), a **linked** worktree, and a
+    detached HEAD.
+    """
+    from wade.git.repo import is_head_attached, is_worktree
+
+    try:
+        if not throwaway_session_marker_path(project_root).is_file():
+            return False
+        return is_worktree(project_root) and not is_head_attached(project_root)
+    except OSError:
+        return False
+
+
+def staged_ratings_path(project_root: Path) -> Path:
+    """Return the untracked, worktree-local rating staging artefact path."""
+    return project_root / STAGED_RATINGS_RELATIVE_PATH
+
+
+def path_escapes_session(project_root: Path, path: Path) -> bool:
+    """Whether *path* resolves outside the detached session root.
+
+    ``.wade/`` is an ordinary checked-out path, so a repository (or a later
+    local edit) can replace it with a symlink pointing at the main checkout or
+    any other writable location. Following it would silently defeat the whole
+    point of staging: a detached session must never read, write, or delete
+    outside its own throwaway worktree merely to move a vote. Every filesystem
+    operation on a session-relative ``.wade/`` path goes through this first —
+    the readiness probe, the marker writer, the staging writer, and the flush's
+    read + unlink — so a symlink planted *after* a passing preflight is still
+    refused at the moment of the operation.
+
+    An unresolvable path (``OSError`` from ``resolve``) counts as an escape —
+    fail closed rather than touch an unknown location.
+    """
+    parent = path.parent
+    try:
+        if parent.is_symlink() or path.is_symlink():
+            return True
+        root = project_root.resolve()
+        # ``strict=False``: the ``.wade`` dir may not exist yet on the probe path.
+        return not parent.resolve().is_relative_to(root)
+    except OSError:
+        return True
+
+
 def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
     """Resolve the knowledge path for the current session's resolved root.
 
@@ -214,17 +356,18 @@ def _legacy_ratings_path(ratings_path: Path) -> Path:
 
 
 def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeStatus:
-    """Report uncommitted knowledge/ratings changes on the resolved root.
+    """Report local knowledge/ratings state without escaping a session worktree.
 
-    Resolves the root the same way reads/writes do (:func:`_resolve_knowledge_root`),
-    then scopes ``git status --porcelain`` to **only** the knowledge file and its
-    ratings siblings, so unrelated working-tree dirt is never reported as knowledge
-    state. Surfaces pending throwaway-session votes (in the main checkout) and any
-    legacy ``.ratings.yml`` still awaiting on-disk migration.
+    Read-only commands in a detached plan/deps worktree deliberately use the
+    checked-out knowledge snapshot, not the main checkout.  That snapshot is
+    enough to search, validate an entry ID, and display staged votes; reaching
+    into main would make those harmless operations fail in a correctly
+    constrained sandbox.  Attached worktrees keep their existing local status
+    behaviour.
     """
     from wade.git import repo as git_repo
 
-    root = _resolve_knowledge_root(project_root)
+    root = project_root
     knowledge_path = resolve_knowledge_path(root, config)
     ratings_path = resolve_ratings_path(knowledge_path)
     legacy_path = _legacy_ratings_path(ratings_path)
@@ -234,7 +377,32 @@ def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeSt
         root, str(knowledge_path), str(ratings_path), str(legacy_path)
     )
 
-    return KnowledgeStatus(root=root, dirty_paths=dirty, legacy_migration_pending=legacy_pending)
+    staging_path: Path | None = None
+    staged_vote_count = 0
+    staging_error: str | None = None
+    if is_throwaway_knowledge_session(project_root):
+        staging_path = staged_ratings_path(project_root)
+        try:
+            staged_vote_count = len(_load_staged_rating_records(staging_path))
+        except (OSError, ValueError) as exc:
+            # A corrupt or unreadable transport log is exactly when someone runs
+            # `wade knowledge status` to diagnose a failed handoff. Keep it out
+            # of the exit code — dirty_paths and the pending legacy migration
+            # must still be reportable — but carry the failure explicitly so the
+            # caller cannot mistake it for "no staged votes" and call the
+            # session clean when the handoff is about to fail.
+            logger.warning("knowledge.staged_ratings_unreadable", error=str(exc))
+            staged_vote_count = 0
+            staging_error = str(exc)
+
+    return KnowledgeStatus(
+        root=root,
+        dirty_paths=dirty,
+        legacy_migration_pending=legacy_pending,
+        staged_vote_count=staged_vote_count,
+        staging_path=staging_path,
+        staging_error=staging_error,
+    )
 
 
 def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
@@ -306,6 +474,7 @@ def _fold_jsonl_ratings(ratings_path: Path) -> dict[str, EntryRating]:
     """
     data: dict[str, EntryRating] = {}
     seeded: set[str] = set()
+    delivered_event_ids: set[str] = set()
     for raw_line in ratings_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line:
@@ -317,6 +486,11 @@ def _fold_jsonl_ratings(ratings_path: Path) -> dict[str, EntryRating]:
             continue
         if not isinstance(record, dict):
             continue
+        event_id = record.get("event_id")
+        if isinstance(event_id, str):
+            if event_id in delivered_event_ids:
+                continue
+            delivered_event_ids.add(event_id)
         entry_id = record.get("id")
         if not isinstance(entry_id, str):
             continue
@@ -406,6 +580,7 @@ def _materialize_migration_locked(ratings_path: Path) -> None:
     seed_lines = [
         json.dumps(
             {
+                "event_id": f"legacy-seed:{entry_id}",
                 "id": entry_id,
                 "seed": True,
                 "up": r.up,
@@ -424,42 +599,310 @@ def _materialize_migration_locked(ratings_path: Path) -> None:
     _git_rm(legacy)
 
 
-def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON record as a single line, migrating a legacy ``.yml`` first.
+def _append_jsonl_record(
+    path: Path,
+    record: dict[str, Any],
+    *,
+    materialize_legacy: bool,
+) -> None:
+    """Append one JSONL record under the canonical lock for *path*.
 
-    Wrapped in ``file_lock`` so the migration check + append is atomic against
-    concurrent writers in the same worktree. The append itself is a lone
-    ``O_APPEND`` line write — merging the log is pure concatenation, so no vote is
-    ever lost regardless of merge order or parallelism.
+    ``materialize_legacy`` is true only for the tracked ratings sidecar.  A
+    detached-session staging file is intentionally an isolated transport log;
+    it must never inspect, migrate, or copy a canonical knowledge file.
     """
-    with file_lock(ratings_path):
-        if ratings_path.exists() and ratings_path.is_dir():
-            raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
-        _materialize_migration_locked(ratings_path)
+    with file_lock(path):
+        if path.exists() and path.is_dir():
+            raise ValueError(f"Ratings path {path!s} points to a directory, not a file")
+        if materialize_legacy:
+            _materialize_migration_locked(path)
         line = json.dumps(record, sort_keys=True)
-        with ratings_path.open("a", encoding="utf-8") as fd:
+        with path.open("a", encoding="utf-8") as fd:
             fd.write(f"{line}\n")
+            fd.flush()
+            os.fsync(fd.fileno())
+
+
+def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
+    """Append one canonical ratings record, migrating legacy YAML if needed."""
+    _append_jsonl_record(ratings_path, record, materialize_legacy=True)
+
+
+def create_rating_event(entry_id: str, direction: str) -> RatingEvent:
+    """Validate and serialize-independently create one durable rating event."""
+    if direction not in ("up", "down", "stale"):
+        raise ValueError(f"Invalid direction {direction!r}: must be 'up', 'down', or 'stale'")
+    return RatingEvent(
+        event_id=uuid.uuid4().hex,
+        entry_id=entry_id,
+        direction=direction,
+        timestamp=datetime.now(tz=UTC).isoformat(),
+    )
 
 
 def record_rating(
     ratings_path: Path,
     entry_id: str,
     direction: str,
-) -> None:
+) -> RatingEvent:
     """Append an up/down/stale vote for an entry to the JSONL vote log.
 
     ``direction`` must be ``"up"``, ``"down"``, or ``"stale"``. A ``ts`` is stamped
     on the record — each vote is a distinct event (not a re-derivation), so votes
     are always distinct lines and both survive a union merge.
     """
-    if direction not in ("up", "down", "stale"):
-        raise ValueError(f"Invalid direction {direction!r}: must be 'up', 'down', or 'stale'")
-    record: dict[str, Any] = {
-        "dir": direction,
-        "id": entry_id,
-        "ts": datetime.now(tz=UTC).isoformat(),
-    }
-    _append_ratings_record(ratings_path, record)
+    event = create_rating_event(entry_id, direction)
+    _append_ratings_record(ratings_path, event.to_record())
+    return event
+
+
+def stage_rating_event(project_root: Path, event: RatingEvent) -> Path:
+    """Persist *event* only in a detached session's ignored transport log.
+
+    Re-validates containment at write time: a readiness preflight cannot stop a
+    symlink planted at ``.wade/`` afterwards from redirecting the append out of
+    the throwaway worktree.
+    """
+    path = staged_ratings_path(project_root)
+    if path_escapes_session(project_root, path):
+        raise ValueError(
+            f"Refusing to stage a knowledge vote outside the session worktree: {path!s}"
+        )
+    _append_jsonl_record(path, event.to_record(), materialize_legacy=False)
+    return path
+
+
+def record_rating_for_session(
+    project_root: Path,
+    config: KnowledgeConfig,
+    entry_id: str,
+    direction: str,
+) -> RatingEvent:
+    """Record a rating through the appropriate attached/detached lifecycle.
+
+    Detached plan/deps sessions can write their own ``.wade`` directory but
+    must never write the main checkout merely to vote.  Attached worktrees
+    retain the existing direct tracked-sidecar behavior.
+    """
+    event = create_rating_event(entry_id, direction)
+    if is_throwaway_knowledge_session(project_root):
+        stage_rating_event(project_root, event)
+        return event
+    ratings_path = resolve_ratings_path(resolve_knowledge_path(project_root, config))
+    _append_ratings_record(ratings_path, event.to_record())
+    return event
+
+
+def _load_staged_rating_records(staging_path: Path) -> list[dict[str, Any]]:
+    """Read valid staged vote records, rejecting a malformed transport log.
+
+    Staging is written only by :func:`stage_rating_event`, so treating a bad
+    line as a handoff failure is safer than silently deleting a recoverable
+    artefact.  Canonical ratings reads remain deliberately forgiving of merge
+    damage; this stricter transport parser is only for the retryable handoff.
+    """
+    if not staging_path.exists():
+        return []
+    if staging_path.is_dir():
+        raise ValueError(f"Staged ratings path {staging_path!s} points to a directory")
+
+    records: list[dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
+    for line_number, raw_line in enumerate(
+        staging_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not raw_line.strip():
+            continue
+        try:
+            record: Any = json.loads(raw_line)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(f"Invalid staged rating record on line {line_number}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"Invalid staged rating record on line {line_number}")
+        event_id = record.get("event_id")
+        entry_id = record.get("id")
+        direction = record.get("dir")
+        timestamp = record.get("ts")
+        if not (
+            isinstance(event_id, str)
+            and event_id
+            and isinstance(entry_id, str)
+            and isinstance(direction, str)
+            and direction in ("up", "down", "stale")
+            and isinstance(timestamp, str)
+        ):
+            raise ValueError(f"Invalid staged rating record on line {line_number}")
+        if event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id)
+        records.append(record)
+    return records
+
+
+def _event_ids_in_jsonl(path: Path) -> set[str]:
+    """Return durable event IDs already present in a canonical ratings log."""
+    if not path.is_file():
+        return set()
+    event_ids: set[str] = set()
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record: Any = json.loads(raw_line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(record, dict) and isinstance(record.get("event_id"), str):
+            event_ids.add(record["event_id"])
+    return event_ids
+
+
+def flush_staged_ratings(
+    worktree_path: Path,
+    repo_root: Path,
+    config: KnowledgeConfig,
+) -> StagedRatingsFlushResult:
+    """Atomically hand detached-session votes to main's existing spool.
+
+    The main ratings path is the lock key used by the pre-#462 carry-forward
+    lifecycle.  Retrying after a crash is safe: durable event IDs already in
+    that spool are skipped, while the staging artefact is retained until it can
+    be removed after a successful durable append.
+
+    A staging path that resolves outside *worktree_path* is skipped rather than
+    read and unlinked: the same ``.wade/`` symlink that would redirect the read
+    would also make the post-transfer ``unlink`` delete a file outside the
+    session. Nothing can legitimately be waiting there either — the writer
+    refuses the identical check — so this is "nothing to hand off", not a
+    failure that would strand the worktree forever on an unfixable path.
+    """
+    staging_path = staged_ratings_path(worktree_path)
+    if path_escapes_session(worktree_path, staging_path):
+        logger.warning("knowledge.flush_path_escapes_session", path=str(staging_path))
+        return StagedRatingsFlushResult(
+            success=True,
+            worktree=worktree_path,
+            message=(
+                "Skipped a staged-ratings path that resolves outside the session "
+                f"worktree: {staging_path!s}"
+            ),
+        )
+    # Do not create an otherwise-absent ``.wade/`` directory merely to lock it.
+    # If a writer starts after this check, its own lifecycle will flush the new
+    # event; if it starts before the lock, it is included in this transfer.
+    if not staging_path.exists():
+        return StagedRatingsFlushResult(success=True, worktree=worktree_path)
+
+    # A retained-worktree sweep may encounter a live sibling session.  Hold its
+    # append lock from the snapshot through durable delivery and cleanup, so an
+    # append cannot land in the interval between read and unlink.
+    with file_lock(staging_path):
+        try:
+            staged_records = _load_staged_rating_records(staging_path)
+        except (OSError, ValueError) as exc:
+            return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
+        if not staged_records:
+            try:
+                staging_path.unlink()
+            except OSError as exc:
+                return StagedRatingsFlushResult(
+                    success=False,
+                    message=f"Empty staging cleanup failed: {exc}",
+                    worktree=worktree_path,
+                )
+            return StagedRatingsFlushResult(success=True, worktree=worktree_path)
+
+        try:
+            main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config))
+        except ValueError as exc:
+            return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
+
+        try:
+            with file_lock(main_ratings):
+                if main_ratings.exists() and main_ratings.is_dir():
+                    raise ValueError(
+                        f"Ratings path {main_ratings!s} points to a directory, not a file"
+                    )
+                _materialize_migration_locked(main_ratings)
+                delivered = _event_ids_in_jsonl(main_ratings)
+                missing = [
+                    record for record in staged_records if str(record["event_id"]) not in delivered
+                ]
+                if missing:
+                    with main_ratings.open("a", encoding="utf-8") as fd:
+                        for record in missing:
+                            fd.write(f"{json.dumps(record, sort_keys=True)}\n")
+                        fd.flush()
+                        os.fsync(fd.fileno())
+        except (OSError, ValueError) as exc:
+            return StagedRatingsFlushResult(
+                success=False,
+                staged_count=len(staged_records),
+                message=str(exc),
+                worktree=worktree_path,
+            )
+
+        try:
+            staging_path.unlink()
+        except OSError as exc:
+            # The durable main-spool transfer is already complete.  Keep the
+            # artefact for a later idempotent retry rather than claiming cleanup.
+            return StagedRatingsFlushResult(
+                success=False,
+                staged_count=len(staged_records),
+                appended_count=len(missing),
+                message=f"Ratings reached the main spool but staging cleanup failed: {exc}",
+                worktree=worktree_path,
+            )
+        return StagedRatingsFlushResult(
+            success=True,
+            staged_count=len(staged_records),
+            appended_count=len(missing),
+            worktree=worktree_path,
+        )
+
+
+def flush_retained_staged_ratings(
+    repo_root: Path,
+    config: KnowledgeConfig,
+) -> list[StagedRatingsFlushResult]:
+    """Recover votes stranded in throwaway worktrees a previous run retained.
+
+    A failed handoff deliberately preserves its worktree so the staging log can
+    be retried — but the parent process then exits, and a re-run of ``wade
+    plan`` / ``wade task deps`` creates a *fresh* worktree that knows nothing
+    about the old one, so nothing would ever pick the log back up (#462 review).
+    Both lifecycles call this before creating their new worktree: discovery is
+    deterministic (every linked worktree of *repo_root* that still carries the
+    throwaway marker and a staging log), so recovery needs no extra command and
+    no user bookkeeping.
+
+    Only worktrees with a staging log left are reported — a clean one is a
+    silent no-op. The flush itself is idempotent (event IDs already in the main
+    spool are skipped), so sweeping a *live* sibling session's log is harmless:
+    it delivers those votes early and that session's own flush then finds
+    nothing. Worktrees are never removed here for exactly that reason — a
+    retained worktree may still be in use.
+    """
+    from wade.git import worktree as git_worktree
+
+    try:
+        worktrees = git_worktree.list_worktrees(repo_root)
+    except Exception as exc:
+        logger.warning("knowledge.retained_sweep_list_failed", error=str(exc))
+        return []
+
+    root = repo_root.resolve()
+    results: list[StagedRatingsFlushResult] = []
+    for entry in worktrees:
+        path = Path(entry.path)
+        if path.resolve() == root or entry.branch != "(detached)":
+            continue
+        if not is_throwaway_knowledge_session(path):
+            continue
+        if path_escapes_session(path, staged_ratings_path(path)):
+            continue
+        if not staged_ratings_path(path).exists():
+            continue
+        results.append(flush_staged_ratings(path, repo_root, config))
+    return results
 
 
 def record_supersede(
@@ -538,7 +981,6 @@ def get_annotated_knowledge(
     """
     from wade.services.knowledge_search import evaluate_query, parse_query
 
-    project_root = _resolve_knowledge_root(project_root)
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
         return AnnotatedKnowledgeResult(content=None, entries_count=0)

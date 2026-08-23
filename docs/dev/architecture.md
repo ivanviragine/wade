@@ -58,7 +58,8 @@ src/wade/
 │   ├── implementation_session.py  # implementation-session check/sync/done
 │   ├── review_pr_comments_session.py # review-pr-comments-session check/sync/done/fetch/resolve
 │   ├── review.py        # review plan/implementation/pr-comments/batch
-│   ├── plan_session.py  # plan-session done
+│   ├── plan_session.py  # plan-session check/done
+│   ├── deps_session.py  # deps-session check (actual detached-agent runtime)
 │   ├── hook.py          # `wade hook` — write-guard entry point for AI tool hooks
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
@@ -67,6 +68,7 @@ src/wade/
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
 │   ├── delegation.py    # DelegationRequest, DelegationResult, DelegationMode
 │   ├── permission.py    # PermissionMode (autonomy axis), launch-kwargs helpers
+│   ├── readiness.py     # phase capability requirements + stable failure IDs
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
@@ -477,6 +479,83 @@ picks (implement / batch / review). `None` (unset) still re-resolves per the
 routed command's own config, matching how a non-explicit `permission_mode` is
 threaded.
 
+### Phase-aware session readiness (#462)
+
+`check_service.check_session_readiness()` applies the declarative
+`READINESS_REQUIREMENTS` model to the **agent child runtime** for `plan`,
+`implementation`, `review-pr-comments`, and `deps`. This is deliberately not a
+description of the parent `wade` process: a parent can call a task provider once
+an offline detached agent exits, while a `wade` command issued *by* an agent
+inherits its tool's filesystem sandbox, environment/PATH, command approvals,
+network policy, credentials, and hook environment.
+
+The stable result states preserve the original `IN_WORKTREE` / main / non-repo
+contracts and add `GITHUB_CLI_BLOCKED` (4), `GITHUB_AUTH_BLOCKED` (5),
+`GITHUB_API_BLOCKED` (6), `KNOWLEDGE_STAGING_BLOCKED` (7), and
+`PLAN_DIR_BLOCKED` (8); each names a
+`ReadinessFailure` such as `github_cli_executable` or
+`github_api_reachability`. One further state, `PLAN_DIR_ONLY`, is added as a
+**success** (exit 0, no `ReadinessFailure`) — see *Plan-directory fallback*
+below. GitHub readiness first runs local `gh --version` so
+a missing or exec-blocked CLI is not misreported as failed authentication, then
+runs `gh auth status --active` and `gh api user --method GET`; none mutate a
+remote. `--active` is deliberate — plain `gh auth status` exits 1 when *any*
+account known for the host is unhealthy, so one stale secondary login would
+block every session even though `gh` operations use the healthy active account.
+An older `gh` that rejects the flag falls back to the unfiltered probe rather
+than turning a working login into a hard block. Both probes pass the same
+explicit hostname: `GH_HOST` when set, otherwise the hostname parsed from the
+repository's `origin` (HTTPS/SSH and scp-like SSH remotes). This keeps a GitHub
+Enterprise worktree from accidentally probing github.com, which is `gh api`'s
+default when no hostname is given.
+
+**Plan-directory fallback.** `plan()` keeps a supported worktree-less mode: if
+the detached planning worktree cannot be created (bootstrap failure, or no git
+repo at all), it writes plan files to a throwaway directory and launches the
+agent from the caller's checkout. A bare worktree check would report
+`IN_MAIN_CHECKOUT` / `NOT_IN_GIT_REPO` there and the mandatory first action
+would tell the agent to stop, making the fallback unusable. `plan()` therefore
+exports `WADE_PLAN_DIR` (`PLAN_DIR_ENV_VAR`) for the duration of that launch
+only; PLAN readiness consults it exclusively when the base check did **not**
+return `IN_WORKTREE`, write-probes the directory, and returns `PLAN_DIR_ONLY`
+(exit 0, `plandir=…`) or `PLAN_DIR_BLOCKED` (8, `plan_output_write`). Because
+only the parent sets the marker, a genuinely misplaced agent still gets
+`IN_MAIN_CHECKOUT`, and a real worktree-mode failure (e.g. blocked staging) is
+never masked.
+They apply to implementation and PR-comment sessions **regardless of the task
+provider**, because PRs, review threads, and `done` are GitHub-backed even when
+tasks are Markdown or ClickUp. Those two phases also require writable linked-worktree Git metadata:
+they execute fetch/sync/done. Detached planning and dependency analysis require
+only their local output area plus (when knowledge is enabled) a self-cleaning
+probe of `.wade/` vote staging; they intentionally do not require GitHub,
+network, or writable out-of-root Git metadata because the trusted parent
+performs provider finalization after the child exits.
+
+The session CLIs expose `plan-session check`, `deps-session check`,
+`implementation-session check`, and `review-pr-comments-session check`. The
+templates require the first check in the actual AI runtime and a re-check before
+implementation/review `sync` or `done` after a resume or capability change. The
+check cannot prove access to an arbitrary Git remote, project test dependencies,
+or a project-specific hook: those later subprocesses still inherit the same
+sandbox and report their own failure. Tool command allowlists authorize an agent
+to start `wade`; they do not grant that child new filesystem/network authority,
+and hooks are guardrails rather than privilege escalation.
+
+The implementation-review pass cap distinguishes an attempted, bounded review
+from a reviewer that never launched: success and a true headless timeout count
+toward `done.max_review_passes`, but missing credentials/PATH or a sandbox exec
+denial do not. Otherwise an unavailable reviewer could exhaust the cap and let
+`done` bypass its review gate without any review attempt.
+
+The capability remediation is intentionally tool-neutral: retain the sandbox
+and grant only the worktree Git metadata paths, GitHub credential/API route, or
+local staging path named by the failure. Codex continues to use explicit
+`network_access` and additive worktree metadata grants; Claude/Cursor use
+path/domain allowlists; Copilot/VS Code need host-networked `gh` credentials;
+OpenCode has host-authority shells and must be launched only in a trusted host
+context. Wade never rewrites those external tool settings or grants the main
+checkout write access as a readiness workaround.
+
 ### Session-start context injection (#351)
 
 The launch prompt injects the task **once**. Nothing re-injects it on **resume**
@@ -636,7 +715,7 @@ boundary.
 
 ## Command Dispatch
 
-`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`, `knowledge`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias (for `task`) and `address-reviews-session` (for `review-pr-comments-session`) are hidden Typer groups pointing at the same apps, and `hook` is a hidden write-guard entry point invoked by AI tools. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `deps-session`, `implementation-session`, `review-pr-comments-session`, `review`, `knowledge`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias (for `task`) and `address-reviews-session` (for `review-pr-comments-session`) are hidden Typer groups pointing at the same apps, and `hook` is a hidden write-guard entry point invoked by AI tools. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
@@ -823,7 +902,97 @@ exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 **Repo-quality gates** (`HooksConfig` → `PreCommitConfig` / `CommitMsgConfig` / `PostToolUseConfig`, #352): three opt-in, off-by-default subsections. `pre_commit.{lint,test}` and `commit_msg.conventional` install per-worktree `pre-commit` / `commit-msg` git hooks (baked from config at bootstrap via placeholder substitution — no per-commit config load). They are reconciled together with the `done.pre_push_backstop` `pre-push` hook by `reconcile_worktree_git_hooks`, which installs the desired set in one batch (so every prior user hook is captured **before** wade sets `core.hooksPath` — per-hook `.chain-<hook_name>` files; a #349 unsuffixed `.chain` is migrated to `.chain-pre-push` on upgrade) **and** is idempotent across re-bootstraps of a reused worktree: a gate turned off since a prior session is neutralized (a chain-only passthrough that still runs any captured prior, or a full uninstall + `core.hooksPath` unset when nothing is managed), so disabling a gate actually disables it. `post_tool_use` installs a PostToolUse hook into context-capable tools only (dialect ≠ `DECISION`, so Antigravity CLI is skipped and its prior entry removed); the command is **stable** (`wade-hook post_tool_use --tool <id> --root <root>`) and resolves `lint_cmd`/timeout/scope from `.wade.yml` at runtime, so re-bootstrap dedups, a disabled gate's entry is removed (and a leftover hook self-noops), and it fails open — lints the just-edited file (`lint_cmd` file-scoped; falls back to `pre_commit.lint` whole-repo) and injects findings back as `additionalContext`, never blocking. All three, like `done`, derive their `check_service` validator allowlists from `*.model_fields` so config-key validity can't drift (knowledge `ca245d6a`). **Honesty:** `git commit --no-verify` bypasses the git hooks — these are quality gates, not enforcement boundaries.
 
-**Project knowledge** (worktree-local lifecycle, #358): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — a session edits the copy in the worktree it is standing in, and the change rides to `main` with its PR. They are **not** copied into worktrees (a copy would manufacture a stale snapshot); `_resolve_knowledge_root` keys off the HEAD-attachment state, redirecting only a throwaway detached-HEAD worktree (a `plan` / `task deps` session) back to the main checkout. Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `rate` appends an up/down/stale vote (allowed everywhere; a throwaway session's vote is carried into the next attached session's PR by a ratings-only reconcile at bootstrap), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`. (Attached-session knowledge edits are worktree-local, so an attached session never dirties `main`. The one exception is a detached `plan` / `task deps` session: its `rate` vote appends to main's tracked ratings JSONL and stays uncommitted there until the next attached bootstrap's ratings-only reconcile carries it forward and restores main. The stash/pop branch in `_pull_main_after_merge` therefore still matters — it covers that transient detached-ratings dirt as well as non-knowledge dirt.)
+**Project knowledge** (worktree-local lifecycle, #358/#462): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — an attached session edits the copy in its worktree and the change rides to `main` with its PR. They are never copied into worktrees (a copy would manufacture a stale snapshot). Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`.
+
+**Detached-vote staging (#462):** `record_rating_for_session()` first validates
+the entry against the detached worktree's committed knowledge snapshot, then
+serializes a durable `RatingEvent` only to `.wade/knowledge-ratings-staged.jsonl`.
+What *authorizes* staging is `is_throwaway_knowledge_session()`: a
+`.wade/throwaway-session` marker **plus** a linked worktree on a detached HEAD.
+The marker is written by the two parents that create such a worktree
+(`plan()` and standalone `task deps`, via `mark_throwaway_knowledge_session`) —
+i.e. exactly the two lifecycles that later call `flush_staged_ratings()`. A bare
+detached HEAD is deliberately not enough: a primary checkout parked on one (CI,
+`git checkout <sha>`, bisect) or a hand-made `git worktree add --detach` has no
+parent that would ever flush the artefact, so a vote staged there would be
+stranded — those write the ordinary ratings sidecar instead.
+Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
+they never cross into the main checkout. The parent plan/deps lifecycle calls
+`flush_staged_ratings()` before cleanup, holds the staging-log lock through its
+snapshot, the locked main-spool transfer, and staging cleanup, then appends only
+event IDs not already present and fsyncs. A live sibling's append therefore
+waits until cleanup and creates a fresh log rather than being lost between the
+snapshot and unlink. Every filesystem operation on a session-relative
+`.wade/` path — the readiness probe, the marker writer
+(`mark_throwaway_knowledge_session`, which **raises** on an escape), the staging
+writer, and the flush's read + unlink — first rejects a parent that is a symlink
+or resolves outside the session root (`path_escapes_session`): `.wade/` is an
+ordinary checked-out path, so a symlink there would silently redirect a vote into
+the main checkout (or make the post-transfer `unlink` delete an outside file),
+and a preflight alone cannot stop one planted afterwards. The flush *skips* such
+a path (success, nothing to hand off) rather than failing, since the writer's
+identical check means nothing could legitimately be staged there and a failure
+would strand the worktree on an unclearable condition. A failed or partially
+completed handoff leaves the
+throwaway worktree and its generated output in place for retry — and that retry
+is real, not advisory: `wade plan` and standalone `wade task deps` both call
+`report_retained_vote_recovery` (`services/knowledge_recovery.py`) **before**
+creating their next worktree, which sweeps every linked worktree of the repo
+still carrying the throwaway marker plus a staging log
+(`flush_retained_staged_ratings`) and reports what it recovered. Discovery is
+deterministic, so no resume command or user bookkeeping is needed. The sweep
+never *removes* a worktree — a retained one may be a live sibling session — and
+is safe to run against one anyway, because the flush skips event IDs already in
+the main spool. Standalone deps
+also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
+handoff, because stdout alone would be lost with the parent process. Duplicate
+delivery of a new event is folded once, while legacy no-ID JSONL vote records
+retain their historical duplicate-vote semantics. The next attached
+bootstrap's existing ratings-only carry-forward remains the sole path that puts
+tracked ratings into a PR. `knowledge status` reports staged votes from a
+detached session in addition to canonical sidecar dirt, and carries an
+unreadable staging log as its own `staging_error` state — a corrupt transport
+log is a *failing handoff*, so it must never be collapsed into "0 staged votes"
+and reported as a clean session.
+
+`wade task deps` runs the `DEPS` check for **every** non-prompt agent cwd, not
+only a worktree it created itself — a reused planning worktree with blocked
+`.wade/` staging must stop delegation too. Cleanup differs by owner: a
+standalone worktree this call created is removed (nothing was produced yet),
+while a planning worktree is preserved for the parent `wade plan` lifecycle that
+flushes its votes.
+
+**Lifecycle readiness enforcement (#462):** Phase readiness is resolved by
+`check_service.resolve_session_readiness(phase, cwd)` — it loads config, maps the
+phase to its `ai.<command>` section (declared as `ReadinessRequirements.ai_command`
+in `models/readiness.py`, validated against `AI_COMMAND_NAMES` so a typo cannot
+silently fall back to `ai.default_tool`), selects the tool, and runs
+`check_session_readiness`. The CLI layer only picks *which directory* to inspect.
+The first-action check remains the
+agent-facing diagnostic, but `implementation-session catchup`/`sync`/`done` and
+`review-pr-comments-session sync`/`done`/`fetch`/`resolve` invoke the same
+read-only phase check again in the process that is about to act. This matters
+after a resume or an approval-policy/PATH/credential/network change: the Wade
+process is contained by the same runtime as the AI agent and cannot assume the
+launcher had more authority. A blocked lifecycle command prints the stable
+readiness result before issuing its Git/GitHub operation; sync/catchup retain
+their established preflight exit code while the other commands retain their
+ordinary failure exit contract.
+
+`done` is the one endpoint whose subject may not be the cwd: it is deliberately
+runnable from the main checkout with a worktree-name/issue target or `--plan`,
+where it resolves that worktree and operates there. Its gate therefore checks
+the **resolved** worktree — `resolve_done_worktree()` previews it read-only and
+non-raising (it never creates the issue a plan-*file* target would, and it
+leaves every error message to `done` itself), and `require_ready(cwd=…)` runs
+the phase check against it. Checking the cwd instead would report
+`IN_MAIN_CHECKOUT` and make both recovery forms unusable. `None` — no target,
+or nothing resolvable — falls back to the process cwd.
+
+The `gh --version`, `gh auth status --active`, and read-only `gh api user` probes share
+a short five-second subprocess timeout. A runtime that blackholes an executable
+or network packet therefore returns the phase's named unavailable-capability
+status rather than indefinitely blocking the session's first action.
 
 ## Config Migration Pipeline
 

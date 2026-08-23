@@ -13,6 +13,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import structlog
@@ -39,6 +41,10 @@ from wade.services.ai_resolution import (
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
+from wade.services.knowledge_recovery import (
+    RETAINED_VOTE_RECOVERY_HINT,
+    report_retained_vote_recovery,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -244,6 +250,36 @@ def _select_valid_plans(
 # ---------------------------------------------------------------------------
 # AI session runner
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _plan_dir_fallback_env(plan_dir: str, planning_worktree: Path | None) -> Iterator[None]:
+    """Advertise the plan directory to the child only in worktree-less fallback mode.
+
+    ``wade plan-session check`` runs inside the AI tool and sees only its own
+    cwd, which in this mode is the caller's checkout — indistinguishable from an
+    agent that simply started in the wrong place. Exporting the plan directory
+    for the duration of the launch is what lets the check recognise the
+    supported fallback (``PLAN_DIR_ONLY``) instead of telling the agent to stop.
+
+    With a planning worktree the check succeeds on its own, so nothing is
+    exported — the variable never leaks into the normal path. The previous value
+    is restored afterwards so a nested/parent ``wade`` process is unaffected.
+    """
+    from wade.models.readiness import PLAN_DIR_ENV_VAR
+
+    if planning_worktree is not None:
+        yield
+        return
+    previous = os.environ.get(PLAN_DIR_ENV_VAR)
+    os.environ[PLAN_DIR_ENV_VAR] = plan_dir
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(PLAN_DIR_ENV_VAR, None)
+        else:
+            os.environ[PLAN_DIR_ENV_VAR] = previous
 
 
 def run_ai_planning_session(
@@ -467,6 +503,7 @@ def plan(
     from wade.git import repo as git_repo
     from wade.git import worktree as git_worktree
     from wade.services.implementation_service import _resolve_worktrees_dir, bootstrap_worktree
+    from wade.services.knowledge_service import mark_throwaway_knowledge_session
     from wade.skills.installer import PLAN_SKILLS
 
     cwd = project_root or Path.cwd()
@@ -478,6 +515,11 @@ def plan(
 
     # Ensure task label exists
     ensure_task_label(provider, config.project.issue_label)
+
+    # Recover votes a previous run had to leave behind before starting a new
+    # session — a retained worktree is only retryable if something retries it.
+    if repo_root is not None:
+        report_retained_vote_recovery(repo_root, config)
 
     # Create a detached-HEAD planning worktree
     planning_worktree: Path | None = None
@@ -499,6 +541,11 @@ def plan(
                 plan_mode=True,
                 session_phase=SessionPhase.PLAN,
             )
+            # This process flushes the worktree's staged votes on the way out
+            # (``_flush_planning_ratings``), so it is entitled to authorize
+            # staging in it. Without the marker a vote would be written to the
+            # canonical sidecar of a worktree that is about to be deleted.
+            mark_throwaway_knowledge_session(planning_worktree)
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:
             console.warn(f"Could not create planning worktree: {e}")
@@ -542,17 +589,18 @@ def plan(
     console.empty()
     issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
     session_cwd = planning_worktree or Path.cwd()
-    exit_code = run_ai_planning_session(
-        ai_tool=resolved_tool,
-        plan_dir=plan_dir,
-        model=resolved_model,
-        transcript_path=transcript_path,
-        issue_context=issue_context,
-        effort=resolved_effort,
-        allowed_commands=config.permissions.allowed_commands,
-        cwd=session_cwd,
-        permission_mode=resolved_permission_mode,
-    )
+    with _plan_dir_fallback_env(plan_dir, planning_worktree):
+        exit_code = run_ai_planning_session(
+            ai_tool=resolved_tool,
+            plan_dir=plan_dir,
+            model=resolved_model,
+            transcript_path=transcript_path,
+            issue_context=issue_context,
+            effort=resolved_effort,
+            allowed_commands=config.permissions.allowed_commands,
+            cwd=session_cwd,
+            permission_mode=resolved_permission_mode,
+        )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
     # Non-blocking tools (VS Code, Antigravity) return immediately.
@@ -569,7 +617,11 @@ def plan(
             console.info("Plan directory preserved — review output manually.")
             console.hint(f"Plan dir: {plan_dir}")
             stop_title_keeper()
-            _remove_planning_worktree(repo_root, planning_worktree)
+            _remove_planning_worktree(
+                repo_root,
+                planning_worktree,
+                config if config.knowledge.enabled else None,
+            )
             return False
 
     # Post-session: extract token usage (skip for non-blocking tools)
@@ -608,7 +660,7 @@ def plan(
                         # worktree merge-target pin could not be reconciled. Preserve
                         # the freshly generated plan and abort — finalizing here would
                         # discard it when the worktree is force-removed below (#376).
-                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                         stop_title_keeper()
                         return False
                     finalize_issue_numbers = [existing_issue.id]
@@ -624,7 +676,7 @@ def plan(
                 stop_title_keeper()
                 if not finalize_issue_numbers:
                     console.warn("No issues were created from plan files.")
-                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
                     return False
                 offer_result = _finalize_issues(
                     provider=provider,
@@ -638,7 +690,14 @@ def plan(
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                 )
-                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                if not _cleanup_plan_dir_or_worktree(
+                    plan_dir, repo_root, planning_worktree, config
+                ):
+                    # A failed staging handoff deliberately preserves the detached
+                    # worktree. Do not report the overall plan as successful: an
+                    # automation caller must be able to retry the parent-side
+                    # recovery rather than treating the retained vote as delivered.
+                    return False
                 if offer_result is not None:
                     return offer_result
                 return True
@@ -646,12 +705,12 @@ def plan(
             # partial run). Preserve the generated files — the helper already
             # surfaced the reason — so a validation miss doesn't force a full
             # AI re-planning run.
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
         # Reached only when the session produced no plan files (nothing to
         # preserve) — clean up like every other failure path.
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
         stop_title_keeper()
         return False
 
@@ -696,9 +755,17 @@ def plan(
                         f"{len(failed_files)} plan(s) could not be persisted to a draft "
                         f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
                     )
-                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                    cleanup_succeeded = _preserve_generated_plans(
+                        plan_dir, repo_root, planning_worktree, config
+                    )
                 else:
-                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                    cleanup_succeeded = _cleanup_plan_dir_or_worktree(
+                        plan_dir, repo_root, planning_worktree, config
+                    )
+                if not cleanup_succeeded:
+                    # The helper has already preserved the generated plan and/or
+                    # detached vote artifact and printed its recovery location.
+                    return False
                 if offer_result is not None:
                     return offer_result
                 return True
@@ -709,7 +776,7 @@ def plan(
                     f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
                     f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
                 )
-                _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                 stop_title_keeper()
                 return False
             console.warn("No issues were created from plan files.")
@@ -718,14 +785,14 @@ def plan(
             # partial run). Preserve the generated files — the helper already
             # surfaced the reason — so a validation miss doesn't force a full
             # AI re-planning run.
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
     else:
         console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
 
-    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
     stop_title_keeper()
     return False
 
@@ -1343,7 +1410,19 @@ def _finalize_issues(
     # Hint for next steps
     console.empty()
     if len(issue_numbers) == 1:
-        result = _offer_to_implement(issue_numbers[0])
+        if planning_worktree is not None and repo_root is not None and config.knowledge.enabled:
+            # The next attached implementation bootstrap carries main's pending
+            # ratings into its PR. Delay the handoff until every plan-finalizing
+            # side effect above succeeded, but run it immediately before that
+            # bootstrap so this detached vote is not left behind.
+            result = _offer_to_implement(
+                issue_numbers[0],
+                before_start=lambda: _flush_planning_votes_before_implementation(
+                    planning_worktree, repo_root, config
+                ),
+            )
+        else:
+            result = _offer_to_implement(issue_numbers[0])
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -1359,7 +1438,28 @@ def _print_implement_hint(issue_number: str) -> None:
     console.detail(f"wade implement {issue_number}")
 
 
-def _offer_to_implement(issue_number: str) -> bool | None:
+def _flush_planning_votes_before_implementation(
+    planning_worktree: Path,
+    repo_root: Path,
+    config: ProjectConfig,
+) -> bool:
+    """Flush completed plan-session votes just before an attached bootstrap.
+
+    A failed handoff returns ``False`` to prevent implementation from starting.
+    The caller's immediate cleanup retry owns the persistent-failure report, so
+    users see one recovery message rather than one for each identical attempt.
+    """
+    from wade.services.knowledge_service import flush_staged_ratings
+
+    handoff = flush_staged_ratings(planning_worktree, repo_root, config.knowledge)
+    return handoff.success
+
+
+def _offer_to_implement(
+    issue_number: str,
+    *,
+    before_start: Callable[[], bool] | None = None,
+) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
@@ -1377,6 +1477,9 @@ def _offer_to_implement(issue_number: str) -> bool | None:
         _print_implement_hint(issue_number)
         return None
 
+    if before_start is not None and not before_start():
+        return False
+
     try:
         result = start_implementation_session(target=issue_number)
         return result.success
@@ -1385,26 +1488,51 @@ def _offer_to_implement(issue_number: str) -> bool | None:
         return False
 
 
-def _remove_planning_worktree(repo_root: Path | None, worktree: Path | None) -> None:
-    """Remove a planning worktree if it exists."""
+def _remove_planning_worktree(
+    repo_root: Path | None,
+    worktree: Path | None,
+    config: ProjectConfig | None = None,
+) -> bool:
+    """Flush staged rating votes, then remove a planning worktree if it exists."""
     if repo_root is None or worktree is None:
-        return
-    with contextlib.suppress(Exception):
-        from wade.git import worktree as git_worktree
+        return True
+    if config is not None and config.knowledge.enabled:
+        from wade.services.knowledge_service import flush_staged_ratings
 
+        result = flush_staged_ratings(worktree, repo_root, config.knowledge)
+        if not result.success:
+            console.error(
+                "Could not hand off staged knowledge votes; preserving the planning "
+                f"worktree at {worktree}. {result.message or 'Retry after restoring access.'}"
+            )
+            console.hint(RETAINED_VOTE_RECOVERY_HINT)
+            return False
+    from wade.git import worktree as git_worktree
+
+    try:
         git_worktree.remove_worktree(repo_root, worktree, force=True)
+    except Exception as exc:
+        # The return value is the caller's cleanup contract — a swallowed
+        # failure here would leave the worktree behind while `plan()` reports
+        # success, so surface it and let the caller decide.
+        logger.warning("plan.planning_worktree_remove_failed", error=str(exc))
+        console.warn(f"Could not remove the planning worktree at {worktree}: {exc}")
+        return False
+    return True
 
 
 def _cleanup_plan_dir_or_worktree(
     plan_dir: str,
     repo_root: Path | None,
     planning_worktree: Path | None,
-) -> None:
+    config: ProjectConfig | None = None,
+) -> bool:
     """Clean up the plan directory — either a worktree or a temp dir."""
     if planning_worktree is not None:
-        _remove_planning_worktree(repo_root, planning_worktree)
+        return _remove_planning_worktree(repo_root, planning_worktree, config)
     else:
         _cleanup_plan_dir(plan_dir)
+        return True
 
 
 def _cleanup_plan_dir(plan_dir: str) -> None:
@@ -1417,7 +1545,8 @@ def _preserve_generated_plans(
     plan_dir: str,
     repo_root: Path | None,
     planning_worktree: Path | None,
-) -> None:
+    config: ProjectConfig | None = None,
+) -> bool:
     """Salvage generated ``PLAN*.md`` before the normal cleanup, then clean up.
 
     Used when the strict gate (:func:`_select_valid_plans`) rejects a batch — every
@@ -1432,8 +1561,7 @@ def _preserve_generated_plans(
     generated = discover_plan_files(Path(plan_dir))
     if not generated:
         # Nothing to salvage — the usual cleanup can run unconditionally.
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-        return
+        return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
     try:
         preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
@@ -1446,12 +1574,12 @@ def _preserve_generated_plans(
         # user at the untouched originals still sitting in ``plan_dir``.
         logger.warning("plan.preserve_generated_failed", exc_info=True)
         _report_preserved_plans(len(generated), Path(plan_dir))
-        return
+        return False
 
     # Every file copied cleanly — the stable copy now stands in for the source,
     # so the normal cleanup can remove the worktree/temp dir.
     _report_preserved_plans(len(generated), preserved)
-    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+    return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
 
 def _report_preserved_plans(count: int, location: Path) -> None:

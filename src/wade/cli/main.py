@@ -630,6 +630,7 @@ def reviews_alias(
 # --- Register subcommand groups ---
 
 from wade.cli.admin import admin_app  # noqa: E402
+from wade.cli.deps_session import deps_session_app  # noqa: E402
 from wade.cli.hook import hook_command  # noqa: E402
 from wade.cli.implementation_session import implementation_session_app  # noqa: E402
 from wade.cli.knowledge import knowledge_app  # noqa: E402
@@ -658,6 +659,12 @@ app.add_typer(
     name="plan-session",
     help="Plan session commands (done).",
     rich_help_panel="AI Session — Plan",
+)
+app.add_typer(
+    deps_session_app,
+    name="deps-session",
+    help="Dependency-analysis session commands (check).",
+    rich_help_panel="AI Session — Dependencies",
 )
 app.add_typer(
     implementation_session_app,

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from wade.config.loader import ConfigError
 from wade.models.config import (
     AI_COMMAND_NAMES,
     AICommandConfig,
@@ -15,12 +19,28 @@ from wade.models.config import (
     HooksConfig,
     PostToolUseConfig,
     PreCommitConfig,
+    ProjectConfig,
+    ProviderConfig,
+    ProviderID,
+)
+from wade.models.readiness import (
+    PLAN_DIR_ENV_VAR,
+    READINESS_REQUIREMENTS,
+    ReadinessFailure,
+    ReadinessPhase,
 )
 from wade.services.check_service import (
+    READINESS_PROBE_TIMEOUT_SECONDS,
     CheckExitCode,
+    CheckResult,
     CheckStatus,
     ConfigExitCode,
+    _github_api_reachable,
+    _github_auth_available,
+    _github_cli_available,
+    check_session_readiness,
     check_worktree,
+    resolve_session_readiness,
     validate_config,
 )
 
@@ -180,6 +200,399 @@ class TestWorktreeGitReadinessProbe:
         result = check_worktree(tmp_git_repo)
         assert result.status == CheckStatus.IN_MAIN_CHECKOUT
         assert result.exit_code == CheckExitCode.IN_MAIN_CHECKOUT
+
+
+class TestSessionReadiness:
+    """Phase-aware probes preserve the legacy worktree contract and name failures."""
+
+    def test_github_cli_failure_is_distinct_from_authentication(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="cli-worktree", branch="cli-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: False)
+
+        def auth_must_not_run(_: Path) -> bool:
+            raise AssertionError("auth probe must not mask an unavailable gh executable")
+
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", auth_must_not_run)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.GITHUB_CLI_BLOCKED
+        assert result.exit_code == CheckExitCode.GITHUB_CLI_BLOCKED
+        assert result.failure == ReadinessFailure.GITHUB_CLI_EXECUTABLE
+        assert "reason=github_cli_executable" in result.format_output()
+        assert "PATH" in result.format_output()
+
+    def test_github_auth_failure_has_stable_reason(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="auth-worktree", branch="auth-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: True)
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.GITHUB_AUTH_BLOCKED
+        assert result.exit_code == CheckExitCode.GITHUB_AUTH_BLOCKED
+        assert result.failure == ReadinessFailure.GITHUB_AUTHENTICATION
+        assert "reason=github_authentication" in result.format_output()
+
+    def test_github_api_failure_runs_after_auth(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="api-worktree", branch="api-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: True)
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: True)
+        monkeypatch.setattr("wade.services.check_service._github_api_reachable", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.GITHUB_API_BLOCKED
+        assert result.exit_code == CheckExitCode.GITHUB_API_BLOCKED
+        assert result.failure == ReadinessFailure.GITHUB_API_REACHABILITY
+
+    @pytest.mark.parametrize(
+        "probe",
+        [_github_cli_available, _github_auth_available, _github_api_reachable],
+    )
+    def test_github_probes_are_bounded_and_treat_timeout_as_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        probe: Callable[[Path], bool],
+    ) -> None:
+        """Packet-dropping sandboxes cannot hang the first-action check forever."""
+        run = MagicMock(side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=5))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: None)
+
+        assert probe(tmp_path) is False
+        assert run.call_args.kwargs["timeout"] == READINESS_PROBE_TIMEOUT_SECONDS
+
+    def test_pr_sessions_require_github_even_for_non_github_task_provider(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="markdown-worktree", branch="markdown-branch")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: True)
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", lambda _: False)
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.MARKDOWN))
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree, config)
+
+        # Task providers are pluggable, but implementation/review completion
+        # still creates and updates GitHub PRs. Do not let Markdown/ClickUp
+        # sessions discover their missing `gh` authority only at `done`.
+        assert result.status == CheckStatus.GITHUB_AUTH_BLOCKED
+
+    def test_github_probes_do_not_depend_on_a_supplied_config(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whether a phase needs GitHub comes from the phase, never from config.
+
+        ``config`` is optional, so gating the probes on it would let a caller
+        that omits it pass a GitHub-requiring phase without a single check.
+        """
+        worktree = _add_worktree(tmp_git_repo, name="no-config", branch="no-config")
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.IMPLEMENTATION, worktree)
+
+        assert result.status == CheckStatus.GITHUB_CLI_BLOCKED
+
+    @pytest.mark.parametrize("phase", [ReadinessPhase.PLAN, ReadinessPhase.DEPS])
+    def test_detached_analysis_phases_skip_github_probes(
+        self,
+        tmp_git_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        phase: ReadinessPhase,
+    ) -> None:
+        worktree = _add_worktree(
+            tmp_git_repo,
+            name=f"{phase.value}-worktree",
+            branch=f"{phase.value}-branch",
+        )
+
+        def must_not_probe(_: Path) -> bool:
+            raise AssertionError("offline detached analysis must not probe GitHub")
+
+        monkeypatch.setattr("wade.services.check_service._github_auth_available", must_not_probe)
+        monkeypatch.setattr("wade.services.check_service._github_api_reachable", must_not_probe)
+        monkeypatch.setattr("wade.services.check_service._github_cli_available", must_not_probe)
+
+        result = check_session_readiness(phase, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.IN_WORKTREE
+
+    @pytest.mark.parametrize("phase", [ReadinessPhase.PLAN, ReadinessPhase.DEPS])
+    def test_detached_analysis_does_not_probe_git_metadata_writes(
+        self,
+        tmp_git_repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        phase: ReadinessPhase,
+    ) -> None:
+        worktree = _add_worktree(
+            tmp_git_repo,
+            name=f"{phase.value}-git-blocked",
+            branch=f"{phase.value}-git-blocked",
+        )
+
+        def metadata_probe_must_not_run(_: Path) -> list[str]:
+            raise AssertionError("plan/deps must not attempt an irrelevant gitdir write probe")
+
+        monkeypatch.setattr(
+            "wade.services.check_service._blocked_git_metadata_dirs",
+            metadata_probe_must_not_run,
+        )
+
+        result = check_session_readiness(phase, worktree, ProjectConfig())
+
+        assert result.status == CheckStatus.IN_WORKTREE
+        assert result.failure is None
+        assert result.blocked_paths == []
+
+    def test_detached_stage_failure_is_named_before_planning(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="plan-worktree", branch="plan-branch")
+        config = ProjectConfig(
+            provider=ProviderConfig(name=ProviderID.MARKDOWN),
+            knowledge={"enabled": True},
+        )
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        monkeypatch.setattr("wade.services.check_service._probe_staging_path", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, worktree, config)
+
+        assert result.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED
+        assert result.exit_code == CheckExitCode.KNOWLEDGE_STAGING_BLOCKED
+        assert result.failure == ReadinessFailure.KNOWLEDGE_VOTE_STAGING
+
+
+class TestGitHubAuthProbe:
+    """Only the account this session will actually use decides authentication."""
+
+    def test_restricts_the_status_check_to_the_active_account(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.delenv("GH_HOST", raising=False)
+
+        assert _github_auth_available(tmp_path) is True
+        # Without --active a single stale secondary login exits 1 and would
+        # block every session, even though gh operations use the active one.
+        assert "--active" in run.call_args.args[0]
+
+    def test_does_not_invent_a_host_when_origin_is_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No origin leaves gh's normal default-host behavior intact."""
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.delenv("GH_HOST", raising=False)
+
+        assert _github_auth_available(tmp_path) is True
+        assert "--hostname" not in run.call_args.args[0]
+
+    @pytest.mark.parametrize(
+        "remote_url",
+        [
+            "https://ghe.example.com/organization/project.git",
+            "git@ghe.example.com:organization/project.git",
+        ],
+    )
+    def test_probes_the_origin_hostname_for_auth_and_api(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote_url: str
+    ) -> None:
+        """Bare `gh api` would otherwise default to github.com on Enterprise."""
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: remote_url)
+        monkeypatch.delenv("GH_HOST", raising=False)
+
+        assert _github_auth_available(tmp_path) is True
+        assert _github_api_reachable(tmp_path) is True
+        for call in run.call_args_list:
+            args = call.args[0]
+            assert args[args.index("--hostname") + 1] == "ghe.example.com"
+
+    def test_forwards_an_explicit_gh_host(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setenv("GH_HOST", "ghe.example.com")
+
+        assert _github_auth_available(tmp_path) is True
+        args = run.call_args.args[0]
+        assert args[args.index("--hostname") + 1] == "ghe.example.com"
+
+    def test_falls_back_when_the_installed_gh_rejects_active(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            if "--active" in args:
+                return subprocess.CompletedProcess(
+                    args, 1, stdout="", stderr="unknown flag: --active"
+                )
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", fake_run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: None)
+
+        # An older gh must degrade to the unfiltered probe, not turn a working
+        # login into a hard session block.
+        assert _github_auth_available(tmp_path) is True
+        assert len(calls) == 2
+
+    def test_a_genuine_auth_failure_is_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = MagicMock(
+            return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="not logged in")
+        )
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: None)
+
+        assert _github_auth_available(tmp_path) is False
+        assert run.call_count == 1
+
+
+class TestPlanDirFallbackReadiness:
+    """`wade plan`'s supported worktree-less fallback stays usable."""
+
+    def test_plan_dir_mode_reports_ready_outside_a_worktree(
+        self, tmp_git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_dir = tmp_path / "wade-plan-abc"
+        plan_dir.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+
+        result = check_session_readiness(ReadinessPhase.PLAN, tmp_git_repo, ProjectConfig())
+
+        assert result.status == CheckStatus.PLAN_DIR_ONLY
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+        assert result.failure is None
+        assert f"plandir={plan_dir}" in result.format_output()
+
+    def test_plan_dir_mode_works_outside_a_git_repo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_dir = tmp_path / "wade-plan-def"
+        plan_dir.mkdir()
+        caller = tmp_path / "not-a-repo"
+        caller.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+
+        result = check_session_readiness(ReadinessPhase.PLAN, caller, ProjectConfig())
+
+        assert result.status == CheckStatus.PLAN_DIR_ONLY
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+
+    def test_unwritable_plan_dir_is_named_not_silently_ready(
+        self, tmp_git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plan_dir = tmp_path / "wade-plan-ghi"
+        plan_dir.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+        monkeypatch.setattr("wade.services.check_service._probe_dir_writable", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, tmp_git_repo, ProjectConfig())
+
+        assert result.status == CheckStatus.PLAN_DIR_BLOCKED
+        assert result.exit_code == CheckExitCode.PLAN_DIR_BLOCKED
+        assert result.failure == ReadinessFailure.PLAN_OUTPUT_WRITE
+        assert "reason=plan_output_write" in result.format_output()
+
+    def test_a_main_checkout_without_the_marker_still_fails(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Only `wade plan` sets the marker, so a plain misplaced agent must not
+        # be able to talk its way into planning from the main checkout.
+        monkeypatch.delenv(PLAN_DIR_ENV_VAR, raising=False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, tmp_git_repo, ProjectConfig())
+
+        assert result.status == CheckStatus.IN_MAIN_CHECKOUT
+
+    def test_the_marker_never_masks_a_real_worktree_failure(
+        self, tmp_git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worktree = _add_worktree(tmp_git_repo, name="plan-marker", branch="plan-marker")
+        plan_dir = tmp_path / "wade-plan-jkl"
+        plan_dir.mkdir()
+        monkeypatch.setenv(PLAN_DIR_ENV_VAR, str(plan_dir))
+        config = ProjectConfig(knowledge={"enabled": True})
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        monkeypatch.setattr("wade.services.check_service._probe_staging_path", lambda _: False)
+
+        result = check_session_readiness(ReadinessPhase.PLAN, worktree, config)
+
+        assert result.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED
+
+
+class TestResolveSessionReadiness:
+    """Config + AI-tool resolution for a phase lives in the service, not the CLI."""
+
+    def test_resolves_the_phase_specific_ai_tool(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = ProjectConfig(
+            ai=AIConfig(
+                default_tool="claude",
+                review_pr_comments=AICommandConfig(tool="cursor"),
+            )
+        )
+        seen: dict[str, object] = {}
+
+        def _check(
+            phase: ReadinessPhase,
+            cwd: Path | None = None,
+            cfg: ProjectConfig | None = None,
+            tool: str | None = None,
+        ) -> CheckResult:
+            seen["phase"], seen["cwd"], seen["tool"] = phase, cwd, tool
+            return CheckResult(status=CheckStatus.IN_WORKTREE, exit_code=CheckExitCode.IN_WORKTREE)
+
+        monkeypatch.setattr("wade.services.check_service.load_config", lambda _: config)
+        monkeypatch.setattr("wade.services.check_service.check_session_readiness", _check)
+
+        result = resolve_session_readiness("review-pr-comments", tmp_git_repo)
+
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+        assert seen == {
+            "phase": ReadinessPhase.REVIEW_PR_COMMENTS,
+            "cwd": tmp_git_repo,
+            "tool": "cursor",
+        }
+
+    def test_every_phase_maps_to_a_real_ai_config_section(self) -> None:
+        # A typo would fall back to ``ai.default_tool`` instead of raising, so a
+        # phase silently losing its per-command tool override is caught here.
+        for requirements in READINESS_REQUIREMENTS.values():
+            assert requirements.ai_command in AI_COMMAND_NAMES
+            assert isinstance(getattr(AIConfig(), requirements.ai_command, None), AICommandConfig)
+
+    def test_does_not_silently_ignore_invalid_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defaults are for an absent config, never for a malformed existing one."""
+
+        def _raise(_: Path) -> ProjectConfig:
+            raise ConfigError("invalid config")
+
+        monkeypatch.setattr("wade.services.check_service.load_config", _raise)
+
+        with pytest.raises(ConfigError, match="invalid config"):
+            resolve_session_readiness(ReadinessPhase.IMPLEMENTATION, tmp_path)
 
 
 # ---------------------------------------------------------------------------

@@ -13,9 +13,7 @@ Read and follow them before performing any other action.
 
 ## Execution mode
 
-Run `wade` and `gh` commands with the required permissions/capabilities (not
-in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
-start.
+Keep the sandbox enabled; never grant main-checkout write access just to pass.
 
 ## Talking to the user
 
@@ -33,12 +31,17 @@ Always use `wade task create` for interactive issue creation.
 
 ## First action: check your context
 
-Run `wade review-pr-comments-session check` as your **first action**:
+Run `wade review-pr-comments-session check` first:
 
-- `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
+- `IN_WORKTREE` — proceed.
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden**. Tell the human
   to run `wade review pr-comments <issue>` from the main checkout.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
+- `WORKTREE_GIT_BLOCKED` — relaunch with only the named Git metadata path writable.
+- `GITHUB_CLI_BLOCKED` — `gh` unavailable; fix PATH/runtime sandbox.
+- `GITHUB_AUTH_BLOCKED` / `GITHUB_API_BLOCKED` — relaunch with `gh` access.
+
+Read `reason=…`; ask for a trusted relaunch if needed.
 
 ## Triggering a fresh bot review (optional)
 
@@ -136,6 +139,15 @@ unresolved with reasoning. `done` reads it to update the PR body. Never commit
 this file; it is a gitignored session artifact.
 
 **Step 3 — Sync with main:**
+
+`fetch`, `resolve`, `sync`, and `done` enforce the same read-only runtime
+check. After a resume or permission/network change, inspect it first:
+
+```bash
+wade review-pr-comments-session check
+```
+
+If blocked, use its hint; never bypass it with raw `git`/`gh`.
 
 ```bash
 wade review-pr-comments-session sync --json

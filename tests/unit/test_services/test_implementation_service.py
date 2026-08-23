@@ -521,6 +521,55 @@ class TestFindWorktreePath:
         assert path is None
 
 
+class TestResolveDoneWorktree:
+    """The read-only preview the readiness gate in front of `done` uses (#462)."""
+
+    def test_resolves_the_targeted_worktree(self, tmp_git_repo: Path) -> None:
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import resolve_done_worktree
+
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
+
+        resolved = resolve_done_worktree(target="42", project_root=tmp_git_repo)
+        assert resolved is not None
+        assert resolved.resolve() == wt_dir.resolve()
+
+    def test_no_target_returns_none(self, tmp_git_repo: Path) -> None:
+        from wade.services.implementation_service import resolve_done_worktree
+
+        assert resolve_done_worktree(project_root=tmp_git_repo) is None
+
+    def test_unknown_target_returns_none(self, tmp_git_repo: Path) -> None:
+        from wade.services.implementation_service import resolve_done_worktree
+
+        assert resolve_done_worktree(target="999", project_root=tmp_git_repo) is None
+
+    def test_unresolvable_plan_file_returns_none_instead_of_raising(
+        self, tmp_git_repo: Path
+    ) -> None:
+        # `done` owns the error message for a bad plan file; the preview must
+        # stay silent and non-raising so it can never pre-empt it.
+        from wade.services.implementation_service import resolve_done_worktree
+
+        assert (
+            resolve_done_worktree(
+                plan_file=tmp_git_repo / "missing-plan.md", project_root=tmp_git_repo
+            )
+            is None
+        )
+
+    def test_plan_file_target_returns_none(self, tmp_git_repo: Path) -> None:
+        # A plan *file* target makes `done` create the issue first, so there is
+        # no worktree to check yet.
+        from wade.services.implementation_service import resolve_done_worktree
+
+        plan = tmp_git_repo / "PLAN-new.md"
+        plan.write_text("# feat: something\n", encoding="utf-8")
+
+        assert resolve_done_worktree(target=str(plan), project_root=tmp_git_repo) is None
+
+
 # ---------------------------------------------------------------------------
 # Command assembly tests — verify exact subprocess.run cmd lists
 # ---------------------------------------------------------------------------
@@ -3229,6 +3278,250 @@ class TestCarryForwardPendingVotes:
         wt2_text = (wt2 / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
         assert wt1_text.count(pending_line) == 1
         assert wt2_text.count(pending_line) == 0
+
+    def test_carries_verified_untracked_staged_vote_spool(self, tmp_path: Path) -> None:
+        """A first detached vote reaches an attached PR even with no prior sidecar."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        self._git(main, "add", "KNOWLEDGE.md")
+        self._git(main, "commit", "-m", "chore: init knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        (main / "KNOWLEDGE.ratings.jsonl").write_text(pending_line + "\n", encoding="utf-8")
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/first-rating", str(worktree))
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert pending_line in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_untracked_spool_without_event_ids_is_left_in_main(self, tmp_path: Path) -> None:
+        """The durable-spool guard is what stops an arbitrary untracked file moving.
+
+        Without ``event_id`` on every line the file is not a WADE handoff spool,
+        so it must stay exactly where it is — never relocated into a branch.
+        """
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        self._git(main, "add", "KNOWLEDGE.md")
+        self._git(main, "commit", "-m", "chore: init knowledge")
+        foreign_line = '{"dir": "up", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(foreign_line + "\n", encoding="utf-8")
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/no-event-id", str(worktree))
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert main_ratings.read_text(encoding="utf-8") == foreign_line + "\n"
+        assert not (worktree / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_unresolvable_legacy_head_state_leaves_main_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A git lookup failure must not read as "there was never a legacy file".
+
+        The untracked branch deletes main's spool and relies on the legacy
+        answer to decide whether main still owes a HEAD restore. When git cannot
+        answer, abort the carry so a later bootstrap can retry.
+        """
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        self._git(main, "add", "KNOWLEDGE.md")
+        self._git(main, "commit", "-m", "chore: init knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/unresolvable", str(worktree))
+
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.path_exists_at_head",
+            lambda *_args, **_kwargs: None,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Votes stay put; nothing is half-moved.
+        assert main_ratings.read_text(encoding="utf-8") == pending_line + "\n"
+        assert not (worktree / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_failed_legacy_restore_leaves_main_spool_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed legacy restore must not delete pending untracked votes."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        self._git(main, "rm", "--cached", "--quiet", "KNOWLEDGE.ratings.yml")
+        (main / "KNOWLEDGE.ratings.yml").unlink()
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/restore-failure", str(worktree))
+
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.restore_paths_to_head",
+            lambda *_args, **_kwargs: False,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert main_ratings.read_text(encoding="utf-8") == pending_line + "\n"
+        assert not (worktree / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_failed_legacy_removal_rolls_back_the_worktree_append(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failure after the append must undo both sides, not just main."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        self._git(main, "rm", "--cached", "--quiet", "KNOWLEDGE.ratings.yml")
+        (main / "KNOWLEDGE.ratings.yml").unlink()
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/rollback", str(worktree))
+
+        # The append succeeds, then staging the legacy removal fails.
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.rm_file",
+            lambda *_args, **_kwargs: False,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Main keeps the votes, and the worktree append is undone — not both.
+        assert pending_line in main_ratings.read_text(encoding="utf-8")
+        worktree_ratings = worktree / "KNOWLEDGE.ratings.jsonl"
+        carried = ""
+        if worktree_ratings.is_file():
+            carried = worktree_ratings.read_text(encoding="utf-8")
+        assert pending_line not in carried
+
+    def test_rollback_tolerates_failed_legacy_restage(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A partial index rollback warns but never turns recovery into a crash."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        self._git(main, "rm", "--cached", "--quiet", "KNOWLEDGE.ratings.yml")
+        (main / "KNOWLEDGE.ratings.yml").unlink()
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/rollback-retry", str(worktree))
+
+        def fail_worktree_then_main_restage(root: Path, _: str) -> bool:
+            if root == worktree:
+                return False
+            raise OSError("git metadata is read-only")
+
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.rm_file",
+            fail_worktree_then_main_restage,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Vote content remains durable even when git cannot exactly restore the
+        # legacy deletion in its index; a warning records the partial rollback.
+        assert pending_line in main_ratings.read_text(encoding="utf-8")
+        assert (main / "KNOWLEDGE.ratings.yml").is_file()
+
+    def test_carries_staged_vote_through_legacy_ratings_migration(self, tmp_path: Path) -> None:
+        """The first detached vote migrates legacy YAML in the attached PR, not main."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+        from wade.services.knowledge_service import (
+            create_rating_event,
+            flush_staged_ratings,
+            read_ratings,
+            stage_rating_event,
+        )
+
+        main = tmp_path / "main"
+        plan_worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        plan_worktree.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 2}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        stage_rating_event(plan_worktree, create_rating_event("e", "up"))
+
+        handoff = flush_staged_ratings(plan_worktree, main, config.knowledge)
+        assert handoff.success
+        assert not (main / "KNOWLEDGE.ratings.yml").exists()
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/legacy-rating", str(worktree))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        assert (main / "KNOWLEDGE.ratings.yml").is_file()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+        assert not (worktree / "KNOWLEDGE.ratings.yml").exists()
+        assert read_ratings(worktree / "KNOWLEDGE.ratings.jsonl")["e"].up == 3
 
     def test_failed_main_restore_carries_nothing(self, tmp_path: Path) -> None:
         # If restoring main fails, the votes must NOT be carried into the worktree —

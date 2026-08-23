@@ -6,5 +6,6 @@ a todo list from its workflow steps before starting work.
 Implement @PLAN.md — Issue #{issue_number}: {issue_title}. If you cannot see the
 plan above, read `PLAN.md` in the worktree root.
 
-**First action:** run `wade implementation-session check` to confirm you're in a
-worktree.
+**First action:** run `wade implementation-session check`. Proceed only on
+`IN_WORKTREE`; otherwise follow the exact `reason=…` remediation without
+broadly disabling the sandbox or granting main-checkout writes.

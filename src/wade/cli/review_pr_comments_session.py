@@ -20,10 +20,13 @@ def check() -> None:
       1  NOT_IN_GIT_REPO      — not inside a git repository
       2  IN_MAIN_CHECKOUT     — unsafe for agent work
       3  WORKTREE_GIT_BLOCKED — worktree git metadata is not writable
+      4  GITHUB_CLI_BLOCKED — GitHub CLI cannot start in this runtime
+      5  GITHUB_AUTH_BLOCKED — GitHub CLI credentials are unavailable
+      6  GITHUB_API_BLOCKED — GitHub API is unreachable
     """
     from wade.cli.session_shared import run_check
 
-    run_check()
+    run_check("review-pr-comments")
 
 
 @review_pr_comments_session_app.command()
@@ -40,9 +43,10 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
-    from wade.cli.session_shared import handle_sync_result
+    from wade.cli.session_shared import handle_sync_result, require_ready
     from wade.services.implementation_service import sync as do_sync
 
+    require_ready("review-pr-comments", exit_code=4, json_output=json_output)
     result = do_sync(
         dry_run=dry_run,
         main_branch=main_branch,
@@ -74,11 +78,22 @@ def done(
     ),
 ) -> None:
     """Finalize review — run the completion gates, push, and update the PR."""
+    from wade.cli.session_shared import require_ready
     from wade.services.implementation_service import done as do_done
+    from wade.services.implementation_service import resolve_done_worktree
 
+    plan_file = Path(plan) if plan else None
+    # Same as the implementation endpoint: a worktree/issue target or `--plan`
+    # makes `done` act on the resolved worktree, so readiness must check that
+    # worktree rather than the caller's cwd.
+    require_ready(
+        "review-pr-comments",
+        exit_code=1,
+        cwd=resolve_done_worktree(target=target, plan_file=plan_file),
+    )
     success = do_done(
         target=target,
-        plan_file=Path(plan) if plan else None,
+        plan_file=plan_file,
         no_close=no_close,
         draft=draft,
         session_type="review-pr-comments",
@@ -136,8 +151,10 @@ def fetch(
     target: str = typer.Argument(..., help="Issue number."),
 ) -> None:
     """Fetch unresolved PR review comments and print formatted markdown to stdout."""
+    from wade.cli.session_shared import require_ready
     from wade.services.review_service import fetch_reviews
 
+    require_ready("review-pr-comments", exit_code=1)
     success = fetch_reviews(target=target)
     raise typer.Exit(0 if success else 1)
 
@@ -147,7 +164,9 @@ def resolve(
     thread_id: str = typer.Argument(..., help="GitHub review thread node ID."),
 ) -> None:
     """Mark a PR review thread as resolved on GitHub."""
+    from wade.cli.session_shared import require_ready
     from wade.services.review_service import resolve_thread
 
+    require_ready("review-pr-comments", exit_code=1)
     success = resolve_thread(thread_id=thread_id)
     raise typer.Exit(0 if success else 1)

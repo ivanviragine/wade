@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,14 +17,17 @@ from wade.services.knowledge_service import (
     EntryRating,
     KnowledgeEntry,
     ParsedEntry,
+    StagedRatingsFlushResult,
     _canonical_project_root,
     add_tag_to_entry,
     append_knowledge,
     compute_auto_filter_threshold,
+    create_rating_event,
     disable_knowledge,
     enable_knowledge,
     ensure_knowledge_file,
     find_entry_id,
+    flush_staged_ratings,
     get_annotated_knowledge,
     knowledge_status,
     list_tags,
@@ -30,12 +35,15 @@ from wade.services.knowledge_service import (
     read_knowledge,
     read_ratings,
     record_rating,
+    record_rating_for_session,
     record_supersede,
     refusal_for_throwaway_write,
     remove_tag_from_entry,
     resolve_canonical_knowledge_path,
     resolve_knowledge_path,
     resolve_ratings_path,
+    stage_rating_event,
+    staged_ratings_path,
     validate_tag,
 )
 from wade.utils.knowledge_file import validate_knowledge_file
@@ -1528,7 +1536,8 @@ class TestWritePathMigration:
         lines = jsonl.read_text(encoding="utf-8").splitlines()
         # A byte-deterministic seed (no ts) plus the appended vote line.
         expected_seed = (
-            '{"down": 1, "id": "entry1", "seed": true, "stale": 0, "superseded_by": null, "up": 5}'
+            '{"down": 1, "event_id": "legacy-seed:entry1", "id": "entry1", "seed": true, '
+            '"stale": 0, "superseded_by": null, "up": 5}'
         )
         assert expected_seed in lines
         folded = read_ratings(jsonl)
@@ -1562,6 +1571,445 @@ class TestWritePathMigration:
         folded = read_ratings(jsonl)
         assert folded["e"].up == 1
         assert folded["e"].down == 1
+
+
+class TestStagedRatingEvents:
+    """Detached vote transport keeps main clean and retries idempotently."""
+
+    def test_empty_staging_is_removed_without_materializing_main_ratings(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        staged = staged_ratings_path(worktree)
+        staged.parent.mkdir()
+        staged.write_text("", encoding="utf-8")
+
+        result = flush_staged_ratings(worktree, main, config)
+
+        assert result.success
+        assert not staged.exists()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_new_event_id_deduplicates_delivery_but_legacy_duplicate_does_not(
+        self, tmp_path: Path
+    ) -> None:
+        ratings = tmp_path / "KNOWLEDGE.ratings.jsonl"
+        event = create_rating_event("entry", "up")
+        record = event.to_record()
+        ratings.write_text(
+            "\n".join(
+                [
+                    json.dumps(record),
+                    json.dumps(record),
+                    # Legacy records have no event_id, so two historical votes
+                    # remain two votes rather than being accidentally collapsed.
+                    '{"dir": "up", "id": "legacy", "ts": "same"}',
+                    '{"dir": "up", "id": "legacy", "ts": "same"}',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        folded = read_ratings(ratings)
+
+        assert folded["entry"].up == 1
+        assert folded["legacy"].up == 2
+
+    def test_detached_rate_stages_without_writing_canonical_sidecar(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+
+        event = record_rating_for_session(tmp_path, config, "entry", "up")
+
+        staged = staged_ratings_path(tmp_path)
+        assert staged.is_file()
+        assert event.event_id in staged.read_text(encoding="utf-8")
+        assert not (tmp_path / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_flush_hands_off_once_and_retry_only_cleans_staging(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        event = create_rating_event("entry", "up")
+        stage_rating_event(worktree, event)
+
+        first = flush_staged_ratings(worktree, main, config)
+
+        assert first.success
+        assert first.appended_count == 1
+        assert not staged_ratings_path(worktree).exists()
+        canonical = main / "KNOWLEDGE.ratings.jsonl"
+        assert read_ratings(canonical)["entry"].up == 1
+
+        # Simulate interruption after a durable append but before staging cleanup.
+        stage_rating_event(worktree, event)
+        retry = flush_staged_ratings(worktree, main, config)
+
+        assert retry.success
+        assert retry.appended_count == 0
+        assert not staged_ratings_path(worktree).exists()
+        assert read_ratings(canonical)["entry"].up == 1
+
+    def test_flush_blocks_a_live_append_until_after_staging_cleanup(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sibling append cannot be lost between the drain snapshot and unlink."""
+        from wade.services import knowledge_service
+
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        first = create_rating_event("first", "up")
+        second = create_rating_event("second", "up")
+        stage_rating_event(worktree, first)
+
+        snapshot_loaded = threading.Event()
+        continue_flush = threading.Event()
+        append_finished = threading.Event()
+        original_load = knowledge_service._load_staged_rating_records
+
+        def pause_after_snapshot(path: Path) -> list[dict[str, object]]:
+            records = original_load(path)
+            snapshot_loaded.set()
+            assert continue_flush.wait(timeout=1)
+            return records
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._load_staged_rating_records", pause_after_snapshot
+        )
+        outcomes: list[StagedRatingsFlushResult] = []
+        drain = threading.Thread(
+            target=lambda: outcomes.append(flush_staged_ratings(worktree, main, config))
+        )
+        append = threading.Thread(
+            target=lambda: (stage_rating_event(worktree, second), append_finished.set())
+        )
+        drain.start()
+        assert snapshot_loaded.wait(timeout=1)
+        append.start()
+
+        # The writer uses the same staging-path lock, so it must remain blocked
+        # until the handoff has unlinked the snapshot it just delivered.
+        assert not append_finished.wait(timeout=0.05)
+        continue_flush.set()
+        drain.join(timeout=1)
+        append.join(timeout=1)
+
+        assert not drain.is_alive()
+        assert not append.is_alive()
+        assert len(outcomes) == 1
+        assert outcomes[0].success
+        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["first"].up == 1
+        staged = staged_ratings_path(worktree)
+        assert staged.is_file()
+        assert second.event_id in staged.read_text(encoding="utf-8")
+        assert first.event_id not in staged.read_text(encoding="utf-8")
+
+    def test_flush_failure_retains_staging_for_recovery(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        def fail_migration(_: Path) -> None:
+            raise OSError("main checkout is not writable")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._materialize_migration_locked", fail_migration
+        )
+        result = flush_staged_ratings(worktree, main, config)
+
+        assert not result.success
+        assert "not writable" in (result.message or "")
+        assert staged_ratings_path(worktree).is_file()
+
+    def test_malformed_staging_log_retains_artefact_and_writes_nothing(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        """A corrupt transport log is a retryable handoff failure, not garbage to drop."""
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        stage_rating_event(worktree, create_rating_event("entry", "up"))
+        staging = staged_ratings_path(worktree)
+        with staging.open("a", encoding="utf-8") as fd:
+            fd.write("not json at all\n")
+
+        result = flush_staged_ratings(worktree, main, config)
+
+        assert not result.success
+        assert staging.is_file()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+
+class TestStagingContainment:
+    """A vote must never be redirected out of the throwaway session worktree."""
+
+    def test_symlinked_staging_dir_is_refused_by_the_writer(self, tmp_path: Path) -> None:
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        worktree.mkdir()
+        outside.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="outside the session worktree"):
+            stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        assert list(outside.iterdir()) == []
+
+    def test_contained_staging_dir_is_accepted(self, tmp_path: Path) -> None:
+        worktree = tmp_path / "plan-worktree"
+        worktree.mkdir()
+
+        path = stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        assert path == staged_ratings_path(worktree)
+        assert path.is_file()
+
+    def test_staging_creates_a_missing_wade_dir(self, tmp_path: Path) -> None:
+        # `stage_rating_event` never mkdirs explicitly — `file_lock` creates the
+        # guarded path's parent. Pinned because it is easy to misread as a
+        # FileNotFoundError waiting to happen (the readiness probe removes any
+        # `.wade/` it had to create, so "absent at write time" is a real state).
+        worktree = tmp_path / "plan-worktree"
+        worktree.mkdir()
+        assert not (worktree / ".wade").exists()
+
+        path = stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        assert path.is_file()
+        assert '"id": "entry"' in path.read_text(encoding="utf-8")
+
+    def test_readiness_probe_rejects_a_symlinked_staging_dir(self, tmp_path: Path) -> None:
+        from wade.services.check_service import _probe_staging_path
+
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        worktree.mkdir()
+        outside.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        assert _probe_staging_path(worktree) is False
+
+    def test_symlinked_marker_dir_is_refused_by_the_marker_writer(self, tmp_path: Path) -> None:
+        """`.wade/` is repo-controlled, so marking must not become a write outside."""
+        from wade.services.knowledge_service import mark_throwaway_knowledge_session
+
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        worktree.mkdir()
+        outside.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="outside the worktree"):
+            mark_throwaway_knowledge_session(worktree)
+
+        assert list(outside.iterdir()) == []
+
+    def test_flush_neither_reads_nor_deletes_through_a_symlinked_staging_dir(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        """The post-transfer unlink must not be redirected onto an outside file."""
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        for directory in (main, worktree, outside):
+            directory.mkdir()
+        planted = outside / "knowledge-ratings-staged.jsonl"
+        planted.write_text("", encoding="utf-8")
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        result = flush_staged_ratings(worktree, main, config)
+
+        # Skipped, not failed: nothing could legitimately be staged there, and a
+        # failure would strand the worktree on a condition no retry can clear.
+        assert result.success
+        assert "outside the session worktree" in (result.message or "")
+        assert planted.exists()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+
+class TestRetainedStagedRatingsSweep:
+    """A retained worktree's votes are recovered by the next plan/deps run."""
+
+    @staticmethod
+    def _throwaway_worktree(root: Path, name: str) -> Path:
+        worktree = root / name
+        worktree.mkdir()
+        (worktree / ".wade").mkdir()
+        (worktree / ".wade" / "throwaway-session").write_text("marker\n", encoding="utf-8")
+        return worktree
+
+    @staticmethod
+    def _patch_worktree_list(monkeypatch: pytest.MonkeyPatch, paths: list[Path]) -> None:
+        from wade.models import Worktree
+
+        entries = [Worktree(path=str(p), branch="(detached)") for p in paths]
+        monkeypatch.setattr(
+            "wade.git.worktree.list_worktrees",
+            lambda _: entries,
+        )
+        monkeypatch.setattr("wade.git.repo.is_worktree", lambda _: True)
+        monkeypatch.setattr("wade.git.repo.is_head_attached", lambda _: False)
+
+    def test_recovers_votes_left_behind_by_a_failed_handoff(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        retained = self._throwaway_worktree(tmp_path, "plan-retained")
+        stage_rating_event(retained, create_rating_event("entry", "up"))
+        self._patch_worktree_list(monkeypatch, [retained])
+
+        outcomes = flush_retained_staged_ratings(main, config)
+
+        assert [(o.success, o.appended_count, o.worktree) for o in outcomes] == [
+            (True, 1, retained)
+        ]
+        assert not staged_ratings_path(retained).exists()
+        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["entry"].up == 1
+
+    def test_reports_nothing_when_no_worktree_has_staged_votes(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        clean = self._throwaway_worktree(tmp_path, "plan-clean")
+        self._patch_worktree_list(monkeypatch, [clean])
+
+        assert flush_retained_staged_ratings(main, config) == []
+
+    def test_skips_a_symlinked_repo_root(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The self-worktree guard compares canonical paths from git worktree list."""
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = self._throwaway_worktree(tmp_path, "main")
+        repo_root = tmp_path / "main-link"
+        repo_root.symlink_to(main, target_is_directory=True)
+        stage_rating_event(main, create_rating_event("entry", "up"))
+        self._patch_worktree_list(monkeypatch, [main])
+
+        assert flush_retained_staged_ratings(repo_root, config) == []
+        assert staged_ratings_path(main).exists()
+
+    def test_skips_a_worktree_without_the_throwaway_marker(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No marker means no wade parent — its `.wade/` is not ours to drain."""
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        foreign = tmp_path / "hand-made"
+        foreign.mkdir()
+        staged = staged_ratings_path(foreign)
+        staged.parent.mkdir()
+        staged.write_text("", encoding="utf-8")
+        self._patch_worktree_list(monkeypatch, [foreign])
+
+        assert flush_retained_staged_ratings(main, config) == []
+        assert staged.exists()
+
+    def test_a_failed_retry_keeps_the_staging_log_for_the_next_run(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        retained = self._throwaway_worktree(tmp_path, "plan-retained")
+        stage_rating_event(retained, create_rating_event("entry", "up"))
+        self._patch_worktree_list(monkeypatch, [retained])
+
+        def fail_migration(_: Path) -> None:
+            raise OSError("main checkout is not writable")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._materialize_migration_locked", fail_migration
+        )
+
+        outcomes = flush_retained_staged_ratings(main, config)
+
+        assert [(o.success, o.worktree) for o in outcomes] == [(False, retained)]
+        assert staged_ratings_path(retained).is_file()
+
+    def test_git_failure_is_not_a_vote_error(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.git.repo import GitError
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        def boom(_: Path) -> list[object]:
+            raise GitError("git unavailable")
+
+        monkeypatch.setattr("wade.git.worktree.list_worktrees", boom)
+
+        assert flush_retained_staged_ratings(tmp_path, config) == []
+
+
+class TestDetachedKnowledgeReads:
+    """Read-only plan/deps commands must not cross into the main checkout."""
+
+    def test_annotated_get_uses_local_snapshot_without_canonical_resolution(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            KNOWLEDGE_TEMPLATE
+            + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nLocal detached knowledge.\n\n---\n",
+            encoding="utf-8",
+        )
+
+        def main_checkout_must_not_be_read(_: Path) -> Path:
+            raise AssertionError("read-only detached knowledge command escaped its worktree")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._resolve_knowledge_root",
+            main_checkout_must_not_be_read,
+        )
+
+        result = get_annotated_knowledge(tmp_path, config, no_filter=True)
+
+        assert result.content is not None
+        assert "Local detached knowledge." in result.content
+
+    def test_status_uses_local_snapshot_without_canonical_resolution(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "KNOWLEDGE.ratings.yml").write_text("entry: {up: 1}\n", encoding="utf-8")
+
+        def main_checkout_must_not_be_read(_: Path) -> Path:
+            raise AssertionError("status escaped its detached worktree")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._resolve_knowledge_root",
+            main_checkout_must_not_be_read,
+        )
+
+        result = knowledge_status(tmp_path, config)
+
+        assert result.root == tmp_path
+        assert result.legacy_migration_pending is True
 
 
 class TestValidateKnowledgeFile:
@@ -1676,4 +2124,34 @@ class TestKnowledgeStatus:
         # A legacy .yml with no .jsonl yet is reported as pending on-disk migration.
         (tmp_path / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
         result = knowledge_status(tmp_path, config)
+        assert result.legacy_migration_pending is True
+
+    def test_reports_staged_detached_votes(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        stage_rating_event(tmp_path, create_rating_event("entry", "up"))
+
+        result = knowledge_status(tmp_path, config)
+
+        assert result.staged_vote_count == 1
+        assert result.staging_path == staged_ratings_path(tmp_path)
+
+    def test_corrupt_staging_log_still_reports_the_rest_of_the_status(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`status` is the diagnostic for a failed handoff — it must not fail with it."""
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        (tmp_path / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        staged_ratings_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+        staged_ratings_path(tmp_path).write_text("not json at all\n", encoding="utf-8")
+
+        result = knowledge_status(tmp_path, config)
+
+        assert result.staged_vote_count == 0
+        assert result.staging_path == staged_ratings_path(tmp_path)
         assert result.legacy_migration_pending is True

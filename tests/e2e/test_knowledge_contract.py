@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e._support import _run
+from tests.e2e._support import _git, _run
 
 pytestmark = [
     pytest.mark.e2e_docker,
@@ -102,6 +102,102 @@ class TestKnowledgeCommands:
         ratings_text = (e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
         assert '"id": "a1b2c3d4"' in ratings_text
         assert '"dir": "up"' in ratings_text
+
+    def test_detached_rate_stages_then_parent_handoff_preserves_vote(self, e2e_repo: Path) -> None:
+        """A real detached child never dirties main and reaches its parent spool once."""
+        from wade.models.config import KnowledgeConfig
+        from wade.services.knowledge_service import (
+            flush_staged_ratings,
+            mark_throwaway_knowledge_session,
+            read_ratings,
+        )
+
+        _write_knowledge_config(e2e_repo)
+        knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
+        knowledge_path.parent.mkdir(parents=True, exist_ok=True)
+        knowledge_path.write_text(
+            (
+                "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
+                "Prefer labels.\n\n---\n"
+            ),
+            encoding="utf-8",
+        )
+        _git(["add", ".wade.yml", "docs/KNOWLEDGE.md"], cwd=e2e_repo)
+        _git(["commit", "-m", "chore: seed detached knowledge"], cwd=e2e_repo)
+        detached = e2e_repo.parent / "detached-plan"
+        _git(["worktree", "add", "--detach", str(detached)], cwd=e2e_repo)
+        # Stand in for the parent `wade plan` / `wade task deps` process: only a
+        # marked worktree may stage votes, because only such a parent flushes them.
+        mark_throwaway_knowledge_session(detached)
+
+        result = _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=detached)
+
+        assert result.returncode == 0
+        staged = detached / ".wade" / "knowledge-ratings-staged.jsonl"
+        assert staged.is_file()
+        assert '"event_id"' in staged.read_text(encoding="utf-8")
+        assert not (e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl").exists()
+        assert not (detached / "docs" / "KNOWLEDGE.ratings.jsonl").exists()
+
+        status = _run(["knowledge", "status"], cwd=detached)
+        assert status.returncode == 0
+        assert "1 detached-session rating vote(s) staged" in status.stdout
+
+        handoff = flush_staged_ratings(
+            detached,
+            e2e_repo,
+            KnowledgeConfig(enabled=True, path="docs/KNOWLEDGE.md"),
+        )
+
+        assert handoff.success
+        assert handoff.appended_count == 1
+        assert not staged.exists()
+        ratings = read_ratings(e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl")
+        assert ratings["a1b2c3d4"].up == 1
+
+    def test_retained_worktree_votes_are_recovered_by_the_next_session(
+        self, e2e_repo: Path
+    ) -> None:
+        """A handoff that failed once is picked back up from real `git worktree list`."""
+        from wade.models.config import KnowledgeConfig
+        from wade.services.knowledge_service import (
+            flush_retained_staged_ratings,
+            mark_throwaway_knowledge_session,
+            read_ratings,
+        )
+
+        _write_knowledge_config(e2e_repo)
+        knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
+        knowledge_path.parent.mkdir(parents=True, exist_ok=True)
+        knowledge_path.write_text(
+            (
+                "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
+                "Prefer labels.\n\n---\n"
+            ),
+            encoding="utf-8",
+        )
+        _git(["add", ".wade.yml", "docs/KNOWLEDGE.md"], cwd=e2e_repo)
+        _git(["commit", "-m", "chore: seed retained knowledge"], cwd=e2e_repo)
+        retained = e2e_repo.parent / "retained-plan"
+        _git(["worktree", "add", "--detach", str(retained)], cwd=e2e_repo)
+        mark_throwaway_knowledge_session(retained)
+
+        assert _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=retained).returncode == 0
+        staged = retained / ".wade" / "knowledge-ratings-staged.jsonl"
+        assert staged.is_file()
+
+        # The parent that should have flushed this exited without doing so. The
+        # next plan/deps run sweeps it from the repo's own worktree list.
+        config = KnowledgeConfig(enabled=True, path="docs/KNOWLEDGE.md")
+        outcomes = flush_retained_staged_ratings(e2e_repo, config)
+
+        assert [(o.success, o.appended_count) for o in outcomes] == [(True, 1)]
+        assert outcomes[0].worktree == retained
+        assert not staged.exists()
+        assert read_ratings(e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl")["a1b2c3d4"].up == 1
+
+        # Idempotent: a second sweep finds nothing left to hand off.
+        assert flush_retained_staged_ratings(e2e_repo, config) == []
 
     def test_knowledge_rate_invalid_path_exits_cleanly(self, e2e_repo: Path) -> None:
         """knowledge rate should fail cleanly for configured paths outside the repo."""

@@ -61,11 +61,58 @@ __all__ = [
     "_done_via_pr",
     "_maybe_trigger_bot_reviews",
     "done",
+    "resolve_done_worktree",
 ]
 
 # Placeholder sentinels from templates/skills/.../reference/pr-summary-format.md.
 # Their presence means the file is still the template stub, not a real summary.
 _PR_SUMMARY_PLACEHOLDERS = ("[high-level summary", "[optional:")
+
+
+def resolve_done_worktree(
+    target: str | None = None,
+    plan_file: Path | None = None,
+    project_root: Path | None = None,
+) -> Path | None:
+    """Preview the worktree :func:`done` will switch to, or ``None`` for the cwd.
+
+    ``done`` is deliberately runnable from the main checkout with a worktree
+    name / issue number target or ``--plan`` — the recovery and finalization
+    forms — in which case it resolves that worktree and operates there. A
+    readiness gate placed in front of ``done`` must therefore inspect the
+    **resolved** worktree, not the caller's cwd, or it would report
+    ``IN_MAIN_CHECKOUT`` and make both forms unusable (#462 review).
+
+    Read-only and non-raising by contract: it mirrors ``done``'s own resolution
+    order but never creates an issue, prints, or fails. ``None`` means "nothing
+    to resolve, or not resolvable here" — the caller falls back to its cwd and
+    lets ``done`` surface the real error with its own wording.
+    """
+    cwd = project_root or Path.cwd()
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        return None
+
+    if plan_file is not None:
+        try:
+            wt_path, _branch, _issue = _resolve_worktree_from_plan(
+                plan_file, project_root=project_root
+            )
+        except (ValueError, GitError, OSError):
+            return None
+        return wt_path
+
+    if not target:
+        return None
+    # A plan-*file* target makes ``done`` create the issue first, so no worktree
+    # exists to check yet — leave the verdict to the cwd.
+    if not target.isdigit() and Path(target).expanduser().is_file():
+        return None
+    try:
+        return find_worktree_path(target, project_root=repo_root)
+    except GitError:
+        return None
 
 
 def done(

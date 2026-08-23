@@ -222,13 +222,15 @@ These are invoked by the AI during a session — you normally don't run them by 
 
 | Command | Description |
 |---------|-------------|
-| `wade implementation-session check` | Verify the AI is in a writable worktree before it edits anything |
+| `wade implementation-session check` | Verify the implementation session's Git, GitHub, and required local capabilities before edits |
 | `wade implementation-session sync` | Sync the branch onto the base branch |
 | `wade implementation-session done` | Completion gate — runs the gates, pushes, and opens/updates the PR |
 | `wade review-pr-comments-session check \| sync \| done` | Same lifecycle for a review session |
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
+| `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
+| `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
@@ -674,11 +676,88 @@ flag enables it there. Precedence for the commands that honor it is
 enable network for a WADE-managed sandbox. Enabling network never disables the
 sandbox and never changes approval-policy semantics.
 
-`wade implementation-session check` (and the review equivalent) verifies this is
-actually working: on top of `IN_WORKTREE` / `IN_MAIN_CHECKOUT` /
-`NOT_IN_GIT_REPO`, it now reports **`WORKTREE_GIT_BLOCKED`** (exit code **3**)
-when a worktree's git metadata is not writable — naming the blocked path — so a
-session launched without the correct grant is caught before it wastes work.
+### Session readiness and least-privilege remediation
+
+Every `wade` command an agent runs is a child of the AI tool. It inherits that
+tool runtime's filesystem sandbox, environment/PATH, network policy, `gh`
+credentials, and the effects of any command or hook approval. WADE does not
+become privileged because it launched the session: a `wade … done` call and its
+own `git`/`gh` subprocesses are subject to the same containment.
+
+Run the phase-specific readiness check as the first agent action. The
+implementation and PR-comment lifecycle commands also repeat the same
+non-mutating check immediately before `catchup`, `sync`, `done`, `fetch`, or
+`resolve`, so a resumed session cannot turn a changed sandbox/PATH/credential
+state into a late raw Git or GitHub failure. `done` checks the worktree it will
+act on, so running it from the main checkout with a worktree/issue target or
+`--plan` still works. It reports stable capability failures:
+`WORKTREE_GIT_BLOCKED` (3), `GITHUB_CLI_BLOCKED` (4),
+`GITHUB_AUTH_BLOCKED` (5), `GITHUB_API_BLOCKED` (6),
+`KNOWLEDGE_STAGING_BLOCKED` (7), and `PLAN_DIR_BLOCKED` (8) — plus one
+non-failure state, `PLAN_DIR_ONLY` (exit 0), described next. The result includes a
+machine-readable `reason=…` and narrow remediation; do not disable a sandbox
+globally or give the AI write access to the main checkout.
+
+When `wade plan` cannot create a planning worktree — bootstrap failed, or you
+are not in a git repo — it falls back to a standalone plan directory and runs
+the agent from your checkout. That supported mode reports `PLAN_DIR_ONLY`
+(exit 0) with a `plandir=…`: planning proceeds, but the agent may write only
+that directory. `PLAN_DIR_BLOCKED` means even the plan directory is not
+writable.
+
+| Agent session | Run in the AI runtime | Required there | Intentionally not required there |
+|---|---|---|---|
+| Planning | `wade plan-session check` | a worktree and, when knowledge is enabled, local `.wade/` vote staging — or, in the `PLAN_DIR_ONLY` fallback, just a writable plan directory (no worktree, no vote staging) | GitHub, remote network, and writable out-of-worktree Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
+| Dependency analysis | `wade deps-session check` | worktree output and optional local vote staging | GitHub and Git metadata writes — the parent `wade task deps` reads/updates task data after exit |
+| Implementation | `wade implementation-session check` | worktree plus Git metadata writes, usable `gh` authentication, and a read-only GitHub API route | main-checkout writes |
+| PR comments | `wade review-pr-comments-session check` | the same Git/GitHub capabilities as implementation, because it fetches threads, syncs, resolves, and completes a PR | main-checkout writes |
+
+Implementation and PR-comment checks require GitHub regardless of the task
+provider: Markdown and ClickUp can own tasks, but PR creation, review threads,
+and `done` still use GitHub. The check first verifies that `gh` can start in the
+actual runtime (`GITHUB_CLI_BLOCKED` distinguishes a missing/blocked executable
+from bad credentials), then runs `gh auth status` and `gh api user --method
+GET`; all three are non-mutating and have a short bounded timeout. It cannot
+prove credentials for an arbitrary Git remote, test dependencies, or a
+project-specific hook — those run later under the same sandbox and surface
+their own exact error.
+
+`permissions.allowed_commands` and a tool's approval UI only decide whether the
+agent may launch a command such as `wade`; they do not grant filesystem or
+network authority to the child process. Likewise, WADE's installed hooks are
+guardrails, not privilege escalation: a failing hook may block a command, but
+cannot make `gh`, Git metadata, or a network route available.
+
+If `wade review implementation` cannot launch its reviewer because of missing
+credentials, PATH, or sandbox execution access, it does not consume a
+`done.max_review_passes` slot: repair the runtime and retry. A real headless
+timeout still counts as a bounded review attempt, so the review/fix loop cannot
+run forever.
+
+For Codex, keep `--sandbox workspace-write`; WADE/crossby add only the linked
+worktree's private/common Git metadata directories, and you must enable
+`network_access` explicitly for implementation/review sessions that need GitHub.
+For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
+the GitHub domains needed by the session rather than choosing unrestricted shell
+access. Copilot and VS Code need network plus usable `gh` credentials in their
+host runtime. OpenCode shells execute with host authority, so treat the selected
+host runtime and its credentials as the boundary rather than assuming a
+worktree is one. These are external tool/runtime settings; WADE reports missing
+capabilities but never rewrites them.
+
+Detached plan and dependency sessions stage knowledge-rating events in their own
+ignored `.wade/` area. Wade flushes those durable-ID events into the main ratings
+spool before removing the throwaway worktree; a failed handoff preserves the
+worktree, and the **next** `wade plan` or `wade task deps` automatically hands
+off what it finds there and tells you what it recovered — no recovery command to
+remember. Only a worktree wade itself created for one of those two
+lifecycles stages votes — it is marked at creation by the same parent that will
+flush it. Any other detached checkout (a CI checkout, `git checkout <sha>`, your
+own `git worktree add --detach`) records votes normally, so nothing is left
+staged with no one to deliver it. Dependency sessions also save their returned edge analysis
+there before handoff, so a blocked main checkout does not discard the generated
+output. The next attached worktree remains the only path that commits the
+ratings log into a PR.
 
 ## Supported AI Tools
 

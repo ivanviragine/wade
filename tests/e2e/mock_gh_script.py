@@ -520,6 +520,10 @@ def _has_form_values(args: list[str], *keys: str) -> bool:
 def _handle_api(args: list[str], state: dict[str, object]) -> int:
     if not args:
         return 1
+    # Session-readiness probe: authenticated, read-only API request.
+    if args[0] == "user":
+        print(json.dumps({"login": "e2e-user"}))
+        return 0
     if args[0] != "graphql":
         return 1
 
@@ -651,6 +655,9 @@ def main() -> int:
         return 0
     state = _load_state()
 
+    if argv[0] == "--version":
+        print("gh version 99.0.0 (mock)")
+        return 0
     if argv[0] == "auth":
         print("Logged in to github.com")
         return 0

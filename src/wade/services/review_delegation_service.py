@@ -55,11 +55,13 @@ def _mark_reviewed() -> None:
 def _record_review_pass() -> int | None:
     """Count one delegation-backed implementation-review pass for the cap (#384).
 
-    Writes a ``.wade/review-pass@<HEAD>`` marker **independent of the review's
-    success** — even a headless timeout (which exits non-zero and writes no
-    ``reviewed`` marker) still consumed a real review→fix cycle, so it must
-    advance the pass count that the ``done`` gate's review-pass cap reads. Per-sha and
-    idempotent, so re-running review on the same HEAD does not inflate the count.
+    A caller records a pass only after a completed review or a true headless
+    timeout. A launch/configuration failure (for example an unauthenticated
+    Claude subprocess or a sandbox that cannot execute the reviewer) did not
+    review anything and must not spend a ``done.max_review_passes`` slot: doing
+    so could let `done` bypass its review gate solely because the runtime was
+    unavailable. A timeout remains countable because it consumed a real,
+    bounded review attempt. Per-sha markers are idempotent.
 
     Returns the resulting distinct-pass count, or ``None`` if the marker could not
     be recorded (best-effort: a git failure is logged and skipped).
@@ -485,17 +487,31 @@ def review_implementation(
         yolo=yolo,
         permission_mode_explicit=permission_mode_explicit,
     )
-    # Count this delegation-backed pass toward the `done` review cap regardless
-    # of success — a headless timeout still consumed a review→fix cycle, so it
-    # must advance the count (#384). This runs only past the no-diff early return
-    # above, so an empty review never spends a cap slot. Per-sha and idempotent.
-    passes = _record_review_pass()
-    # Surface the running budget from the command itself so the caller sees how
-    # many passes remain before `done` stops requiring re-review — no need to rely
-    # on the "run at most N times" rule buried in the skill/prompt. Guarded by an
-    # int check so a mocked `_record_review_pass` in tests never triggers it.
-    if isinstance(passes, int):
-        _announce_review_pass_budget(passes, config.done.max_review_passes)
+    # Count completed reviews and real headless timeouts toward the cap. A
+    # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
+    # has not consumed a review→fix cycle; counting it would make `done` skip a
+    # required review for an infrastructure failure (#462).
+    if result.success or result.timed_out:
+        passes = _record_review_pass()
+        # Surface the running budget from the command itself so the caller sees
+        # how many passes remain before `done` stops requiring re-review — no
+        # need to rely on the "run at most N times" rule buried in the
+        # skill/prompt. Guarded by an int check so a mocked
+        # `_record_review_pass` in tests never triggers it.
+        if isinstance(passes, int):
+            _announce_review_pass_budget(passes, config.done.max_review_passes)
+    else:
+        # ``DelegationResult`` cannot yet tell "never launched" from "launched
+        # and exited nonzero", so this covers both. Word both the finding and
+        # the remedy as what is actually known: prescribing "restore the
+        # reviewer runtime" would be wrong advice for a reviewer that started
+        # fine and then failed (#462 review).
+        console.warn(
+            "Review did not complete, so no review-pass budget was consumed. "
+            "Check the reviewer output above for the cause — a launch failure "
+            "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
+            "then re-run `wade review implementation`."
+        )
     # Record the review-ran marker on any non-hard-failure result (success),
     # keyed to the current HEAD sha. The `done` review-ran gate reads it.
     if result.success:

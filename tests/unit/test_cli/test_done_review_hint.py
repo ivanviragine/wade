@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from wade.cli.main import app
@@ -12,6 +13,13 @@ from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.services.plan_service import PlanValidationResult
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def ready_runtime() -> object:
+    """Keep completion-message tests independent of the runtime preflight."""
+    with patch("wade.cli.session_shared.require_ready"):
+        yield
 
 
 def _config(

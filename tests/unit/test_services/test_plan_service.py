@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -647,6 +648,58 @@ class TestFinalizeIssues:
         assert call_kwargs["ai_explicit"] is False
         assert call_kwargs["model_explicit"] is False
 
+    def test_vote_handoff_failure_waits_until_other_finalization_completes(
+        self, tmp_path: Path
+    ) -> None:
+        """A transient main-write failure must not lose completed plan bookkeeping."""
+        from wade.models.config import KnowledgeConfig
+        from wade.services.knowledge_service import StagedRatingsFlushResult
+
+        provider = MagicMock()
+        task = MagicMock(id="1", title="Issue", body="")
+        provider.read_task.return_value = task
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True))
+        usage = TokenUsage(total_tokens=42)
+
+        def offer_and_run_handoff(
+            _issue_number: str, *, before_start: Callable[[], bool] | None = None
+        ) -> bool:
+            assert before_start is not None
+            return before_start()
+
+        with (
+            patch("wade.services.plan_service.apply_plan_token_usage") as apply_usage,
+            patch("wade.services.plan_service.add_planned_by_labels") as add_labels,
+            patch(
+                "wade.services.knowledge_service.flush_staged_ratings",
+                return_value=StagedRatingsFlushResult(
+                    success=False, message="main checkout is read-only"
+                ),
+            ),
+            patch(
+                "wade.services.plan_service._offer_to_implement",
+                side_effect=offer_and_run_handoff,
+            ),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            result = _finalize_issues(
+                provider=provider,
+                config=config,
+                issue_numbers=["1"],
+                ai_tool="claude",
+                usage=usage,
+                repo_root=tmp_path,
+                planning_worktree=tmp_path / "planning-worktree",
+            )
+
+        assert result is False
+        apply_usage.assert_called_once()
+        add_labels.assert_called_once_with(provider, "1", "claude", None)
+        # The plan() caller immediately retries this handoff during cleanup;
+        # it emits the sole recovery message if that retry also fails.
+        mock_console.error.assert_not_called()
+        mock_console.hint.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # validate_plan_dir tests
@@ -997,7 +1050,8 @@ class TestOfferToImplement:
             mock_start.assert_called_once_with(target="42")
 
     def test_user_declines_returns_none(self) -> None:
-        """Declining the prompt returns None without calling start."""
+        """Declining the prompt returns None without flushing or starting."""
+        before_start = MagicMock(return_value=True)
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
             patch("wade.services.plan_service.start_implementation_session") as mock_start,
@@ -1006,9 +1060,10 @@ class TestOfferToImplement:
             mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = False
 
-            result = _offer_to_implement("42")
+            result = _offer_to_implement("42", before_start=before_start)
 
             assert result is None
+            before_start.assert_not_called()
             mock_start.assert_not_called()
 
     def test_non_tty_prints_static_hint(self) -> None:
@@ -1919,6 +1974,36 @@ class TestPlanExistingIssueBranch:
         mock_finalize.assert_called_once()
         assert mock_finalize.call_args.kwargs["issue_numbers"] == ["101", "102"]
 
+    def test_handoff_cleanup_failure_makes_plan_fail_for_retry(self, tmp_path: Path) -> None:
+        """A retained staged vote must never be hidden behind a successful plan exit."""
+        provider = MagicMock()
+        existing_issue = Task(id="330", title="Some bug", body="Original body")
+        provider.read_task.return_value = existing_issue
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [plan_file]):
+                stack.enter_context(p)
+            stack.enter_context(patch("wade.services.plan_service._attach_plan_to_existing_issue"))
+            stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+            cleanup = stack.enter_context(
+                patch(
+                    "wade.services.plan_service._cleanup_plan_dir_or_worktree",
+                    return_value=False,
+                )
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is False
+
+        cleanup.assert_called_once()
+
     def test_supersede_with_no_created_issues_skips_finalize(self, tmp_path: Path) -> None:
         """If supersede created nothing at all, plan() must not call _finalize_issues."""
         provider = MagicMock()
@@ -2060,7 +2145,7 @@ class TestPreserveGeneratedPlans:
         # afterwards so no worktree/temp dir lingers.
         assert (preserved_dir / "PLAN.md").is_file()
         assert (preserved_dir / "PLAN-2.md").is_file()
-        mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+        mock_cleanup.assert_called_once_with(str(plan_dir), None, None, None)
 
     def test_no_files_skips_copy_but_still_cleans(self, tmp_path: Path) -> None:
         plan_dir = tmp_path / "plans"
@@ -2074,7 +2159,25 @@ class TestPreserveGeneratedPlans:
             _preserve_generated_plans(str(plan_dir), None, None)
 
         mock_mkdtemp.assert_not_called()  # nothing to preserve
-        mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+        mock_cleanup.assert_called_once_with(str(plan_dir), None, None, None)
+
+    def test_propagates_cleanup_failure_after_preserving_files(self, tmp_path: Path) -> None:
+        """A copied plan is recoverable, but an undelivered vote is still a failure."""
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()
+        (plan_dir / "PLAN.md").write_text(_GATE_VALID)
+        preserved_dir = tmp_path / "preserved"
+        preserved_dir.mkdir()
+
+        with (
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(preserved_dir)),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=False),
+            patch("wade.services.plan_service.console"),
+        ):
+            result = _preserve_generated_plans(str(plan_dir), tmp_path, tmp_path)
+
+        assert result is False
+        assert (preserved_dir / "PLAN.md").is_file()
 
     def test_copy_failure_retains_source_and_skips_cleanup(self, tmp_path: Path) -> None:
         # A mid-copy failure must never cost the user their generated plans: the

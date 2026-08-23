@@ -15,9 +15,9 @@ after you exit.
 
 ## Execution mode
 
-Run `wade` and `gh` commands with the required permissions/capabilities (not
-in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
-start.
+Keep the sandbox enabled with only the capabilities this session needs. The
+readiness check identifies the missing capability and remediation; never grant
+broad main-checkout writes.
 
 ## Talking to the user
 
@@ -36,6 +36,23 @@ creation is a separate skill (@.claude/skills/task/SKILL.md), used outside
 planning sessions.
 
 {knowledge_step}
+
+## First action: check session readiness
+
+Run `wade plan-session check` as your **first action**. A detached planning
+agent needs only its worktree for plan output and, when knowledge is enabled,
+local `.wade/` vote staging. It does **not** need GitHub access or writable
+out-of-worktree Git metadata: after you exit, the trusted parent `wade plan`
+process creates tasks and draft PRs.
+
+- `IN_WORKTREE` — proceed with planning.
+- `PLAN_DIR_ONLY` — no planning worktree; proceed, but write **only** to its
+  `plandir=…` and rate no knowledge (put the learning in the plan file).
+- `KNOWLEDGE_STAGING_BLOCKED` — do not write a vote; follow its `reason=…`
+  hint and relaunch with only local `.wade/` write access. You may not work
+  around it by granting the main checkout.
+
+Do not disable a sandbox globally or request main-checkout writes.
 
 **Planning session limits:** a plan worktree is discarded at session end and has
 no PR, so `wade knowledge add`, `wade knowledge tag add`, and
@@ -85,7 +102,7 @@ creates after you exit is branched from and targeted at that base. See
 - Do not create tasks/issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
-- Do not write files into the repo directory — only to the temp dir (`wade knowledge add` is **not** available in a planning session)
+- Do not write source or plan files into the repo directory — only the plan/temp dir from your prompt, plus the ignored `.wade/` (where `wade knowledge rate` stages votes). `wade knowledge add` is **not** available
 - Do not skip the review step or `wade plan-session done` — always present a plan summary, invite modifications, and validate before telling the user to exit
 - **⚠️ After exiting plan mode:** if your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 

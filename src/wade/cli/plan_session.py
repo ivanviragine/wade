@@ -7,8 +7,22 @@ from pathlib import Path
 import typer
 
 plan_session_app = typer.Typer(
-    help="Plan session commands (done).",
+    help="Plan session commands (check, done).",
 )
+
+
+@plan_session_app.command()
+def check() -> None:
+    """Verify planning-session capabilities before writing plan artefacts.
+
+    Planning is deliberately offline in the agent runtime: it checks the
+    detached checkout plus local vote staging only. Exit 7 means the latter is
+    not writable; GitHub finalization happens later in the trusted parent
+    ``wade plan`` process.
+    """
+    from wade.cli.session_shared import run_check
+
+    run_check("plan")
 
 
 @plan_session_app.command()

@@ -193,9 +193,8 @@ def rate(
     from wade.config.loader import load_config
     from wade.services.knowledge_service import (
         find_entry_id,
-        record_rating,
-        resolve_canonical_knowledge_path,
-        resolve_ratings_path,
+        record_rating_for_session,
+        resolve_knowledge_path,
     )
     from wade.ui.console import console
 
@@ -210,13 +209,15 @@ def rate(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
+        # A detached plan/deps worktree has the committed knowledge snapshot in
+        # its own tree. Validate there so an otherwise-contained vote never
+        # needs even read access to the main checkout before it can be staged.
+        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
         if not find_entry_id(knowledge_path, entry_id):
             console.error(f"Entry ID '{entry_id}' not found in knowledge file.")
             raise typer.Exit(1)
 
-        ratings_path = resolve_ratings_path(knowledge_path)
-        record_rating(ratings_path, entry_id, direction)
+        record_rating_for_session(project_root, config.knowledge, entry_id, direction)
     except typer.Exit:
         raise
     except ValueError as exc:
@@ -237,7 +238,7 @@ def rate(
 
 @knowledge_app.command()
 def status() -> None:
-    """Report uncommitted knowledge/ratings changes on the resolved root."""
+    """Report local knowledge/ratings state, including detached staged votes."""
     from pathlib import Path
 
     from wade.config.loader import load_config
@@ -256,7 +257,15 @@ def status() -> None:
         console.error(str(exc))
         raise typer.Exit(1) from exc
 
-    if not result.dirty_paths and not result.legacy_migration_pending:
+    if (
+        not result.dirty_paths
+        and not result.legacy_migration_pending
+        and not result.staged_vote_count
+        # An unreadable staging log is a dirty session, not a clean one: the
+        # handoff to main's spool will fail, and this command is how that gets
+        # diagnosed (#462 review).
+        and not result.staging_error
+    ):
         console.success("Knowledge is clean — no uncommitted knowledge or ratings changes.")
         return
 
@@ -269,6 +278,22 @@ def status() -> None:
             "A legacy ratings YAML file is pending migration to .ratings.jsonl "
             "(converts on the next `wade knowledge rate`)."
         )
+    if result.staged_vote_count:
+        assert result.staging_path is not None
+        console.info(
+            f"{result.staged_vote_count} detached-session rating vote(s) staged at "
+            f"{result.staging_path}; wade will flush them before this session is removed."
+        )
+    if result.staging_error:
+        console.warn(
+            f"Staged rating votes cannot be read ({result.staging_error}); the handoff to "
+            "the main ratings spool will fail until this is repaired."
+        )
+        if result.staging_path is not None:
+            console.hint(
+                f"Inspect {result.staging_path} — repair or remove the offending line(s). "
+                "Removing the file discards those votes."
+            )
 
 
 @knowledge_app.command()
@@ -403,7 +428,7 @@ def tag_list(
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import list_tags, resolve_canonical_knowledge_path
+    from wade.services.knowledge_service import list_tags, resolve_knowledge_path
     from wade.ui.console import console
 
     config = load_config()
@@ -413,7 +438,7 @@ def tag_list(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
         result = list_tags(knowledge_path, entry_id=entry_id)
         if not result:
             print("No tags found.", file=sys.stderr)
