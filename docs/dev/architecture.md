@@ -773,12 +773,19 @@ Consumers, all fed from that one module:
   silence. The offer is a `prompts.confirm` on a TTY and a printed
   offer-in-your-closing-dialog line otherwise — `done` normally runs in a
   non-TTY AI session, so the agent, not wade, is the one who can ask the human.
+  This offer runs *after* the push and PR finalize, so a Ctrl+C at the confirm is
+  treated as a declined offer (`prompts.confirm(cancel_default=False)`) rather
+  than aborting `done` and skipping its worktree cleanup for an already-live PR.
 - `implementation_service.lifecycle._post_implementation_lifecycle_pr` and
   `review_service._post_review_lifecycle` / `_quiet_next_steps_prompt` — each
   **appends** (never inserts) a `Trigger bot reviews (…)` entry, so existing
   choice indexes are untouched; `menu_entry` returns `(None, None)` and the menu
   renders unchanged whenever resolution fails, since an offer must never break
-  the merge/wait menu it decorates.
+  the merge/wait menu it decorates. Picking the entry only falls through into the
+  wait-for-review poll when `post_pending_triggers` reports a review is now
+  pending (`bool`: a trigger posted, or every bot already recorded for this SHA);
+  when every post fails (e.g. a GitHub outage) it returns instead of silently
+  waiting for a review no bot was asked for.
 
 **Expectation-verified review completion (#448)**: `arrival_timeout` / `ack_timeout`
 turn review completion from *presence-inferred* (no blocking signal → done) into
