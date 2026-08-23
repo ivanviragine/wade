@@ -28,7 +28,7 @@ pytestmark = [
 class TestWorkSyncCommand:
     """Test `wade implementation-session sync` via CLI subprocess."""
 
-    def test_sync_clean_merge(self, e2e_repo: Path) -> None:
+    def test_sync_clean_merge(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
         """implementation-session sync when main has diverged - clean merge."""
         wt_dir = e2e_repo.parent / ".worktrees" / "50-feature"
         _git(
@@ -51,7 +51,7 @@ class TestWorkSyncCommand:
         assert (wt_dir / "docs.md").exists()
         assert (wt_dir / "feature.py").exists()
 
-    def test_sync_already_up_to_date(self, e2e_repo: Path) -> None:
+    def test_sync_already_up_to_date(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
         """implementation-session sync when already up to date - no-op."""
         wt_dir = e2e_repo.parent / ".worktrees" / "51-uptodate"
         _git(
@@ -63,7 +63,7 @@ class TestWorkSyncCommand:
         assert result.returncode == 0
         assert "already up to date" in result.stdout.lower()
 
-    def test_sync_conflict_exit_code(self, e2e_repo: Path) -> None:
+    def test_sync_conflict_exit_code(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
         """implementation-session sync conflict emits structured conflict event."""
         wt_dir = e2e_repo.parent / ".worktrees" / "60-conflict"
         _git(
@@ -94,7 +94,7 @@ class TestWorkSyncCommand:
 
         subprocess.run(["git", "merge", "--abort"], cwd=wt_dir, capture_output=True)
 
-    def test_sync_json_output(self, e2e_repo: Path) -> None:
+    def test_sync_json_output(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
         """implementation-session sync --json emits structured events."""
         wt_dir = e2e_repo.parent / ".worktrees" / "52-json"
         _git(

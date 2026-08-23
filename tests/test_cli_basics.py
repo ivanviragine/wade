@@ -253,7 +253,10 @@ class TestStartupNoiseRegistration:
         # Mock the branch name so the test is not environment-dependent
         # (on a feature worktree the branch has an issue number and the
         # error path is different).
-        with patch("wade.git.repo.get_current_branch", return_value="main"):
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch("wade.git.repo.get_current_branch", return_value="main"),
+        ):
             result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output
@@ -262,7 +265,10 @@ class TestStartupNoiseRegistration:
         # implementation-session sync on main exits 4 (preflight failure).
         # Mock branch name so this assertion is deterministic regardless of the
         # caller's checkout (main checkout vs feature worktree).
-        with patch("wade.git.repo.get_current_branch", return_value="main"):
+        with (
+            patch("wade.cli.session_shared.require_ready"),
+            patch("wade.git.repo.get_current_branch", return_value="main"),
+        ):
             result = runner.invoke(app, ["implementation-session", "sync"])
         assert result.exit_code == 4
 

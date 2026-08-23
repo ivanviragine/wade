@@ -175,10 +175,19 @@ def test_done_target_plan_file_bad_title_fails_clean(
 def test_cli_plan_flag_passes_to_service() -> None:
     from wade.cli.implementation_session import implementation_session_app
 
-    with patch("wade.services.implementation_service.done", return_value=True) as mock_done:
+    with (
+        patch("wade.cli.session_shared.require_ready") as mock_require_ready,
+        patch(
+            "wade.services.implementation_service.resolve_done_worktree",
+            return_value=Path("/tmp/wt"),
+        ) as mock_resolve_worktree,
+        patch("wade.services.implementation_service.done", return_value=True) as mock_done,
+    ):
         result = runner.invoke(implementation_session_app, ["done", "--plan", "/tmp/PLAN.md"])
 
     assert result.exit_code == 0
+    mock_resolve_worktree.assert_called_once_with(target=None, plan_file=Path("/tmp/PLAN.md"))
+    mock_require_ready.assert_called_once_with("implementation", exit_code=1, cwd=Path("/tmp/wt"))
     mock_done.assert_called_once_with(
         target=None,
         plan_file=Path("/tmp/PLAN.md"),
