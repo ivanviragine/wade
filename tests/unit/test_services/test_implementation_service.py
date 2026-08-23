@@ -3406,6 +3406,48 @@ class TestCarryForwardPendingVotes:
             carried = worktree_ratings.read_text(encoding="utf-8")
         assert pending_line not in carried
 
+    def test_rollback_tolerates_failed_legacy_restage(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A partial index rollback warns but never turns recovery into a crash."""
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init legacy knowledge")
+        pending_line = '{"dir": "up", "event_id": "detached-event", "id": "e", "ts": "pending"}'
+        main_ratings = main / "KNOWLEDGE.ratings.jsonl"
+        main_ratings.write_text(pending_line + "\n", encoding="utf-8")
+        self._git(main, "rm", "--cached", "--quiet", "KNOWLEDGE.ratings.yml")
+        (main / "KNOWLEDGE.ratings.yml").unlink()
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/rollback-retry", str(worktree))
+
+        def fail_worktree_then_main_restage(root: Path, _: str) -> bool:
+            if root == worktree:
+                return False
+            raise OSError("git metadata is read-only")
+
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap.git_repo.rm_file",
+            fail_worktree_then_main_restage,
+        )
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Vote content remains durable even when git cannot exactly restore the
+        # legacy deletion in its index; a warning records the partial rollback.
+        assert pending_line in main_ratings.read_text(encoding="utf-8")
+        assert (main / "KNOWLEDGE.ratings.yml").is_file()
+
     def test_carries_staged_vote_through_legacy_ratings_migration(self, tmp_path: Path) -> None:
         """The first detached vote migrates legacy YAML in the attached PR, not main."""
         from wade.models.config import KnowledgeConfig, ProjectConfig

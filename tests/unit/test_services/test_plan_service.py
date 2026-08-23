@@ -680,7 +680,7 @@ class TestFinalizeIssues:
                 "wade.services.plan_service._offer_to_implement",
                 side_effect=offer_and_run_handoff,
             ),
-            patch("wade.services.plan_service.console"),
+            patch("wade.services.plan_service.console") as mock_console,
         ):
             result = _finalize_issues(
                 provider=provider,
@@ -695,6 +695,10 @@ class TestFinalizeIssues:
         assert result is False
         apply_usage.assert_called_once()
         add_labels.assert_called_once_with(provider, "1", "claude", None)
+        # The plan() caller immediately retries this handoff during cleanup;
+        # it emits the sole recovery message if that retry also fails.
+        mock_console.error.assert_not_called()
+        mock_console.hint.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

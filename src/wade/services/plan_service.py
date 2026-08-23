@@ -1443,18 +1443,16 @@ def _flush_planning_votes_before_implementation(
     repo_root: Path,
     config: ProjectConfig,
 ) -> bool:
-    """Flush completed plan-session votes just before an attached bootstrap."""
+    """Flush completed plan-session votes just before an attached bootstrap.
+
+    A failed handoff returns ``False`` to prevent implementation from starting.
+    The caller's immediate cleanup retry owns the persistent-failure report, so
+    users see one recovery message rather than one for each identical attempt.
+    """
     from wade.services.knowledge_service import flush_staged_ratings
 
     handoff = flush_staged_ratings(planning_worktree, repo_root, config.knowledge)
-    if handoff.success:
-        return True
-    console.error(
-        "Could not hand off staged knowledge votes; preserving the planning "
-        f"worktree at {planning_worktree}. {handoff.message or 'Retry after restoring access.'}"
-    )
-    console.hint(RETAINED_VOTE_RECOVERY_HINT)
-    return False
+    return handoff.success
 
 
 def _offer_to_implement(

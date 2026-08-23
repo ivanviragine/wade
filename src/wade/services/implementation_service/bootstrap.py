@@ -856,7 +856,17 @@ def _carry_forward_pending_votes(
             with contextlib.suppress(OSError):
                 main_ratings.write_bytes(original_main_bytes)
             if legacy_tracked_in_main and legacy_relpath is not None:
-                git_repo.rm_file(repo_root, legacy_relpath)
+                try:
+                    if not git_repo.rm_file(repo_root, legacy_relpath):
+                        logger.warning(
+                            "implementation.ratings_carry_legacy_restage_failed",
+                            path=legacy_relpath,
+                        )
+                except OSError:
+                    logger.warning(
+                        "implementation.ratings_carry_legacy_restage_failed",
+                        path=legacy_relpath,
+                    )
             logger.warning("implementation.ratings_carry_transfer_failed", path=relpath)
             return
         logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))
