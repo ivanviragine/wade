@@ -1723,6 +1723,20 @@ class TestStagingContainment:
         assert path == staged_ratings_path(worktree)
         assert path.is_file()
 
+    def test_staging_creates_a_missing_wade_dir(self, tmp_path: Path) -> None:
+        # `stage_rating_event` never mkdirs explicitly — `file_lock` creates the
+        # guarded path's parent. Pinned because it is easy to misread as a
+        # FileNotFoundError waiting to happen (the readiness probe removes any
+        # `.wade/` it had to create, so "absent at write time" is a real state).
+        worktree = tmp_path / "plan-worktree"
+        worktree.mkdir()
+        assert not (worktree / ".wade").exists()
+
+        path = stage_rating_event(worktree, create_rating_event("entry", "up"))
+
+        assert path.is_file()
+        assert '"id": "entry"' in path.read_text(encoding="utf-8")
+
     def test_readiness_probe_rejects_a_symlinked_staging_dir(self, tmp_path: Path) -> None:
         from wade.services.check_service import _probe_staging_path
 
