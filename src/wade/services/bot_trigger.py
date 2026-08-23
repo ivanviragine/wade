@@ -117,14 +117,14 @@ def format_bot_names(bots: list[ReviewBotConfig]) -> str:
 
 
 def pending_names(
-    config: ProjectConfig, repo_root: Path, branch: str, marker_root: Path
+    config: ProjectConfig, repo_root: Path, pr_number: int, marker_root: Path
 ) -> str | None:
     """Bot names a post-session menu should offer to trigger, or ``None`` (#464).
 
     ``None`` — hide the menu entry — when the user opted out
-    (``bot_review.offer_on_done: false``), no bot is enabled, the branch tip is
+    (``bot_review.offer_on_done: false``), no bot is enabled, the PR head SHA is
     unresolvable (markers cannot dedupe), or every enabled bot was already
-    triggered at this commit (including by ``done``'s auto-trigger moments
+    triggered at that head (including by ``done``'s auto-trigger moments
     earlier). Callers compose their own label around the returned names so each
     menu can say what happens next ("…, then wait").
     """
@@ -132,7 +132,7 @@ def pending_names(
         return None
     if not any(bot.enabled for bot in config.bot_review.bots):
         return None
-    sha = resolve_branch_sha(repo_root, branch)
+    sha = git_pr.get_pr_head_sha(repo_root, pr_number)
     if sha is None:
         return None
     pending = pending_bots(config, marker_root, sha)
@@ -141,7 +141,7 @@ def pending_names(
 
 def menu_entry(
     repo_root: Path,
-    branch: str,
+    pr_number: int,
     worktree_path: Path | None,
     *,
     suffix: str = "",
@@ -164,7 +164,7 @@ def menu_entry(
         from wade.config.loader import load_config
 
         resolved = config or load_config(repo_root)
-        names = pending_names(resolved, repo_root, branch, worktree_path or repo_root)
+        names = pending_names(resolved, repo_root, pr_number, worktree_path or repo_root)
     except Exception:
         logger.debug("bot_trigger.menu_entry_failed", exc_info=True)
         return None, None
@@ -176,18 +176,18 @@ def menu_entry(
 def post_pending_triggers(
     config: ProjectConfig,
     repo_root: Path,
-    branch: str,
     pr_number: int,
     marker_root: Path,
 ) -> bool:
-    """Post the triggers for every enabled bot not yet triggered at the branch tip.
+    """Post triggers for bots not yet triggered at GitHub's current PR head.
 
-    The menu-side counterpart of :func:`pending_names` — it re-resolves the sha
-    and the pending set at post time rather than trusting what the menu was built
-    from, so a trigger that landed in between (another terminal, ``done``) is
-    still not duplicated. This outer re-check is a fast path and the
-    "already posted for this commit" notice; the authoritative dedup is the
-    under-lock re-check inside :func:`post_bot_triggers`.
+    The menu-side counterpart of :func:`pending_names` — it re-resolves the PR
+    head SHA and pending set at post time rather than trusting what the menu was
+    built from. This keeps markers aligned with the commit the PR presents for
+    review even if another terminal advances the local branch without pushing.
+    The outer re-check is a fast path and the "already posted for this commit"
+    notice; the authoritative dedup is the under-lock re-check inside
+    :func:`post_bot_triggers`.
 
     Returns whether **a bot review is now pending for this commit** — i.e. whether
     a caller that falls through into a wait-for-review poll is justified in doing
@@ -197,9 +197,9 @@ def post_pending_triggers(
     not be resolved, or every post attempt failed (e.g. a GitHub/API outage) — in
     which case waiting would be a silent wait for a review no bot was asked for.
     """
-    sha = resolve_branch_sha(repo_root, branch)
+    sha = git_pr.get_pr_head_sha(repo_root, pr_number)
     if sha is None:
-        console.warn("Could not resolve the branch tip — skipping the bot review triggers.")
+        console.warn("Could not resolve the PR head — skipping the bot review triggers.")
         return False
     pending = pending_bots(config, marker_root, sha)
     if not pending:

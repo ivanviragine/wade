@@ -1462,7 +1462,7 @@ def _quiet_next_steps_prompt(
         # entry is appended, never inserted, so the existing choices keep their
         # indexes. Hidden once every enabled bot has fired for this commit.
         bot_config, trigger_option = bot_trigger.menu_entry(
-            repo_root, branch, worktree_path, config=config
+            repo_root, pr_number, worktree_path, config=config
         )
         # Index bound at append time so a later option can't steal this branch.
         trigger_index = -1
@@ -1473,7 +1473,7 @@ def _quiet_next_steps_prompt(
 
         if bot_config is not None and choice == trigger_index:
             if bot_trigger.post_pending_triggers(
-                bot_config, repo_root, branch, pr_number, worktree_path or repo_root
+                bot_config, repo_root, pr_number, worktree_path or repo_root
             ):
                 # The freshly written trigger markers reset each bot's arrival
                 # window. Retain the config even when this prompt was reached
@@ -1561,7 +1561,7 @@ def _post_review_lifecycle(
     # `done` pushed fixups, and with `auto_trigger` off nothing asked the bots to
     # look again — which is precisely when "wait for new reviews" waits forever.
     bot_config, trigger_option = bot_trigger.menu_entry(
-        repo_root, branch, worktree_path, suffix=", then wait", config=config
+        repo_root, pr_number, worktree_path, suffix=", then wait", config=config
     )
     options = ["Merge PR", "Wait for new reviews"]
     # Index bound at append time so a later option can't steal this branch.
@@ -1574,9 +1574,12 @@ def _post_review_lifecycle(
 
     if bot_config is not None and choice == trigger_index:
         if bot_trigger.post_pending_triggers(
-            bot_config, repo_root, branch, pr_number, worktree_path or repo_root
+            bot_config, repo_root, pr_number, worktree_path or repo_root
         ):
             choice = 1  # ...then fall through into the wait-for-new-reviews flow.
+            # The fresh trigger markers reset each bot's arrival window, so keep
+            # the config attached to the poll even when the caller passed none.
+            config = bot_config
         else:
             # Every trigger post failed (e.g. a GitHub outage) — no bot was asked
             # to review, so don't drop into a wait for a review no one requested

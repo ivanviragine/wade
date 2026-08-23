@@ -369,7 +369,7 @@ def _post_implementation_lifecycle_pr(
     # mode this avoids. Hidden when every enabled bot already fired for this
     # commit (see `bot_trigger.pending_names`).
     bot_config, trigger_option = bot_trigger.menu_entry(
-        repo_root, branch, worktree_path, suffix=", then wait"
+        repo_root, pr_number, worktree_path, suffix=", then wait"
     )
     options = ["Merge PR", "Wait for reviews"]
     # Bind the entry's index at append time (not `len(options) - 1` at read time)
@@ -384,7 +384,7 @@ def _post_implementation_lifecycle_pr(
     poll_config = None
     if bot_config is not None and choice == trigger_index:
         if bot_trigger.post_pending_triggers(
-            bot_config, repo_root, branch, int(pr_number), worktree_path or repo_root
+            bot_config, repo_root, int(pr_number), worktree_path or repo_root
         ):
             choice = 1  # ...then fall through into the wait-for-reviews flow.
             # The trigger marker resets each bot's arrival window. Keep both the

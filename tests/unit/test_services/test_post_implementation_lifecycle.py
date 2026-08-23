@@ -839,7 +839,7 @@ def _run_menu_with_bot_offer(
         patch(f"{_LC}.prompts.confirm", return_value=False),  # don't open the browser
         patch(f"{_LC}.prompts.select", return_value=choice) as mock_select,
         patch("wade.config.loader.load_config", return_value=config),
-        patch(f"{_BT}.git_repo.rev_parse", return_value="sha1"),
+        patch(f"{_BT}.git_pr.get_pr_head_sha", return_value="sha1"),
         patch(f"{_BT}.git_pr.comment_on_pr", comment),
         patch("wade.services.review_service.poll_for_reviews", poll),
     ):
@@ -885,7 +885,7 @@ def test_menu_bot_trigger_offer_does_not_wait_when_every_post_fails(tmp_path: Pa
         patch(f"{_LC}.prompts.confirm", return_value=False),  # don't open the browser
         patch(f"{_LC}.prompts.select", return_value=2),  # the "Trigger bot reviews" entry
         patch("wade.config.loader.load_config", return_value=ProjectConfig()),
-        patch(f"{_BT}.git_repo.rev_parse", return_value="sha1"),
+        patch(f"{_BT}.git_pr.get_pr_head_sha", return_value="sha1"),
         patch(f"{_BT}.git_pr.comment_on_pr", side_effect=RuntimeError("gh down")),
         patch("wade.services.review_service.poll_for_reviews", poll),
     ):

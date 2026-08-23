@@ -2330,7 +2330,7 @@ class TestQuietNextStepsPrompt:
         assert mock_poll.call_count == 1
 
     @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
-    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1")
     @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.ui.prompts.select")
@@ -2341,7 +2341,7 @@ class TestQuietNextStepsPrompt:
         mock_select: MagicMock,
         mock_poll: MagicMock,
         mock_status: MagicMock,
-        _mock_rev_parse: MagicMock,
+        _mock_pr_head: MagicMock,
         mock_comment: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -2373,7 +2373,7 @@ class TestQuietNextStepsPrompt:
         ]
 
     @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
-    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1")
     @patch("wade.config.loader.load_config")
     @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service.poll_for_reviews")
@@ -2386,7 +2386,7 @@ class TestQuietNextStepsPrompt:
         mock_poll: MagicMock,
         mock_status: MagicMock,
         mock_load_config: MagicMock,
-        _mock_rev_parse: MagicMock,
+        _mock_pr_head: MagicMock,
         _mock_comment: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -2404,6 +2404,39 @@ class TestQuietNextStepsPrompt:
 
         _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, MagicMock())
 
+        assert mock_poll.call_args.kwargs["config"] is config
+        assert mock_poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
+
+    @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
+    @patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1")
+    @patch("wade.config.loader.load_config")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=2)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_trigger_choice_without_config_keeps_bot_config_for_poll(
+        self,
+        _mock_is_tty: MagicMock,
+        _mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        mock_load_config: MagicMock,
+        _mock_pr_head: MagicMock,
+        _mock_comment: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A trigger from the default caller keeps expected-bot gating enabled."""
+        from wade.models.config import ProjectConfig
+        from wade.models.review import PollOutcome
+
+        config = ProjectConfig()
+        mock_load_config.return_value = config
+        mock_poll.return_value = PollOutcome.INTERRUPTED
+        provider = MagicMock()
+
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+
+        mock_merge.assert_not_called()
         assert mock_poll.call_args.kwargs["config"] is config
         assert mock_poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
 
@@ -2466,7 +2499,7 @@ class TestPostReviewLifecycle:
         mock_poll.assert_called_once()
 
     @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
-    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1")
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=2)
@@ -2477,7 +2510,7 @@ class TestPostReviewLifecycle:
         mock_select: MagicMock,
         mock_merge: MagicMock,
         mock_poll: MagicMock,
-        _mock_rev_parse: MagicMock,
+        _mock_pr_head: MagicMock,
         mock_comment: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -2504,7 +2537,7 @@ class TestPostReviewLifecycle:
         "wade.services.bot_trigger.git_pr.comment_on_pr",
         side_effect=RuntimeError("gh down"),
     )
-    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1")
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=2)
@@ -2515,7 +2548,7 @@ class TestPostReviewLifecycle:
         mock_select: MagicMock,
         mock_merge: MagicMock,
         mock_poll: MagicMock,
-        _mock_rev_parse: MagicMock,
+        _mock_pr_head: MagicMock,
         mock_comment: MagicMock,
         tmp_path: Path,
     ) -> None:

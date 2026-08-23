@@ -533,10 +533,8 @@ class TestMenuHelpers:
     def _entry(
         self, config: ProjectConfig, tmp_path: Path, *, sha: str = "abc123", suffix: str = ""
     ) -> tuple[ProjectConfig | None, str | None]:
-        with patch("wade.services.bot_trigger.git_repo.rev_parse", return_value=sha):
-            return bot_trigger.menu_entry(
-                tmp_path, "feat/42-x", tmp_path, suffix=suffix, config=config
-            )
+        with patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value=sha):
+            return bot_trigger.menu_entry(tmp_path, 99, tmp_path, suffix=suffix, config=config)
 
     def test_entry_lists_pending_bots(self, tmp_path: Path) -> None:
         config, label = self._entry(_config(), tmp_path, suffix=", then wait")
@@ -550,11 +548,9 @@ class TestMenuHelpers:
         _run_done_hook(_config(auto_trigger=True), tmp_path, sha="sha1")
         assert self._entry(_config(), tmp_path, sha="sha1") == (None, None)
 
-    def test_entry_hidden_when_sha_unresolvable(self, tmp_path: Path) -> None:
-        with patch(
-            "wade.services.bot_trigger.git_repo.rev_parse", side_effect=GitError("detached")
-        ):
-            entry = bot_trigger.menu_entry(tmp_path, "feat/42-x", tmp_path, config=_config())
+    def test_entry_hidden_when_pr_head_unresolvable(self, tmp_path: Path) -> None:
+        with patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value=None):
+            entry = bot_trigger.menu_entry(tmp_path, 99, tmp_path, config=_config())
         assert entry == (None, None)
 
     def test_entry_only_names_bots_still_pending(self, tmp_path: Path) -> None:
@@ -572,12 +568,10 @@ class TestMenuHelpers:
     def test_post_pending_posts_and_marks(self, tmp_path: Path) -> None:
         comment = MagicMock()
         with (
-            patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1"),
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1"),
             patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
         ):
-            pending = bot_trigger.post_pending_triggers(
-                _config(), tmp_path, "feat/42-x", 99, tmp_path
-            )
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
         # Posting a trigger means a review is now pending for this commit.
         assert pending is True
         assert markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
@@ -585,15 +579,11 @@ class TestMenuHelpers:
     def test_post_pending_is_a_noop_once_triggered(self, tmp_path: Path) -> None:
         comment = MagicMock()
         with (
-            patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1"),
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1"),
             patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
         ):
-            first = bot_trigger.post_pending_triggers(
-                _config(), tmp_path, "feat/42-x", 99, tmp_path
-            )
-            second = bot_trigger.post_pending_triggers(
-                _config(), tmp_path, "feat/42-x", 99, tmp_path
-            )
+            first = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+            second = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
         # Both report "a review is pending": the first posts them, the second finds
         # them already recorded for this sha (no re-post — proven by call_count).
         assert (first, second) == (True, True)
@@ -607,26 +597,37 @@ class TestMenuHelpers:
         waiting for a review no bot was successfully asked for (#464 review).
         """
         with (
-            patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1"),
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1"),
             patch(
                 "wade.services.bot_trigger.git_pr.comment_on_pr",
                 side_effect=RuntimeError("gh down"),
             ),
         ):
-            pending = bot_trigger.post_pending_triggers(
-                _config(), tmp_path, "feat/42-x", 99, tmp_path
-            )
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
         assert pending is False
         assert not markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
 
-    def test_post_pending_false_when_sha_unresolvable(self, tmp_path: Path) -> None:
-        with patch(
-            "wade.services.bot_trigger.git_repo.rev_parse", side_effect=GitError("detached")
-        ):
-            pending = bot_trigger.post_pending_triggers(
-                _config(), tmp_path, "feat/42-x", 99, tmp_path
-            )
+    def test_post_pending_false_when_pr_head_unresolvable(self, tmp_path: Path) -> None:
+        with patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value=None):
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
         assert pending is False
+
+    def test_post_pending_keys_markers_to_pr_head_not_local_branch(self, tmp_path: Path) -> None:
+        """An unpushed local commit must not suppress review of the PR's head."""
+        comment = MagicMock()
+        with (
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="remote-sha"),
+            patch(
+                "wade.services.bot_trigger.git_repo.rev_parse", return_value="local-sha"
+            ) as rev_parse,
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+
+        assert pending is True
+        assert markers.marker_present(tmp_path, "bot-triggered-codex", "remote-sha")
+        assert not markers.marker_present(tmp_path, "bot-triggered-codex", "local-sha")
+        rev_parse.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
