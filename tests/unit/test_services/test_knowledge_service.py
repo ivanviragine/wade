@@ -1840,6 +1840,21 @@ class TestRetainedStagedRatingsSweep:
 
         assert flush_retained_staged_ratings(main, config) == []
 
+    def test_skips_a_symlinked_repo_root(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The self-worktree guard compares canonical paths from git worktree list."""
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = self._throwaway_worktree(tmp_path, "main")
+        repo_root = tmp_path / "main-link"
+        repo_root.symlink_to(main, target_is_directory=True)
+        stage_rating_event(main, create_rating_event("entry", "up"))
+        self._patch_worktree_list(monkeypatch, [main])
+
+        assert flush_retained_staged_ratings(repo_root, config) == []
+        assert staged_ratings_path(main).exists()
+
     def test_skips_a_worktree_without_the_throwaway_marker(
         self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:

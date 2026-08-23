@@ -554,6 +554,7 @@ class TestResolveSessionReadiness:
         # phase silently losing its per-command tool override is caught here.
         for requirements in READINESS_REQUIREMENTS.values():
             assert requirements.ai_command in AI_COMMAND_NAMES
+            assert isinstance(getattr(AIConfig(), requirements.ai_command, None), AICommandConfig)
 
     def test_does_not_silently_ignore_invalid_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

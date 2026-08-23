@@ -879,10 +879,11 @@ def flush_retained_staged_ratings(
         logger.warning("knowledge.retained_sweep_list_failed", error=str(exc))
         return []
 
+    root = repo_root.resolve()
     results: list[StagedRatingsFlushResult] = []
     for entry in worktrees:
         path = Path(entry.path)
-        if path == repo_root or entry.branch != "(detached)":
+        if path.resolve() == root or entry.branch != "(detached)":
             continue
         if not is_throwaway_knowledge_session(path):
             continue

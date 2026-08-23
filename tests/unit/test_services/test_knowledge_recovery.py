@@ -10,6 +10,7 @@ import pytest
 from wade.models.config import KnowledgeConfig, ProjectConfig
 from wade.services.knowledge_recovery import report_retained_vote_recovery
 from wade.services.knowledge_service import StagedRatingsFlushResult
+from wade.ui.console import Console
 
 
 class TestReportRetainedVoteRecovery:
@@ -40,6 +41,7 @@ class TestReportRetainedVoteRecovery:
 
     def test_reports_recovered_votes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         console = MagicMock()
+        console.escape_markup.side_effect = lambda text: text
         monkeypatch.setattr(
             "wade.services.knowledge_service.flush_retained_staged_ratings",
             lambda *_args: [
@@ -63,6 +65,7 @@ class TestReportRetainedVoteRecovery:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         console = MagicMock()
+        console.escape_markup.side_effect = lambda text: text
         monkeypatch.setattr(
             "wade.services.knowledge_service.flush_retained_staged_ratings",
             lambda *_args: [
@@ -78,6 +81,33 @@ class TestReportRetainedVoteRecovery:
         report_retained_vote_recovery(tmp_path, ProjectConfig(knowledge=_enabled()))
 
         assert "main checkout is read-only" in console.warn.call_args.args[0]
+
+    def test_reports_markup_like_recovery_values_literally(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.flush_retained_staged_ratings",
+            lambda *_args: [
+                StagedRatingsFlushResult(
+                    success=True,
+                    appended_count=1,
+                    worktree=tmp_path / "plan-[/]",
+                ),
+                StagedRatingsFlushResult(
+                    success=False,
+                    message="handoff [/] blocked",
+                    worktree=tmp_path / "deps-[/]",
+                ),
+            ],
+        )
+        monkeypatch.setattr("wade.services.knowledge_recovery.console", Console())
+
+        report_retained_vote_recovery(tmp_path, ProjectConfig(knowledge=_enabled()))
+
+        captured = capsys.readouterr()
+        assert "plan-[/]" in captured.out
+        assert "deps-[/]" in captured.err
+        assert "handoff [/] blocked" in captured.err
 
     def test_a_sweep_failure_never_blocks_the_session_about_to_start(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

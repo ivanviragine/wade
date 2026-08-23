@@ -47,11 +47,12 @@ def report_retained_vote_recovery(repo_root: Path, config: ProjectConfig) -> Non
         if outcome.success:
             console.info(
                 f"Recovered {outcome.appended_count} staged knowledge vote(s) from a "
-                f"retained session worktree at {outcome.worktree}."
+                f"retained session worktree at {console.escape_markup(str(outcome.worktree))}."
             )
         else:
             # Still retained, still retryable — say so instead of going quiet.
             console.warn(
-                f"Staged knowledge votes at {outcome.worktree} could not be handed off: "
-                f"{outcome.message or 'unknown error'}"
+                "Staged knowledge votes at "
+                f"{console.escape_markup(str(outcome.worktree))} could not be handed off: "
+                f"{console.escape_markup(outcome.message or 'unknown error')}"
             )
