@@ -749,9 +749,15 @@ service module — `pending_bots`/`pending_names` (enabled bots with no
 `menu_entry`/`post_pending_triggers` (the post-session menu pair). Triggers fire
 **at most once per bot per commit SHA** (`utils/markers.py:write_marker`, written
 only after that bot's post succeeds — so a failed bot retries, a succeeded one
-never re-posts). A failed marker *write* is warned rather than reported as durable
-success, since the comment is already posted but a later same-SHA pass may re-post
-it. (The `name` safe-identifier invariant means a `/` can no longer break the
+never re-posts). `post_bot_triggers` runs the whole check→post→record section
+under a cross-process `utils/filelock.file_lock` keyed on worktree+SHA, and
+re-checks each bot's marker *inside* the lock — so two concurrent `done`/menu
+processes on one worktree can't both read a marker absent and double-post
+(the guarantee holds under process-level parallelism, not just sequential
+re-runs); if the lock primitive is unavailable it degrades to the unlocked
+best-effort check-then-act rather than fail an otherwise-complete `done`. A
+failed marker *write* is warned rather than reported as durable success, since
+the comment is already posted but a later same-SHA pass may re-post it. (The `name` safe-identifier invariant means a `/` can no longer break the
 marker path, so a `False` write now signals a genuine I/O failure.) An
 unresolvable branch sha means the markers cannot dedupe, so every caller declines
 to post rather than risk a comment per pass.

@@ -558,3 +558,77 @@ class TestMenuHelpers:
             )
         assert (first, second) == (3, 0)
         assert comment.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# post_bot_triggers race-safety (#464 review): under-lock re-check + fallback
+# ---------------------------------------------------------------------------
+
+
+class TestPostBotTriggersRaceSafety:
+    def test_under_lock_recheck_skips_a_bot_marked_in_between(self, tmp_path: Path) -> None:
+        """A bot recorded after the caller's pending set was built is skipped.
+
+        Simulates a concurrent done/menu process on the same worktree posting +
+        recording coderabbit@sha1 after this caller computed its pending list:
+        the re-check *inside* ``post_bot_triggers``'s lock must drop it, so the
+        PR gets no duplicate comment (once-per-bot-per-sha under concurrency).
+        """
+        config = _config(auto_trigger=True)
+        assert markers.write_marker(tmp_path, "bot-triggered-coderabbit", "sha1")
+        comment = MagicMock()
+        with patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment):
+            posted = bot_trigger.post_bot_triggers(
+                tmp_path, 99, config.bot_review.bots, marker_root=tmp_path, sha="sha1"
+            )
+        names = [c.args[2] for c in comment.call_args_list]
+        assert names == ["@codex review", "bugbot run"]  # coderabbit skipped, not re-posted
+        assert posted == 2
+
+    def test_posts_when_lock_primitive_unavailable(self, tmp_path: Path) -> None:
+        """A broken file_lock degrades to posting, never fails an otherwise-complete done."""
+        config = _config(auto_trigger=True)
+        comment = MagicMock()
+        with (
+            patch(
+                "wade.services.bot_trigger.file_lock",
+                MagicMock(side_effect=OSError("temp dir unwritable")),
+            ),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            posted = bot_trigger.post_bot_triggers(
+                tmp_path, 99, config.bot_review.bots, marker_root=tmp_path, sha="sha1"
+            )
+        assert posted == 3  # all three still posted despite the lock being unavailable
+        assert markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
+
+    def test_lock_release_error_does_not_repost(self, tmp_path: Path) -> None:
+        """An OSError during lock *release* must not re-run posting (no double-post).
+
+        Worst case: a bot's comment posts, its marker write fails, then
+        ``file_lock`` cleanup raises. Re-running the section would re-post that
+        un-marked bot — so a release error returns the already-computed count
+        instead. Distinguishes a release failure (body ran) from an acquisition
+        failure (body must still run).
+        """
+        config = _config(
+            auto_trigger=True,
+            bots=[ReviewBotConfig(name="codex", trigger="@codex review", enabled=True)],
+        )
+        comment = MagicMock()
+
+        @contextmanager
+        def _lock_release_boom(_path: Path) -> Iterator[None]:
+            yield
+            raise OSError("close failed on release")
+
+        with (
+            patch("wade.services.bot_trigger.file_lock", _lock_release_boom),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+            patch("wade.services.bot_trigger.markers.write_marker", return_value=False),
+        ):
+            posted = bot_trigger.post_bot_triggers(
+                tmp_path, 99, config.bot_review.bots, marker_root=tmp_path, sha="sha1"
+            )
+        assert comment.call_count == 1  # posted exactly once, not re-run after release error
+        assert posted == 1
