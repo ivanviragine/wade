@@ -2934,6 +2934,7 @@ class TestPostImplementationLifecyclePr:
             permission_mode="yolo",
             permission_mode_explicit=False,
             network_access=True,
+            config=None,
         )
 
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:

@@ -821,12 +821,13 @@ def _run_menu_with_bot_offer(
     choice: int,
     config: ProjectConfig,
     comment: MagicMock,
-) -> tuple[MergeStatus, list[str]]:
+) -> tuple[MergeStatus, list[str], MagicMock]:
     """Drive the post-implementation menu with the bot-trigger offer resolvable."""
     from wade.models.review import PollOutcome
 
     wt_path = tmp_path / "wt"
     wt_path.mkdir(exist_ok=True)
+    poll = MagicMock(return_value=PollOutcome.INTERRUPTED)
     with (
         patch(
             f"{_LC}.git_pr.get_pr_for_branch",
@@ -840,26 +841,26 @@ def _run_menu_with_bot_offer(
         patch("wade.config.loader.load_config", return_value=config),
         patch(f"{_BT}.git_repo.rev_parse", return_value="sha1"),
         patch(f"{_BT}.git_pr.comment_on_pr", comment),
-        patch(
-            "wade.services.review_service.poll_for_reviews",
-            return_value=PollOutcome.INTERRUPTED,
-        ),
+        patch("wade.services.review_service.poll_for_reviews", poll),
     ):
         status = _post_implementation_lifecycle(
             tmp_path / "repo", "feat/42-test", 42, wt_path, MagicMock()
         )
-    return status, list(mock_select.call_args[0][1])
+    return status, list(mock_select.call_args[0][1]), poll
 
 
 def test_menu_offers_bot_triggers_and_posts_then_waits(tmp_path: Path) -> None:
     """Picking the offer posts every pending trigger, then falls into the wait flow."""
     comment = MagicMock()
-    status, options = _run_menu_with_bot_offer(
-        tmp_path, choice=2, config=ProjectConfig(), comment=comment
+    config = ProjectConfig()
+    status, options, poll = _run_menu_with_bot_offer(
+        tmp_path, choice=2, config=config, comment=comment
     )
     assert options[:2] == ["Merge PR", "Wait for reviews"]
     assert options[2] == "Trigger bot reviews (coderabbit, codex, bugbot), then wait"
     assert comment.call_count == 3
+    assert poll.call_args.kwargs["config"] is config
+    assert poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
     assert status == MergeStatus.NOT_MERGED
 
 
@@ -900,7 +901,9 @@ def test_menu_hides_bot_trigger_offer_when_opted_out(tmp_path: Path) -> None:
 
     config = ProjectConfig(bot_review=BotReviewConfig(offer_on_done=False))
     comment = MagicMock()
-    _status, options = _run_menu_with_bot_offer(tmp_path, choice=1, config=config, comment=comment)
+    _status, options, _poll = _run_menu_with_bot_offer(
+        tmp_path, choice=1, config=config, comment=comment
+    )
     assert options == ["Merge PR", "Wait for reviews"]
     assert comment.call_count == 0
 
@@ -908,7 +911,7 @@ def test_menu_hides_bot_trigger_offer_when_opted_out(tmp_path: Path) -> None:
 def test_menu_bot_trigger_offer_does_not_shift_existing_choices(tmp_path: Path) -> None:
     """The entry is appended, so 'Merge PR'/'Wait for reviews' keep indexes 0/1."""
     comment = MagicMock()
-    _status, options = _run_menu_with_bot_offer(
+    _status, options, _poll = _run_menu_with_bot_offer(
         tmp_path, choice=1, config=ProjectConfig(), comment=comment
     )
     assert options[0] == "Merge PR"

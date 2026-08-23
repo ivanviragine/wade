@@ -381,11 +381,16 @@ def _post_implementation_lifecycle_pr(
 
     choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
+    poll_config = None
     if bot_config is not None and choice == trigger_index:
         if bot_trigger.post_pending_triggers(
             bot_config, repo_root, branch, int(pr_number), worktree_path or repo_root
         ):
             choice = 1  # ...then fall through into the wait-for-reviews flow.
+            # The trigger marker resets each bot's arrival window. Keep both the
+            # config and its worktree-local marker root attached to the poll so a
+            # commit pushed long ago does not make this fresh trigger look expired.
+            poll_config = bot_config
         else:
             # Every trigger post failed (e.g. a GitHub outage) — no bot was asked
             # to review, so don't drop into a wait for a review no one requested
@@ -396,7 +401,14 @@ def _post_implementation_lifecycle_pr(
         from wade.models.review import PollOutcome
         from wade.services import review_service
 
-        outcome = review_service.poll_for_reviews(provider, repo_root, int(pr_number), branch)
+        outcome = review_service.poll_for_reviews(
+            provider,
+            repo_root,
+            int(pr_number),
+            branch,
+            config=poll_config,
+            marker_root=worktree_path or repo_root,
+        )
         if outcome == PollOutcome.COMMENTS_FOUND and issue_number:
             _ = review_service.start(
                 str(issue_number),
@@ -426,6 +438,7 @@ def _post_implementation_lifecycle_pr(
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 network_access=network_access,
+                config=poll_config,
             )
         return MergeStatus.NOT_MERGED
 

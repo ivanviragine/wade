@@ -655,6 +655,7 @@ def poll_for_reviews(
     human_settle: int = 120,
     quiet_timeout: int = 600,
     config: ProjectConfig | None = None,
+    marker_root: Path | None = None,
 ) -> PollOutcome:
     """Poll for new PR review comments, blocking until a terminal condition is reached.
 
@@ -672,8 +673,10 @@ def poll_for_reviews(
     keeps waiting (reporting per-bot progress) and never returns ``REVIEW_COMPLETE``
     or lets the quiet-timeout fire with a clean "done". Once a bot's window elapses
     it stops blocking and is surfaced as missing. When ``config`` is ``None`` (a
-    caller that predates this gating) the loop behaves as before. The marker-absent
-    commit-push fallback is used for arrival-window starts (see
+    caller that predates this gating) the loop behaves as before. ``marker_root``
+    identifies the worktree whose ``.wade/`` contains the trigger markers; it
+    defaults to ``repo_root`` for callers already running inside that worktree.
+    The marker-absent commit-push fallback is used for arrival-window starts (see
     ``compute_bot_arrivals``).
     """
     console.info("Waiting for review comments... (Ctrl+C to stop)")
@@ -715,7 +718,7 @@ def poll_for_reviews(
             # the worktree in the common in-worktree poll, so its ``.wade/`` trigger
             # markers seed the arrival windows (missing dir → commit-push fallback).
             if config is not None:
-                annotate_bot_expectations(status, config, marker_root=repo_root)
+                annotate_bot_expectations(status, config, marker_root=marker_root or repo_root)
 
             if status.bot_status == ReviewBotStatus.IN_PROGRESS:
                 quiet_start = None  # bot is active; reset quiet timer
@@ -1475,7 +1478,14 @@ def _quiet_next_steps_prompt(
             continue  # Re-display the menu — the user can now keep polling.
 
         if choice == 0:  # Keep polling
-            outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
+            outcome = poll_for_reviews(
+                provider,
+                repo_root,
+                pr_number,
+                branch,
+                config=config,
+                marker_root=worktree_path or repo_root,
+            )
             if outcome == PollOutcome.COMMENTS_FOUND:
                 if issue_number:
                     _ = start(
@@ -1569,7 +1579,14 @@ def _post_review_lifecycle(
             return
 
     if choice == 1:  # Wait for new reviews
-        outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
+        outcome = poll_for_reviews(
+            provider,
+            repo_root,
+            pr_number,
+            branch,
+            config=config,
+            marker_root=worktree_path or repo_root,
+        )
         if outcome == PollOutcome.COMMENTS_FOUND:
             if issue_number:
                 _ = start(

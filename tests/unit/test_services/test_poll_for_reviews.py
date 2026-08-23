@@ -1024,3 +1024,34 @@ def test_expected_bot_window_elapsed_completes_without_blocking(
     # coderabbit arrived; bugbot never showed but its window elapsed → complete.
     assert result == PollOutcome.REVIEW_COMPLETE
     mock_sleep.assert_not_called()
+
+
+@patch("wade.services.review_service.annotate_bot_expectations")
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_expected_bot_uses_explicit_worktree_marker_root(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    _mock_sleep: MagicMock,
+    mock_annotate: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """A main-root poll must read fresh trigger markers from the linked worktree."""
+    status = PRReviewStatus(bot_status=ReviewBotStatus.COMPLETED)
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
+    mock_status.return_value = status
+    config = _bot_config("coderabbit")
+    marker_root = tmp_path / "linked-worktree"
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        config=config,
+        marker_root=marker_root,
+    )
+
+    assert result == PollOutcome.REVIEW_COMPLETE
+    mock_annotate.assert_called_once_with(status, config, marker_root=marker_root)

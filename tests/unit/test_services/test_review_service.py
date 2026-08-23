@@ -2452,8 +2452,9 @@ class TestPostReviewLifecycle:
 
         mock_poll.return_value = PollOutcome.INTERRUPTED
         provider = MagicMock()
+        config = ProjectConfig()
         _post_review_lifecycle(
-            tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider, config=ProjectConfig()
+            tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider, config=config
         )
         options = mock_select.call_args.args[1]
         assert options[:2] == ["Merge PR", "Wait for new reviews"]
@@ -2461,6 +2462,8 @@ class TestPostReviewLifecycle:
         assert mock_comment.call_count == 3
         mock_merge.assert_not_called()
         mock_poll.assert_called_once()
+        assert mock_poll.call_args.kwargs["config"] is config
+        assert mock_poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
 
     @patch(
         "wade.services.bot_trigger.git_pr.comment_on_pr",
