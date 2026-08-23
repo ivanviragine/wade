@@ -502,10 +502,11 @@ remote. `--active` is deliberate — plain `gh auth status` exits 1 when *any*
 account known for the host is unhealthy, so one stale secondary login would
 block every session even though `gh` operations use the healthy active account.
 An older `gh` that rejects the flag falls back to the unfiltered probe rather
-than turning a working login into a hard block. The host is **not** pinned:
-like every other wade `gh` call, resolution is left to `gh` (repo remote /
-`GH_HOST`, which is forwarded when set), so a GitHub Enterprise session is not
-blocked on a missing github.com login.
+than turning a working login into a hard block. Both probes pass the same
+explicit hostname: `GH_HOST` when set, otherwise the hostname parsed from the
+repository's `origin` (HTTPS/SSH and scp-like SSH remotes). This keeps a GitHub
+Enterprise worktree from accidentally probing github.com, which is `gh api`'s
+default when no hostname is given.
 
 **Plan-directory fallback.** `plan()` keeps a supported worktree-less mode: if
 the detached planning worktree cannot be created (bootstrap failure, or no git
@@ -874,9 +875,11 @@ parent that would ever flush the artefact, so a vote staged there would be
 stranded — those write the ordinary ratings sidecar instead.
 Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
 they never cross into the main checkout. The parent plan/deps lifecycle calls
-`flush_staged_ratings()` before cleanup, locks the existing main ratings spool,
-appends only event IDs not already present, fsyncs, and removes the staging
-artifact only afterward. Every filesystem operation on a session-relative
+`flush_staged_ratings()` before cleanup, holds the staging-log lock through its
+snapshot, the locked main-spool transfer, and staging cleanup, then appends only
+event IDs not already present and fsyncs. A live sibling's append therefore
+waits until cleanup and creates a fresh log rather than being lost between the
+snapshot and unlink. Every filesystem operation on a session-relative
 `.wade/` path — the readiness probe, the marker writer
 (`mark_throwaway_knowledge_session`, which **raises** on an escape), the staging
 writer, and the flush's read + unlink — first rejects a parent that is a symlink

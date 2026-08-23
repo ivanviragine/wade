@@ -8,6 +8,7 @@ import subprocess
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 import yaml
@@ -412,6 +413,34 @@ def check_worktree(
     )
 
 
+def _github_hostname(cwd: Path) -> str | None:
+    """Return the GitHub hostname selected for *cwd*'s repository.
+
+    ``gh api`` defaults to github.com, unlike repository-scoped ``gh`` commands
+    that infer a GitHub Enterprise hostname from ``origin``.  Readiness must
+    probe the same account and API route that the later session commands use.
+    An explicit ``GH_HOST`` remains the user's authoritative override.
+    """
+    if host := os.environ.get("GH_HOST"):
+        return host
+
+    remote_url = repo.get_remote_url(cwd)
+    if not remote_url:
+        return None
+
+    if parsed := urlparse(remote_url).hostname:
+        return parsed
+
+    # Git commonly stores SSH remotes in scp-like form, e.g.
+    # ``git@ghe.example.com:org/repo.git``.  ``urlparse`` deliberately does
+    # not recognize that as a URL, so extract its hostname separately.
+    scp_target = remote_url.rsplit("@", maxsplit=1)[-1]
+    host, separator, _path = scp_target.partition(":")
+    if separator and host and "/" not in host:
+        return host
+    return None
+
+
 def _github_auth_available(cwd: Path) -> bool:
     """Check local GitHub CLI credentials without contacting a repository API.
 
@@ -425,15 +454,11 @@ def _github_auth_available(cwd: Path) -> bool:
     would reject it as an unknown flag and turn a working login into a hard
     session block — so fall back to the unfiltered probe in that one case.
 
-    The host is deliberately **not** pinned to ``github.com``. Every other
-    ``gh`` call wade makes (``gh api``, ``gh pr``, the provider) lets ``gh``
-    resolve the host from the repo remote or ``GH_HOST``; pinning it here would
-    block every GitHub Enterprise session on a missing github.com login while
-    the operations those sessions actually run work fine. An explicit
-    ``GH_HOST`` is forwarded so a multi-host setup is checked against the host
-    this session will use.
+    The hostname is derived from ``GH_HOST`` or the repository's ``origin`` so
+    a GitHub Enterprise worktree checks the same account that later
+    repository-scoped commands use.
     """
-    host = os.environ.get("GH_HOST")
+    host = _github_hostname(cwd)
 
     def _probe(args: list[str]) -> subprocess.CompletedProcess[str] | None:
         try:
@@ -484,10 +509,11 @@ def _github_cli_available(cwd: Path) -> bool:
 
 
 def _github_api_reachable(cwd: Path) -> bool:
-    """Verify read-only GitHub API reachability for a session that requires it."""
+    """Verify read-only API reachability on the repository's GitHub host."""
+    host = _github_hostname(cwd)
     try:
         result = subprocess.run(
-            ["gh", "api", "user", "--method", "GET"],
+            ["gh", "api", "user", "--method", "GET", *(["--hostname", host] if host else [])],
             cwd=cwd,
             capture_output=True,
             text=True,

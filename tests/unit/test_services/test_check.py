@@ -265,6 +265,7 @@ class TestSessionReadiness:
         """Packet-dropping sandboxes cannot hang the first-action check forever."""
         run = MagicMock(side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=5))
         monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: None)
 
         assert probe(tmp_path) is False
         assert run.call_args.kwargs["timeout"] == READINESS_PROBE_TIMEOUT_SECONDS
@@ -385,16 +386,38 @@ class TestGitHubAuthProbe:
         # block every session, even though gh operations use the active one.
         assert "--active" in run.call_args.args[0]
 
-    def test_does_not_pin_the_host_so_enterprise_sessions_are_not_blocked(
+    def test_does_not_invent_a_host_when_origin_is_unavailable(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Every other wade `gh` call lets gh resolve the host; so does this one."""
+        """No origin leaves gh's normal default-host behavior intact."""
         run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
         monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
         monkeypatch.delenv("GH_HOST", raising=False)
 
         assert _github_auth_available(tmp_path) is True
         assert "--hostname" not in run.call_args.args[0]
+
+    @pytest.mark.parametrize(
+        "remote_url",
+        [
+            "https://ghe.example.com/organization/project.git",
+            "git@ghe.example.com:organization/project.git",
+        ],
+    )
+    def test_probes_the_origin_hostname_for_auth_and_api(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote_url: str
+    ) -> None:
+        """Bare `gh api` would otherwise default to github.com on Enterprise."""
+        run = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+        monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: remote_url)
+        monkeypatch.delenv("GH_HOST", raising=False)
+
+        assert _github_auth_available(tmp_path) is True
+        assert _github_api_reachable(tmp_path) is True
+        for call in run.call_args_list:
+            args = call.args[0]
+            assert args[args.index("--hostname") + 1] == "ghe.example.com"
 
     def test_forwards_an_explicit_gh_host(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -421,6 +444,7 @@ class TestGitHubAuthProbe:
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
         monkeypatch.setattr("wade.services.check_service.subprocess.run", fake_run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: None)
 
         # An older gh must degrade to the unfiltered probe, not turn a working
         # login into a hard session block.
@@ -434,6 +458,7 @@ class TestGitHubAuthProbe:
             return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="not logged in")
         )
         monkeypatch.setattr("wade.services.check_service.subprocess.run", run)
+        monkeypatch.setattr("wade.services.check_service.repo.get_remote_url", lambda _: None)
 
         assert _github_auth_available(tmp_path) is False
         assert run.call_count == 1

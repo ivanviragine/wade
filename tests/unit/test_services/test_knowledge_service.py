@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1657,6 +1658,62 @@ class TestStagedRatingEvents:
         assert retry.appended_count == 0
         assert not staged_ratings_path(worktree).exists()
         assert read_ratings(canonical)["entry"].up == 1
+
+    def test_flush_blocks_a_live_append_until_after_staging_cleanup(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sibling append cannot be lost between the drain snapshot and unlink."""
+        from wade.services import knowledge_service
+
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+        first = create_rating_event("first", "up")
+        second = create_rating_event("second", "up")
+        stage_rating_event(worktree, first)
+
+        snapshot_loaded = threading.Event()
+        continue_flush = threading.Event()
+        append_finished = threading.Event()
+        original_load = knowledge_service._load_staged_rating_records
+
+        def pause_after_snapshot(path: Path) -> list[dict[str, object]]:
+            records = original_load(path)
+            snapshot_loaded.set()
+            assert continue_flush.wait(timeout=1)
+            return records
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._load_staged_rating_records", pause_after_snapshot
+        )
+        outcomes = []
+        drain = threading.Thread(
+            target=lambda: outcomes.append(flush_staged_ratings(worktree, main, config))
+        )
+        append = threading.Thread(
+            target=lambda: (stage_rating_event(worktree, second), append_finished.set())
+        )
+        drain.start()
+        assert snapshot_loaded.wait(timeout=1)
+        append.start()
+
+        # The writer uses the same staging-path lock, so it must remain blocked
+        # until the handoff has unlinked the snapshot it just delivered.
+        assert not append_finished.wait(timeout=0.05)
+        continue_flush.set()
+        drain.join(timeout=1)
+        append.join(timeout=1)
+
+        assert not drain.is_alive()
+        assert not append.is_alive()
+        assert len(outcomes) == 1
+        assert outcomes[0].success
+        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["first"].up == 1
+        staged = staged_ratings_path(worktree)
+        assert staged.is_file()
+        assert second.event_id in staged.read_text(encoding="utf-8")
+        assert first.event_id not in staged.read_text(encoding="utf-8")
 
     def test_flush_failure_retains_staging_for_recovery(
         self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch

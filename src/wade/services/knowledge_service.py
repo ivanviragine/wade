@@ -784,69 +784,79 @@ def flush_staged_ratings(
                 f"worktree: {staging_path!s}"
             ),
         )
+    # Do not create an otherwise-absent ``.wade/`` directory merely to lock it.
+    # If a writer starts after this check, its own lifecycle will flush the new
+    # event; if it starts before the lock, it is included in this transfer.
     if not staging_path.exists():
         return StagedRatingsFlushResult(success=True, worktree=worktree_path)
-    try:
-        staged_records = _load_staged_rating_records(staging_path)
-    except (OSError, ValueError) as exc:
-        return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
-    if not staged_records:
+
+    # A retained-worktree sweep may encounter a live sibling session.  Hold its
+    # append lock from the snapshot through durable delivery and cleanup, so an
+    # append cannot land in the interval between read and unlink.
+    with file_lock(staging_path):
+        try:
+            staged_records = _load_staged_rating_records(staging_path)
+        except (OSError, ValueError) as exc:
+            return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
+        if not staged_records:
+            try:
+                staging_path.unlink()
+            except OSError as exc:
+                return StagedRatingsFlushResult(
+                    success=False,
+                    message=f"Empty staging cleanup failed: {exc}",
+                    worktree=worktree_path,
+                )
+            return StagedRatingsFlushResult(success=True, worktree=worktree_path)
+
+        try:
+            main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config))
+        except ValueError as exc:
+            return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
+
+        try:
+            with file_lock(main_ratings):
+                if main_ratings.exists() and main_ratings.is_dir():
+                    raise ValueError(
+                        f"Ratings path {main_ratings!s} points to a directory, not a file"
+                    )
+                _materialize_migration_locked(main_ratings)
+                delivered = _event_ids_in_jsonl(main_ratings)
+                missing = [
+                    record for record in staged_records if str(record["event_id"]) not in delivered
+                ]
+                if missing:
+                    with main_ratings.open("a", encoding="utf-8") as fd:
+                        for record in missing:
+                            fd.write(f"{json.dumps(record, sort_keys=True)}\n")
+                        fd.flush()
+                        os.fsync(fd.fileno())
+        except (OSError, ValueError) as exc:
+            return StagedRatingsFlushResult(
+                success=False,
+                staged_count=len(staged_records),
+                message=str(exc),
+                worktree=worktree_path,
+            )
+
         try:
             staging_path.unlink()
         except OSError as exc:
+            # The durable main-spool transfer is already complete.  Keep the
+            # artefact for a later idempotent retry rather than claiming cleanup.
             return StagedRatingsFlushResult(
                 success=False,
-                message=f"Empty staging cleanup failed: {exc}",
+                staged_count=len(staged_records),
+                appended_count=len(missing),
+                message=f"Ratings reached the main spool but staging cleanup failed: {exc}",
                 worktree=worktree_path,
             )
-        return StagedRatingsFlushResult(success=True, worktree=worktree_path)
-
-    try:
-        main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config))
-    except ValueError as exc:
-        return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
-
-    try:
-        with file_lock(main_ratings):
-            if main_ratings.exists() and main_ratings.is_dir():
-                raise ValueError(f"Ratings path {main_ratings!s} points to a directory, not a file")
-            _materialize_migration_locked(main_ratings)
-            delivered = _event_ids_in_jsonl(main_ratings)
-            missing = [
-                record for record in staged_records if str(record["event_id"]) not in delivered
-            ]
-            if missing:
-                with main_ratings.open("a", encoding="utf-8") as fd:
-                    for record in missing:
-                        fd.write(f"{json.dumps(record, sort_keys=True)}\n")
-                    fd.flush()
-                    os.fsync(fd.fileno())
-    except (OSError, ValueError) as exc:
         return StagedRatingsFlushResult(
-            success=False,
-            staged_count=len(staged_records),
-            message=str(exc),
-            worktree=worktree_path,
-        )
-
-    try:
-        staging_path.unlink()
-    except OSError as exc:
-        # The durable main-spool transfer is already complete.  Keep the
-        # artefact for a later idempotent retry rather than claiming cleanup.
-        return StagedRatingsFlushResult(
-            success=False,
+            success=True,
             staged_count=len(staged_records),
             appended_count=len(missing),
-            message=f"Ratings reached the main spool but staging cleanup failed: {exc}",
             worktree=worktree_path,
         )
-    return StagedRatingsFlushResult(
-        success=True,
-        staged_count=len(staged_records),
-        appended_count=len(missing),
-        worktree=worktree_path,
-    )
 
 
 def flush_retained_staged_ratings(
