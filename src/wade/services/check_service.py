@@ -26,6 +26,7 @@ from wade.models.config import (
     LEGACY_AI_COMMAND_ALIASES,
     AICommandConfig,
     AIConfig,
+    BotReviewConfig,
     CommitMsgConfig,
     DoneConfig,
     HooksConfig,
@@ -399,6 +400,11 @@ _VALID_HOOKS_KEYS = frozenset(HooksConfig.model_fields)
 _VALID_PRE_COMMIT_KEYS = frozenset(PreCommitConfig.model_fields)
 _VALID_COMMIT_MSG_KEYS = frozenset(CommitMsgConfig.model_fields)
 _VALID_POST_TOOL_USE_KEYS = frozenset(PostToolUseConfig.model_fields)
+
+# Valid keys for the ``bot_review`` section, derived from the Pydantic model for
+# the same anti-drift reason (#431/#464 hand-edited this set to add
+# ``offer_on_done`` — deriving it removes that step for the next field).
+_VALID_BOT_REVIEW_KEYS = frozenset(BotReviewConfig.model_fields)
 
 
 def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
@@ -944,10 +950,9 @@ def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) 
         else:
             _validate_bot_review_bots(bots, errors)
 
-    valid_keys = {"auto_trigger", "offer_on_done", "arrival_timeout", "ack_timeout", "bots"}
-    supported = ", ".join(sorted(valid_keys))
+    supported = ", ".join(sorted(_VALID_BOT_REVIEW_KEYS))
     for key in bot_review:
-        if key not in valid_keys:
+        if key not in _VALID_BOT_REVIEW_KEYS:
             errors.append(f"bot_review.{key}: unsupported key. Supported keys: {supported}")
 
 
