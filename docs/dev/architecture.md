@@ -731,7 +731,9 @@ validators, enforced on every construction path — not only `check-config`): th
 must be **unique** and a **safe identifier** (`[A-Za-z0-9._-]+`), since `--bot`
 selection and the per-bot auto-trigger marker (a `.wade/` filename component)
 both key off `name`. `check_service` mirrors both rules for friendly
-`check-config` messages. No config-version migration is needed. `wade review trigger <issue>`
+`check-config` messages, and its `bot_review` key allowlist is **derived** from
+`BotReviewConfig.model_fields` (like the `done` validator above), so a new field
+is accepted without a hand-edit. No config-version migration is needed. `wade review trigger <issue>`
 (`review_service.trigger_bot_reviews`) posts the enabled bots' triggers via
 `git_pr.comment_on_pr`, wrapping **each** post in its own try/except so one
 failing bot doesn't abort the rest, and returns a `BotTriggerReport`
