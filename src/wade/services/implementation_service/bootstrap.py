@@ -790,12 +790,17 @@ def _carry_forward_pending_votes(
             return
         else:
             try:
-                main_ratings.unlink()
                 if legacy_tracked_in_main:
                     assert legacy_relpath is not None
                     restored = git_repo.restore_paths_to_head(repo_root, legacy_relpath)
                 else:
                     restored = True
+                # Keep the pending spool intact unless every prerequisite for
+                # resetting main has succeeded.  ``restore_paths_to_head``
+                # deliberately returns False rather than raising when git
+                # cannot restore the staged legacy migration.
+                if restored:
+                    main_ratings.unlink()
             except OSError:
                 restored = False
         if not restored:
