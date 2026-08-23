@@ -468,6 +468,24 @@ class TestDoneTriggerOffer:
         assert comment.call_count == 0
         assert not markers.marker_present(tmp_path, "bot-triggered-coderabbit", "abc123")
 
+    def test_tty_confirm_cancelled_is_declined_not_an_abort(self, tmp_path: Path) -> None:
+        """Ctrl+C at the offer must not raise — done() runs after the PR finalize.
+
+        A raised ``typer.Exit`` here would abort ``done()`` (reporting failure and
+        skipping worktree cleanup) even though the push/PR already succeeded. The
+        real ``prompts.confirm`` runs with ``cancel_default=False``, so a cancelled
+        prompt (questionary returns ``None``) is treated as a decline (#464 review).
+        """
+        with (
+            patch("wade.services.implementation_service.done.prompts.is_tty", return_value=True),
+            # questionary returning None simulates Ctrl+C at the confirm.
+            patch("questionary.select") as mock_select,
+        ):
+            mock_select.return_value.ask.return_value = None
+            comment = _run_done_hook(_config(), tmp_path)
+        assert comment.call_count == 0
+        assert not markers.marker_present(tmp_path, "bot-triggered-coderabbit", "abc123")
+
     def test_flag_posts_even_with_auto_trigger_off(self, tmp_path: Path) -> None:
         comment = _run_done_hook(_config(offer_on_done=False), tmp_path, trigger_bots=True)
         assert comment.call_count == 3
@@ -538,10 +556,11 @@ class TestMenuHelpers:
             patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1"),
             patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
         ):
-            posted = bot_trigger.post_pending_triggers(
+            pending = bot_trigger.post_pending_triggers(
                 _config(), tmp_path, "feat/42-x", 99, tmp_path
             )
-        assert posted == 3
+        # Posting a trigger means a review is now pending for this commit.
+        assert pending is True
         assert markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
 
     def test_post_pending_is_a_noop_once_triggered(self, tmp_path: Path) -> None:
@@ -556,8 +575,39 @@ class TestMenuHelpers:
             second = bot_trigger.post_pending_triggers(
                 _config(), tmp_path, "feat/42-x", 99, tmp_path
             )
-        assert (first, second) == (3, 0)
+        # Both report "a review is pending": the first posts them, the second finds
+        # them already recorded for this sha (no re-post — proven by call_count).
+        assert (first, second) == (True, True)
         assert comment.call_count == 3
+
+    def test_post_pending_false_when_every_post_fails(self, tmp_path: Path) -> None:
+        """A GitHub/API outage (every trigger post raises) means nothing pending.
+
+        The menu-side callers fall through into a wait-for-review poll only when a
+        trigger is actually pending — a ``False`` here keeps them from silently
+        waiting for a review no bot was successfully asked for (#464 review).
+        """
+        with (
+            patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1"),
+            patch(
+                "wade.services.bot_trigger.git_pr.comment_on_pr",
+                side_effect=RuntimeError("gh down"),
+            ),
+        ):
+            pending = bot_trigger.post_pending_triggers(
+                _config(), tmp_path, "feat/42-x", 99, tmp_path
+            )
+        assert pending is False
+        assert not markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
+
+    def test_post_pending_false_when_sha_unresolvable(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.bot_trigger.git_repo.rev_parse", side_effect=GitError("detached")
+        ):
+            pending = bot_trigger.post_pending_triggers(
+                _config(), tmp_path, "feat/42-x", 99, tmp_path
+            )
+        assert pending is False
 
 
 # ---------------------------------------------------------------------------

@@ -2462,6 +2462,36 @@ class TestPostReviewLifecycle:
         mock_merge.assert_not_called()
         mock_poll.assert_called_once()
 
+    @patch(
+        "wade.services.bot_trigger.git_pr.comment_on_pr",
+        side_effect=RuntimeError("gh down"),
+    )
+    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=2)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_trigger_choice_does_not_wait_when_every_post_fails(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        _mock_rev_parse: MagicMock,
+        mock_comment: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A GitHub outage posts nothing, so don't drop into the wait poll (#464 review)."""
+        from wade.models.config import ProjectConfig
+
+        provider = MagicMock()
+        _post_review_lifecycle(
+            tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider, config=ProjectConfig()
+        )
+        assert mock_comment.call_count == 3  # attempted every bot, all raised
+        mock_merge.assert_not_called()
+        mock_poll.assert_not_called()
+
     @patch("wade.services.review_service._quiet_next_steps_prompt")
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")

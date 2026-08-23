@@ -179,7 +179,7 @@ def post_pending_triggers(
     branch: str,
     pr_number: int,
     marker_root: Path,
-) -> int:
+) -> bool:
     """Post the triggers for every enabled bot not yet triggered at the branch tip.
 
     The menu-side counterpart of :func:`pending_names` — it re-resolves the sha
@@ -187,18 +187,25 @@ def post_pending_triggers(
     from, so a trigger that landed in between (another terminal, ``done``) is
     still not duplicated. This outer re-check is a fast path and the
     "already posted for this commit" notice; the authoritative dedup is the
-    under-lock re-check inside :func:`post_bot_triggers`. Returns the number of
-    comments posted.
+    under-lock re-check inside :func:`post_bot_triggers`.
+
+    Returns whether **a bot review is now pending for this commit** — i.e. whether
+    a caller that falls through into a wait-for-review poll is justified in doing
+    so. ``True`` when at least one trigger was posted just now, or when every
+    enabled bot was already triggered for this sha (concurrently recorded by
+    another ``done``/menu). ``False`` when nothing is pending: the branch tip could
+    not be resolved, or every post attempt failed (e.g. a GitHub/API outage) — in
+    which case waiting would be a silent wait for a review no bot was asked for.
     """
     sha = resolve_branch_sha(repo_root, branch)
     if sha is None:
         console.warn("Could not resolve the branch tip — skipping the bot review triggers.")
-        return 0
+        return False
     pending = pending_bots(config, marker_root, sha)
     if not pending:
         console.detail("Bot review triggers were already posted for this commit.")
-        return 0
-    return post_bot_triggers(repo_root, pr_number, pending, marker_root=marker_root, sha=sha)
+        return True
+    return post_bot_triggers(repo_root, pr_number, pending, marker_root=marker_root, sha=sha) > 0
 
 
 def post_bot_triggers(

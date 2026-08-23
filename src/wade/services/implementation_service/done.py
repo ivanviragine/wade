@@ -993,7 +993,16 @@ def _maybe_trigger_bot_reviews(
 
     names = bot_trigger.format_bot_names(pending)
     if prompts.is_tty():
-        if prompts.confirm(f"Post the bot-review triggers now ({names})?", default=True):
+        # This offer runs *after* the push and PR finalize, so a Ctrl+C at the
+        # confirm must never abort done() (which would report failure and skip its
+        # worktree-gitignore cleanup even though the remote already succeeded).
+        # `cancel_default=False` treats a cancel as a declined optional offer — the
+        # best-effort contract this function's docstring promises.
+        if prompts.confirm(
+            f"Post the bot-review triggers now ({names})?",
+            default=True,
+            cancel_default=False,
+        ):
             bot_trigger.post_bot_triggers(
                 repo_root, pr_number, pending, marker_root=marker_root, sha=sha
             )

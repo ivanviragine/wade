@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 import questionary
+import typer
 from questionary.prompts.common import InquirerControl
 
-from wade.ui.prompts import _enable_choice_wrapping, select
+from wade.ui.prompts import _enable_choice_wrapping, confirm, select
 
 
 def _mock_questionary_result(return_value: object) -> MagicMock:
@@ -43,6 +45,41 @@ class TestSelect:
         ):
             result = select("Pick one", ["a", "b"])
         assert result == 1
+
+
+class TestConfirm:
+    """confirm() yes/no mapping and Ctrl+C (cancel) handling."""
+
+    def test_yes_returns_true(self) -> None:
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("questionary.select", return_value=_mock_questionary_result("Yes")),
+        ):
+            assert confirm("OK?") is True
+
+    def test_no_returns_false(self) -> None:
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("questionary.select", return_value=_mock_questionary_result("No")),
+        ):
+            assert confirm("OK?", default=True) is False
+
+    def test_cancel_raises_typer_exit_by_default(self) -> None:
+        """Ctrl+C (questionary returns None) aborts the program by default."""
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("questionary.select", return_value=_mock_questionary_result(None)),
+            pytest.raises(typer.Exit),
+        ):
+            confirm("OK?")
+
+    def test_cancel_returns_cancel_default_when_given(self) -> None:
+        """An optional prompt returns cancel_default instead of aborting on Ctrl+C."""
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("questionary.select", return_value=_mock_questionary_result(None)),
+        ):
+            assert confirm("OK?", default=True, cancel_default=False) is False
 
 
 class TestSelectNonTty:

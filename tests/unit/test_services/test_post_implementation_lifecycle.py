@@ -863,6 +863,38 @@ def test_menu_offers_bot_triggers_and_posts_then_waits(tmp_path: Path) -> None:
     assert status == MergeStatus.NOT_MERGED
 
 
+def test_menu_bot_trigger_offer_does_not_wait_when_every_post_fails(tmp_path: Path) -> None:
+    """A GitHub outage (every trigger post raises) must not drop into the wait poll.
+
+    Picking the offer while ``comment_on_pr`` fails for every bot posts nothing, so
+    the lifecycle returns instead of silently waiting for a review no bot was asked
+    for (#464 review) — poll_for_reviews is never reached.
+    """
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir(exist_ok=True)
+    poll = MagicMock()
+    with (
+        patch(
+            f"{_LC}.git_pr.get_pr_for_branch",
+            return_value=PRLookup(
+                found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+            ),
+        ),
+        patch(f"{_LC}.prompts.is_tty", return_value=True),
+        patch(f"{_LC}.prompts.confirm", return_value=False),  # don't open the browser
+        patch(f"{_LC}.prompts.select", return_value=2),  # the "Trigger bot reviews" entry
+        patch("wade.config.loader.load_config", return_value=ProjectConfig()),
+        patch(f"{_BT}.git_repo.rev_parse", return_value="sha1"),
+        patch(f"{_BT}.git_pr.comment_on_pr", side_effect=RuntimeError("gh down")),
+        patch("wade.services.review_service.poll_for_reviews", poll),
+    ):
+        status = _post_implementation_lifecycle(
+            tmp_path / "repo", "feat/42-test", 42, wt_path, MagicMock()
+        )
+    assert status == MergeStatus.NOT_MERGED
+    assert poll.called is False
+
+
 def test_menu_hides_bot_trigger_offer_when_opted_out(tmp_path: Path) -> None:
     from wade.models.config import BotReviewConfig
 

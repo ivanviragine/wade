@@ -382,10 +382,15 @@ def _post_implementation_lifecycle_pr(
     choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
     if bot_config is not None and choice == trigger_index:
-        bot_trigger.post_pending_triggers(
+        if bot_trigger.post_pending_triggers(
             bot_config, repo_root, branch, int(pr_number), worktree_path or repo_root
-        )
-        choice = 1  # ...then fall through into the wait-for-reviews flow.
+        ):
+            choice = 1  # ...then fall through into the wait-for-reviews flow.
+        else:
+            # Every trigger post failed (e.g. a GitHub outage) — no bot was asked
+            # to review, so don't drop into a wait for a review no one requested
+            # (the exact silent-wait this option exists to avoid).
+            return MergeStatus.NOT_MERGED
 
     if choice == 1:  # Wait for reviews
         from wade.models.review import PollOutcome
