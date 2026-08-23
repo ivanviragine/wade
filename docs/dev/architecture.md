@@ -803,12 +803,15 @@ gates on `blocking_bots` when `expected_bots` is set; the **service**
 a runtime clock, so it populates `expected_bots` from the enabled bots and computes
 the arrival map (arrival window measured from the later of the commit push and a
 `.wade/bot-triggered-<name>@<sha>` marker, falling back to the commit push when
-absent). The arrival-window comparison is a service/param concern — the model stays
-config-free (layering rule). Every completion surface reads the map: the poll loop
-(`poll_for_reviews`, gated on `config`), single-shot `start()`, the AI-agent-facing
-`fetch_reviews()`, and `format_review_status_summary`. When `expected_bots` is empty
-(no config passed, or all bots disabled) the model behaves exactly as before #448.
-See knowledge `cc91cd11` for the generalized principle.
+absent). `poll_for_reviews` accepts `marker_root` separately from the git/provider
+`repo_root`; menu-triggered polls pass the linked worktree here so a fresh trigger
+marker resets the arrival window even when provider operations run from the main
+checkout. The arrival-window comparison is a service/param concern — the model
+stays config-free (layering rule). Every completion surface reads the map: the poll
+loop (`poll_for_reviews`, gated on `config`), single-shot `start()`, the
+AI-agent-facing `fetch_reviews()`, and `format_review_status_summary`. When
+`expected_bots` is empty (no config passed, or all bots disabled) the model behaves
+exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
