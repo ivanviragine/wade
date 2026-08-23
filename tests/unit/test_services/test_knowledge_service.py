@@ -17,6 +17,7 @@ from wade.services.knowledge_service import (
     EntryRating,
     KnowledgeEntry,
     ParsedEntry,
+    StagedRatingsFlushResult,
     _canonical_project_root,
     add_tag_to_entry,
     append_knowledge,
@@ -1687,7 +1688,7 @@ class TestStagedRatingEvents:
         monkeypatch.setattr(
             "wade.services.knowledge_service._load_staged_rating_records", pause_after_snapshot
         )
-        outcomes = []
+        outcomes: list[StagedRatingsFlushResult] = []
         drain = threading.Thread(
             target=lambda: outcomes.append(flush_staged_ratings(worktree, main, config))
         )

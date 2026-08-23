@@ -100,6 +100,7 @@ class TestReportRetainedVoteRecovery:
                 ),
             ],
         )
+        monkeypatch.setenv("COLUMNS", "500")
         monkeypatch.setattr("wade.services.knowledge_recovery.console", Console())
 
         report_retained_vote_recovery(tmp_path, ProjectConfig(knowledge=_enabled()))
