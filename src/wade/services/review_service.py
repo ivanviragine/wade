@@ -43,6 +43,7 @@ from wade.models.review import (
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import bot_trigger
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
@@ -654,6 +655,7 @@ def poll_for_reviews(
     human_settle: int = 120,
     quiet_timeout: int = 600,
     config: ProjectConfig | None = None,
+    marker_root: Path | None = None,
 ) -> PollOutcome:
     """Poll for new PR review comments, blocking until a terminal condition is reached.
 
@@ -671,8 +673,10 @@ def poll_for_reviews(
     keeps waiting (reporting per-bot progress) and never returns ``REVIEW_COMPLETE``
     or lets the quiet-timeout fire with a clean "done". Once a bot's window elapses
     it stops blocking and is surfaced as missing. When ``config`` is ``None`` (a
-    caller that predates this gating) the loop behaves as before. The marker-absent
-    commit-push fallback is used for arrival-window starts (see
+    caller that predates this gating) the loop behaves as before. ``marker_root``
+    identifies the worktree whose ``.wade/`` contains the trigger markers; it
+    defaults to ``repo_root`` for callers already running inside that worktree.
+    The marker-absent commit-push fallback is used for arrival-window starts (see
     ``compute_bot_arrivals``).
     """
     console.info("Waiting for review comments... (Ctrl+C to stop)")
@@ -714,7 +718,7 @@ def poll_for_reviews(
             # the worktree in the common in-worktree poll, so its ``.wade/`` trigger
             # markers seed the arrival windows (missing dir → commit-push fallback).
             if config is not None:
-                annotate_bot_expectations(status, config, marker_root=repo_root)
+                annotate_bot_expectations(status, config, marker_root=marker_root or repo_root)
 
             if status.bot_status == ReviewBotStatus.IN_PROGRESS:
                 quiet_start = None  # bot is active; reset quiet timer
@@ -1453,10 +1457,40 @@ def _quiet_next_steps_prompt(
             if allow_merge
             else ["Keep polling", "Exit without merging"]
         )
+        # A quiet PR is exactly where an un-triggered bot shows up as silence, so
+        # offer the trigger before the user decides to keep waiting (#464). The
+        # entry is appended, never inserted, so the existing choices keep their
+        # indexes. Hidden once every enabled bot has fired for this commit.
+        bot_config, trigger_option = bot_trigger.menu_entry(
+            repo_root, pr_number, worktree_path, config=config
+        )
+        # Index bound at append time so a later option can't steal this branch.
+        trigger_index = -1
+        if trigger_option:
+            trigger_index = len(options)
+            options.append(trigger_option)
         choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
+        if bot_config is not None and choice == trigger_index:
+            if bot_trigger.post_pending_triggers(
+                bot_config, repo_root, pr_number, worktree_path or repo_root
+            ):
+                # The freshly written trigger markers reset each bot's arrival
+                # window. Retain the config even when this prompt was reached
+                # from an ordinary poll (where ``config`` is None), so a later
+                # "Keep polling" tracks the newly requested bots.
+                config = bot_config
+            continue  # Re-display the menu — the user can now keep polling.
+
         if choice == 0:  # Keep polling
-            outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
+            outcome = poll_for_reviews(
+                provider,
+                repo_root,
+                pr_number,
+                branch,
+                config=config,
+                marker_root=worktree_path or repo_root,
+            )
             if outcome == PollOutcome.COMMENTS_FOUND:
                 if issue_number:
                     _ = start(
@@ -1523,13 +1557,44 @@ def _post_review_lifecycle(
         return
 
     console.empty()
-    choice = prompts.select(
-        f"PR #{pr_number} — what next?",
-        ["Merge PR", "Wait for new reviews"],
+    # Same offer as the post-implementation menu (#464): the review session's
+    # `done` pushed fixups, and with `auto_trigger` off nothing asked the bots to
+    # look again — which is precisely when "wait for new reviews" waits forever.
+    bot_config, trigger_option = bot_trigger.menu_entry(
+        repo_root, pr_number, worktree_path, suffix=", then wait", config=config
     )
+    options = ["Merge PR", "Wait for new reviews"]
+    # Index bound at append time so a later option can't steal this branch.
+    trigger_index = -1
+    if trigger_option:
+        trigger_index = len(options)
+        options.append(trigger_option)
+
+    choice = prompts.select(f"PR #{pr_number} — what next?", options)
+
+    if bot_config is not None and choice == trigger_index:
+        if bot_trigger.post_pending_triggers(
+            bot_config, repo_root, pr_number, worktree_path or repo_root
+        ):
+            choice = 1  # ...then fall through into the wait-for-new-reviews flow.
+            # The fresh trigger markers reset each bot's arrival window, so keep
+            # the config attached to the poll even when the caller passed none.
+            config = bot_config
+        else:
+            # Every trigger post failed (e.g. a GitHub outage) — no bot was asked
+            # to review, so don't drop into a wait for a review no one requested
+            # (the exact silent-wait this option exists to avoid).
+            return
 
     if choice == 1:  # Wait for new reviews
-        outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
+        outcome = poll_for_reviews(
+            provider,
+            repo_root,
+            pr_number,
+            branch,
+            config=config,
+            marker_root=worktree_path or repo_root,
+        )
         if outcome == PollOutcome.COMMENTS_FOUND:
             if issue_number:
                 _ = start(

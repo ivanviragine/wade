@@ -78,6 +78,7 @@ src/wade/
 │   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
 │   ├── review_service.py           # PR review session lifecycle
+│   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
 │   ├── batch_review_service.py      # Batch issue review
 │   ├── deps_service.py  # Dependency analysis
@@ -777,6 +778,7 @@ done:                        # completion-gate toggles (all default true)
   max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
 bot_review:                  # external-bot review triggers (#431); fully defaulted
   auto_trigger: false        # opt-in; when true, `done` posts triggers after it pushes
+  offer_on_done: true        # #464: when auto_trigger is off, `done`/menus OFFER the triggers
   arrival_timeout: 300       # #448: seconds to wait for an enabled bot to review HEAD
   ack_timeout: 900           # #448: longer ceiling once a bot reacts (👀/+1); must be >= arrival
   bots:
@@ -800,31 +802,69 @@ and the three built-in bots (CodeRabbit / Codex / Bugbot), produced by
 `Field(default_factory=_default_review_bots)` so no list instance is shared
 across `ProjectConfig`s. Because `_build_config` is hand-rolled per section, the
 model alone is not parsed — `_parse_bot_review` in `config/loader.py` is the
-explicit parse block (a present section overrides `auto_trigger`; an explicit
-`bots` list replaces the defaults wholesale, an omitted one keeps them). Bot
+explicit parse block (a present section overrides `auto_trigger` /
+`offer_on_done`; an explicit `bots` list replaces the defaults wholesale, an
+omitted one keeps them). Bot
 `name` values are **model invariants** (`ReviewBotConfig`/`BotReviewConfig`
 validators, enforced on every construction path — not only `check-config`): they
 must be **unique** and a **safe identifier** (`[A-Za-z0-9._-]+`), since `--bot`
 selection and the per-bot auto-trigger marker (a `.wade/` filename component)
 both key off `name`. `check_service` mirrors both rules for friendly
-`check-config` messages. No config-version migration is needed. `wade review trigger <issue>`
+`check-config` messages, and its `bot_review` key allowlist is **derived** from
+`BotReviewConfig.model_fields` (like the `done` validator above), so a new field
+is accepted without a hand-edit. No config-version migration is needed. `wade review trigger <issue>`
 (`review_service.trigger_bot_reviews`) posts the enabled bots' triggers via
 `git_pr.comment_on_pr`, wrapping **each** post in its own try/except so one
 failing bot doesn't abort the rest, and returns a `BotTriggerReport`
-(`models/review.py`) whose `exit_code` the CLI uses. With `auto_trigger: true`,
-`implementation_service.done()` → `_done_via_pr` → `_auto_trigger_bot_reviews`
-fires the same triggers **after a successful push**, at most **once per bot per
-commit SHA** via per-bot `.wade/bot-triggered-<name>@<sha>` markers
-(`utils/markers.py:write_marker`, written only after that bot's post succeeds —
-so a failed bot retries, a succeeded one never re-posts). A failed marker *write*
-is warned rather than reported as durable success, since the comment is already
-posted but a later same-SHA `done` may re-post it. (The `name` safe-identifier
-invariant means a `/` can no longer break the marker path, so a `False` write now
-signals a genuine I/O failure.) The manual command never reads or writes those
-markers, so a same-SHA `done` still auto-fires. Untrusted text interpolated into
-markup-enabled console output — provider/exception error text, and arbitrary
-`--bot` values — is escaped (`console.escape_markup`) so a stray Rich control
-token can't raise `MarkupError` (even on `--dry-run`).
+(`models/review.py`) whose `exit_code` the CLI uses. The manual command never
+reads or writes the per-SHA markers described below, so a same-SHA automatic
+trigger still fires. Untrusted text interpolated into markup-enabled console
+output — provider/exception error text, and arbitrary `--bot` values — is escaped
+(`console.escape_markup`) so a stray Rich control token can't raise `MarkupError`
+(even on `--dry-run`).
+
+**Marker-aware triggering** (`services/bot_trigger.py`, #431/#464): every surface
+that triggers as a *side effect of finishing a session* shares this leafish
+service module — `pending_bots`/`pending_names` (enabled bots with no
+`.wade/bot-triggered-<name>@<sha>` marker), `post_bot_triggers` (post + record),
+`menu_entry`/`post_pending_triggers` (the post-session menu pair). Triggers fire
+**at most once per bot per commit SHA** (`utils/markers.py:write_marker`, written
+only after that bot's post succeeds — so a failed bot retries, a succeeded one
+never re-posts). `post_bot_triggers` runs the whole check→post→record section
+under a cross-process `utils/filelock.file_lock` keyed on worktree+SHA, and
+re-checks each bot's marker *inside* the lock — so two concurrent `done`/menu
+processes on one worktree can't both read a marker absent and double-post
+(the guarantee holds under process-level parallelism, not just sequential
+re-runs); if the lock primitive is unavailable it degrades to the unlocked
+best-effort check-then-act rather than fail an otherwise-complete `done`. A
+failed marker *write* is warned rather than reported as durable success, since
+the comment is already posted but a later same-SHA pass may re-post it. (The `name` safe-identifier invariant means a `/` can no longer break the
+marker path, so a `False` write now signals a genuine I/O failure.) An
+unresolvable branch sha means the markers cannot dedupe, so every caller declines
+to post rather than risk a comment per pass.
+
+Consumers, all fed from that one module:
+
+- `implementation_service.done()` → `_done_via_pr` → `_maybe_trigger_bot_reviews`
+  (covers **both** session `done` commands). Resolution order: the
+  `--trigger-bots` / `--no-trigger-bots` flag (`trigger_bots: bool | None`,
+  threaded CLI → `done()` → `_done_via_pr`) > `auto_trigger` > `offer_on_done` >
+  silence. The offer is a `prompts.confirm` on a TTY and a printed
+  offer-in-your-closing-dialog line otherwise — `done` normally runs in a
+  non-TTY AI session, so the agent, not wade, is the one who can ask the human.
+  This offer runs *after* the push and PR finalize, so a Ctrl+C at the confirm is
+  treated as a declined offer (`prompts.confirm(cancel_default=False)`) rather
+  than aborting `done` and skipping its worktree cleanup for an already-live PR.
+- `implementation_service.lifecycle._post_implementation_lifecycle_pr` and
+  `review_service._post_review_lifecycle` / `_quiet_next_steps_prompt` — each
+  **appends** (never inserts) a `Trigger bot reviews (…)` entry, so existing
+  choice indexes are untouched; `menu_entry` returns `(None, None)` and the menu
+  renders unchanged whenever resolution fails, since an offer must never break
+  the merge/wait menu it decorates. Picking the entry only falls through into the
+  wait-for-review poll when `post_pending_triggers` reports a review is now
+  pending (`bool`: a trigger posted, or every bot already recorded for this SHA);
+  when every post fails (e.g. a GitHub outage) it returns instead of silently
+  waiting for a review no bot was asked for.
 
 **Expectation-verified review completion (#448)**: `arrival_timeout` / `ack_timeout`
 turn review completion from *presence-inferred* (no blocking signal → done) into
@@ -842,12 +882,15 @@ gates on `blocking_bots` when `expected_bots` is set; the **service**
 a runtime clock, so it populates `expected_bots` from the enabled bots and computes
 the arrival map (arrival window measured from the later of the commit push and a
 `.wade/bot-triggered-<name>@<sha>` marker, falling back to the commit push when
-absent). The arrival-window comparison is a service/param concern — the model stays
-config-free (layering rule). Every completion surface reads the map: the poll loop
-(`poll_for_reviews`, gated on `config`), single-shot `start()`, the AI-agent-facing
-`fetch_reviews()`, and `format_review_status_summary`. When `expected_bots` is empty
-(no config passed, or all bots disabled) the model behaves exactly as before #448.
-See knowledge `cc91cd11` for the generalized principle.
+absent). `poll_for_reviews` accepts `marker_root` separately from the git/provider
+`repo_root`; menu-triggered polls pass the linked worktree here so a fresh trigger
+marker resets the arrival window even when provider operations run from the main
+checkout. The arrival-window comparison is a service/param concern — the model
+stays config-free (layering rule). Every completion surface reads the map: the poll
+loop (`poll_for_reviews`, gated on `config`), single-shot `start()`, the
+AI-agent-facing `fetch_reviews()`, and `format_review_status_summary`. When
+`expected_bots` is empty (no config passed, or all bots disabled) the model behaves
+exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 

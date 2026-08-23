@@ -22,6 +22,7 @@ Never grant write access to the main checkout just to make it pass.
 {user_interaction_prompt}
 - After `done` succeeds (dialog): `Exit now — wade takes over (recommended)` / `Keep editing — I have more changes`.
 - If a review finding needs your call (dialog): `Fix it now (recommended)` / `Skip — open a follow-up issue`.
+- Only if `done` says bot review triggers were **not** posted, add a third exit-dialog option: `Post bot review triggers` → `wade review trigger <issue-number>`.
 
 ## Never use `gh issue create`
 

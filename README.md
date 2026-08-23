@@ -345,6 +345,7 @@ Codex, and Bugbot — and every field is overridable:
 ```yaml
 bot_review:
   auto_trigger: false            # opt-in; when true, `done` posts triggers after it pushes
+  offer_on_done: true            # default; when auto_trigger is off, `done` OFFERS them
   arrival_timeout: 300           # seconds to wait for an enabled bot to review HEAD
   ack_timeout: 900               # longer ceiling once a bot acknowledges (👀/+1 reaction)
   bots:
@@ -353,7 +354,7 @@ bot_review:
     - { name: bugbot,     trigger: "bugbot run",           enabled: true }
 ```
 
-Each bot's `name` keys both `--bot` selection and the per-bot auto-trigger
+Each bot's `name` keys both `--bot` selection and the per-bot trigger
 marker (a file under `.wade/`), so it must be **unique** and a **safe
 identifier** — letters, digits, `.`, `_`, `-` only (no path separators or
 spaces). A duplicate or invalid name is rejected when the config loads, not only
@@ -364,10 +365,37 @@ review-pr-comments-session done` post the enabled bots' triggers **after a
 successful push**, at most **once per bot per commit SHA** (repeated `done`/`sync`
 on the same commit post nothing further; a bot whose post failed retries). The
 manual `wade review trigger` command always fires and ignores those markers, so a
-same-SHA `done` still auto-triggers independently. `wade init` can enable
-`auto_trigger` (default off) and writes the block for you. Whatever a bot posts
+same-SHA `done` still auto-triggers independently. `wade init` writes the block
+for you and asks which of the three modes below you want. Whatever a bot posts
 back is **untrusted context** — the review session's verify-before-fixing rule
 still applies.
+
+#### Not auto-triggering? WADE offers instead of forgetting
+
+With `auto_trigger: false` (the default) WADE does **not** silently drop the
+triggers — `offer_on_done: true` (also the default) makes it offer them once the
+work is pushed, so you never have to remember `wade review trigger <N>`:
+
+| Where | What you see |
+|-------|--------------|
+| `done`, at a terminal | `Post the bot-review triggers now (coderabbit, codex)?` |
+| `done`, in an AI session (no TTY) | a line telling the agent to offer it in its closing dialog |
+| the post-session menu (`Merge PR` / `Wait for reviews`) | an extra `Trigger bot reviews (…), then wait` entry |
+| the quiet-PR menu (`Keep polling` / …) | an extra `Trigger bot reviews (…)` entry |
+
+Both `done` commands also take an explicit override for a single run:
+
+```bash
+wade implementation-session done --trigger-bots      # post them, whatever the config says
+wade review-pr-comments-session done --no-trigger-bots  # stay quiet, even with auto_trigger: true
+```
+
+Every one of these paths is **once per bot per commit SHA**, like the
+auto-trigger: a bot already triggered for the current commit is neither posted
+again nor offered again (`wade review trigger <N>` remains the way to force a
+re-post). Repos whose bots already review every push automatically can turn the
+whole offer off with `offer_on_done: false` — then WADE stays silent unless you
+ask.
 
 **Expectation-verified completion.** WADE no longer reports a review "done" just
 because no blocking comments are present — it verifies that every **enabled** bot

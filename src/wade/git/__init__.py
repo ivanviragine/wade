@@ -15,6 +15,7 @@ from wade.git.pr import (
     PRRef,
     create_pr,
     get_pr_for_branch,
+    get_pr_head_sha,
     merge_pr,
 )
 from wade.git.repo import (
@@ -64,6 +65,7 @@ __all__ = [
     "get_current_branch",
     "get_dirty_file_paths",
     "get_pr_for_branch",
+    "get_pr_head_sha",
     "get_remote_url",
     "get_repo_root",
     "is_clean",

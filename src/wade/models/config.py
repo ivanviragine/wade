@@ -330,6 +330,24 @@ class BotReviewConfig(BaseModel):
     (via :func:`_default_review_bots`) so ``wade review trigger`` works with no
     config; every field is overridable.
 
+    ``offer_on_done`` (#464) governs the middle ground between "post every time"
+    and "never": with ``auto_trigger: False`` (the default), a session's ``done``
+    — and the post-session menus — **offer** the triggers instead of leaving the
+    user to remember ``wade review trigger <N>``. Interactively that is a
+    confirm/menu entry; in a non-TTY agent session ``done`` prints the offer so
+    the agent can put it in its closing dialog. Set it to ``False`` for repos
+    whose bots already auto-review every push, where a trigger comment is
+    redundant noise. The three states, in precedence order (a ``done``
+    ``--trigger-bots`` / ``--no-trigger-bots`` flag overrides all of them):
+
+    ===================  =================  ==================================
+    ``auto_trigger``     ``offer_on_done``  behavior after ``done`` pushes
+    ===================  =================  ==================================
+    ``True``             (ignored)          posts the enabled bots' triggers
+    ``False``            ``True``           offers them (default)
+    ``False``            ``False``          silent — trigger manually
+    ===================  =================  ==================================
+
     ``arrival_timeout`` / ``ack_timeout`` bound how long review completion waits
     for an expected bot (#448). WADE refuses to report all-clear while an enabled
     bot has not posted a review covering HEAD; ``arrival_timeout`` (seconds) caps
@@ -349,6 +367,7 @@ class BotReviewConfig(BaseModel):
     """
 
     auto_trigger: bool = False
+    offer_on_done: bool = True
     arrival_timeout: StrictInt = Field(default=300, gt=0)
     ack_timeout: StrictInt = Field(default=900, gt=0)
     bots: list[ReviewBotConfig] = Field(default_factory=_default_review_bots)

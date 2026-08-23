@@ -1,10 +1,12 @@
-"""Tests for bot-review triggering (#431).
+"""Tests for bot-review triggering (#431, #464).
 
 Covers the manual ``review_service.trigger_bot_reviews`` service (per-bot
 posting, partial-failure isolation, output-state contract, ``--bot`` subset
-selection + enabled override, unknown-name error, dry-run) and the ``done``
-auto-trigger hook (``_auto_trigger_bot_reviews``: once-per-bot-per-sha,
-retry-only-failed, skip-when-disabled, and the manual-vs-auto marker separation).
+selection + enabled override, unknown-name error, dry-run), the ``done`` hook
+(``_maybe_trigger_bot_reviews``: once-per-bot-per-sha, retry-only-failed,
+skip-when-disabled, the ``--trigger-bots`` / ``--no-trigger-bots`` override, the
+``offer_on_done`` offer path, and the manual-vs-automatic marker separation), and
+the shared menu helpers in ``services.bot_trigger``.
 """
 
 from __future__ import annotations
@@ -15,20 +17,25 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git.pr import PRLookup, PRRef
+from wade.git.repo import GitError
 from wade.models.config import BotReviewConfig, ProjectConfig, ReviewBotConfig
 from wade.models.review import BotTriggerOutcome
-from wade.services.implementation_service.done import _auto_trigger_bot_reviews
+from wade.services import bot_trigger
+from wade.services.implementation_service.done import _maybe_trigger_bot_reviews
 from wade.services.review_service import trigger_bot_reviews
 from wade.utils import markers
 
 
 def _config(
-    *, auto_trigger: bool = False, bots: list[ReviewBotConfig] | None = None
+    *,
+    auto_trigger: bool = False,
+    offer_on_done: bool = True,
+    bots: list[ReviewBotConfig] | None = None,
 ) -> ProjectConfig:
     review = (
-        BotReviewConfig(auto_trigger=auto_trigger, bots=bots)
+        BotReviewConfig(auto_trigger=auto_trigger, offer_on_done=offer_on_done, bots=bots)
         if bots is not None
-        else BotReviewConfig(auto_trigger=auto_trigger)
+        else BotReviewConfig(auto_trigger=auto_trigger, offer_on_done=offer_on_done)
     )
     return ProjectConfig(bot_review=review)
 
@@ -261,8 +268,30 @@ class TestTriggerDryRunAndResolution:
 
 
 # ---------------------------------------------------------------------------
-# Auto-trigger in done (_auto_trigger_bot_reviews)
+# Automatic / offered triggering in done (_maybe_trigger_bot_reviews)
 # ---------------------------------------------------------------------------
+
+
+def _run_done_hook(
+    config: ProjectConfig,
+    tmp_path: Path,
+    *,
+    comment: MagicMock | None = None,
+    sha: str = "abc123",
+    trigger_bots: bool | None = None,
+) -> MagicMock:
+    """Drive ``done``'s trigger hook with git plumbing stubbed out.
+
+    ``prompts.is_tty()`` is False under pytest, so the offer path takes its
+    non-interactive branch unless a test patches it.
+    """
+    comment = comment or MagicMock()
+    with (
+        patch("wade.services.bot_trigger.git_repo.rev_parse", return_value=sha),
+        patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+    ):
+        _maybe_trigger_bot_reviews(config, tmp_path, "feat/42-x", 99, tmp_path, "42", trigger_bots)
+    return comment
 
 
 class TestAutoTrigger:
@@ -274,22 +303,10 @@ class TestAutoTrigger:
         comment: MagicMock | None = None,
         sha: str = "abc123",
     ) -> MagicMock:
-        comment = comment or MagicMock()
-        with (
-            patch(
-                "wade.services.implementation_service.done.git_repo.rev_parse",
-                return_value=sha,
-            ),
-            patch(
-                "wade.services.implementation_service.done.git_pr.comment_on_pr",
-                comment,
-            ),
-        ):
-            _auto_trigger_bot_reviews(config, tmp_path, "feat/42-x", 99, tmp_path)
-        return comment
+        return _run_done_hook(config, tmp_path, comment=comment, sha=sha)
 
     def test_disabled_when_auto_trigger_false(self, tmp_path: Path) -> None:
-        comment = self._run(_config(auto_trigger=False), tmp_path)
+        comment = self._run(_config(auto_trigger=False, offer_on_done=False), tmp_path)
         assert comment.call_count == 0
 
     def test_posts_enabled_bots_when_on(self, tmp_path: Path) -> None:
@@ -350,22 +367,13 @@ class TestAutoTrigger:
         )
         comment = MagicMock()
         with (
-            patch(
-                "wade.services.implementation_service.done.git_repo.rev_parse",
-                return_value="sha1",
-            ),
-            patch(
-                "wade.services.implementation_service.done.git_pr.comment_on_pr",
-                comment,
-            ),
-            patch(
-                "wade.services.implementation_service.done.markers.write_marker",
-                return_value=False,
-            ),
-            patch("wade.services.implementation_service.done.console") as mock_console,
+            patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1"),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+            patch("wade.services.bot_trigger.markers.write_marker", return_value=False),
+            patch("wade.services.bot_trigger.console") as mock_console,
         ):
             mock_console.escape_markup.side_effect = lambda s: s
-            _auto_trigger_bot_reviews(config, tmp_path, "feat/42-x", 99, tmp_path)
+            _maybe_trigger_bot_reviews(config, tmp_path, "feat/42-x", 99, tmp_path, "42")
         assert comment.call_count == 1  # comment still posted
         assert mock_console.warn.call_count == 1  # failure surfaced
         assert mock_console.detail.call_count == 0  # not a durable-success report
@@ -382,3 +390,315 @@ class TestAutoTrigger:
         # A same-sha done auto-trigger therefore still posts.
         comment = self._run(_config(auto_trigger=True), tmp_path, sha="sha1")
         assert comment.call_count == 3
+
+    def test_unresolvable_sha_posts_nothing(self, tmp_path: Path) -> None:
+        """No sha means the markers cannot dedupe — post nothing rather than spam."""
+        comment = MagicMock()
+        with (
+            patch(
+                "wade.services.bot_trigger.git_repo.rev_parse",
+                side_effect=GitError("detached"),
+            ),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            _maybe_trigger_bot_reviews(
+                _config(auto_trigger=True), tmp_path, "feat/42-x", 99, tmp_path, "42"
+            )
+        assert comment.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# The offer path + the --trigger-bots / --no-trigger-bots override (#464)
+# ---------------------------------------------------------------------------
+
+
+class TestDoneTriggerOffer:
+    def test_offer_reports_instead_of_posting(self, tmp_path: Path) -> None:
+        """auto_trigger off + offer on + non-TTY: nothing posted, offer surfaced."""
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(_config(), tmp_path)
+        assert comment.call_count == 0
+        offered = " ".join(str(c.args[0]) for c in mock_console.info.call_args_list)
+        assert "wade review trigger 42" in offered
+        assert "coderabbit" in offered
+
+    def test_non_tty_offer_handoff_limits_trigger_to_pending_bots(self, tmp_path: Path) -> None:
+        """The closing-dialog command must not re-trigger an already marked bot."""
+        config = _config(
+            bots=[
+                ReviewBotConfig(name="coderabbit", trigger="@coderabbitai review"),
+                ReviewBotConfig(name="codex", trigger="@codex review"),
+            ]
+        )
+        assert markers.write_marker(tmp_path, "bot-triggered-coderabbit", "abc123")
+
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(config, tmp_path)
+
+        assert comment.call_count == 0
+        offered = " ".join(str(call.args[0]) for call in mock_console.info.call_args_list)
+        assert "wade review trigger 42 --bot codex" in offered
+        assert "--bot coderabbit" not in offered
+
+    def test_offer_silent_when_opted_out(self, tmp_path: Path) -> None:
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(_config(offer_on_done=False), tmp_path)
+        assert comment.call_count == 0
+        assert mock_console.info.call_count == 0
+
+    def test_offer_silent_when_no_bot_enabled(self, tmp_path: Path) -> None:
+        config = _config(
+            bots=[ReviewBotConfig(name="codex", trigger="@codex review", enabled=False)]
+        )
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(config, tmp_path)
+        assert comment.call_count == 0
+        assert mock_console.info.call_count == 0
+
+    def test_offer_not_repeated_for_an_already_triggered_commit(self, tmp_path: Path) -> None:
+        """A second done at the same sha neither posts nor re-asks."""
+        _run_done_hook(_config(auto_trigger=True), tmp_path, sha="sha1")
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(_config(), tmp_path, sha="sha1")
+        assert comment.call_count == 0
+        assert mock_console.info.call_count == 0
+
+    def test_tty_confirm_accepted_posts(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.services.implementation_service.done.prompts.is_tty", return_value=True),
+            patch("wade.services.implementation_service.done.prompts.confirm", return_value=True),
+        ):
+            comment = _run_done_hook(_config(), tmp_path)
+        assert comment.call_count == 3
+        assert markers.marker_present(tmp_path, "bot-triggered-coderabbit", "abc123")
+
+    def test_tty_confirm_declined_posts_nothing_and_leaves_no_marker(self, tmp_path: Path) -> None:
+        """Declining must not write markers — the next done offers again."""
+        with (
+            patch("wade.services.implementation_service.done.prompts.is_tty", return_value=True),
+            patch("wade.services.implementation_service.done.prompts.confirm", return_value=False),
+        ):
+            comment = _run_done_hook(_config(), tmp_path)
+        assert comment.call_count == 0
+        assert not markers.marker_present(tmp_path, "bot-triggered-coderabbit", "abc123")
+
+    def test_tty_confirm_cancelled_is_declined_not_an_abort(self, tmp_path: Path) -> None:
+        """Ctrl+C at the offer must not raise — done() runs after the PR finalize.
+
+        A raised ``typer.Exit`` here would abort ``done()`` (reporting failure and
+        skipping worktree cleanup) even though the push/PR already succeeded. The
+        real ``prompts.confirm`` runs with ``cancel_default=False``, so a cancelled
+        prompt (questionary returns ``None``) is treated as a decline (#464 review).
+        """
+        with (
+            patch("wade.services.implementation_service.done.prompts.is_tty", return_value=True),
+            # questionary returning None simulates Ctrl+C at the confirm.
+            patch("questionary.select") as mock_select,
+        ):
+            mock_select.return_value.ask.return_value = None
+            comment = _run_done_hook(_config(), tmp_path)
+        assert comment.call_count == 0
+        assert not markers.marker_present(tmp_path, "bot-triggered-coderabbit", "abc123")
+
+    def test_flag_posts_even_with_auto_trigger_off(self, tmp_path: Path) -> None:
+        comment = _run_done_hook(_config(offer_on_done=False), tmp_path, trigger_bots=True)
+        assert comment.call_count == 3
+
+    def test_flag_suppresses_auto_trigger(self, tmp_path: Path) -> None:
+        comment = _run_done_hook(_config(auto_trigger=True), tmp_path, trigger_bots=False)
+        assert comment.call_count == 0
+
+    def test_flag_on_an_already_triggered_commit_says_so(self, tmp_path: Path) -> None:
+        """An explicit request that the markers swallow is reported, not silent."""
+        _run_done_hook(_config(auto_trigger=True), tmp_path, sha="sha1")
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(_config(), tmp_path, sha="sha1", trigger_bots=True)
+        assert comment.call_count == 0
+        said = " ".join(str(c.args[0]) for c in mock_console.detail.call_args_list)
+        assert "wade review trigger 42" in said
+
+
+# ---------------------------------------------------------------------------
+# Shared post-session menu helpers (services.bot_trigger)
+# ---------------------------------------------------------------------------
+
+
+class TestMenuHelpers:
+    def _entry(
+        self, config: ProjectConfig, tmp_path: Path, *, sha: str = "abc123", suffix: str = ""
+    ) -> tuple[ProjectConfig | None, str | None]:
+        with patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value=sha):
+            return bot_trigger.menu_entry(tmp_path, 99, tmp_path, suffix=suffix, config=config)
+
+    def test_entry_lists_pending_bots(self, tmp_path: Path) -> None:
+        config, label = self._entry(_config(), tmp_path, suffix=", then wait")
+        assert config is not None
+        assert label == "Trigger bot reviews (coderabbit, codex, bugbot), then wait"
+
+    def test_entry_hidden_when_opted_out(self, tmp_path: Path) -> None:
+        assert self._entry(_config(offer_on_done=False), tmp_path) == (None, None)
+
+    def test_entry_hidden_when_every_bot_already_triggered(self, tmp_path: Path) -> None:
+        _run_done_hook(_config(auto_trigger=True), tmp_path, sha="sha1")
+        assert self._entry(_config(), tmp_path, sha="sha1") == (None, None)
+
+    def test_entry_hidden_when_pr_head_unresolvable(self, tmp_path: Path) -> None:
+        with patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value=None):
+            entry = bot_trigger.menu_entry(tmp_path, 99, tmp_path, config=_config())
+        assert entry == (None, None)
+
+    def test_entry_only_names_bots_still_pending(self, tmp_path: Path) -> None:
+        """A bot triggered by `done` drops out of the menu; the rest stay."""
+        config = _config(
+            bots=[
+                ReviewBotConfig(name="coderabbit", trigger="@coderabbitai review"),
+                ReviewBotConfig(name="codex", trigger="@codex review"),
+            ]
+        )
+        assert markers.write_marker(tmp_path, "bot-triggered-coderabbit", "sha1")
+        _, label = self._entry(config, tmp_path, sha="sha1")
+        assert label == "Trigger bot reviews (codex)"
+
+    def test_post_pending_posts_and_marks(self, tmp_path: Path) -> None:
+        comment = MagicMock()
+        with (
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1"),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+        # Posting a trigger means a review is now pending for this commit.
+        assert pending is True
+        assert markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
+
+    def test_post_pending_is_a_noop_once_triggered(self, tmp_path: Path) -> None:
+        comment = MagicMock()
+        with (
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1"),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            first = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+            second = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+        # Both report "a review is pending": the first posts them, the second finds
+        # them already recorded for this sha (no re-post — proven by call_count).
+        assert (first, second) == (True, True)
+        assert comment.call_count == 3
+
+    def test_post_pending_false_when_every_post_fails(self, tmp_path: Path) -> None:
+        """A GitHub/API outage (every trigger post raises) means nothing pending.
+
+        The menu-side callers fall through into a wait-for-review poll only when a
+        trigger is actually pending — a ``False`` here keeps them from silently
+        waiting for a review no bot was successfully asked for (#464 review).
+        """
+        with (
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="sha1"),
+            patch(
+                "wade.services.bot_trigger.git_pr.comment_on_pr",
+                side_effect=RuntimeError("gh down"),
+            ),
+        ):
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+        assert pending is False
+        assert not markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
+
+    def test_post_pending_false_when_pr_head_unresolvable(self, tmp_path: Path) -> None:
+        with patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value=None):
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+        assert pending is False
+
+    def test_post_pending_keys_markers_to_pr_head_not_local_branch(self, tmp_path: Path) -> None:
+        """An unpushed local commit must not suppress review of the PR's head."""
+        comment = MagicMock()
+        with (
+            patch("wade.services.bot_trigger.git_pr.get_pr_head_sha", return_value="remote-sha"),
+            patch(
+                "wade.services.bot_trigger.git_repo.rev_parse", return_value="local-sha"
+            ) as rev_parse,
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            pending = bot_trigger.post_pending_triggers(_config(), tmp_path, 99, tmp_path)
+
+        assert pending is True
+        assert markers.marker_present(tmp_path, "bot-triggered-codex", "remote-sha")
+        assert not markers.marker_present(tmp_path, "bot-triggered-codex", "local-sha")
+        rev_parse.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# post_bot_triggers race-safety (#464 review): under-lock re-check + fallback
+# ---------------------------------------------------------------------------
+
+
+class TestPostBotTriggersRaceSafety:
+    def test_under_lock_recheck_skips_a_bot_marked_in_between(self, tmp_path: Path) -> None:
+        """A bot recorded after the caller's pending set was built is skipped.
+
+        Simulates a concurrent done/menu process on the same worktree posting +
+        recording coderabbit@sha1 after this caller computed its pending list:
+        the re-check *inside* ``post_bot_triggers``'s lock must drop it, so the
+        PR gets no duplicate comment (once-per-bot-per-sha under concurrency).
+        """
+        config = _config(auto_trigger=True)
+        assert markers.write_marker(tmp_path, "bot-triggered-coderabbit", "sha1")
+        comment = MagicMock()
+        with patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment):
+            posted = bot_trigger.post_bot_triggers(
+                tmp_path, 99, config.bot_review.bots, marker_root=tmp_path, sha="sha1"
+            )
+        names = [c.args[2] for c in comment.call_args_list]
+        assert names == ["@codex review", "bugbot run"]  # coderabbit skipped, not re-posted
+        assert posted == 2
+
+    def test_posts_when_lock_primitive_unavailable(self, tmp_path: Path) -> None:
+        """A broken file_lock degrades to posting, never fails an otherwise-complete done."""
+        config = _config(auto_trigger=True)
+        comment = MagicMock()
+        with (
+            patch(
+                "wade.services.bot_trigger.file_lock",
+                MagicMock(side_effect=OSError("temp dir unwritable")),
+            ),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+        ):
+            posted = bot_trigger.post_bot_triggers(
+                tmp_path, 99, config.bot_review.bots, marker_root=tmp_path, sha="sha1"
+            )
+        assert posted == 3  # all three still posted despite the lock being unavailable
+        assert markers.marker_present(tmp_path, "bot-triggered-codex", "sha1")
+
+    def test_lock_release_error_does_not_repost(self, tmp_path: Path) -> None:
+        """An OSError during lock *release* must not re-run posting (no double-post).
+
+        Worst case: a bot's comment posts, its marker write fails, then
+        ``file_lock`` cleanup raises. Re-running the section would re-post that
+        un-marked bot — so a release error returns the already-computed count
+        instead. Distinguishes a release failure (body ran) from an acquisition
+        failure (body must still run).
+        """
+        config = _config(
+            auto_trigger=True,
+            bots=[ReviewBotConfig(name="codex", trigger="@codex review", enabled=True)],
+        )
+        comment = MagicMock()
+
+        @contextmanager
+        def _lock_release_boom(_path: Path) -> Iterator[None]:
+            yield
+            raise OSError("close failed on release")
+
+        with (
+            patch("wade.services.bot_trigger.file_lock", _lock_release_boom),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr", comment),
+            patch("wade.services.bot_trigger.markers.write_marker", return_value=False),
+        ):
+            posted = bot_trigger.post_bot_triggers(
+                tmp_path, 99, config.bot_review.bots, marker_root=tmp_path, sha="sha1"
+            )
+        assert comment.call_count == 1  # posted exactly once, not re-run after release error
+        assert posted == 1

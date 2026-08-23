@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 from wade.utils import markers
 
@@ -151,3 +153,26 @@ class TestFlagMarkers:
         real.write_text("")
         (wade / "stop-nudged").symlink_to(real)
         assert markers.flag_marker_present(tmp_path, "stop-nudged") is False
+
+
+class TestCleanupErrorSuppressed:
+    """A raising ``os.close`` on the fd-cleanup path must not escape (best-effort).
+
+    Marker reads run in the finalized ``done`` flow (completion gate, pre-push
+    backstop, Stop hook), so a cleanup-time ``os.close`` failure escaping would
+    fail an already-complete session.
+    """
+
+    def test_read_survives_close_failure(self, tmp_path: Path) -> None:
+        assert markers.write_marker(tmp_path, "done", _SHA_A) is True
+
+        real_close = os.close
+
+        def _boom(fd: int) -> None:
+            real_close(fd)  # really close so the descriptor is not leaked
+            raise OSError("close failed")
+
+        # Patched only around the read: _present opens a .wade dir-fd and closes
+        # it in finally; the close now raises, but _close_quietly swallows it.
+        with patch("wade.utils.markers.os.close", _boom):
+            assert markers.marker_present(tmp_path, "done", _SHA_A) is True

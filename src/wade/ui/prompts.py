@@ -85,10 +85,16 @@ def _enable_choice_wrapping(question: questionary.Question) -> None:
         logger.debug("prompts.choice_wrap_failed", exc_info=True)
 
 
-def confirm(message: str, default: bool = False) -> bool:
+def confirm(message: str, default: bool = False, *, cancel_default: bool | None = None) -> bool:
     """Ask a yes/no confirmation question.
 
-    Returns default when stdin is not a TTY.
+    Returns ``default`` when stdin is not a TTY.
+
+    On cancellation (Ctrl+C) the prompt normally raises ``typer.Exit(1)`` to abort
+    the program. For an **optional** prompt that must not abort \u2014 e.g. one that
+    runs after an irreversible/finalized operation \u2014 pass ``cancel_default``; that
+    value is returned instead of raising, so the caller can treat a cancel as a
+    declined offer.
     """
     if not is_tty():
         return default
@@ -104,6 +110,8 @@ def confirm(message: str, default: bool = False) -> bool:
         instruction="",
     ).ask()
 
+    if result is None and cancel_default is not None:
+        return cancel_default
     _handle_none(result)
     return result == "Yes"
 

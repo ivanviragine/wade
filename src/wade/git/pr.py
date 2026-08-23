@@ -254,6 +254,18 @@ def _get_pr_head_ref(repo_root: Path, pr_number: int) -> tuple[str, str] | None:
     return oid, name
 
 
+def get_pr_head_sha(repo_root: Path, pr_number: int) -> str | None:
+    """Return the SHA currently recorded as the PR's head on GitHub.
+
+    The value is independent of a worktree's mutable local branch tip, so
+    callers that post a PR-side effect can key local state to the commit that
+    GitHub is actually presenting for review. Returns ``None`` when GitHub
+    cannot provide a complete PR head record.
+    """
+    head = _get_pr_head_ref(repo_root, pr_number)
+    return head[0] if head is not None else None
+
+
 def _get_branch_tip_oid(repo_root: Path, branch: str) -> str | None:
     """Return the true tip SHA of *branch* as GitHub's git ref sees it.
 

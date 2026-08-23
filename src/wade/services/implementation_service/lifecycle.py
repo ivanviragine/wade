@@ -21,9 +21,11 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
+from wade.models.config import ProjectConfig
 from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
+from wade.services import bot_trigger
 from wade.services.implementation_service.bootstrap import (
     _format_uncommitted_summary,
     _get_dirty_file_paths,
@@ -362,16 +364,67 @@ def _post_implementation_lifecycle_pr(
     if not prompts.is_tty():
         return MergeStatus.NOT_MERGED
 
-    choice = prompts.select(
-        f"PR #{pr_number} — what next?",
-        ["Merge PR", "Wait for reviews"],
+    # Keep the config attached to every poll, not just the trigger branch: an
+    # ordinary "Wait for reviews" still needs its expected-bot gating (#448).
+    # Config load failure remains non-fatal so a convenience menu never blocks
+    # an otherwise valid merge/wait lifecycle.
+    poll_config: ProjectConfig | None = None
+    try:
+        from wade.config.loader import load_config
+
+        poll_config = load_config(repo_root)
+    except Exception:
+        logger.debug("bot_trigger.poll_config_load_failed", exc_info=True)
+
+    # Offer the bot-review triggers here too (#464): with `auto_trigger` off, the
+    # agent's `done` did not post them, and this menu is the human's first TTY
+    # moment afterwards — waiting for a review no one asked for is the failure
+    # mode this avoids. Hidden when every enabled bot already fired for this
+    # commit (see `bot_trigger.pending_names`).
+    bot_config, trigger_option = bot_trigger.menu_entry(
+        repo_root, pr_number, worktree_path, suffix=", then wait", config=poll_config
     )
+    if bot_config is not None:
+        # ``menu_entry`` may have retried config loading after the best-effort
+        # load above; reuse that successful result for the ordinary wait path.
+        poll_config = bot_config
+    options = ["Merge PR", "Wait for reviews"]
+    # Bind the entry's index at append time (not `len(options) - 1` at read time)
+    # so a future option appended after it can't silently steal the branch below.
+    trigger_index = -1
+    if trigger_option:
+        trigger_index = len(options)
+        options.append(trigger_option)
+
+    choice = prompts.select(f"PR #{pr_number} — what next?", options)
+
+    if bot_config is not None and choice == trigger_index:
+        if bot_trigger.post_pending_triggers(
+            bot_config, repo_root, int(pr_number), worktree_path or repo_root
+        ):
+            choice = 1  # ...then fall through into the wait-for-reviews flow.
+            # The trigger marker resets each bot's arrival window. Keep both the
+            # config and its worktree-local marker root attached to the poll so a
+            # commit pushed long ago does not make this fresh trigger look expired.
+            poll_config = bot_config
+        else:
+            # Every trigger post failed (e.g. a GitHub outage) — no bot was asked
+            # to review, so don't drop into a wait for a review no one requested
+            # (the exact silent-wait this option exists to avoid).
+            return MergeStatus.NOT_MERGED
 
     if choice == 1:  # Wait for reviews
         from wade.models.review import PollOutcome
         from wade.services import review_service
 
-        outcome = review_service.poll_for_reviews(provider, repo_root, int(pr_number), branch)
+        outcome = review_service.poll_for_reviews(
+            provider,
+            repo_root,
+            int(pr_number),
+            branch,
+            config=poll_config,
+            marker_root=worktree_path or repo_root,
+        )
         if outcome == PollOutcome.COMMENTS_FOUND and issue_number:
             _ = review_service.start(
                 str(issue_number),
@@ -401,6 +454,7 @@ def _post_implementation_lifecycle_pr(
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 network_access=network_access,
+                config=poll_config,
             )
         return MergeStatus.NOT_MERGED
 

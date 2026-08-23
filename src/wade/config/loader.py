@@ -378,11 +378,12 @@ def _parse_review_bot(raw: Any) -> ReviewBotConfig:
 def _parse_bot_review(raw: dict[str, Any]) -> BotReviewConfig:
     """Parse the ``bot_review`` section into a :class:`BotReviewConfig`.
 
-    An empty/absent section keeps the model defaults (auto-trigger off, the three
-    built-in bots). A present section overrides ``auto_trigger`` and, when it
-    supplies an explicit ``bots`` list, replaces the defaults wholesale; an
-    omitted ``bots`` list keeps the built-in bots. A null ``auto_trigger``
-    normalizes to the ``False`` default.
+    An empty/absent section keeps the model defaults (auto-trigger off,
+    offer-on-done on, the three built-in bots). A present section overrides
+    ``auto_trigger`` / ``offer_on_done`` and, when it supplies an explicit
+    ``bots`` list, replaces the defaults wholesale; an omitted ``bots`` list keeps
+    the built-in bots. A null ``auto_trigger`` normalizes to the ``False``
+    default; a null ``offer_on_done`` to its ``True`` default (#464).
 
     Name uniqueness and the safe-identifier rule are **model invariants**
     (``BotReviewConfig`` / ``ReviewBotConfig`` validators), so they hold for every
@@ -394,10 +395,12 @@ def _parse_bot_review(raw: dict[str, Any]) -> BotReviewConfig:
         return BotReviewConfig()
     auto_trigger = raw.get("auto_trigger", False)
     auto_trigger = False if auto_trigger is None else auto_trigger
+    offer_on_done = raw.get("offer_on_done", True)
+    offer_on_done = True if offer_on_done is None else offer_on_done
     # arrival_timeout / ack_timeout (#448). A ``None`` value keeps the model
     # default; any other value is passed through untouched so a non-int scalar is
     # rejected by ``StrictInt`` (surfaced as a ConfigError) rather than coerced.
-    kwargs: dict[str, Any] = {"auto_trigger": auto_trigger}
+    kwargs: dict[str, Any] = {"auto_trigger": auto_trigger, "offer_on_done": offer_on_done}
     for key in ("arrival_timeout", "ack_timeout"):
         value = raw.get(key)
         if value is not None:
