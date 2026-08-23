@@ -1014,10 +1014,11 @@ def _maybe_trigger_bot_reviews(
 
     # Non-TTY: the AI agent runs `done`, so hand it the decision to surface —
     # it is the one talking to the developer at the end of the session.
+    bot_args = " ".join(f"--bot {bot.name}" for bot in pending)
     console.info(
         f"Bot review triggers NOT posted ({names}) — `bot_review.auto_trigger` is off. "
         "Add an extra option to your closing dialog, after the recommended exit one: "
-        f"'Post bot review triggers' → `wade review trigger {issue_number}`."
+        f"'Post bot review triggers' → `wade review trigger {issue_number} {bot_args}`."
     )
     console.hint(
         "Always post them: `bot_review.auto_trigger: true` (or `done --trigger-bots`). "

@@ -2372,6 +2372,41 @@ class TestQuietNextStepsPrompt:
             "Exit without merging",
         ]
 
+    @patch("wade.services.bot_trigger.git_pr.comment_on_pr")
+    @patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="sha1")
+    @patch("wade.config.loader.load_config")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_quiet_menu_trigger_retains_config_for_later_poll(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_status: MagicMock,
+        mock_load_config: MagicMock,
+        _mock_rev_parse: MagicMock,
+        _mock_comment: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A trigger from an ordinary quiet poll keeps its bot gates active (#464 review)."""
+        from wade.models.config import ProjectConfig
+        from wade.models.review import PollOutcome, PRReviewStatus
+
+        config = ProjectConfig()
+        mock_load_config.return_value = config
+        mock_status.return_value = PRReviewStatus()
+        mock_poll.return_value = PollOutcome.INTERRUPTED
+        # First select the appended trigger entry, then keep polling after the
+        # markers hide it on the re-displayed menu.
+        mock_select.side_effect = [3, 0]
+
+        _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, MagicMock())
+
+        assert mock_poll.call_args.kwargs["config"] is config
+        assert mock_poll.call_args.kwargs["marker_root"] == tmp_path / "wt"
+
 
 # ---------------------------------------------------------------------------
 # _post_review_lifecycle()

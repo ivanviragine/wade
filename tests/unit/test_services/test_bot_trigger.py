@@ -423,6 +423,25 @@ class TestDoneTriggerOffer:
         assert "wade review trigger 42" in offered
         assert "coderabbit" in offered
 
+    def test_non_tty_offer_handoff_limits_trigger_to_pending_bots(self, tmp_path: Path) -> None:
+        """The closing-dialog command must not re-trigger an already marked bot."""
+        config = _config(
+            bots=[
+                ReviewBotConfig(name="coderabbit", trigger="@coderabbitai review"),
+                ReviewBotConfig(name="codex", trigger="@codex review"),
+            ]
+        )
+        assert markers.write_marker(tmp_path, "bot-triggered-coderabbit", "abc123")
+
+        with patch("wade.services.implementation_service.done.console") as mock_console:
+            mock_console.escape_markup.side_effect = lambda s: s
+            comment = _run_done_hook(config, tmp_path)
+
+        assert comment.call_count == 0
+        offered = " ".join(str(call.args[0]) for call in mock_console.info.call_args_list)
+        assert "wade review trigger 42 --bot codex" in offered
+        assert "--bot coderabbit" not in offered
+
     def test_offer_silent_when_opted_out(self, tmp_path: Path) -> None:
         with patch("wade.services.implementation_service.done.console") as mock_console:
             mock_console.escape_markup.side_effect = lambda s: s

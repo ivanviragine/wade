@@ -1472,9 +1472,14 @@ def _quiet_next_steps_prompt(
         choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
         if bot_config is not None and choice == trigger_index:
-            bot_trigger.post_pending_triggers(
+            if bot_trigger.post_pending_triggers(
                 bot_config, repo_root, branch, pr_number, worktree_path or repo_root
-            )
+            ):
+                # The freshly written trigger markers reset each bot's arrival
+                # window. Retain the config even when this prompt was reached
+                # from an ordinary poll (where ``config`` is None), so a later
+                # "Keep polling" tracks the newly requested bots.
+                config = bot_config
             continue  # Re-display the menu — the user can now keep polling.
 
         if choice == 0:  # Keep polling
