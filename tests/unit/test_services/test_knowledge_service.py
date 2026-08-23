@@ -1748,6 +1748,152 @@ class TestStagingContainment:
 
         assert _probe_staging_path(worktree) is False
 
+    def test_symlinked_marker_dir_is_refused_by_the_marker_writer(self, tmp_path: Path) -> None:
+        """`.wade/` is repo-controlled, so marking must not become a write outside."""
+        from wade.services.knowledge_service import mark_throwaway_knowledge_session
+
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        worktree.mkdir()
+        outside.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="outside the worktree"):
+            mark_throwaway_knowledge_session(worktree)
+
+        assert list(outside.iterdir()) == []
+
+    def test_flush_neither_reads_nor_deletes_through_a_symlinked_staging_dir(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        """The post-transfer unlink must not be redirected onto an outside file."""
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        outside = tmp_path / "elsewhere"
+        for directory in (main, worktree, outside):
+            directory.mkdir()
+        planted = outside / "knowledge-ratings-staged.jsonl"
+        planted.write_text("", encoding="utf-8")
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        result = flush_staged_ratings(worktree, main, config)
+
+        # Skipped, not failed: nothing could legitimately be staged there, and a
+        # failure would strand the worktree on a condition no retry can clear.
+        assert result.success
+        assert "outside the session worktree" in (result.message or "")
+        assert planted.exists()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+
+
+class TestRetainedStagedRatingsSweep:
+    """A retained worktree's votes are recovered by the next plan/deps run."""
+
+    @staticmethod
+    def _throwaway_worktree(root: Path, name: str) -> Path:
+        worktree = root / name
+        worktree.mkdir()
+        (worktree / ".wade").mkdir()
+        (worktree / ".wade" / "throwaway-session").write_text("marker\n", encoding="utf-8")
+        return worktree
+
+    @staticmethod
+    def _patch_worktree_list(monkeypatch: pytest.MonkeyPatch, paths: list[Path]) -> None:
+        from wade.models import Worktree
+
+        entries = [Worktree(path=str(p), branch="(detached)") for p in paths]
+        monkeypatch.setattr(
+            "wade.git.worktree.list_worktrees",
+            lambda _: entries,
+        )
+        monkeypatch.setattr("wade.git.repo.is_worktree", lambda _: True)
+        monkeypatch.setattr("wade.git.repo.is_head_attached", lambda _: False)
+
+    def test_recovers_votes_left_behind_by_a_failed_handoff(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        retained = self._throwaway_worktree(tmp_path, "plan-retained")
+        stage_rating_event(retained, create_rating_event("entry", "up"))
+        self._patch_worktree_list(monkeypatch, [retained])
+
+        outcomes = flush_retained_staged_ratings(main, config)
+
+        assert [(o.success, o.appended_count, o.worktree) for o in outcomes] == [
+            (True, 1, retained)
+        ]
+        assert not staged_ratings_path(retained).exists()
+        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["entry"].up == 1
+
+    def test_reports_nothing_when_no_worktree_has_staged_votes(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        clean = self._throwaway_worktree(tmp_path, "plan-clean")
+        self._patch_worktree_list(monkeypatch, [clean])
+
+        assert flush_retained_staged_ratings(main, config) == []
+
+    def test_skips_a_worktree_without_the_throwaway_marker(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No marker means no wade parent — its `.wade/` is not ours to drain."""
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        foreign = tmp_path / "hand-made"
+        foreign.mkdir()
+        staged = staged_ratings_path(foreign)
+        staged.parent.mkdir()
+        staged.write_text("", encoding="utf-8")
+        self._patch_worktree_list(monkeypatch, [foreign])
+
+        assert flush_retained_staged_ratings(main, config) == []
+        assert staged.exists()
+
+    def test_a_failed_retry_keeps_the_staging_log_for_the_next_run(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        main = tmp_path / "main"
+        main.mkdir()
+        retained = self._throwaway_worktree(tmp_path, "plan-retained")
+        stage_rating_event(retained, create_rating_event("entry", "up"))
+        self._patch_worktree_list(monkeypatch, [retained])
+
+        def fail_migration(_: Path) -> None:
+            raise OSError("main checkout is not writable")
+
+        monkeypatch.setattr(
+            "wade.services.knowledge_service._materialize_migration_locked", fail_migration
+        )
+
+        outcomes = flush_retained_staged_ratings(main, config)
+
+        assert [(o.success, o.worktree) for o in outcomes] == [(False, retained)]
+        assert staged_ratings_path(retained).is_file()
+
+    def test_git_failure_is_not_a_vote_error(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wade.git.repo import GitError
+        from wade.services.knowledge_service import flush_retained_staged_ratings
+
+        def boom(_: Path) -> list[object]:
+            raise GitError("git unavailable")
+
+        monkeypatch.setattr("wade.git.worktree.list_worktrees", boom)
+
+        assert flush_retained_staged_ratings(tmp_path, config) == []
+
 
 class TestDetachedKnowledgeReads:
     """Read-only plan/deps commands must not cross into the main checkout."""

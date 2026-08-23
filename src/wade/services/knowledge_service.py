@@ -124,12 +124,18 @@ class RatingEvent(BaseModel, frozen=True):
 
 
 class StagedRatingsFlushResult(BaseModel, frozen=True):
-    """Outcome of transferring detached-session rating events to main's spool."""
+    """Outcome of transferring detached-session rating events to main's spool.
+
+    ``worktree`` names the session the votes came from, so a sweep over
+    *retained* worktrees (:func:`flush_retained_staged_ratings`) can report
+    which one each outcome belongs to.
+    """
 
     success: bool
     staged_count: int = 0
     appended_count: int = 0
     message: str | None = None
+    worktree: Path | None = None
 
 
 def _generate_entry_id() -> str:
@@ -213,8 +219,17 @@ def mark_throwaway_knowledge_session(worktree_path: Path) -> Path:
     Called by ``wade plan`` / ``wade task deps`` right after they create their
     detached worktree, before the agent is launched — those are exactly the two
     lifecycles that call :func:`flush_staged_ratings` on the way out.
+
+    Raises ``ValueError`` when the marker would land outside *worktree_path*: it
+    lives under the same repo-controlled ``.wade/`` as the staging log, so a
+    symlink there would make this ``mkdir`` + ``write_text`` an arbitrary write
+    outside the throwaway worktree — and would leave the marker behind in
+    whatever directory it pointed at. Both callers treat the raise as "no
+    throwaway session", which is the safe outcome.
     """
     marker = throwaway_session_marker_path(worktree_path)
+    if path_escapes_session(worktree_path, marker):
+        raise ValueError(f"Refusing to mark a throwaway session outside the worktree: {marker!s}")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
         "wade throwaway session — knowledge votes stage here and are flushed by "
@@ -251,26 +266,28 @@ def staged_ratings_path(project_root: Path) -> Path:
     return project_root / STAGED_RATINGS_RELATIVE_PATH
 
 
-def staging_path_escapes_session(project_root: Path, staging_path: Path) -> bool:
-    """Whether *staging_path* would write outside the detached session root.
+def path_escapes_session(project_root: Path, path: Path) -> bool:
+    """Whether *path* resolves outside the detached session root.
 
     ``.wade/`` is an ordinary checked-out path, so a repository (or a later
     local edit) can replace it with a symlink pointing at the main checkout or
     any other writable location. Following it would silently defeat the whole
-    point of staging: a detached session must never write outside its own
-    throwaway worktree merely to record a vote. Both the readiness probe and
-    the writer call this so a symlink planted *after* a passing preflight is
-    still refused at write time.
+    point of staging: a detached session must never read, write, or delete
+    outside its own throwaway worktree merely to move a vote. Every filesystem
+    operation on a session-relative ``.wade/`` path goes through this first —
+    the readiness probe, the marker writer, the staging writer, and the flush's
+    read + unlink — so a symlink planted *after* a passing preflight is still
+    refused at the moment of the operation.
 
     An unresolvable path (``OSError`` from ``resolve``) counts as an escape —
-    fail closed rather than write into an unknown location.
+    fail closed rather than touch an unknown location.
     """
-    parent = staging_path.parent
+    parent = path.parent
     try:
-        if parent.is_symlink() or staging_path.is_symlink():
+        if parent.is_symlink() or path.is_symlink():
             return True
         root = project_root.resolve()
-        # ``strict=False``: the staging dir may not exist yet on the probe path.
+        # ``strict=False``: the ``.wade`` dir may not exist yet on the probe path.
         return not parent.resolve().is_relative_to(root)
     except OSError:
         return True
@@ -647,7 +664,7 @@ def stage_rating_event(project_root: Path, event: RatingEvent) -> Path:
     the throwaway worktree.
     """
     path = staged_ratings_path(project_root)
-    if staging_path_escapes_session(project_root, path):
+    if path_escapes_session(project_root, path):
         raise ValueError(
             f"Refusing to stage a knowledge vote outside the session worktree: {path!s}"
         )
@@ -748,14 +765,31 @@ def flush_staged_ratings(
     lifecycle.  Retrying after a crash is safe: durable event IDs already in
     that spool are skipped, while the staging artefact is retained until it can
     be removed after a successful durable append.
+
+    A staging path that resolves outside *worktree_path* is skipped rather than
+    read and unlinked: the same ``.wade/`` symlink that would redirect the read
+    would also make the post-transfer ``unlink`` delete a file outside the
+    session. Nothing can legitimately be waiting there either — the writer
+    refuses the identical check — so this is "nothing to hand off", not a
+    failure that would strand the worktree forever on an unfixable path.
     """
     staging_path = staged_ratings_path(worktree_path)
+    if path_escapes_session(worktree_path, staging_path):
+        logger.warning("knowledge.flush_path_escapes_session", path=str(staging_path))
+        return StagedRatingsFlushResult(
+            success=True,
+            worktree=worktree_path,
+            message=(
+                "Skipped a staged-ratings path that resolves outside the session "
+                f"worktree: {staging_path!s}"
+            ),
+        )
     if not staging_path.exists():
-        return StagedRatingsFlushResult(success=True)
+        return StagedRatingsFlushResult(success=True, worktree=worktree_path)
     try:
         staged_records = _load_staged_rating_records(staging_path)
     except (OSError, ValueError) as exc:
-        return StagedRatingsFlushResult(success=False, message=str(exc))
+        return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
     if not staged_records:
         try:
             staging_path.unlink()
@@ -763,13 +797,14 @@ def flush_staged_ratings(
             return StagedRatingsFlushResult(
                 success=False,
                 message=f"Empty staging cleanup failed: {exc}",
+                worktree=worktree_path,
             )
-        return StagedRatingsFlushResult(success=True)
+        return StagedRatingsFlushResult(success=True, worktree=worktree_path)
 
     try:
         main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config))
     except ValueError as exc:
-        return StagedRatingsFlushResult(success=False, message=str(exc))
+        return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
 
     try:
         with file_lock(main_ratings):
@@ -791,6 +826,7 @@ def flush_staged_ratings(
             success=False,
             staged_count=len(staged_records),
             message=str(exc),
+            worktree=worktree_path,
         )
 
     try:
@@ -803,12 +839,59 @@ def flush_staged_ratings(
             staged_count=len(staged_records),
             appended_count=len(missing),
             message=f"Ratings reached the main spool but staging cleanup failed: {exc}",
+            worktree=worktree_path,
         )
     return StagedRatingsFlushResult(
         success=True,
         staged_count=len(staged_records),
         appended_count=len(missing),
+        worktree=worktree_path,
     )
+
+
+def flush_retained_staged_ratings(
+    repo_root: Path,
+    config: KnowledgeConfig,
+) -> list[StagedRatingsFlushResult]:
+    """Recover votes stranded in throwaway worktrees a previous run retained.
+
+    A failed handoff deliberately preserves its worktree so the staging log can
+    be retried — but the parent process then exits, and a re-run of ``wade
+    plan`` / ``wade task deps`` creates a *fresh* worktree that knows nothing
+    about the old one, so nothing would ever pick the log back up (#462 review).
+    Both lifecycles call this before creating their new worktree: discovery is
+    deterministic (every linked worktree of *repo_root* that still carries the
+    throwaway marker and a staging log), so recovery needs no extra command and
+    no user bookkeeping.
+
+    Only worktrees with a staging log left are reported — a clean one is a
+    silent no-op. The flush itself is idempotent (event IDs already in the main
+    spool are skipped), so sweeping a *live* sibling session's log is harmless:
+    it delivers those votes early and that session's own flush then finds
+    nothing. Worktrees are never removed here for exactly that reason — a
+    retained worktree may still be in use.
+    """
+    from wade.git import worktree as git_worktree
+
+    try:
+        worktrees = git_worktree.list_worktrees(repo_root)
+    except Exception as exc:
+        logger.warning("knowledge.retained_sweep_list_failed", error=str(exc))
+        return []
+
+    results: list[StagedRatingsFlushResult] = []
+    for entry in worktrees:
+        path = Path(entry.path)
+        if path == repo_root or entry.branch != "(detached)":
+            continue
+        if not is_throwaway_knowledge_session(path):
+            continue
+        if path_escapes_session(path, staged_ratings_path(path)):
+            continue
+        if not staged_ratings_path(path).exists():
+            continue
+        results.append(flush_staged_ratings(path, repo_root, config))
+    return results
 
 
 def record_supersede(

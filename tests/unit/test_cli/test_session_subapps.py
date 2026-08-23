@@ -42,16 +42,19 @@ class TestImplementationSessionSubApp:
         assert result.exit_code == 1
         assert "NOT_IN_GIT_REPO" in result.output
 
-    def test_readiness_does_not_silently_ignore_invalid_config(self) -> None:
-        """Defaults are for an absent config, never for a malformed existing one."""
-        from wade.cli.session_shared import _session_readiness_result
-        from wade.config.loader import ConfigError
+    def test_check_delegates_resolution_to_the_service(self) -> None:
+        """The CLI stays thin dispatch — resolution lives in ``check_service``."""
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
 
-        with (
-            patch("wade.config.loader.load_config", side_effect=ConfigError("invalid config")),
-            pytest.raises(ConfigError, match="invalid config"),
-        ):
-            _session_readiness_result("implementation")
+        ready = CheckResult(status=CheckStatus.IN_WORKTREE, exit_code=CheckExitCode.IN_WORKTREE)
+        with patch(
+            "wade.services.check_service.resolve_session_readiness",
+            return_value=ready,
+        ) as mock_resolve:
+            result = runner.invoke(app, ["implementation-session", "check"])
+
+        assert result.exit_code == 0
+        mock_resolve.assert_called_once_with("implementation", None)
 
     def test_sync_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)

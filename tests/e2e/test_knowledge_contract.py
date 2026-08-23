@@ -155,6 +155,50 @@ class TestKnowledgeCommands:
         ratings = read_ratings(e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl")
         assert ratings["a1b2c3d4"].up == 1
 
+    def test_retained_worktree_votes_are_recovered_by_the_next_session(
+        self, e2e_repo: Path
+    ) -> None:
+        """A handoff that failed once is picked back up from real `git worktree list`."""
+        from wade.models.config import KnowledgeConfig
+        from wade.services.knowledge_service import (
+            flush_retained_staged_ratings,
+            mark_throwaway_knowledge_session,
+            read_ratings,
+        )
+
+        _write_knowledge_config(e2e_repo)
+        knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
+        knowledge_path.parent.mkdir(parents=True, exist_ok=True)
+        knowledge_path.write_text(
+            (
+                "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
+                "Prefer labels.\n\n---\n"
+            ),
+            encoding="utf-8",
+        )
+        _git(["add", ".wade.yml", "docs/KNOWLEDGE.md"], cwd=e2e_repo)
+        _git(["commit", "-m", "chore: seed retained knowledge"], cwd=e2e_repo)
+        retained = e2e_repo.parent / "retained-plan"
+        _git(["worktree", "add", "--detach", str(retained)], cwd=e2e_repo)
+        mark_throwaway_knowledge_session(retained)
+
+        assert _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=retained).returncode == 0
+        staged = retained / ".wade" / "knowledge-ratings-staged.jsonl"
+        assert staged.is_file()
+
+        # The parent that should have flushed this exited without doing so. The
+        # next plan/deps run sweeps it from the repo's own worktree list.
+        config = KnowledgeConfig(enabled=True, path="docs/KNOWLEDGE.md")
+        outcomes = flush_retained_staged_ratings(e2e_repo, config)
+
+        assert [(o.success, o.appended_count) for o in outcomes] == [(True, 1)]
+        assert outcomes[0].worktree == retained
+        assert not staged.exists()
+        assert read_ratings(e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl")["a1b2c3d4"].up == 1
+
+        # Idempotent: a second sweep finds nothing left to hand off.
+        assert flush_retained_staged_ratings(e2e_repo, config) == []
+
     def test_knowledge_rate_invalid_path_exits_cleanly(self, e2e_repo: Path) -> None:
         """knowledge rate should fail cleanly for configured paths outside the repo."""
         _write_knowledge_config(e2e_repo, path="../escape.md")

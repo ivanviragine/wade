@@ -720,7 +720,9 @@ capabilities but never rewrites them.
 Detached plan and dependency sessions stage knowledge-rating events in their own
 ignored `.wade/` area. Wade flushes those durable-ID events into the main ratings
 spool before removing the throwaway worktree; a failed handoff preserves the
-worktree for retry. Only a worktree wade itself created for one of those two
+worktree, and the **next** `wade plan` or `wade task deps` automatically hands
+off what it finds there and tells you what it recovered — no recovery command to
+remember. Only a worktree wade itself created for one of those two
 lifecycles stages votes — it is marked at creation by the same parent that will
 flush it. Any other detached checkout (a CI checkout, `git checkout <sha>`, your
 own `git worktree add --detach`) records votes normally, so nothing is left

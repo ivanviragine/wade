@@ -18,6 +18,7 @@ from wade.config.loader import (
     ConfigError,
     ensure_yaml_mapping,
     find_config_file,
+    load_config,
     parse_config_file,
 )
 from wade.git import repo
@@ -508,8 +509,8 @@ def _probe_staging_path(project_root: Path) -> bool:
     because no preflight can rule out a symlink planted afterwards.
     """
     from wade.services.knowledge_service import (
+        path_escapes_session,
         staged_ratings_path,
-        staging_path_escapes_session,
     )
 
     staging_path = staged_ratings_path(project_root)
@@ -524,7 +525,7 @@ def _probe_staging_path(project_root: Path) -> bool:
         for directory in reversed(missing):
             directory.mkdir()
             created.append(directory)
-        if staging_path_escapes_session(project_root, staging_path):
+        if path_escapes_session(project_root, staging_path):
             logger.warning("check.staging_path_escapes_session", path=str(staging_path))
             return False
         if staging_path.exists() and staging_path.is_dir():
@@ -683,6 +684,33 @@ def check_session_readiness(
                 failure=ReadinessFailure.KNOWLEDGE_VOTE_STAGING,
             )
     return result
+
+
+def resolve_session_readiness(phase: ReadinessPhase | str, cwd: Path | None = None) -> CheckResult:
+    """Resolve config + AI tool for *phase*, then check readiness at *cwd*.
+
+    The whole resolution lives here rather than in the CLI: loading config,
+    mapping the phase to its ``ai.<command>`` section, and selecting the tool is
+    business logic, and both the agent-facing ``check`` command and the
+    mid-session gates must resolve it identically.
+
+    What stays a *caller* decision is which directory to inspect. A session
+    command and the initial skill check must judge the environment that is
+    actually executing ``wade`` — a worktree launcher may hold more authority
+    than the AI child that later runs ``sync`` or ``done`` — so ``cwd`` defaults
+    to the process cwd, and only the endpoints that act on a *resolved* worktree
+    (``done`` with a worktree target, ``done --plan``) pass that path instead.
+
+    ``ConfigError`` deliberately propagates: ``load_config`` already returns
+    defaults when a project has no config, so a raised error means a *present*
+    config is malformed or unreadable. Swallowing it would silently weaken every
+    capability check; the normal CLI error path names that defect instead.
+    """
+    path = cwd or Path.cwd()
+    readiness_phase = ReadinessPhase(phase)
+    config = load_config(path)
+    tool = config.get_ai_tool(READINESS_REQUIREMENTS[readiness_phase].ai_command)
+    return check_session_readiness(readiness_phase, path, config, tool)
 
 
 # ---------------------------------------------------------------------------

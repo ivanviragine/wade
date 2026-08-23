@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from wade.config.loader import ConfigError
 from wade.models.config import (
     AI_COMMAND_NAMES,
     AICommandConfig,
@@ -22,10 +23,16 @@ from wade.models.config import (
     ProviderConfig,
     ProviderID,
 )
-from wade.models.readiness import PLAN_DIR_ENV_VAR, ReadinessFailure, ReadinessPhase
+from wade.models.readiness import (
+    PLAN_DIR_ENV_VAR,
+    READINESS_REQUIREMENTS,
+    ReadinessFailure,
+    ReadinessPhase,
+)
 from wade.services.check_service import (
     READINESS_PROBE_TIMEOUT_SECONDS,
     CheckExitCode,
+    CheckResult,
     CheckStatus,
     ConfigExitCode,
     _github_api_reachable,
@@ -33,6 +40,7 @@ from wade.services.check_service import (
     _github_cli_available,
     check_session_readiness,
     check_worktree,
+    resolve_session_readiness,
     validate_config,
 )
 
@@ -504,6 +512,61 @@ class TestPlanDirFallbackReadiness:
         result = check_session_readiness(ReadinessPhase.PLAN, worktree, config)
 
         assert result.status == CheckStatus.KNOWLEDGE_STAGING_BLOCKED
+
+
+class TestResolveSessionReadiness:
+    """Config + AI-tool resolution for a phase lives in the service, not the CLI."""
+
+    def test_resolves_the_phase_specific_ai_tool(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = ProjectConfig(
+            ai=AIConfig(
+                default_tool="claude",
+                review_pr_comments=AICommandConfig(tool="cursor"),
+            )
+        )
+        seen: dict[str, object] = {}
+
+        def _check(
+            phase: ReadinessPhase,
+            cwd: Path | None = None,
+            cfg: ProjectConfig | None = None,
+            tool: str | None = None,
+        ) -> CheckResult:
+            seen["phase"], seen["cwd"], seen["tool"] = phase, cwd, tool
+            return CheckResult(status=CheckStatus.IN_WORKTREE, exit_code=CheckExitCode.IN_WORKTREE)
+
+        monkeypatch.setattr("wade.services.check_service.load_config", lambda _: config)
+        monkeypatch.setattr("wade.services.check_service.check_session_readiness", _check)
+
+        result = resolve_session_readiness("review-pr-comments", tmp_git_repo)
+
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+        assert seen == {
+            "phase": ReadinessPhase.REVIEW_PR_COMMENTS,
+            "cwd": tmp_git_repo,
+            "tool": "cursor",
+        }
+
+    def test_every_phase_maps_to_a_real_ai_config_section(self) -> None:
+        # A typo would fall back to ``ai.default_tool`` instead of raising, so a
+        # phase silently losing its per-command tool override is caught here.
+        for requirements in READINESS_REQUIREMENTS.values():
+            assert requirements.ai_command in AI_COMMAND_NAMES
+
+    def test_does_not_silently_ignore_invalid_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defaults are for an absent config, never for a malformed existing one."""
+
+        def _raise(_: Path) -> ProjectConfig:
+            raise ConfigError("invalid config")
+
+        monkeypatch.setattr("wade.services.check_service.load_config", _raise)
+
+        with pytest.raises(ConfigError, match="invalid config"):
+            resolve_session_readiness(ReadinessPhase.IMPLEMENTATION, tmp_path)
 
 
 # ---------------------------------------------------------------------------

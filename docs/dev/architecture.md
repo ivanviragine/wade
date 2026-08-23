@@ -876,13 +876,28 @@ Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot
 they never cross into the main checkout. The parent plan/deps lifecycle calls
 `flush_staged_ratings()` before cleanup, locks the existing main ratings spool,
 appends only event IDs not already present, fsyncs, and removes the staging
-artifact only afterward. Both the readiness probe and the writer reject a
-staging parent that is a symlink or resolves outside the session root
-(`staging_path_escapes_session`): `.wade/` is an ordinary checked-out path, so a
-symlink there would silently redirect a vote into the main checkout, and a
-preflight alone cannot stop one planted afterwards. A failed or partially
+artifact only afterward. Every filesystem operation on a session-relative
+`.wade/` path — the readiness probe, the marker writer
+(`mark_throwaway_knowledge_session`, which **raises** on an escape), the staging
+writer, and the flush's read + unlink — first rejects a parent that is a symlink
+or resolves outside the session root (`path_escapes_session`): `.wade/` is an
+ordinary checked-out path, so a symlink there would silently redirect a vote into
+the main checkout (or make the post-transfer `unlink` delete an outside file),
+and a preflight alone cannot stop one planted afterwards. The flush *skips* such
+a path (success, nothing to hand off) rather than failing, since the writer's
+identical check means nothing could legitimately be staged there and a failure
+would strand the worktree on an unclearable condition. A failed or partially
 completed handoff leaves the
-throwaway worktree and its generated output in place for retry. Standalone deps
+throwaway worktree and its generated output in place for retry — and that retry
+is real, not advisory: `wade plan` and standalone `wade task deps` both call
+`report_retained_vote_recovery` (`services/knowledge_recovery.py`) **before**
+creating their next worktree, which sweeps every linked worktree of the repo
+still carrying the throwaway marker plus a staging log
+(`flush_retained_staged_ratings`) and reports what it recovered. Discovery is
+deterministic, so no resume command or user bookkeeping is needed. The sweep
+never *removes* a worktree — a retained one may be a live sibling session — and
+is safe to run against one anyway, because the flush skips event IDs already in
+the main spool. Standalone deps
 also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
 handoff, because stdout alone would be lost with the parent process. Duplicate
 delivery of a new event is folded once, while legacy no-ID JSONL vote records
@@ -901,7 +916,13 @@ standalone worktree this call created is removed (nothing was produced yet),
 while a planning worktree is preserved for the parent `wade plan` lifecycle that
 flushes its votes.
 
-**Lifecycle readiness enforcement (#462):** The first-action check remains the
+**Lifecycle readiness enforcement (#462):** Phase readiness is resolved by
+`check_service.resolve_session_readiness(phase, cwd)` — it loads config, maps the
+phase to its `ai.<command>` section (declared as `ReadinessRequirements.ai_command`
+in `models/readiness.py`, validated against `AI_COMMAND_NAMES` so a typo cannot
+silently fall back to `ai.default_tool`), selects the tool, and runs
+`check_session_readiness`. The CLI layer only picks *which directory* to inspect.
+The first-action check remains the
 agent-facing diagnostic, but `implementation-session catchup`/`sync`/`done` and
 `review-pr-comments-session sync`/`done`/`fetch`/`resolve` invoke the same
 read-only phase check again in the process that is about to act. This matters

@@ -1054,6 +1054,30 @@ class TestAnalyzeDepsIsolationFailure:
         assert snapshot.read_text(encoding="utf-8") == "1 -> 2 # schema must precede API\n"
         remove.assert_not_called()
 
+    def test_retained_votes_are_swept_before_a_new_worktree_is_created(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Otherwise a preserved worktree's votes have nothing that ever retries them."""
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate, knowledge_enabled=True)
+        sweep = MagicMock()
+        monkeypatch.setattr("wade.services.deps_service.report_retained_vote_recovery", sweep)
+        monkeypatch.setattr("wade.git.repo.get_repo_root", lambda _: tmp_path)
+        monkeypatch.setattr(
+            "wade.git.worktree.create_detached_worktree",
+            lambda **_kwargs: (_ for _ in ()).throw(OSError("sandbox denied worktree setup")),
+        )
+
+        result = analyze_deps(["1", "2"], mode="headless", project_root=tmp_path)
+
+        # Ran even though this session then failed to start: recovery is about
+        # the *previous* session's votes, not this one's.
+        assert result is None
+        sweep.assert_called_once()
+        assert sweep.call_args.args[0] == tmp_path
+
 
 def _echo_confirm(
     resolved_tool: str | None,

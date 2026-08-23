@@ -18,35 +18,19 @@ DOC_PASS_ADVISORY = (
 
 
 def _session_readiness_result(phase: str, cwd: Path | None = None) -> CheckResult:
-    """Return the phase-aware readiness result for this exact CLI runtime.
+    """Delegate to the readiness service, naming the directory to inspect.
 
-    Keeping this in the CLI layer is deliberate: a session command and the
-    initial skill check must inspect the environment that is actually executing
-    ``wade``.  A worktree launcher may have more authority than the AI child
-    that later runs ``sync`` or ``done``.
+    Resolution (config load, phase -> ``ai.<command>`` mapping, tool selection)
+    lives in ``check_service.resolve_session_readiness``; this stays dispatch.
 
-    ``cwd`` overrides the inspected directory for the endpoints that operate on
-    a *resolved* worktree rather than the caller's own (``done`` with a worktree
-    target or ``--plan``); it defaults to the process cwd.
+    ``cwd`` defaults to the runtime actually executing ``wade`` and is
+    overridden only by the endpoints that operate on a *resolved* worktree
+    rather than the caller's own (``done`` with a worktree target or
+    ``--plan``).
     """
-    from wade.config.loader import load_config
-    from wade.models.readiness import ReadinessPhase
-    from wade.services.check_service import check_session_readiness
+    from wade.services.check_service import resolve_session_readiness
 
-    path = cwd or Path.cwd()
-    readiness_phase = ReadinessPhase(phase)
-    # ``load_config`` already returns defaults when a project has no config.
-    # Do not weaken capability checks when a present config is malformed or
-    # unreadable: let the normal CLI ConfigError path name that defect instead.
-    config = load_config(path)
-    command = {
-        ReadinessPhase.PLAN: "plan",
-        ReadinessPhase.IMPLEMENTATION: "implement",
-        ReadinessPhase.REVIEW_PR_COMMENTS: "review_pr_comments",
-        ReadinessPhase.DEPS: "deps",
-    }[readiness_phase]
-    tool = config.get_ai_tool(command)
-    return check_session_readiness(readiness_phase, path, config, tool)
+    return resolve_session_readiness(phase, cwd)
 
 
 def require_ready(

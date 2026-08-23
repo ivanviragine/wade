@@ -35,6 +35,10 @@ from wade.services.delegation_service import (
     extended_timeout,
     resolve_mode,
 )
+from wade.services.knowledge_recovery import (
+    RETAINED_VOTE_RECOVERY_HINT,
+    report_retained_vote_recovery,
+)
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
 
@@ -551,6 +555,10 @@ def analyze_deps(
 
             repo_root = git_repo.get_repo_root(cwd)
             standalone_repo_root = repo_root
+            # Hand off votes an earlier session had to leave behind before
+            # adding another worktree — retained staging is only retryable if
+            # some later run actually retries it.
+            report_retained_vote_recovery(repo_root, config)
             worktrees_dir = _resolve_worktrees_dir(config, repo_root)
             repo_name = repo_root.name
             short_id = os.urandom(4).hex()
@@ -764,6 +772,7 @@ def analyze_deps(
                         f"worktree at {standalone_worktree}. "
                         f"{handoff.message or 'Retry after restoring access.'}"
                     )
+                    console.hint(RETAINED_VOTE_RECOVERY_HINT)
                     return None
             git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
         except Exception as exc:

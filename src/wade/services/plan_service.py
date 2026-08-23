@@ -41,6 +41,10 @@ from wade.services.ai_resolution import (
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
+from wade.services.knowledge_recovery import (
+    RETAINED_VOTE_RECOVERY_HINT,
+    report_retained_vote_recovery,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -511,6 +515,11 @@ def plan(
 
     # Ensure task label exists
     ensure_task_label(provider, config.project.issue_label)
+
+    # Recover votes a previous run had to leave behind before starting a new
+    # session — a retained worktree is only retryable if something retries it.
+    if repo_root is not None:
+        report_retained_vote_recovery(repo_root, config)
 
     # Create a detached-HEAD planning worktree
     planning_worktree: Path | None = None
@@ -1444,6 +1453,7 @@ def _flush_planning_votes_before_implementation(
         "Could not hand off staged knowledge votes; preserving the planning "
         f"worktree at {planning_worktree}. {handoff.message or 'Retry after restoring access.'}"
     )
+    console.hint(RETAINED_VOTE_RECOVERY_HINT)
     return False
 
 
@@ -1497,6 +1507,7 @@ def _remove_planning_worktree(
                 "Could not hand off staged knowledge votes; preserving the planning "
                 f"worktree at {worktree}. {result.message or 'Retry after restoring access.'}"
             )
+            console.hint(RETAINED_VOTE_RECOVERY_HINT)
             return False
     from wade.git import worktree as git_worktree
 
