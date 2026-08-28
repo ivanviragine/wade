@@ -70,6 +70,18 @@ def _matches(value: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
 
 
+def _selected_by_filters(
+    name: str,
+    source_path: str,
+    include_patterns: tuple[str, ...],
+    exclude_patterns: tuple[str, ...],
+) -> bool:
+    match_values = (name, source_path, f"project:{name}")
+    return any(_matches(value, include_patterns) for value in match_values) and not any(
+        _matches(value, exclude_patterns) for value in match_values
+    )
+
+
 def _root_label(relative_root: str) -> str:
     return relative_root.strip(".").replace("/", "-").replace(".", "") or "root"
 
@@ -79,6 +91,8 @@ def _scan_checkout(
     *,
     origin: str,
     exclude_real_roots: tuple[Path, ...],
+    include_patterns: tuple[str, ...],
+    exclude_patterns: tuple[str, ...],
 ) -> list[DiscoveredSkill]:
     results: list[DiscoveredSkill] = []
     seen_roots: set[Path] = set()
@@ -96,6 +110,14 @@ def _scan_checkout(
             continue
 
         for name in list_skills(skills_root):
+            source_path = f"{relative_root}/{name}"
+            if not _selected_by_filters(
+                name,
+                source_path,
+                include_patterns,
+                exclude_patterns,
+            ):
+                continue
             source = skills_root / name
             try:
                 real_source = source.resolve(strict=True)
@@ -104,7 +126,6 @@ def _scan_checkout(
             if any(_is_relative_to(real_source, excluded) for excluded in exclude_real_roots):
                 continue
             inspected = inspect_skill(source, project_root=root)
-            source_path = f"{relative_root}/{name}"
             descriptor = SkillDescriptor(
                 name=name,
                 canonical_ref=f"project:{name}",
@@ -199,10 +220,18 @@ def discover_project_skills(
         worktree_root,
         origin="worktree",
         exclude_real_roots=excluded_roots,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
     )
     if main_root.resolve() != worktree_root.resolve():
         candidates.extend(
-            _scan_checkout(main_root, origin="main", exclude_real_roots=excluded_roots)
+            _scan_checkout(
+                main_root,
+                origin="main",
+                exclude_real_roots=excluded_roots,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+            )
         )
 
     selected: list[DiscoveredSkill] = []
@@ -220,11 +249,6 @@ def discover_project_skills(
             continue
         seen_real_or_digest.add(real_key)
         seen_real_or_digest.add(digest_key)
-        match_values = (descriptor.name, descriptor.source_path, descriptor.canonical_ref)
-        if not any(_matches(value, include_patterns) for value in match_values):
-            continue
-        if any(_matches(value, exclude_patterns) for value in match_values):
-            continue
         selected.append(candidate)
 
     selected.sort(

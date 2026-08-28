@@ -118,6 +118,11 @@ delegations:
       work: [builtin:dependency-analysis]
 ```
 
+WADE applies `include` and `exclude` to candidate names, canonical references,
+and source paths before inspecting skill contents. A filtered-out skill is not
+part of the inventory and cannot block session startup because of invalid files;
+selected skills still fail closed on unsafe paths, symlinks, or size limits.
+
 Bindings are ordered lists. Supplying a CLI slot replaces its configured/default
 list; it does not silently append. Users who want two methods list both in the
 desired order. `sessions.deps` is invalid because deps exposes no session slot.

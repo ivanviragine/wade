@@ -177,6 +177,40 @@ def test_include_exclude_and_same_name_collision_resolution(tmp_path: Path) -> N
         resolve_skill_refs((SkillRef.model_validate("project:ignored"),), inventory)
 
 
+@pytest.mark.parametrize(
+    ("include", "exclude"),
+    [
+        (("selected",), ()),
+        (("*",), ("invalid",)),
+    ],
+)
+def test_filters_are_applied_before_skill_validation(
+    tmp_path: Path,
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+) -> None:
+    _skill(tmp_path, ".agents/skills", "selected")
+    invalid = _skill(tmp_path, ".agents/skills", "invalid")
+    (invalid / "broken.md").symlink_to("missing.md")
+
+    inventory = discover_project_skills(
+        tmp_path,
+        tmp_path,
+        include=include,
+        exclude=exclude,
+    )
+
+    assert [skill.descriptor.name for skill in inventory.skills] == ["selected"]
+
+
+def test_selected_skill_still_fails_validation(tmp_path: Path) -> None:
+    invalid = _skill(tmp_path, ".agents/skills", "invalid")
+    (invalid / "broken.md").symlink_to("missing.md")
+
+    with pytest.raises(SkillValidationError, match="Broken"):
+        discover_project_skills(tmp_path, tmp_path)
+
+
 def test_self_init_template_links_are_not_discovered_as_project_skills(
     tmp_path: Path,
 ) -> None:
