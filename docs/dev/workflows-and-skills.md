@@ -179,10 +179,12 @@ order:
 3. untrusted plan/diff/batch/task input in a delimited input section;
 4. authoritative result contract.
 
-No placeholder replacement runs across method or operation-input bytes. A skill
-may refer to resources beneath its materialized root, but headless execution
-does not depend on native tool discovery. The fixed service owns tool/model
-selection, permissions, timeout, input collection, parsing, and side effects.
+No placeholder replacement runs across method or operation-input bytes. Each
+method envelope names the exact absolute materialized root for that invocation,
+so a skill may refer to copied resources even when bundle resolution and the
+reviewer's repository working directory differ. Headless execution does not
+depend on native tool discovery. The fixed service owns tool/model selection,
+permissions, timeout, input collection, parsing, and side effects.
 
 Foreign operations persist a narrower delegation manifest below
 `.wade/operations/`. A successful synchronous operation removes its own bundle;
@@ -209,6 +211,11 @@ The record stores the ordered binding components and a fixed outcome:
 `no-diff` is valid only when committed branch, staged, and unstaged diffs are all
 empty. An empty `--staged` index while other work exists records
 `nothing-staged`, so input scoping cannot satisfy the gate accidentally.
+Prompt mode emits the bounded review prompt but writes no satisfying record and
+consumes no pass. After actually performing that self-review, the caller runs
+`wade review implementation --ack-self-review`; that explicit second action
+writes `reviewed` for the then-current commit and active binding. Successful
+headless or interactive reviews write `reviewed` directly.
 
 Records are idempotent and never downgrade a success. Pass caps count only the
 active binding. Switching A to B preserves A's history but makes it inapplicable;

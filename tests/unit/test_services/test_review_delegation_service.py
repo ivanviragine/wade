@@ -144,6 +144,9 @@ class TestReviewPlan:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         plan_root = tmp_path / "detached-plan"
+        repo_root = tmp_path / "source-repo"
+        repo_root.mkdir()
+        monkeypatch.chdir(repo_root)
         plan_file = plan_root / "output" / "PLAN.md"
         plan_file.parent.mkdir(parents=True)
         plan_file.write_text("# Plan\n", encoding="utf-8")
@@ -165,7 +168,9 @@ class TestReviewPlan:
 
         assert review_plan(str(plan_file)).success
         assert captured["cwd"] == plan_root
-        assert mock_delegate.call_args.args[0].cwd == plan_root
+        request = mock_delegate.call_args.args[0]
+        assert request.cwd == repo_root
+        assert request.trusted_dirs == [str(plan_root)]
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -557,6 +562,24 @@ class TestReviewCode:
         result = review_implementation(mode="bad_value")
         assert result.success is False
         assert "Invalid delegation mode" in result.feedback
+        assert result.exit_code == 1
+
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_self_review_ack_rejects_external_launch_options(
+        self,
+        mock_config: MagicMock,
+    ) -> None:
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+
+        result = review_implementation(
+            ack_self_review=True,
+            mode="headless",
+            ai_tool="claude",
+            ai_explicit=True,
+        )
+
+        assert result.success is False
+        assert "cannot be combined" in result.feedback
         assert result.exit_code == 1
 
     @patch("wade.services.review_delegation_service.delegate")

@@ -66,7 +66,7 @@ def _read_binding_method(root: Path, binding: ResolvedBinding) -> str:
         sections.extend(
             [
                 f'<method position="{position}" ref="{skill.canonical_ref}" '
-                f'root="{skill.materialized_path}">',
+                f'root="{directory.resolve().as_posix()}">',
                 content.rstrip(),
                 "</method>",
             ]

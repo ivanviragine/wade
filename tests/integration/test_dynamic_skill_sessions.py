@@ -354,6 +354,10 @@ def test_session_transition_replaces_manifest_and_mapped_review_uses_it(
     assert prepared.host_session is SessionKind.REVIEW_PR_COMMENTS
     assert prepared.binding == review_session.manifest.bindings[SkillSlot.REVIEW]
     assert "authorization boundaries" in prepared.method_section
+    assert (
+        f'root="{tmp_git_repo.as_posix()}/.wade/session/'
+        'skills/project/agents-skills/review-two"' in prepared.method_section
+    )
 
 
 def test_foreign_dependency_method_preserves_host_session_bundle(

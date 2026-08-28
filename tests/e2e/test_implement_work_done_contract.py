@@ -613,9 +613,10 @@ class TestWorkDoneCommand:
         """#384: review→commit→done refuses once, then completes on the 2nd pass.
 
         The default review mode is ``prompt`` (self-review, no AI subprocess), so
-        each ``wade review implementation`` exits 2 and records a binding-aware
-        review outcome. Committing after each review invalidates the exact-commit
-        success — the loop the active-binding pass cap must bound.
+        each ``wade review implementation`` exits 2 without certifying itself.
+        The explicit acknowledgement records the completed self-review. Committing
+        afterward invalidates the exact-commit success — the loop the active-binding
+        pass cap must bound.
         """
         issue_number = 84
         issue_title = "fix: bound the review loop"
@@ -647,6 +648,8 @@ class TestWorkDoneCommand:
         _commit("v1\n")
         review1 = _run(["review", "implementation"], cwd=worktree_path)
         assert review1.returncode == 2, review1.stdout + review1.stderr
+        ack1 = _run(["review", "implementation", "--ack-self-review"], cwd=worktree_path)
+        assert ack1.returncode == 0, ack1.stdout + ack1.stderr
 
         _commit("v2\n")  # new commit → the prior review record is now stale
         done1 = _run(["implementation-session", "done"], cwd=worktree_path)
@@ -659,6 +662,8 @@ class TestWorkDoneCommand:
         # --- Pass 2: review again, commit again — done SUCCEEDS at the cap. ---
         review2 = _run(["review", "implementation"], cwd=worktree_path)
         assert review2.returncode == 2, review2.stdout + review2.stderr
+        ack2 = _run(["review", "implementation", "--ack-self-review"], cwd=worktree_path)
+        assert ack2.returncode == 0, ack2.stdout + ack2.stderr
 
         _commit("v3\n")  # still a newer, un-reviewed commit — but the cap is hit
         _record_implementation_docs(worktree_path)
@@ -845,10 +850,12 @@ class TestReviewStatusBlockContract:
             e2e_repo, mock_gh_cli, 362, "fix: record the reviewed status"
         )
 
-        # A real self-review pass (default prompt mode, exit 2) writes the
-        # binding-aware current-commit record the done gate later reads.
+        # Default prompt mode emits the review but cannot certify itself; the
+        # separate acknowledgement writes the record the done gate later reads.
         review = _run(["review", "implementation"], cwd=worktree_path)
         assert review.returncode == 2, review.stdout + review.stderr
+        acknowledged = _run(["review", "implementation", "--ack-self-review"], cwd=worktree_path)
+        assert acknowledged.returncode == 0, acknowledged.stdout + acknowledged.stderr
         head = _git(["rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
 
         result = _run(["implementation-session", "done"], cwd=worktree_path)

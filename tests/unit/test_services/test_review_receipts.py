@@ -64,7 +64,7 @@ class TestReviewImplementationReceipts:
         ("result", "outcome"),
         (
             (
-                DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT),
+                DelegationResult(success=True, feedback="ok", mode=DelegationMode.HEADLESS),
                 ReviewOutcome.REVIEWED,
             ),
             (
@@ -96,6 +96,65 @@ class TestReviewImplementationReceipts:
 
         assert record.call_args.args[2] is review_preflight
         assert record.call_args.args[3] is outcome
+
+    def test_prompt_only_review_writes_no_receipt_or_pass(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        prompted = DelegationResult(
+            success=True,
+            feedback="Review this diff yourself.",
+            mode=DelegationMode.PROMPT,
+        )
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation", return_value=prompted),
+            patch.object(rds, "_record_binding_outcome") as record,
+            patch.object(rds, "_announce_review_pass_budget") as announce,
+        ):
+            result = rds.review_implementation()
+
+        assert result.mode is DelegationMode.PROMPT
+        record.assert_not_called()
+        announce.assert_not_called()
+
+    def test_explicit_self_review_acknowledgement_writes_receipt_without_delegating(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation") as delegate,
+            patch.object(rds, "_record_binding_outcome", return_value=1) as record,
+            patch.object(rds, "_announce_review_pass_budget") as announce,
+        ):
+            result = rds.review_implementation(ack_self_review=True)
+
+        assert result.success is True
+        delegate.assert_not_called()
+        assert record.call_args.args[2] is review_preflight
+        assert record.call_args.args[3] is ReviewOutcome.REVIEWED
+        announce.assert_called_once_with(1, 2)
+
+    def test_staged_self_review_ack_cannot_certify_an_empty_index(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        diffs = rds._ReviewDiffs(
+            committed="diff --git a b",
+            staged="",
+            unstaged="",
+        )
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds, "_collect_review_diffs", return_value=diffs),
+            patch.object(rds, "_record_binding_outcome") as record,
+        ):
+            result = rds.review_implementation(staged=True, ack_self_review=True)
+
+        assert result.success is False
+        assert result.exit_code == 1
+        record.assert_called_once()
+        assert record.call_args.args[3] is ReviewOutcome.NOTHING_STAGED
 
     def test_launch_failure_does_not_record_or_spend_pass(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
@@ -136,7 +195,7 @@ class TestAnnounceReviewPassBudget:
     def test_review_forwards_persisted_binding_count(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
     ) -> None:
-        success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
+        success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.HEADLESS)
         with (
             patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
             patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
@@ -151,7 +210,7 @@ class TestAnnounceReviewPassBudget:
     def test_failed_receipt_write_is_not_announced(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
     ) -> None:
-        success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
+        success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.HEADLESS)
         with (
             patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
             patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),

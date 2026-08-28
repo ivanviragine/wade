@@ -242,6 +242,7 @@ class TestReviewImplementationCli:
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 2
         assert "SELF-REVIEW" in result.output
+        assert "--ack-self-review" in result.output
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert "diff --git a/f.py" in request.prompt
@@ -353,6 +354,23 @@ class TestReviewImplementationCli:
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 1
         mock_delegate.assert_called_once()
+
+    @patch("wade.services.review_delegation_service.review_implementation")
+    def test_review_implementation_ack_self_review_exits_zero(
+        self,
+        mock_review: MagicMock,
+    ) -> None:
+        mock_review.return_value = DelegationResult(
+            success=True,
+            feedback="Self-review acknowledged for the current commit and frozen review binding.",
+            mode=DelegationMode.PROMPT,
+        )
+
+        result = runner.invoke(app, ["review", "implementation", "--ack-self-review"])
+
+        assert result.exit_code == 0
+        assert "Self-review acknowledged" in result.output
+        assert mock_review.call_args.kwargs["ack_self_review"] is True
 
     @patch("wade.services.review_delegation_service.review_implementation")
     def test_review_implementation_staged_flag(

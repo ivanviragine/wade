@@ -541,7 +541,11 @@ return `IN_WORKTREE`, write-probes the directory, and returns `PLAN_DIR_ONLY`
 (exit 0, `plandir=…`) or `PLAN_DIR_BLOCKED` (8, `plan_output_write`). Because
 only the parent sets the marker, a genuinely misplaced agent still gets
 `IN_MAIN_CHECKOUT`, and a real worktree-mode failure (e.g. blocked staging) is
-never masked.
+never masked. Plan review resolves the frozen REVIEW binding from that throwaway
+directory but launches the reviewer in the caller's source checkout, granting
+the throwaway bundle as an additional read root. Binding identity and repository
+context therefore remain separate without hiding the source tree from the
+review methodology.
 They apply to implementation and PR-comment sessions **regardless of the task
 provider**, because PRs, review threads, and `done` are GitHub-backed even when
 tasks are Markdown or ClickUp. Those two phases also require writable linked-worktree Git metadata:

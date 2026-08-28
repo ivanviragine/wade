@@ -245,15 +245,21 @@ def _review_step(kind: SessionKind, enabled: bool) -> str:
         return "Skipped explicitly by project review configuration; record this step as skipped."
     if kind is SessionKind.PLAN:
         command = "`wade review plan <plan_file>` for each generated plan"
+        prompt_completion = "Exit 2 requires performing the emitted self-review."
     else:
         command = "`wade review implementation` for the current commit"
+        prompt_completion = (
+            "Exit 2 requires performing the emitted self-review and then running "
+            "`wade review implementation --ack-self-review`; prompt emission alone "
+            "never writes a satisfying receipt."
+        )
     return (
         f"Run {command}. The command loads only the frozen REVIEW methodology. "
         "Address actionable findings, commit changes, and re-review once after major fixes. "
         "The successful receipt must match the final pre-sync commit; if documentation, "
         "knowledge, or another later step creates a commit, repeat this review before done. "
-        "Exit 2 requires performing the emitted self-review; a successful external review "
-        "writes the deterministic binding-aware receipt."
+        f"{prompt_completion} A successful external review writes the deterministic "
+        "binding-aware receipt."
     )
 
 

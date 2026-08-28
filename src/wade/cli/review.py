@@ -19,7 +19,12 @@ review_app = typer.Typer(
 )
 
 
-def _finalize_review_result(result: DelegationResult, complete_message: str) -> None:
+def _finalize_review_result(
+    result: DelegationResult,
+    complete_message: str,
+    *,
+    self_review_followup: str | None = None,
+) -> None:
     """Print status message and exit with the appropriate code.
 
     Shared by plan, implementation, and batch review commands.
@@ -31,6 +36,7 @@ def _finalize_review_result(result: DelegationResult, complete_message: str) -> 
             console.info(
                 "SELF-REVIEW — read the review prompt above, perform the review "
                 "yourself, and address any issues before proceeding."
+                + (f" {self_review_followup}" if self_review_followup else "")
             )
         else:
             console.info(complete_message)
@@ -131,6 +137,11 @@ def review_implementation_cmd(
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="Review methodology skill ref. Repeat for an ordered binding."
     ),
+    ack_self_review: bool = typer.Option(
+        False,
+        "--ack-self-review",
+        help="After prompt-mode self-review, write its binding-aware completion receipt.",
+    ),
 ) -> None:
     """Review code changes."""
     from wade.services.review_delegation_service import review_implementation
@@ -148,11 +159,22 @@ def review_implementation_cmd(
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
         skills=skill,
+        ack_self_review=ack_self_review,
     )
+    if ack_self_review:
+        if result.success and not result.skipped:
+            from wade.ui.console import console
+
+            console.info(result.feedback)
+        raise typer.Exit(0 if result.success else 1)
     _finalize_review_result(
         result,
         "REVIEW COMPLETE — address any actionable feedback above, "
         "then proceed to wade implementation-session done.",
+        self_review_followup=(
+            "When the self-review is complete, run "
+            "`wade review implementation --ack-self-review` to write the receipt."
+        ),
     )
 
 

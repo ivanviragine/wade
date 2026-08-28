@@ -134,6 +134,7 @@ def _run_review_delegation(
     method_section: str = "",
     input_label: str = "Operation input",
     cwd: Path | None = None,
+    trusted_dirs: list[str] | None = None,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
 
@@ -260,6 +261,7 @@ def _run_review_delegation(
         model=resolved_model,
         effort=effort_str,
         cwd=cwd,
+        trusted_dirs=trusted_dirs or [],
         permission_mode=effective_permission_mode,
         timeout=timeout,
         explicit_timeout=explicit_timeout,
@@ -360,17 +362,22 @@ def review_plan(
     # mapped plan-review uses that exact REVIEW binding instead of silently
     # falling back to a fresh standalone operation selected from the caller's
     # current checkout.
-    delegation_cwd = Path.cwd()
+    caller_cwd = Path.cwd()
+    binding_root = caller_cwd
     for candidate in (plan_path.parent, *plan_path.parent.parents):
         if (candidate / ".wade" / "session").exists():
-            delegation_cwd = candidate
+            binding_root = candidate
             break
+    try:
+        review_cwd = git_repo.get_repo_root(binding_root)
+    except GitError:
+        review_cwd = caller_cwd
     template = load_prompt_template("review-plan.md")
     try:
         prepared = prepare_delegation_method(
             config,
             DelegationKind.PLAN_REVIEW,
-            cwd=delegation_cwd,
+            cwd=binding_root,
             skills=skills,
         )
         result = _run_review_delegation(
@@ -392,7 +399,10 @@ def review_plan(
             delegation_kind=DelegationKind.PLAN_REVIEW,
             method_section=prepared.method_section,
             input_label="Plan input",
-            cwd=delegation_cwd,
+            cwd=review_cwd,
+            trusted_dirs=(
+                [str(binding_root)] if binding_root.resolve() != review_cwd.resolve() else None
+            ),
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
@@ -524,12 +534,32 @@ def review_implementation(
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
     skills: list[str] | None = None,
+    ack_self_review: bool = False,
 ) -> DelegationResult:
     """Review implementation changes via the delegation infrastructure."""
     config, cmd_config = _load_review_config("review_implementation")
     skip = _check_review_enabled("review_implementation", cmd_config)
     if skip is not None:
         return skip
+    if ack_self_review and (
+        mode is not None
+        or ai_explicit
+        or model_explicit
+        or effort_explicit
+        or permission_mode_explicit
+        or yolo is not None
+    ):
+        message = (
+            "--ack-self-review cannot be combined with AI launch, mode, effort, or "
+            "permission options"
+        )
+        console.error(message)
+        return DelegationResult(
+            success=False,
+            feedback=message,
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
     if mode is not None:
         try:
             DelegationMode(mode)
@@ -604,10 +634,33 @@ def review_implementation(
         )
         cleanup_delegation_bundle(prepared, preserve=False)
         return DelegationResult(
-            success=True,
+            success=not ack_self_review,
             feedback=message,
             mode=DelegationMode.PROMPT,
             skipped=True,
+            exit_code=1 if ack_self_review else 0,
+        )
+
+    if ack_self_review:
+        passes = _record_binding_outcome(
+            repo_root,
+            head,
+            prepared,
+            ReviewOutcome.REVIEWED,
+        )
+        cleanup_delegation_bundle(prepared, preserve=passes is None)
+        if passes is None:
+            return DelegationResult(
+                success=False,
+                feedback="Self-review acknowledgement could not be persisted.",
+                mode=DelegationMode.PROMPT,
+                exit_code=1,
+            )
+        _announce_review_pass_budget(passes, config.done.max_review_passes)
+        return DelegationResult(
+            success=True,
+            feedback=("Self-review acknowledged for the current commit and frozen review binding."),
+            mode=DelegationMode.PROMPT,
         )
 
     diff_content = diffs.review_input(staged_only=staged)
@@ -648,7 +701,7 @@ def review_implementation(
     # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
     # has not consumed a review→fix cycle; counting it would make `done` skip a
     # required review for an infrastructure failure (#462).
-    if result.success or result.timed_out:
+    if (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
         outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
         passes = _record_binding_outcome(repo_root, head, prepared, outcome)
         # Surface the running budget from the command itself so the caller sees
@@ -658,6 +711,11 @@ def review_implementation(
         # a failed receipt write never triggers it.
         if isinstance(passes, int):
             _announce_review_pass_budget(passes, config.done.max_review_passes)
+    elif result.success:
+        console.info(
+            "Prompt emitted; no satisfying review receipt was written. Perform the "
+            "self-review, then acknowledge it explicitly."
+        )
     else:
         # ``DelegationResult`` cannot yet tell "never launched" from "launched
         # and exited nonzero", so this covers both. Word both the finding and

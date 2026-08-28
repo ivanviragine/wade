@@ -294,6 +294,13 @@ WADE splits review into an **AI review pass** you or the agent can invoke, and
 | `wade review pr-comments <N>` | Starts a session to address human/bot PR comments |
 | `wade review trigger <N>` | Posts configured bot-review trigger comments on the task's PR |
 
+Prompt-mode implementation review prints the bounded review prompt and exits 2;
+printing it does not certify that a review happened. After performing that
+self-review and addressing its findings, run
+`wade review implementation --ack-self-review` to write the current commit and
+frozen-review-binding receipt. Successful headless or interactive reviews write
+the same receipt directly.
+
 To fetch the unresolved comments themselves during a review session, the agent
 runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads with
 `wade review-pr-comments-session resolve`.
@@ -502,7 +509,7 @@ Decision and integrity gates deliberately require an explicit valid outcome:
 | PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (both change-producing session types) | `done.require_pr_summary: false` |
 | Documentation decision | neither an `--updated` nor reasoned `--not-needed` receipt exists for current HEAD | *no disable toggle; `docs --not-needed "<reason>"` records the explicit no-change outcome* |
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (both change-producing session types) | `done.require_sync: false` |
-| Review ran | `wade review implementation` has no successful record for the current commit **and frozen REVIEW binding**. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles for the active reviewer, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| Review ran | `wade review implementation` has no successful external-review or explicitly acknowledged self-review record for the current commit **and frozen REVIEW binding**. Prompt emission alone never satisfies this gate. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles for the active reviewer, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |

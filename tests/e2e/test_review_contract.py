@@ -456,6 +456,21 @@ class TestReviewImplementationCommand:
         output = result.stdout + result.stderr
         assert "diff --git" in output
         assert "SELF-REVIEW" in output
+        assert "--ack-self-review" in output
+        reviews_dir = e2e_repo / ".wade/reviews"
+        assert not list(reviews_dir.glob("review@code-review@*.json"))
+
+        acknowledged = _run(
+            ["review", "implementation", "--staged", "--ack-self-review"],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert acknowledged.returncode == 0
+        assert "Self-review acknowledged" in acknowledged.stdout + acknowledged.stderr
+        records = list(reviews_dir.glob("review@code-review@*.json"))
+        assert len(records) == 1
+        assert json.loads(records[0].read_text(encoding="utf-8"))["outcome"] == "reviewed"
         assert _read_fake_claude_log(log_file) == []
 
 
