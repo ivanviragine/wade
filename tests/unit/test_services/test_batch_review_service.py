@@ -523,6 +523,7 @@ class TestRunCoherenceReview:
         mock_delegation: MagicMock,
         mock_repo: MagicMock,
         mock_pr: MagicMock,
+        tmp_path: Path,
     ) -> None:
         from wade.services.batch_review_service import run_coherence_review
 
@@ -543,11 +544,11 @@ class TestRunCoherenceReview:
             pr_number=42,
         )
 
-        result = run_coherence_review(ctx, repo_root=Path("/repo"))
+        result = run_coherence_review(ctx, repo_root=tmp_path)
 
         assert result.success is True
-        mock_load_review_config.assert_called_once_with("review_batch", Path("/repo"))
-        mock_pr.comment_on_pr.assert_called_once_with(Path("/repo"), 42, "All looks good!")
+        mock_load_review_config.assert_called_once_with("review_batch", tmp_path)
+        mock_pr.comment_on_pr.assert_called_once_with(tmp_path, 42, "All looks good!")
         mock_repo.get_repo_root.assert_not_called()
 
     @patch("wade.services.batch_review_service.git_pr")
@@ -712,10 +713,11 @@ class TestReviewBatch:
         mock_integration: MagicMock,
         mock_pr_create: MagicMock,
         mock_review: MagicMock,
+        tmp_path: Path,
     ) -> None:
         from wade.services.batch_review_service import review_batch
 
-        repo_root = Path("/repo")
+        repo_root = tmp_path
         config = _batch_review_config(review_batch_enabled=True)
         mock_repo.get_repo_root.return_value = repo_root
         mock_repo.get_current_branch.return_value = "main"
@@ -740,7 +742,7 @@ class TestReviewBatch:
             mode=DelegationMode.HEADLESS,
         )
 
-        result = review_batch("99", project_root=Path("/repo/subdir"))
+        result = review_batch("99", project_root=tmp_path / "subdir")
 
         assert result.success is True
         mock_review.assert_called_once()

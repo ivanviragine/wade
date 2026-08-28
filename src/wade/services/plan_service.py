@@ -30,6 +30,7 @@ from wade.models.config import ProjectConfig
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.task import CloseReason, PlanFile, Task
+from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -83,10 +84,14 @@ def get_plan_prompt_template() -> str:
     return template.read_text(encoding="utf-8")
 
 
-def render_plan_prompt(plan_dir: str, issue_context: str | None = None) -> str:
+def render_plan_prompt(
+    plan_dir: str,
+    issue_context: str | None = None,
+    session_bundle: str = ".wade/session",
+) -> str:
     """Render the plan prompt template with the plan directory."""
     template = get_plan_prompt_template()
-    prompt = template.replace("{plan_dir}", plan_dir)
+    prompt = template.replace("{plan_dir}", plan_dir).replace("{session_bundle}", session_bundle)
     if issue_context:
         prompt = issue_context + "\n\n" + prompt
     return prompt
@@ -292,6 +297,7 @@ def run_ai_planning_session(
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
+    session_bundle: str = ".wade/session",
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -304,7 +310,11 @@ def run_ai_planning_session(
     session_cwd = cwd or Path.cwd()
 
     # Build prompt
-    prompt = render_plan_prompt(plan_dir, issue_context=issue_context)
+    prompt = render_plan_prompt(
+        plan_dir,
+        issue_context=issue_context,
+        session_bundle=session_bundle,
+    )
 
     # For Copilot/Codex, prefix with /plan
     tool_lower = ai_tool.lower()
@@ -434,6 +444,9 @@ def plan(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -504,7 +517,7 @@ def plan(
     from wade.git import worktree as git_worktree
     from wade.services.implementation_service import _resolve_worktrees_dir, bootstrap_worktree
     from wade.services.knowledge_service import mark_throwaway_knowledge_session
-    from wade.skills.installer import PLAN_SKILLS
+    from wade.skills.installer import compatibility_skills_for_session
 
     cwd = project_root or Path.cwd()
     try:
@@ -512,9 +525,6 @@ def plan(
     except Exception:
         console.warn("Not in a git repo — draft PRs will not be created.")
         repo_root = None
-
-    # Ensure task label exists
-    ensure_task_label(provider, config.project.issue_label)
 
     # Recover votes a previous run had to leave behind before starting a new
     # session — a retained worktree is only retryable if something retries it.
@@ -537,9 +547,14 @@ def plan(
                 planning_worktree,
                 config,
                 repo_root,
-                skills=PLAN_SKILLS,
+                skills=compatibility_skills_for_session(SessionKind.PLAN),
                 plan_mode=True,
                 session_phase=SessionPhase.PLAN,
+                session_kind=SessionKind.PLAN,
+                task_id=existing_issue.id if existing_issue else None,
+                work_skills=work_skills,
+                review_skills=review_skills,
+                refresh_skills=refresh_skills,
             )
             # This process flushes the worktree's staged votes on the way out
             # (``_flush_planning_ratings``), so it is entitled to authorize
@@ -569,6 +584,30 @@ def plan(
             return False
 
         plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
+        # The supported no-worktree fallback cannot write the caller's checkout.
+        # Materialize its immutable bundle under the writable plan directory and
+        # name that exact path in the launch prompt.
+        from wade.services.session_composition_service import (
+            SessionCompositionError,
+            compose_session,
+        )
+
+        try:
+            compose_session(
+                Path(plan_dir),
+                repo_root or Path.cwd(),
+                config,
+                kind=SessionKind.PLAN,
+                task_id=existing_issue.id if existing_issue else None,
+                work_skills=work_skills,
+                review_skills=review_skills,
+                refresh=refresh_skills,
+                display_root=str(Path(plan_dir) / ".wade/session"),
+            )
+        except SessionCompositionError as exc:
+            console.error(f"Cannot start planning session: {exc}")
+            stop_title_keeper()
+            return False
     else:
         # Plan directory: when using a planning worktree, isolate outputs to a
         # dedicated subdirectory so repo markdown files (e.g., README.md) are not
@@ -581,6 +620,11 @@ def plan(
         if existing_issue is not None:
             _persist_plan_issue_ref(planning_worktree, existing_issue)
 
+    # Provider setup is intentionally deferred until the session's immutable
+    # skill bundle has resolved. An invalid configured or CLI skill must fail
+    # before WADE creates labels, issues, PRs, or any other provider-side state.
+    ensure_task_label(provider, config.project.issue_label)
+
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
     console.hint(f"Transcript: {transcript_path}")
@@ -589,6 +633,9 @@ def plan(
     console.empty()
     issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
     session_cwd = planning_worktree or Path.cwd()
+    session_bundle = (
+        ".wade/session" if planning_worktree is not None else str(Path(plan_dir) / ".wade/session")
+    )
     with _plan_dir_fallback_env(plan_dir, planning_worktree):
         exit_code = run_ai_planning_session(
             ai_tool=resolved_tool,
@@ -600,6 +647,7 @@ def plan(
             allowed_commands=config.permissions.allowed_commands,
             cwd=session_cwd,
             permission_mode=resolved_permission_mode,
+            session_bundle=session_bundle,
         )
     logger.info("plan.ai_exited", exit_code=exit_code)
 

@@ -9,12 +9,42 @@ import typer
 from wade.models.session import SyncEventType, SyncResult
 from wade.services.check_service import CheckResult
 
-# Printed by both `implementation-session done` and `review-pr-comments-session
-# done` after a successful push, mirroring the existing review advisory pattern.
-DOC_PASS_ADVISORY = (
-    "Documentation pass not confirmed — re-read what this session changed and "
-    "update docs (or state why none were needed) if you haven't already."
-)
+
+def record_documentation_decision(
+    session: str,
+    *,
+    updated: bool,
+    not_needed: str | None,
+) -> None:
+    """Shared implementation for change-producing session ``docs`` commands."""
+
+    from wade.git import repo as git_repo
+    from wade.models.session_manifest import DocumentationDecision
+    from wade.models.workflow import SessionKind
+    from wade.services.documentation_receipt_service import write_documentation_receipt
+
+    if updated == (not_needed is not None):
+        typer.echo("error: supply exactly one of --updated or --not-needed <reason>", err=True)
+        raise typer.Exit(2)
+    try:
+        root = git_repo.get_repo_root(Path.cwd())
+        kind = SessionKind(session)
+    except (Exception, ValueError) as exc:
+        typer.echo(f"error: cannot resolve documentation session: {exc}", err=True)
+        raise typer.Exit(1) from None
+    decision = DocumentationDecision.UPDATED if updated else DocumentationDecision.NOT_NEEDED
+    receipt = write_documentation_receipt(
+        root,
+        session=kind,
+        decision=decision,
+        reason=not_needed,
+    )
+    if receipt is None:
+        typer.echo("error: could not persist documentation decision", err=True)
+        raise typer.Exit(1)
+    typer.echo(
+        f"documentation={receipt.decision.value} session={kind.value} commit={receipt.commit}"
+    )
 
 
 def _session_readiness_result(phase: str, cwd: Path | None = None) -> CheckResult:
@@ -77,7 +107,7 @@ def require_ready(
 
 
 def run_check(phase: str) -> None:
-    """Print the phase-specific capabilities an AI session needs.
+    """Print the session-specific capabilities an AI runtime needs.
 
     Exit codes:
       0  IN_WORKTREE          — safe to work

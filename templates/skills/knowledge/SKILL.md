@@ -2,7 +2,7 @@
 name: knowledge
 description: >
   Instructions for contextual knowledge retrieval, tagging, search, and rating.
-  Referenced by plan-session, implementation-session, and review-pr-comments-session skills.
+  Referenced by fixed planning, implementation, and review workflow bundles.
 ---
 
 # Knowledge Operations

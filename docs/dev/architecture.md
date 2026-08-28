@@ -67,6 +67,9 @@ src/wade/
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
 │   ├── delegation.py    # DelegationRequest, DelegationResult, DelegationMode
+│   ├── workflow.py      # Canonical session/delegation definitions and mappings
+│   ├── skill.py         # Skill refs, descriptors, slots, and binding components
+│   ├── session_manifest.py # Frozen session/delegation/review/doc state models
 │   ├── permission.py    # PermissionMode (autonomy axis), launch-kwargs helpers
 │   ├── readiness.py     # phase capability requirements + stable failure IDs
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
@@ -80,6 +83,11 @@ src/wade/
 │   ├── review_service.py           # PR review session lifecycle
 │   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
+│   ├── session_composition_service.py # Resolve/freeze/refresh interactive bindings
+│   ├── skill_invocation_service.py # Bind methods to bounded operation contracts
+│   ├── skill_diagnostics_service.py # Discovery and precedence diagnostics
+│   ├── review_record_service.py # Binding-aware durable review outcomes
+│   ├── documentation_receipt_service.py # Current-commit documentation decision
 │   ├── batch_review_service.py      # Batch issue review
 │   ├── deps_service.py  # Dependency analysis
 │   ├── smart_start.py   # Smart routing (wade <N> → implement or review)
@@ -105,8 +113,13 @@ src/wade/
 ├── hooks/               # Guard policies (invoked via `wade hook` / `wade-hook`)
 │   ├── cli.py           # Lean `wade-hook` entry point (dialect maps, guard routing)
 │   └── policies.py      # worktree_containment / plan_artifact_only / shell_containment / session_complete
-├── skills/              # Skill file management
-│   ├── installer.py     # Install/update/remove skill files (skill-management only — deterministic git-hook logic lives in git/hooks.py)
+├── skills/              # Skill discovery, resolution, and file management
+│   ├── catalog.py       # Replaceable built-in methodology catalog
+│   ├── discovery.py     # Crossby-backed worktree/main project inventory
+│   ├── resolver.py      # Explicit builtin/project/path ref resolution
+│   ├── validation.py    # Recursive safety validation and stable digests
+│   ├── materializer.py  # Atomic session/operation physical snapshots
+│   ├── installer.py     # Tool-native compatibility/support projections
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
 ├── config/              # Configuration management
 │   ├── loader.py        # Find + parse .wade.yml (walk up from CWD)
@@ -130,8 +143,15 @@ src/wade/
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
     ├── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
-    └── templates.py     # Packaged template-asset resolution (prompt/skill/git-hook loaders — leaf, no wade imports)
+    └── templates.py     # Packaged prompt/skill/workflow/hook asset resolution
 ```
+
+`templates/workflows/` contains fixed interactive lifecycle templates and
+workflow-owned references. Replaceable methodology remains under
+`templates/skills/`. See [Workflows and Dynamic Skills](workflows-and-skills.md)
+for the ownership boundary, typed registries, precedence, manifests, and review
+record model; see [Skills, Snapshots, and Pointer System](skills-system.md) for
+discovery, compatibility projection, and filesystem rules.
 
 > `templates/hooks/pre-push` is the completion-gate backstop script installed
 > per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
@@ -567,28 +587,14 @@ the Stop hook, no `fail_closed`) and **fail-open**: a missing `--root`/`--phase`
 an unreadable `PLAN.md`, or any exception yields exit 0, so it can never trap a
 session from starting.
 
-- **Policy** (`hooks/policies.py::session_start_context`): assembles the text by
-  `SessionPhase` (`implement` / `review` / `plan`, baked into the installed
-  command as `--phase`). The AI-facing per-phase prose lives in
-  `templates/prompts/session-start-<phase>.md` (the prompt source-of-truth per the
-  "Prompts as .md Templates" principle) and is loaded via `load_prompt_template`
-  (a lazy import — off the hot PreToolUse path); the builder itself prepends the
-  dynamic issue line, overrides the template's static `Review budget:` line with
-  a disabled-skip note when the phase's review is off (`ai.review_implementation`
-  for impl/review, `ai.review_plan` for plan — mirrors `bootstrap.py`'s
-  skill-partial override for the same flags; a `.wade.yml` load failure fails
-  open to the default line), brands the payload, and caps it. For impl/review it
-  parses the issue ref from `PLAN.md`'s first line (`# Issue #<id>: <title>`,
-  omitted if absent) and points at the phase's `done` command and the gates it
-  enforces; for plan (a detached worktree with no `PLAN.md` at the root) it points
-  at writing a valid `PLAN*.md` then `plan-session done .wade/plans`, plus — for a
-  `wade plan --issue` session — the issue ref parsed from `.wade/plan-issue.md`
-  (which `plan_service` persists so a resumed/compacted plan session re-injects
-  *which* issue it is planning; omitted for a from-scratch plan). Import-light and
-  stdout-safe — it reads the issue-ref file with a plain file read, never the `wade.git`
-  layer (the #349 lean-entry gotcha). The payload is hard-capped at **≤ 800 chars**
-  and phrased *distinctly* from the always-loaded SKILL.md (a per-phase test
-  asserts no prose line is shared).
+- **Policy** (`hooks/policies.py::session_start_context`): assembles compact text
+  by the persisted legacy `SessionPhase` (`implement` / `review` / `plan`). The
+  AI-facing prose lives in `templates/prompts/session-start-<phase>.md` and points
+  back to the frozen `.wade/session/WORKFLOW.md`; it never duplicates
+  configuration-specific review policy or methodology text. For impl/review the
+  builder may prepend the issue ref parsed from `PLAN.md`; for plan it may prepend
+  the ref from `.wade/plan-issue.md`. It remains import-light/stdout-safe and is
+  capped at **≤ 800 characters**.
 - **Install** (`bootstrap.py::_install_session_start_hook`): gated on
   `supports_session_start_hook` (mirroring how the Stop hook gates on
   `supports_stop_hook`). `tools=[]` is **load-bearing** — `_tools_to_matcher([])`
@@ -613,7 +619,7 @@ change or pin bump** was needed — as of crossby 0.17 it already serializes
 | Claude, Codex | `SessionStart` | nested `hookSpecificOutput.additionalContext` |
 | Copilot | `sessionStart` | flat `additionalContext` |
 | Cursor | `sessionStart` | `additional_context` (gated to the events Cursor reads it on) |
-| Antigravity CLI (`agy`) | — | no hook installed (`DECISION` dialect has no context channel); **degrades to the always-loaded skill** |
+| Antigravity CLI (`agy`) | — | no hook installed (`DECISION` dialect has no context channel); **degrades to the launch-loaded workflow** |
 
 **Deferred (evaluated, not built):** `SessionStart.initialUserMessage` as a
 stronger resume carrier — crossby's `emit_decision` has no such channel, so it
@@ -638,49 +644,41 @@ same `done()` service, parameterized by `session_type`; the gate set branches on
 it and runs in a **fixed order** (a clean main-merge in the sync step advances
 HEAD, so any sha-keyed check must precede it):
 
-1. **PR-SUMMARY** (implementation) — present, non-empty, non-placeholder.
-2. **unresolved-threads** (review-pr-comments only, runs *first* for that
-   session type) — a transient provider error is non-blocking.
-3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
-   Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
-   review just performed. **Implementation sessions add a code-enforced review-pass
-   cap (`done.max_review_passes`, default 2) (#384):** past the exact-sha fast
-   path, the gate counts distinct
-   `review-pass@<sha>` markers (written by each delegation-backed
-   `wade review implementation`, independent of its success — so a headless
-   timeout still counts) and, once `done.max_review_passes` (default 2) is
-   reached, completes anyway with a notice rather than looping. `wade review
-   implementation` surfaces the running budget after each pass ("review pass N of
-   M — K left"), so the count is visible from the command rather than only from
-   the skill prose or the `done`-time notice. A listdir failure
-   counts as 0 — as does a symlinked `.wade` or a platform without descriptor-based
-directory reads (fail closed toward re-gating, so tampering can't satisfy the
-cap). `review-pr-comments` keeps the unbounded
-   fast-path-or-refuse behavior — the gate is shared, so the cap branch is
-   scoped to `session_type == "implementation"`.
-4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
-   when `behind > 0`, refuse only on conflict.
-5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing,
-   and projects the review outcome into the PR body as a `wade:review-status`
-   block (see below).
+1. **conventional title** (both) — reject a task title that would create a
+   failing PR title.
+2. **PR-SUMMARY** (both) — present, non-empty, and non-placeholder.
+3. **unresolved threads** (review-pr-comments only) — a transient provider error
+   remains non-blocking.
+4. **review-ran** (both) — for a versioned session, require a satisfying
+   structured record for the pre-sync HEAD and the manifest's REVIEW composite.
+   `reviewed` and deterministically empty `no-diff` satisfy the gate; timeout and
+   empty-staged-with-other-work do not. Implementation sessions cap only
+   pass-consuming records for that active reviewer. PR-comment review remains
+   uncapped. A successful record under a different reviewer produces the explicit
+   `REVIEWER_CHANGED` classification. Legacy `reviewed@` / `review-pass@` markers
+   are accepted only when no versioned session state exists.
+5. **documentation decision** (both) — require an `updated` or reasoned
+   `not-needed` receipt for the pre-sync HEAD and session kind.
+6. **sync** (both) — auto-sync through the existing service and refuse only on
+   conflict.
+7. **knowledge validity** (both, when enabled) — runs after sync so a union-merge
+   corruption cannot ship.
+8. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing
+   and projects the review outcome into the PR body.
 
-**Review status is legible in the PR body (#367).** The `.wade/` markers
-(`reviewed@<sha>`, `review-pass@<sha>`) are zero-byte and **worktree-local** — no
-human ever sees them, so "attempted twice, timed out twice" was indistinguishable
-from "never tried" in the durable artifact. `done` closes that legibility gap:
-after the gates pass, `_classify_review(config, worktree, pre-sync HEAD,
-skip_review, session_type)` — one pure classifier that the review-ran **gate**
-also decides from, so the two can't drift — returns a frozen `ReviewStatus`
-(`kind`, `passes`, `session_type`, `reviewed_sha`) that `_render_review_status`
-turns into a one-line `## Review Status` section wrapped in
-`wade:review-status:start/end` markers. It records reviewed-at-`<sha>` /
-skipped (`--skip-review`) / gate-disabled (`done.require_review: false` or
-`review_implementation.enabled: false`) / cap-reached, and shows the review-pass
-count so a skipped-but-attempted run reads differently from a never-run one. Like
-the `wade:summary` block it is marker-scoped (upserted before the
-`wade:impl-usage` table, idempotent on re-run, preserving any concurrent edit
-outside the markers) — the PR body, not the discarded `.wade/` markers, is the
-durable receipt.
+**Review status is legible in the PR body (#367).** `_classify_review()` is the
+single source for the gate and the `wade:review-status` PR-body block. It records
+reviewed-at-`<sha>`, reviewer changed, skipped, gate disabled, or cap reached and
+includes the active binding's pass count. The structured worktree records under
+`.wade/reviews/` provide deterministic gate evidence; the PR-body projection is
+the durable human-readable outcome.
+
+Binding-aware review records and documentation receipts use the descriptor-safe
+state primitives in `utils/safe_state.py`: `.wade` and intermediate directories
+must be real directories, final files are opened relative to trusted directory
+handles, and malformed/symlinked/unreadable state is treated as absent. Record
+filenames and bodies must agree, and every binding digest is recomputed from its
+ordered components. See [Workflows and Dynamic Skills](workflows-and-skills.md).
 
 The **done-marker primitive** lives in `utils/markers.py` — a pure-stdlib leaf
 (so the lean `wade-hook` can import it cheaply). A marker is a zero-byte file
@@ -768,6 +766,36 @@ hooks:
 knowledge:
   enabled: true
   path: KNOWLEDGE.md
+skills:                      # optional project-skill discovery policy
+  project:
+    discover: true
+    include: ["*"]
+    exclude: []
+sessions:                    # optional ordered interactive bindings
+  plan:
+    skills:
+      work: [builtin:planning]
+      review: [builtin:plan-review]
+  implementation:
+    skills:
+      work: [project:domain-implementation]
+      review: [project:security-review]
+  review_pr_comments:
+    skills:
+      work: [builtin:review-comments]
+delegations:                 # optional standalone/fallback bindings
+  plan_review:
+    skills:
+      work: [builtin:plan-review]
+  code_review:
+    skills:
+      work: [project:security-review]
+  batch_review:
+    skills:
+      work: [builtin:batch-review]
+  dependency_analysis:
+    skills:
+      work: [builtin:dependency-analysis]
 done:                        # completion-gate toggles (all default true)
   require_pr_summary: true
   require_sync: true
@@ -786,6 +814,16 @@ bot_review:                  # external-bot review triggers (#431); fully defaul
     - { name: codex,      trigger: "@codex review",        enabled: true }
     - { name: bugbot,     trigger: "bugbot run",           enabled: true }
 ```
+
+**Dynamic skill sections** (`SkillsConfig`, `SessionsConfig`,
+`DelegationsConfig`) are optional additions to schema version 2. Nested models
+forbid unknown keys and bindings must be non-empty ordered lists of explicit
+`builtin:`, `project:`, or normalized repository-relative `path:` refs. `deps`
+is intentionally absent from `sessions`: its AI method is configured only as
+`delegations.dependency_analysis`. The hand-written loader, `check-config`, and
+re-init raw-YAML preservation all cover these sections. Fresh init omits them by
+default. See [Workflows and Dynamic Skills](workflows-and-skills.md) for
+precedence and frozen resume semantics.
 
 **`done` section** (`DoneConfig`): completion-gate escape hatches, all default
 on. Per knowledge `ca245d6a`, config-key validity lives in **three** places that
@@ -1055,11 +1093,12 @@ Services*): the agent authors plan content; code decides what becomes an issue.
 
 **Phase 1 — generate plan files.** In a git repo the service creates a
 detached-HEAD **planning worktree** (`git/worktree.py:create_detached_worktree`),
-bootstraps it (`PLAN_SKILLS`, `plan_mode=True`, `SessionPhase.PLAN`), and points
-the AI at `<worktree>/.wade/plans/`. Isolating outputs to that subdirectory keeps
+bootstraps its fixed plan workflow and frozen WORK/REVIEW bindings, and points the
+AI at `<worktree>/.wade/plans/`. Isolating outputs to that subdirectory keeps
 ordinary repo markdown (e.g. `README.md`) from being misread as a generated plan.
 Outside a git repo it falls back to a `tempfile.mkdtemp(prefix="wade-plan-")`
-temp dir and skips draft-PR creation (except for Antigravity CLI, which requires a
+temp dir, materializes the same session bundle inside that directory, and skips
+draft-PR creation (except for Antigravity CLI, which requires a
 guarded git planning worktree because its launch uses normal file writing mode with
 WADE's plan-artifact PreToolUse guard rather than agy's brain-sandboxed native plan mode).
 The launch prompt (`plan-session.md`) tells the agent to write a plan file per issue
@@ -1153,6 +1192,10 @@ When wade installs skills into a target project (per session, via worktree boots
 
 **`wade implement-batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
+- `--skill` / `--review-skill` — Repeatable ordered bindings forwarded to every
+  child implementation session.
+- `--refresh-skills` — Explicitly refresh frozen bindings in resumed child
+  sessions.
 
 **`wade worktree remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).

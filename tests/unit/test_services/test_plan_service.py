@@ -58,7 +58,8 @@ class TestPromptTemplate:
         rendered = render_plan_prompt("/tmp/wade-plan-abc123")
         assert "/tmp/wade-plan-abc123" in rendered
         assert "{plan_dir}" not in rendered
-        assert "# Goal" in rendered
+        assert ".wade/session/WORKFLOW.md" in rendered
+        assert "trusted parent process" in rendered
 
 
 # ---------------------------------------------------------------------------

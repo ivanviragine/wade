@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import structlog
 import yaml
 from crossby.models.ai import AIToolID, EffortLevel
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from wade.config.loader import (
     ConfigError,
@@ -26,16 +26,20 @@ from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    CONFIG_SCHEMA_VERSION,
     LEGACY_AI_COMMAND_ALIASES,
     AICommandConfig,
     AIConfig,
     BotReviewConfig,
     CommitMsgConfig,
+    DelegationsConfig,
     DoneConfig,
     HooksConfig,
     PostToolUseConfig,
     PreCommitConfig,
     ProjectConfig,
+    SessionsConfig,
+    SkillsConfig,
     is_valid_bot_name,
 )
 from wade.models.delegation import DelegationMode
@@ -212,10 +216,12 @@ class ConfigCheckResult:
         exit_code: int,
         config_path: str | None = None,
         errors: list[str] | None = None,
+        warnings: list[str] | None = None,
     ) -> None:
         self.exit_code = exit_code
         self.config_path = config_path
         self.errors = errors or []
+        self.warnings = warnings or []
 
     @property
     def is_valid(self) -> bool:
@@ -233,6 +239,8 @@ class ConfigCheckResult:
             lines = ["VALID_CONFIG"]
             if self.config_path:
                 lines.append(f"path={self.config_path}")
+            for warning in self.warnings:
+                lines.append(f"warning: {warning}")
             return "\n".join(lines)
 
         # INVALID
@@ -864,9 +872,21 @@ def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
             errors=errors,
         )
 
+    from wade.services.skill_diagnostics_service import check_project_skills
+
+    skill_report = check_project_skills(config_path.parent)
+    if skill_report.errors:
+        return ConfigCheckResult(
+            exit_code=ConfigExitCode.INVALID,
+            config_path=str(config_path),
+            errors=list(skill_report.errors),
+            warnings=list(skill_report.warnings),
+        )
+
     return ConfigCheckResult(
         exit_code=ConfigExitCode.VALID,
         config_path=str(config_path),
+        warnings=list(skill_report.warnings),
     )
 
 
@@ -901,8 +921,8 @@ def _validate_config_file(config_path: Path) -> list[str]:
 
     # Validate version
     version = raw.get("version")
-    if version is not None and version != 2:
-        errors.append(f"version: '{version}' is invalid. Use: version: 2")
+    if version is not None and version != CONFIG_SCHEMA_VERSION:
+        errors.append(f"version: '{version}' is invalid. Use: version: {CONFIG_SCHEMA_VERSION}")
 
     # Validate project section
     project = raw.get("project")
@@ -976,6 +996,12 @@ def _validate_config_file(config_path: Path) -> list[str]:
         else:
             _validate_bot_review_section(bot_review, errors)
 
+    # Strict nested skill/session/delegation schemas. These models derive their
+    # own allowed keys and reject unsupported slots such as sessions.deps.
+    _validate_pydantic_section(raw.get("skills"), "skills", SkillsConfig, errors)
+    _validate_pydantic_section(raw.get("sessions"), "sessions", SessionsConfig, errors)
+    _validate_pydantic_section(raw.get("delegations"), "delegations", DelegationsConfig, errors)
+
     # Check for unsupported top-level keys
     supported_keys = {
         "version",
@@ -988,6 +1014,9 @@ def _validate_config_file(config_path: Path) -> list[str]:
         "knowledge",
         "done",
         "bot_review",
+        "skills",
+        "sessions",
+        "delegations",
     }
     for key in raw:
         if key not in supported_keys:
@@ -1003,6 +1032,28 @@ def _validate_config_file(config_path: Path) -> list[str]:
             errors.append(f"config parse error: {e}")
 
     return errors
+
+
+def _validate_pydantic_section(
+    raw: Any,
+    section: str,
+    model: type[BaseModel],
+    errors: list[str],
+) -> None:
+    """Render strict nested-model errors with stable YAML-style locations."""
+
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        errors.append(f"{section}: must be a mapping")
+        return
+    try:
+        model.model_validate(raw)
+    except ValidationError as exc:
+        for error in exc.errors(include_url=False):
+            location = ".".join(str(part) for part in error["loc"])
+            field = f"{section}.{location}" if location else section
+            errors.append(f"{field}: {error['msg']}")
 
 
 def _validate_project_section(project: dict[str, Any], errors: list[str]) -> None:

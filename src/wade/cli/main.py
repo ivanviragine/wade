@@ -244,6 +244,15 @@ def plan_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
+    ),
+    review_skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--review-skill", help="Review methodology skill ref. Repeat for an ordered binding."
+    ),
+    refresh_skills: bool = typer.Option(
+        False, "--refresh-skills", help="Explicitly replace a resumed session's frozen skills."
+    ),
 ) -> None:
     """Start a planning session with AI."""
     from wade.services.plan_service import plan as do_plan
@@ -258,6 +267,9 @@ def plan_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        work_skills=skill,
+        review_skills=review_skill,
+        refresh_skills=refresh_skills,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -294,6 +306,15 @@ def implement_cmd(
         "Overrides the plan-declared base; when omitted, inherits the existing "
         "draft PR's base, then falls back to the project's main branch.",
     ),
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
+    ),
+    review_skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--review-skill", help="Review methodology skill ref. Repeat for an ordered binding."
+    ),
+    refresh_skills: bool = typer.Option(
+        False, "--refresh-skills", help="Explicitly replace a resumed session's frozen skills."
+    ),
 ) -> None:
     """Start an implementation session on an issue."""
     from wade.services.implementation_service import start as do_start
@@ -323,6 +344,9 @@ def implement_cmd(
         permission_mode=permission_mode,
         network_access=network_access,
         base_branch=current_base,
+        work_skills=skill,
+        review_skills=review_skill,
+        refresh_skills=refresh_skills,
     )
 
     # Iterative chain continuation loop (stacked branches — no merge gate)
@@ -359,6 +383,9 @@ def implement_cmd(
             permission_mode=permission_mode,
             network_access=network_access,
             base_branch=current_base,
+            work_skills=skill,
+            review_skills=review_skill,
+            refresh_skills=refresh_skills,
         )
 
     raise typer.Exit(0 if result.success else 1)
@@ -384,6 +411,19 @@ def implement_batch_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="WORK methodology skill ref forwarded to every child session."
+    ),
+    review_skill: list[str] | None = typer.Option(  # noqa: B008
+        None,
+        "--review-skill",
+        help="Review methodology skill ref forwarded to every child session.",
+    ),
+    refresh_skills: bool = typer.Option(
+        False,
+        "--refresh-skills",
+        help="Explicitly refresh frozen bindings in resumed child sessions.",
+    ),
 ) -> None:
     """Start parallel implementation sessions. [beta]"""
     from wade.services.implementation_service import batch as do_batch
@@ -418,6 +458,9 @@ def implement_batch_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        work_skills=skill,
+        review_skills=review_skill,
+        refresh_skills=refresh_skills,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -435,6 +478,9 @@ def address_reviews_cmd(
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
     network_access: bool | None = _NETWORK_ACCESS_OPT,
+    skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
+    review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
+    refresh_skills: bool = typer.Option(False, "--refresh-skills"),
 ) -> None:
     """Address PR review comments (hidden alias for review pr-comments)."""
     from wade.cli.review import review_pr_comments_cmd
@@ -447,6 +493,9 @@ def address_reviews_cmd(
         yolo=yolo,
         permission_mode=permission_mode,
         network_access=network_access,
+        skill=skill,
+        review_skill=review_skill,
+        refresh_skills=refresh_skills,
     )
 
 
@@ -538,6 +587,9 @@ def plan_alias(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
+    review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
+    refresh_skills: bool = typer.Option(False, "--refresh-skills"),
 ) -> None:
     """Alias for plan."""
     plan_cmd(
@@ -547,6 +599,9 @@ def plan_alias(
         effort=effort,
         yolo=yolo,
         permission_mode=permission_mode,
+        skill=skill,
+        review_skill=review_skill,
+        refresh_skills=refresh_skills,
     )
 
 
@@ -582,6 +637,9 @@ def implement_alias(
         "Overrides the plan-declared base; when omitted, inherits the existing "
         "draft PR's base, then falls back to the project's main branch.",
     ),
+    skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
+    review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
+    refresh_skills: bool = typer.Option(False, "--refresh-skills"),
 ) -> None:
     """Alias for implement."""
     implement_cmd(
@@ -596,6 +654,9 @@ def implement_alias(
         network_access=network_access,
         chain=chain,
         base=base,
+        skill=skill,
+        review_skill=review_skill,
+        refresh_skills=refresh_skills,
     )
 
 
@@ -612,6 +673,9 @@ def reviews_alias(
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
     network_access: bool | None = _NETWORK_ACCESS_OPT,
+    skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
+    review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
+    refresh_skills: bool = typer.Option(False, "--refresh-skills"),
 ) -> None:
     """Alias for review pr-comments."""
     from wade.cli.review import review_pr_comments_cmd
@@ -624,6 +688,9 @@ def reviews_alias(
         yolo=yolo,
         permission_mode=permission_mode,
         network_access=network_access,
+        skill=skill,
+        review_skill=review_skill,
+        refresh_skills=refresh_skills,
     )
 
 
@@ -637,6 +704,8 @@ from wade.cli.knowledge import knowledge_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
 from wade.cli.review import review_app  # noqa: E402
 from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
+from wade.cli.session import session_app  # noqa: E402
+from wade.cli.skills import skills_app  # noqa: E402
 from wade.cli.task import task_app  # noqa: E402
 from wade.cli.worktree import worktree_app  # noqa: E402
 
@@ -669,13 +738,13 @@ app.add_typer(
 app.add_typer(
     implementation_session_app,
     name="implementation-session",
-    help="Implementation session commands (check, sync, done).",
+    help="Implementation session commands (check, docs, sync, done).",
     rich_help_panel="AI Session — Implementation",
 )
 app.add_typer(
     review_pr_comments_session_app,
     name="review-pr-comments-session",
-    help="PR comment review session commands (check, sync, done, fetch, resolve).",
+    help="PR comment review session commands (check, docs, sync, done, fetch, resolve).",
     rich_help_panel="AI Session — Review PR Comments",
 )
 app.add_typer(
@@ -694,6 +763,18 @@ app.add_typer(
     name="knowledge",
     help="Project knowledge management.",
     rich_help_panel="Knowledge",
+)
+app.add_typer(
+    skills_app,
+    name="skills",
+    help="Inspect dynamic Agent Skill discovery and bindings.",
+    rich_help_panel="Setup",
+)
+app.add_typer(
+    session_app,
+    name="session",
+    help="Inspect or refresh the active WADE session bundle.",
+    rich_help_panel="AI Session",
 )
 
 # ``wade hook`` — hidden write-guard entry point invoked by AI tools' hooks.

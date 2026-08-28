@@ -191,41 +191,48 @@ class TestReviewPlanCli:
 
 class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
     @patch("wade.git.repo.get_repo_root")
     def test_review_implementation_no_diff(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
-        mock_fallback: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
         mock_config: MagicMock,
+        tmp_path: Path,
     ) -> None:
         mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = ""
-        mock_fallback.return_value = ""
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(empty=True)
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
-        assert "No changes to review." in result.output
-        mock_fallback.assert_called_once_with()
+        assert "No committed, staged, or unstaged changes to review." in result.output
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
     @patch("wade.git.repo.get_repo_root")
     def test_review_implementation_prompt_mode_exits_2(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """PROMPT mode should exit 2 with a SELF-REVIEW message."""
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = "diff --git a/f.py\n+line\n"
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(
+            empty=False,
+            review_input=MagicMock(return_value="diff --git a/f.py\n+line\n"),
+        )
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_cli_config(review_implementation_mode="prompt")
         mock_delegate.return_value = DelegationResult(
@@ -243,19 +250,26 @@ class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
     @patch("wade.git.repo.get_repo_root")
     def test_review_implementation_interactive_mode_exits_0(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """INTERACTIVE mode should exit 0 with REVIEW COMPLETE message."""
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = "diff --git a/f.py\n+line\n"
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(
+            empty=False,
+            review_input=MagicMock(return_value="diff --git a/f.py\n+line\n"),
+        )
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_cli_config(review_implementation_mode="interactive")
         mock_delegate.return_value = DelegationResult(
@@ -273,19 +287,26 @@ class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
     @patch("wade.git.repo.get_repo_root")
     def test_review_implementation_headless_mode_exits_0(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """HEADLESS mode should exit 0 with REVIEW COMPLETE message."""
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = "diff --git a/f.py\n+line\n"
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(
+            empty=False,
+            review_input=MagicMock(return_value="diff --git a/f.py\n+line\n"),
+        )
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_cli_config(review_implementation_mode="headless")
         mock_delegate.return_value = DelegationResult(
@@ -303,19 +324,26 @@ class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
     @patch("wade.git.repo.get_repo_root")
     def test_review_implementation_failure_exits_1(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Failed review should exit 1."""
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = "diff --git a/f.py\n+line\n"
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(
+            empty=False,
+            review_input=MagicMock(return_value="diff --git a/f.py\n+line\n"),
+        )
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_cli_config(review_implementation_mode="interactive")
         mock_delegate.return_value = DelegationResult(
@@ -324,21 +352,22 @@ class TestReviewImplementationCli:
 
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 1
+        mock_delegate.assert_called_once()
 
-    @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.git.repo.diff_worktree")
-    @patch("wade.git.repo.get_repo_root")
+    @patch("wade.services.review_delegation_service.review_implementation")
     def test_review_implementation_staged_flag(
         self,
-        mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
-        mock_config: MagicMock,
+        mock_review: MagicMock,
     ) -> None:
-        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = ""
-        runner.invoke(app, ["review", "implementation", "--staged"])
-        assert mock_diff.call_args.kwargs["staged"] is True
+        mock_review.return_value = DelegationResult(
+            success=True,
+            feedback="No staged changes.",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+        result = runner.invoke(app, ["review", "implementation", "--staged"])
+        assert result.exit_code == 0
+        assert mock_review.call_args.kwargs["staged"] is True
 
     @patch("wade.services.review_delegation_service.review_implementation")
     def test_review_implementation_skipped_omits_completion_banner(
@@ -411,6 +440,7 @@ class TestReviewBatchCli:
             yolo=None,
             permission_mode=None,
             permission_mode_explicit=False,
+            skills=None,
         )
 
     @patch("wade.services.batch_review_service.review_batch")
@@ -464,6 +494,7 @@ class TestReviewBatchCli:
             yolo=None,
             permission_mode=None,
             permission_mode_explicit=False,
+            skills=None,
         )
 
 
@@ -513,18 +544,25 @@ class TestReviewCliEffortFlag:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
     @patch("wade.git.repo.get_repo_root")
     def test_review_implementation_effort_flag(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
+        tmp_path: Path,
     ) -> None:
-        mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = "diff --git a/f.py\n+line\n"
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(
+            empty=False,
+            review_input=MagicMock(return_value="diff --git a/f.py\n+line\n"),
+        )
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_cli_config(review_implementation_mode="headless")
         mock_delegate.return_value = DelegationResult(

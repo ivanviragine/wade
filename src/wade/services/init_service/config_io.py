@@ -17,6 +17,7 @@ from crossby.config.defaults import get_defaults
 from wade.config.loader import ConfigError, ensure_yaml_mapping
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    CONFIG_SCHEMA_VERSION,
     BotReviewConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
@@ -211,7 +212,7 @@ def _write_config(
     bot_review_setup: dict[str, Any] | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
-    config_dict: dict[str, Any] = {"version": 2}
+    config_dict: dict[str, Any] = {"version": CONFIG_SCHEMA_VERSION}
 
     settings = project_settings or ProjectSettings()
     config_dict["project"] = {
@@ -355,7 +356,7 @@ def _patch_config(
 
     # Ensure version
     if "version" not in raw:
-        raw["version"] = 2
+        raw["version"] = CONFIG_SCHEMA_VERSION
         changed = True
 
     # Patch project settings

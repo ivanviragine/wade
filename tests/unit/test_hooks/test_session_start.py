@@ -21,12 +21,12 @@ from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 _ISSUE_TITLE = "E3: Session-start & resume context injection"
 _PLAN_FIRST_LINE = f"# Issue #351: {_ISSUE_TITLE}"
 
-# Repo root → the source-of-truth skill templates that get installed per session.
-_TEMPLATES = Path(__file__).resolve().parents[3] / "templates" / "skills"
-_PHASE_SKILL = {
-    SessionPhase.IMPLEMENT: "implementation-session",
-    SessionPhase.REVIEW: "review-pr-comments-session",
-    SessionPhase.PLAN: "plan-session",
+# Repo root → fixed workflow templates rendered into every interactive session.
+_WORKFLOWS = Path(__file__).resolve().parents[3] / "templates" / "workflows"
+_PHASE_WORKFLOW = {
+    SessionPhase.IMPLEMENT: "implementation.md",
+    SessionPhase.REVIEW: "review-pr-comments.md",
+    SessionPhase.PLAN: "plan.md",
 }
 
 # Source-of-truth prompt templates holding the phase prose (#391 P1).
@@ -147,11 +147,8 @@ class TestPhaseContent:
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
         assert "Issue #" not in ctx
         assert "wade plan-session done <plan dir>" in ctx
-        # Both plan-dir forms are named: the worktree default and the
-        # PLAN_DIR_ONLY fallback's reported plandir (#462 review).
-        assert "`.wade/plans` in a worktree" in ctx
-        assert "`plandir=…` in `PLAN_DIR_ONLY`" in ctx
-        assert "## Complexity" in ctx
+        assert ".wade/session/WORKFLOW.md" in ctx
+        assert "Never implement or create issues" in ctx
 
     def test_plan_reinjects_persisted_issue_ref(self, tmp_path: Path) -> None:
         # A ``wade plan --issue-id`` session persists .wade/plan-issue.md so a
@@ -163,75 +160,32 @@ class TestPhaseContent:
         assert "wade plan-session done <plan dir>" in ctx
 
 
-class TestReviewDisabledOverride:
-    """#450 review: the static 'Review budget:' line must reflect a disabled review.
-
-    ``ai.review_implementation.enabled: false`` (IMPLEMENT/REVIEW) or
-    ``ai.review_plan.enabled: false`` (PLAN) makes the review command
-    short-circuit to a disabled-skip result — the SessionStart line must say so
-    instead of claiming the command "prints your live time budget and pass
-    count", which mirrors bootstrap.py's skill-partial override for the same
-    flags.
-    """
+class TestWorkflowPointerSeparation:
+    """SessionStart stays a compact pointer; the frozen workflow owns policy."""
 
     def _ctx(self, r: subprocess.CompletedProcess[str]) -> str:
         return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
 
-    def _write_config(self, root: Path, body: str) -> None:
-        (root / ".wade.yml").write_text(body, encoding="utf-8")
-
-    def test_implement_shows_skip_note_when_review_implementation_disabled(
+    def test_review_configuration_does_not_duplicate_policy_in_pointer(
         self, tmp_path: Path
     ) -> None:
         _write_plan(tmp_path)
-        self._write_config(tmp_path, "ai:\n  review_implementation:\n    enabled: false\n")
+        (tmp_path / ".wade.yml").write_text(
+            "ai:\n  review_implementation:\n    enabled: false\n",
+            encoding="utf-8",
+        )
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "implement"))
-        assert "Review budget: skipped" in ctx
-        assert "review_implementation.enabled: false" in ctx
-        assert "prints your live time budget and pass count" not in ctx
+        assert ".wade/session/WORKFLOW.md" in ctx
+        assert "review_implementation.enabled" not in ctx
+        assert "Review budget:" not in ctx
 
-    def test_review_shows_skip_note_when_review_implementation_disabled(
-        self, tmp_path: Path
-    ) -> None:
-        # review-pr-comments-session closes through `wade review implementation`
-        # too, so it gates on the same ``review_implementation`` flag as IMPLEMENT.
+    def test_malformed_config_does_not_affect_pointer(self, tmp_path: Path) -> None:
         _write_plan(tmp_path)
-        self._write_config(tmp_path, "ai:\n  review_implementation:\n    enabled: false\n")
-        ctx = self._ctx(_run_ss("claude", str(tmp_path), "review"))
-        assert "Review budget: skipped" in ctx
-        assert "review_implementation.enabled: false" in ctx
-        assert "prints your live time budget" not in ctx
-
-    def test_plan_shows_skip_note_when_review_plan_disabled(self, tmp_path: Path) -> None:
-        self._write_config(tmp_path, "ai:\n  review_plan:\n    enabled: false\n")
-        ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
-        assert "Review budget: skipped" in ctx
-        assert "review_plan.enabled: false" in ctx
-        assert "advisory, not code-tracked" not in ctx
-
-    def test_implement_keeps_default_line_when_review_plan_disabled(self, tmp_path: Path) -> None:
-        # Disabling the *other* phase's review flag must not affect this one.
-        _write_plan(tmp_path)
-        self._write_config(tmp_path, "ai:\n  review_plan:\n    enabled: false\n")
-        ctx = self._ctx(_run_ss("claude", str(tmp_path), "implement"))
-        assert "prints your live time budget and pass count" in ctx
-        assert "Review budget: skipped" not in ctx
-
-    def test_default_config_keeps_default_line(self, tmp_path: Path) -> None:
-        _write_plan(tmp_path)
-        ctx = self._ctx(_run_ss("claude", str(tmp_path), "implement"))
-        assert "prints your live time budget and pass count" in ctx
-
-    def test_malformed_config_fails_open_to_default_line(self, tmp_path: Path) -> None:
-        # Invalid YAML must not suppress the whole SessionStart payload — the
-        # config-load failure is swallowed and the default (enabled-state) line
-        # stands, same fail-open contract as the rest of the builder.
-        _write_plan(tmp_path)
-        self._write_config(tmp_path, "ai: [not, a, mapping\n")
+        (tmp_path / ".wade.yml").write_text("ai: [not, a, mapping\n", encoding="utf-8")
         r = _run_ss("claude", str(tmp_path), "implement")
         assert r.returncode == 0
         ctx = self._ctx(r)
-        assert "prints your live time budget and pass count" in ctx
+        assert ".wade/session/WORKFLOW.md" in ctx
 
 
 class TestFailOpen:
@@ -273,7 +227,14 @@ class TestFailOpen:
         # Omitting the required --tool makes argparse exit 2; the SystemExit branch
         # must recover the event and return 0 (never block startup), not raise.
         r = subprocess.run(
-            [sys.executable, "-m", "wade.hooks.cli", "session_start", "--phase", "implement"],
+            [
+                sys.executable,
+                "-m",
+                "wade.hooks.cli",
+                "session_start",
+                "--phase",
+                "implement",
+            ],
             input="{}",
             capture_output=True,
             text=True,
@@ -355,7 +316,7 @@ class TestLeanEntryParity:
 
 
 class TestAliasUsageErrorParity:
-    """A malformed ``wade hook session_start`` invocation must fail OPEN like the lean entry.
+    """Malformed ``wade hook session_start`` input fails open like the lean entry.
 
     The alias forwards raw argv to the lean parser, so a Click usage error can no
     longer exit 2 *before* the session_start dispatcher: a value-taking option with
@@ -395,13 +356,29 @@ class TestAliasUsageErrorParity:
     def test_pre_tool_use_usage_error_still_fails_closed_via_alias(self) -> None:
         # The passthrough must NOT flip the fail-closed direction: a PreToolUse
         # write guard with a bad typed option still denies (exit 2).
-        args = ("pre_tool_use", "--guard", "worktree", "--tool", "claude", "--timeout", "nope")
+        args = (
+            "pre_tool_use",
+            "--guard",
+            "worktree",
+            "--tool",
+            "claude",
+            "--timeout",
+            "nope",
+        )
         assert self._alias(*args).returncode == 2
 
     def test_stop_usage_error_fails_open_via_alias(self) -> None:
         # A Stop *usage* error fails open (exit 0) — while a Stop *block* keeps its
         # legitimate exit 2 (covered elsewhere); the passthrough preserves both.
-        args = ("stop", "--guard", "session-complete", "--tool", "claude", "--timeout", "nope")
+        args = (
+            "stop",
+            "--guard",
+            "session-complete",
+            "--tool",
+            "claude",
+            "--timeout",
+            "nope",
+        )
         assert self._alias(*args).returncode == 0
 
 
@@ -477,10 +454,10 @@ class TestBuilderBudget:
         assert payload.endswith("…")
 
 
-class TestPayloadSkillNoOverlap:
-    """The injected payload must not restate a prose line from the always-loaded skill.
+class TestPayloadWorkflowNoOverlap:
+    """The injected payload must not restate prose from the fixed workflow.
 
-    The skill is loaded every session; the payload's value is being *distinct*
+    The workflow is loaded every session; the payload's value is being *distinct*
     (compact reminders/pointers, not a second copy). Prose-scoped: short lines and
     bare single-backtick-span lines are excluded, so the one string both legitimately
     share (the exact closing command) never fails the test by construction.
@@ -494,9 +471,13 @@ class TestPayloadSkillNoOverlap:
         # A line that is entirely one backtick-code span (e.g. a bare command).
         return not (line.startswith("`") and line.endswith("`") and line.count("`") == 2)
 
-    def _skill_lines(self, phase: SessionPhase) -> set[str]:
-        skill = _TEMPLATES / _PHASE_SKILL[phase] / "SKILL.md"
-        return {ln.strip() for ln in skill.read_text(encoding="utf-8").splitlines() if ln.strip()}
+    def _workflow_lines(self, phase: SessionPhase) -> set[str]:
+        workflow = _WORKFLOWS / _PHASE_WORKFLOW[phase]
+        return {
+            line.strip()
+            for line in workflow.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
 
     def _payload_lines(self, phase: SessionPhase, tmp_path: Path) -> list[str]:
         _write_plan(tmp_path)
@@ -504,14 +485,14 @@ class TestPayloadSkillNoOverlap:
         assert payload is not None
         return [ln.strip() for ln in payload.splitlines() if ln.strip()]
 
-    def test_no_prose_line_appears_verbatim_in_skill(self, tmp_path: Path) -> None:
+    def test_no_prose_line_appears_verbatim_in_workflow(self, tmp_path: Path) -> None:
         for phase in SessionPhase:
-            skill_lines = self._skill_lines(phase)
+            workflow_lines = self._workflow_lines(phase)
             for line in self._payload_lines(phase, tmp_path):
                 if not self._is_prose(line):
                     continue
-                assert line not in skill_lines, (
-                    f"{phase}: payload line duplicates SKILL.md: {line!r}"
+                assert line not in workflow_lines, (
+                    f"{phase}: payload line duplicates workflow: {line!r}"
                 )
 
     def test_payload_within_budget_per_phase(self, tmp_path: Path) -> None:
@@ -523,7 +504,7 @@ class TestPayloadSkillNoOverlap:
 
 
 class TestStaleBaseWarning:
-    """#407: a ``.wade/stale_base`` marker prepends a loud 'N commits behind' warning."""
+    """A stale-base marker prepends a loud commits-behind warning."""
 
     def _write_marker(self, root: Path, behind: int, reason: str = "untracked_conflict") -> None:
         from wade.utils import stale_base
@@ -536,7 +517,7 @@ class TestStaleBaseWarning:
         payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
         assert payload is not None
         assert "24 COMMITS BEHIND BASE" in payload
-        # It must be the FIRST line (after the [wade] brand) so tail-truncation can't drop it.
+        # It must be first so tail truncation cannot drop it.
         assert payload.splitlines()[0].startswith("[wade] ⚠️ BRANCH IS 24 COMMITS BEHIND")
         # The issue line still follows.
         assert "Issue #351" in payload
@@ -564,7 +545,7 @@ class TestStaleBaseWarning:
 
     def test_included_for_review_phase(self, tmp_path: Path) -> None:
         # #408: a REVIEW worktree can carry the marker too (it reuses the implement
-        # worktree), and its remedy must point at the review session's own sync command —
+        # worktree), and its remedy must point at its own sync command —
         # not the implementation one.
         _write_plan(tmp_path)
         self._write_marker(tmp_path, 3)

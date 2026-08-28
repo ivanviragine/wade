@@ -7,7 +7,12 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from wade.models.delegation import DelegationMode, DelegationResult
+from wade.models.session_manifest import ResolvedBinding
+from wade.models.skill import ResolvedSkill
+from wade.services.skill_invocation_service import PreparedDelegationMethod
 from wade.utils import markers
 
 rds = importlib.import_module("wade.services.review_delegation_service")
@@ -39,6 +44,28 @@ def _cap(capsys) -> str:
     return " ".join((captured.out + "\n" + captured.err).split())
 
 
+@pytest.fixture
+def review_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide a stable foreign binding for command-orchestration unit tests."""
+
+    skill = ResolvedSkill(
+        canonical_ref="builtin:code-review",
+        source_path="templates/skills/code-review",
+        materialized_path=".wade/operations/code-review/test/skills/builtin/code-review",
+        content_digest=f"sha256:{'1' * 64}",
+        files=("SKILL.md",),
+    )
+    prepared = PreparedDelegationMethod(
+        binding=ResolvedBinding.from_skills((skill,)),
+        method_section="<method>Review carefully.</method>",
+        host_session=None,
+        operation_bundle=None,
+    )
+    monkeypatch.setattr(rds, "prepare_delegation_method", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(rds.git_repo, "rev_parse", lambda *args, **kwargs: "a" * 40)
+    monkeypatch.setattr(rds.git_repo, "get_current_branch", lambda *args, **kwargs: "main")
+
+
 class TestMarkReviewed:
     def test_writes_marker_for_head(self, tmp_path: Path, monkeypatch) -> None:
         repo = tmp_path / "r"
@@ -66,7 +93,7 @@ class TestMarkReviewed:
 
 
 class TestReviewImplementationWritesMarker:
-    def test_no_diff_path_marks_reviewed(self, tmp_path: Path) -> None:
+    def test_no_diff_path_marks_reviewed(self, tmp_path: Path, review_preflight: None) -> None:
         with (
             patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
             patch.object(rds.git_repo, "diff_worktree", return_value=""),
@@ -77,7 +104,7 @@ class TestReviewImplementationWritesMarker:
         assert result.skipped is True
         mock_mark.assert_called_once()
 
-    def test_success_path_marks_reviewed(self, tmp_path: Path) -> None:
+    def test_success_path_marks_reviewed(self, tmp_path: Path, review_preflight: None) -> None:
         success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
         with (
             patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
@@ -88,7 +115,7 @@ class TestReviewImplementationWritesMarker:
             rds.review_implementation()
         mock_mark.assert_called_once()
 
-    def test_failure_path_does_not_mark(self, tmp_path: Path) -> None:
+    def test_failure_path_does_not_mark(self, tmp_path: Path, review_preflight: None) -> None:
         failure = DelegationResult(
             success=False, feedback="boom", mode=DelegationMode.HEADLESS, exit_code=1
         )
@@ -125,7 +152,7 @@ class TestRecordReviewPass:
         with patch.object(rds.git_repo, "get_repo_root", side_effect=rds.GitError("boom")):
             assert rds._record_review_pass() is None
 
-    def test_success_path_records_pass(self, tmp_path: Path) -> None:
+    def test_success_path_records_pass(self, tmp_path: Path, review_preflight: None) -> None:
         success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
         with (
             patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
@@ -136,7 +163,9 @@ class TestRecordReviewPass:
             rds.review_implementation()
         mock_pass.assert_called_once()
 
-    def test_headless_timeout_still_records_pass(self, tmp_path: Path) -> None:
+    def test_headless_timeout_still_records_pass(
+        self, tmp_path: Path, review_preflight: None
+    ) -> None:
         # A headless timeout exits non-zero (success=False, timed_out=True) and
         # writes NO `reviewed` marker — but it still consumed a review→fix cycle,
         # so the pass MUST be recorded (this is what breaks the infinite loop).
@@ -159,7 +188,9 @@ class TestRecordReviewPass:
         mock_pass.assert_called_once()
         mock_mark.assert_not_called()
 
-    def test_reviewer_launch_failure_does_not_record_pass(self, tmp_path: Path) -> None:
+    def test_reviewer_launch_failure_does_not_record_pass(
+        self, tmp_path: Path, review_preflight: None
+    ) -> None:
         """Missing credentials/sandbox launch failure must not bypass `done` later."""
         failure = DelegationResult(
             success=False,
@@ -187,7 +218,9 @@ class TestRecordReviewPass:
         assert "Restore the reviewer runtime" not in warning
         assert "nonzero exit" in warning
 
-    def test_no_diff_path_does_not_record_pass(self, tmp_path: Path) -> None:
+    def test_no_diff_path_does_not_record_pass(
+        self, tmp_path: Path, review_preflight: None
+    ) -> None:
         # The no-diff early return writes the exact-sha `reviewed` marker (which
         # already satisfies the gate) but must NOT consume a cap slot.
         with (
@@ -222,7 +255,9 @@ class TestAnnounceReviewPassBudget:
         assert "review pass 2 of 2" in text
         assert "reached" in text
 
-    def test_review_implementation_forwards_the_count(self, tmp_path: Path) -> None:
+    def test_review_implementation_forwards_the_count(
+        self, tmp_path: Path, review_preflight: None
+    ) -> None:
         # The command wires the recorded count into the budget announcement.
         success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
         with (
@@ -236,7 +271,9 @@ class TestAnnounceReviewPassBudget:
         mock_announce.assert_called_once()
         assert mock_announce.call_args.args[0] == 2  # the recorded pass count
 
-    def test_no_announce_when_pass_not_recorded(self, tmp_path: Path) -> None:
+    def test_no_announce_when_pass_not_recorded(
+        self, tmp_path: Path, review_preflight: None
+    ) -> None:
         # A git failure yields no count → nothing to announce (no crash).
         success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
         with (

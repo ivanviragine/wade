@@ -1,37 +1,27 @@
-"""Tests for the canonical review-budget skill partial (#450)."""
+"""Tests for the canonical fixed-workflow review-budget partial."""
 
 from __future__ import annotations
 
-from wade.skills.installer import SKILL_FILES, _expand_partials, get_skills_templates_dir
+from wade.skills.installer import SKILL_FILES, get_skills_templates_dir
+from wade.utils.templates import get_workflows_templates_dir
 
-# The three session skills that reference {review_budget_notes} — review_batch
-# has no session skill by design (see the comment above _SKILL_PARTIALS), so it
-# is intentionally excluded here.
-_SKILLS_REFERENCING_REVIEW_BUDGET = [
-    "implementation-session",
-    "plan-session",
-    "review-pr-comments-session",
-]
+_WORKFLOWS_REFERENCING_REVIEW_BUDGET = ["implementation.md", "review-pr-comments.md"]
 
 
-class TestReviewBudgetPartialExpansion:
-    def test_each_referencing_skill_declares_the_placeholder(self) -> None:
-        skills_dir = get_skills_templates_dir()
-        for skill_name in _SKILLS_REFERENCING_REVIEW_BUDGET:
-            raw = (skills_dir / skill_name / "SKILL.md").read_text(encoding="utf-8")
-            assert "{review_budget_notes}" in raw, (
-                f"{skill_name}/SKILL.md no longer references {{review_budget_notes}}"
-            )
+class TestReviewBudgetWorkflowPartial:
+    def test_each_referencing_workflow_declares_the_placeholder(self) -> None:
+        workflows_dir = get_workflows_templates_dir()
+        for workflow_name in _WORKFLOWS_REFERENCING_REVIEW_BUDGET:
+            raw = (workflows_dir / workflow_name).read_text(encoding="utf-8")
+            assert "{review_budget}" in raw
 
-    def test_placeholder_expands_and_pulls_in_the_canonical_content(self) -> None:
-        skills_dir = get_skills_templates_dir()
-        for skill_name in _SKILLS_REFERENCING_REVIEW_BUDGET:
-            raw = (skills_dir / skill_name / "SKILL.md").read_text(encoding="utf-8")
-            rendered = _expand_partials(raw, skills_dir)
-            assert "{review_budget_notes}" not in rendered
-            assert "Review budget & skip guidance" in rendered
-            assert "done.max_review_passes" in rendered
-            assert "Trade-off, stated plainly" in rendered
+    def test_canonical_content_is_lifecycle_not_methodology(self) -> None:
+        partial = (get_workflows_templates_dir() / "_partials" / "review-budget.md").read_text(
+            encoding="utf-8"
+        )
+        assert "done.max_review_passes" in partial
+        assert "may be skipped only" in partial
+        assert "WADE" not in partial
 
 
 class TestNoStaleBudgetLiterals:
@@ -54,8 +44,8 @@ class TestNoStaleBudgetLiterals:
         assert checked > 0  # sanity: the walk actually found files
 
     def test_no_partial_hardcodes_the_old_literals(self) -> None:
-        partials_dir = get_skills_templates_dir() / "_partials"
-        md_files = list(partials_dir.glob("*.md"))
+        md_files = list((get_skills_templates_dir() / "_partials").glob("*.md"))
+        md_files.extend((get_workflows_templates_dir() / "_partials").glob("*.md"))
         assert md_files  # sanity: the directory has partials
         for md_file in md_files:
             text = md_file.read_text(encoding="utf-8")

@@ -35,13 +35,15 @@ class TestPromptTemplate:
     def test_template_exists(self) -> None:
         template = get_deps_prompt_template()
         assert len(template) > 50
-        assert "{context}" in template
+        assert "Dependency-analysis operation contract" in template
+        assert "bounded" in template
 
     def test_build_prompt(self) -> None:
         prompt = build_deps_prompt("## Issue #1: Add auth\n\nAdd login page.")
         assert "## Issue #1: Add auth" in prompt
         assert "Add login page" in prompt
-        assert "{context}" not in prompt
+        assert "<operation-input>" in prompt
+        assert "Required result contract" in prompt
 
 
 # ---------------------------------------------------------------------------

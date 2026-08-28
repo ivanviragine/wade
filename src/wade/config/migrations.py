@@ -13,6 +13,7 @@ import structlog
 import yaml
 
 from wade.config.loader import ConfigError, ensure_yaml_mapping
+from wade.models.config import CONFIG_SCHEMA_VERSION
 from wade.utils.knowledge_file import knowledge_copy_exclusions
 from wade.utils.paths import collapse_relative_path
 
@@ -20,9 +21,9 @@ logger = structlog.get_logger()
 
 
 def ensure_version(raw: dict[str, Any]) -> bool:
-    """Set version: 2 if missing."""
+    """Set the canonical config schema version if missing."""
     if "version" not in raw:
-        raw["version"] = 2
+        raw["version"] = CONFIG_SCHEMA_VERSION
         return True
     return False
 

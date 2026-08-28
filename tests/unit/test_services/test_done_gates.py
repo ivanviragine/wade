@@ -483,6 +483,11 @@ class TestRunCompletionGatesOrder:
                 done_mod, "_gate_resolved_threads", side_effect=_record("resolved_threads")
             ),
             patch.object(done_mod, "_gate_review_ran", side_effect=_record("review_ran")),
+            patch.object(
+                done_mod,
+                "_gate_documentation_decision",
+                side_effect=_record("documentation"),
+            ),
             patch.object(done_mod, "_gate_sync", side_effect=_record("sync")),
             patch.object(done_mod, "_gate_knowledge_valid", side_effect=_record("knowledge_valid")),
         ):
@@ -511,15 +516,19 @@ class TestRunCompletionGatesOrder:
             "pr_title",
             "pr_summary",
             "review_ran",
+            "documentation",
             "sync",
             "knowledge_valid",
         ]
 
-    def test_review_runs_title_threads_review_then_knowledge_and_never_syncs(self) -> None:
+    def test_review_runs_title_summary_threads_review_docs_sync_then_knowledge(self) -> None:
         assert self._order("review-pr-comments") == [
             "pr_title",
+            "pr_summary",
             "resolved_threads",
             "review_ran",
+            "documentation",
+            "sync",
             "knowledge_valid",
         ]
 

@@ -680,6 +680,12 @@ def diff_between(repo_root: Path, base: str, head: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def diff_between_checked(repo_root: Path, base: str, head: str) -> str:
+    """Return ``git diff base...head`` and raise when git cannot compute it."""
+
+    return _run_git("diff", f"{base}...{head}", cwd=repo_root).stdout
+
+
 def diff_worktree(repo_root: Path, *, staged: bool = False) -> str:
     """Return ``git diff`` output for the working tree (or the staged index).
 

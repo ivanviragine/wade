@@ -29,6 +29,7 @@ from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus, SyncEventType, SyncResult
 from wade.models.task import Task
+from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -430,6 +431,9 @@ def start(
     permission_mode_explicit: bool = False,
     network_access: bool | None = None,
     base_branch: str | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
 
@@ -508,6 +512,9 @@ def start(
             permission_mode=permission_mode,
             network_access=network_access,
             cd_only=cd_only,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
         )
         if batch_result is not None:
             return ImplementResult(success=batch_result)
@@ -668,6 +675,8 @@ def start(
         #   > config.project.main_branch (or detect_main_branch)
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
         resolved_base = base_branch
+        current_pr_base: str | None = None
+        retarget_requested = False
         if existing_pr is not None:
             # Use the base from the PR lookup already performed above. A failed
             # lookup was aborted earlier (lookup_failed), so this base is reliable
@@ -678,94 +687,13 @@ def start(
                 # No explicit override — inherit the base the plan recorded on the PR.
                 if current_pr_base:
                     resolved_base = current_pr_base
-            elif current_pr_base != resolved_base:
-                # Explicit override differs from the PR's base — retarget so the worktree,
-                # PR, and merge target stay consistent; a failed retarget must abort rather
-                # than leave a stale base (#376). When the PR base can't be read
-                # (current_pr_base is None), the reroot below refuses — it cannot prove the
-                # branch is a rerootable scaffold — and this aborts, safer than resetting a
-                # branch of unknown provenance.
-                console.step(
-                    f"Retargeting PR #{existing_pr.number} base "
-                    f"{current_pr_base or '(unknown)'} -> {resolved_base}..."
-                )
-                # Editing the PR base alone leaves the head branch rooted on the old
-                # base, so that base's commits would merge into the new one. A
-                # scaffold-only branch is re-rooted below; but a branch with in-flight
-                # work cannot be rewritten without discarding it, so guard that case
-                # (confirm/abort) rather than silently polluting the PR — mirrors the
-                # plan flow's _base_retarget_is_safe (#376 review).
-                #
-                # `_branch_has_real_work(None)` returns False (skip the confirmation) when
-                # the base is unknown; that stays safe only because reroot's `if not
-                # old_base` is the *authoritative* guard for an unknown base and aborts
-                # below. Keep the two in step if either changes (#376 review).
-                if _branch_has_real_work(repo_root, branch_name, current_pr_base):
-                    console.error(
-                        f"PR #{existing_pr.number}'s branch already has in-flight work, so "
-                        f"retargeting its base to '{resolved_base}' cannot rewrite history — "
-                        f"'{current_pr_base}'s commits would then merge into '{resolved_base}'."
-                    )
-                    if not (
-                        prompts.is_tty()
-                        and not yolo
-                        and prompts.confirm(
-                            f"Retarget PR #{existing_pr.number} base to '{resolved_base}' anyway?",
-                            default=False,
-                        )
-                    ):
-                        console.info(
-                            f"Left PR #{existing_pr.number} targeting '{current_pr_base}'. "
-                            "Merge or finish the in-flight work first, then retarget."
-                        )
-                        return ImplementResult(success=False)
-                # Re-root a scaffold-only branch on the new base first (#376 review).
-                # The reroot force-pushes the rewritten head *before* the base edit, so
-                # capture the pre-reroot head: a failed edit would otherwise leave the
-                # remote branch (new base) and the PR (old base) divergent. Roll the head
-                # back to keep them consistent — mirroring bootstrap_draft_pr (#376 review).
-                head_ref = git_branch.resolve_start_point(repo_root, branch_name)
-                pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
-                if not reroot_scaffold_branch_for_retarget(
-                    repo_root, branch_name, current_pr_base, resolved_base, task.id
-                ):
-                    return ImplementResult(success=False)
-                if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):
-                    console.error(
-                        f"Failed to retarget PR #{existing_pr.number} to {resolved_base}."
-                    )
-                    # Only roll back when the reroot actually rewrote the head (SHA
-                    # changed). A real-work branch is left untouched by the reroot, so a
-                    # restore would be a needless hard reset that could discard uncommitted
-                    # work (#376 review).
-                    post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
-                    if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
-                        _restore_scaffold_head(
-                            repo_root, branch_name, pre_reroot_sha, existing_pr.number
-                        )
-                    return ImplementResult(success=False)
+            else:
+                retarget_requested = current_pr_base != resolved_base
         effective_base = resolved_base or main_branch
 
         worktrees_dir = _resolve_worktrees_dir(config, repo_root)
         repo_name = repo_root.name
         worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
-
-        # Bootstrap draft PR for "Proceed without plan" path (deferred from above so it
-        # runs after AI selection rather than before).
-        if proceed_needs_bootstrap:
-            console.step("Bootstrapping draft PR...")
-            pr_info = bootstrap_draft_pr(
-                issue_number=task.id,
-                issue_title=task.title,
-                plan_body=task.body or f"Implements #{task.id}: {task.title}",
-                config=config,
-                repo_root=repo_root,
-                base_branch=base_branch,
-            )
-            if pr_info:
-                console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
-            else:
-                console.warn("Could not create draft PR — proceeding anyway")
 
         # Reuse the worktree if the branch already exists (idempotent re-run)
         existing_wt = next(
@@ -820,19 +748,132 @@ def start(
                 console.error(f"Failed to create worktree: {e}")
                 return ImplementResult(success=False)
 
+        # Resolve the immutable session bundle before any provider-side mutation.
+        # Discovery must happen against the actual target worktree (not merely the
+        # caller's checkout) so branch-specific project skills retain precedence.
+        # The later full bootstrap reuses this frozen bundle.
+        from wade.services.session_composition_service import SessionCompositionError
+
+        try:
+            bootstrap_worktree(
+                worktree_path,
+                config,
+                repo_root,
+                session_phase=SessionPhase.IMPLEMENT,
+                session_kind=SessionKind.IMPLEMENTATION,
+                task_id=task.id,
+                work_skills=work_skills,
+                review_skills=review_skills,
+                refresh_skills=refresh_skills,
+                compose_session_only=True,
+            )
+        except SessionCompositionError as exc:
+            console.error(f"Cannot start implementation session: {exc}")
+            return ImplementResult(success=False)
+
+        if retarget_requested and existing_pr is not None and resolved_base is not None:
+            # Explicit override differs from the PR's base — retarget so the worktree,
+            # PR, and merge target stay consistent. This intentionally runs only after
+            # skill preflight, so an invalid active ref cannot mutate the remote branch
+            # or PR.
+            console.step(
+                f"Retargeting PR #{existing_pr.number} base "
+                f"{current_pr_base or '(unknown)'} -> {resolved_base}..."
+            )
+            # Editing the PR base alone leaves the head branch rooted on the old
+            # base, so that base's commits would merge into the new one. A
+            # scaffold-only branch is re-rooted below; but a branch with in-flight
+            # work cannot be rewritten without discarding it, so guard that case
+            # (confirm/abort) rather than silently polluting the PR — mirrors the
+            # plan flow's _base_retarget_is_safe (#376 review).
+            #
+            # `_branch_has_real_work(None)` returns False (skip the confirmation) when
+            # the base is unknown; that stays safe only because reroot's `if not
+            # old_base` is the *authoritative* guard for an unknown base and aborts
+            # below. Keep the two in step if either changes (#376 review).
+            if _branch_has_real_work(repo_root, branch_name, current_pr_base):
+                console.error(
+                    f"PR #{existing_pr.number}'s branch already has in-flight work, so "
+                    f"retargeting its base to '{resolved_base}' cannot rewrite history — "
+                    f"'{current_pr_base}'s commits would then merge into '{resolved_base}'."
+                )
+                if not (
+                    prompts.is_tty()
+                    and not yolo
+                    and prompts.confirm(
+                        f"Retarget PR #{existing_pr.number} base to '{resolved_base}' anyway?",
+                        default=False,
+                    )
+                ):
+                    console.info(
+                        f"Left PR #{existing_pr.number} targeting '{current_pr_base}'. "
+                        "Merge or finish the in-flight work first, then retarget."
+                    )
+                    return ImplementResult(success=False)
+            # Re-root a scaffold-only branch on the new base first (#376 review).
+            # The reroot force-pushes the rewritten head *before* the base edit, so
+            # capture the pre-reroot head: a failed edit would otherwise leave the
+            # remote branch (new base) and the PR (old base) divergent. Roll the head
+            # back to keep them consistent — mirroring bootstrap_draft_pr (#376 review).
+            head_ref = git_branch.resolve_start_point(repo_root, branch_name)
+            pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
+            if not reroot_scaffold_branch_for_retarget(
+                repo_root, branch_name, current_pr_base, resolved_base, task.id
+            ):
+                return ImplementResult(success=False)
+            if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):
+                console.error(f"Failed to retarget PR #{existing_pr.number} to {resolved_base}.")
+                # Only roll back when the reroot actually rewrote the head (SHA
+                # changed). A real-work branch is left untouched by the reroot, so a
+                # restore would be a needless hard reset that could discard uncommitted
+                # work (#376 review).
+                post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
+                if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
+                    _restore_scaffold_head(
+                        repo_root, branch_name, pre_reroot_sha, existing_pr.number
+                    )
+                return ImplementResult(success=False)
+
+        # Bootstrap the draft PR only after the session skills are known-good.
+        if proceed_needs_bootstrap:
+            console.step("Bootstrapping draft PR...")
+            pr_info = bootstrap_draft_pr(
+                issue_number=task.id,
+                issue_title=task.title,
+                plan_body=task.body or f"Implements #{task.id}: {task.title}",
+                config=config,
+                repo_root=repo_root,
+                base_branch=base_branch,
+            )
+            if pr_info:
+                console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
+            else:
+                console.warn("Could not create draft PR — proceeding anyway")
+
         console.empty()
 
         # Bootstrap
-        from wade.skills.installer import IMPLEMENT_SKILLS
+        from wade.skills.installer import compatibility_skills_for_session
 
         write_plan_md(worktree_path, task, plan_content=plan_content)
         bootstrap_worktree(
             worktree_path,
             config,
             repo_root,
-            skills=IMPLEMENT_SKILLS,
+            skills=compatibility_skills_for_session(SessionKind.IMPLEMENTATION),
             selected_ai_tool=resolved_tool,
             session_phase=SessionPhase.IMPLEMENT,
+            session_kind=SessionKind.IMPLEMENTATION,
+            task_id=task.id,
+            # Bindings were resolved and frozen by the preflight above. Supplying
+            # overrides again would correctly look like an illegal resume-time
+            # override to the composition service.
+            work_skills=None,
+            review_skills=None,
+            # The preflight above already applied an explicit refresh and froze the
+            # result. Re-resolving after a PR mutation would break the fail-fast
+            # guarantee and could observe a different main-checkout inventory.
+            refresh_skills=False,
         )
 
         # Persist the resolved base so catchup/sync/done merge into the correct

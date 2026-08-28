@@ -8,14 +8,14 @@ Every change **must** include documentation updates as part of the implementatio
 
 1. **`AGENTS.md`** — Update if the change affects architecture, commands, conventions, design principles, or development workflow.
 2. **`README.md`** — Update if the change affects user-facing behavior: new commands, flags, install steps, configuration options, or supported tools.
-3. **`templates/skills/plan-session/SKILL.md`** / **`templates/skills/implementation-session/SKILL.md`** / **`templates/skills/review-pr-comments-session/SKILL.md`** — *(inited-project artifacts)* Update if the change affects phase-specific session rules (planning rules in plan-session, implementation rules in implementation-session, review rules in review-pr-comments-session).
-4. **`templates/skills/`** (task, deps) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use wade commands. This is where command references, flags, workflows, and examples belong.
+3. **`templates/workflows/`** — *(inited-project artifacts)* Update when fixed session steps, WADE commands, safety rules, completion policy, or workflow-owned references change.
+4. **`templates/skills/`** — *(inited-project artifacts)* Update replaceable built-ins only for generic methodology, rubrics, and domain reasoning; they must remain WADE-agnostic. Update compatibility/support skills only for their narrow command-support purpose.
 5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that **worktree bootstrap** injects (per session) into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, refreshed per session by bootstrap (`pointer.ensure_pointer`), never by `wade init` or `wade update`.
 6. **`docs/dev/`** — Update the relevant supplementary doc if the change affects architecture details, testing patterns, extension guides, or skills system internals.
 
 Do not skip documentation even for "small" changes — a new flag, a renamed option, or a changed default all need docs updates. Documentation is part of "done", not a separate task.
 
-For **inited projects** (the output side, not this repo), the same principle is enforced as an explicit, mandatory closing step in the installed `implementation-session` and `review-pr-comments-session` skills — see `templates/skills/_partials/doc-update-step.md`, injected via `{doc_update_step}`. The step is deliberately short to stay within the session context budget; its rationale and the "what counts as needing an update" list live in each skill's `reference/doc-update.md`, loaded on demand. That step's target file list is detected per project by `src/wade/skills/doc_targets.py` — see [Documentation Targets](skills-system.md#documentation-targets) for the detector and its generated-docs guard.
+For **inited projects** (the output side, not this repo), the same principle is enforced by the fixed implementation and PR-comment workflow templates. `templates/workflows/_partials/documentation-step.md` receives the per-project targets detected by `src/wade/skills/doc_targets.py`; the agent then records either `--updated` or a reasoned `--not-needed` decision for the current commit. The deterministic `done` gate requires that receipt. See [Documentation Targets](skills-system.md#documentation-targets) and [Workflows and Dynamic Skills](workflows-and-skills.md).
 
 ## Full Change Checklist
 
@@ -25,10 +25,10 @@ Before considering any work complete, verify each item:
 - [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, design principles, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed (commands, flags, config, install)
-- [ ] **`templates/skills/plan-session/SKILL.md`** / **`implementation-session/SKILL.md`** / **`review-pr-comments-session/SKILL.md`** — updated if phase-specific session rules changed
+- [ ] **`templates/workflows/`** — updated if fixed session steps, lifecycle rules, or workflow-owned references changed
 - [ ] **`templates/agents-pointer.md`** — updated if the critical inline rules or pointer wording changed
-- [ ] **`templates/skills/`** (task, deps) — updated if agent-facing command workflows, flags, or examples changed
-- [ ] **Phase skills** *(inited-project artifacts)* — planning rules go in plan-session, implementation rules go in implementation-session, review rules go in review-pr-comments-session, AGENTS.md pointer stays minimal
+- [ ] **`templates/skills/`** — generic built-ins updated only for WADE-agnostic methodology; compatibility/support skills updated for their narrow purpose
+- [ ] **Workflow/skill boundary** — WADE lifecycle belongs in workflows and deterministic services, never in replaceable skills; the AGENTS.md pointer stays minimal
 - [ ] **`docs/dev/`** — updated if architecture details, testing patterns, extension guides, or skills system docs changed
 - [ ] **Commit** — uses conventional-commit prefix for correct auto-versioning
 

@@ -609,11 +609,12 @@ class ReviewStatusKind(StrEnum):
     into a human-legible line — one source of truth so the two cannot drift.
     """
 
-    REVIEWED = "reviewed"  # exact-sha ``reviewed@<head>`` marker present
+    REVIEWED = "reviewed"  # current commit + active reviewer record is valid
     SKIPPED_FLAG = "skipped_flag"  # ``--skip-review`` passed
     REQUIRE_OFF = "require_off"  # ``done.require_review: false``
     DISABLED = "disabled"  # ``review_implementation.enabled: false``
     CAP_REACHED = "cap_reached"  # impl-only; pass cap hit with no fresh review
+    REVIEWER_CHANGED = "reviewer_changed"  # same commit reviewed by another binding
     NOT_REVIEWED = "not_reviewed"  # gate would refuse (rendering fallback)
 
 
@@ -631,7 +632,7 @@ class ReviewStatus(BaseModel):
     model_config = {"frozen": True}
 
     kind: ReviewStatusKind
-    passes: int  # distinct review-pass markers (``count_review_passes()``)
+    passes: int  # distinct attempts for the active reviewer binding
     session_type: SessionType
     reviewed_sha: str  # the pre-sync HEAD the agent reviewed (for display)
 
@@ -639,12 +640,10 @@ class ReviewStatus(BaseModel):
 def _review_pass_phrase(passes: int) -> str:
     """``review attempted on N distinct commit(s)`` — a count of unique commits a
     review delegation ran against, not a count of confirmed-successful reviews.
-    ``review_delegation_service._record_review_pass`` writes the
-    ``review-pass@<sha>`` marker *before* checking ``result.success``, so a
-    headless timeout or other delegation failure still advances this count
-    (#384) — the phrase must not claim those commits were actually reviewed,
-    only that a review was attempted. ``markers.record_review_pass`` is per-sha
-    and idempotent, so retrying against the same HEAD is never double-counted.
+    Binding-aware records count completed reviews and real timeouts; legacy
+    unversioned worktrees count their compatibility markers. The phrase must not
+    claim every attempt produced a complete review. Both representations are
+    per-commit and idempotent, so same-HEAD retries are never double-counted.
     """
     noun = "commit" if passes == 1 else "commits"
     return f"review attempted on {passes} distinct {noun}"
@@ -687,6 +686,11 @@ def _render_review_status(status: ReviewStatus) -> str:
         line = (
             f"⚠️ Completed with {_review_pass_phrase(status.passes)}; the final commit "
             "was not freshly reviewed (`done.max_review_passes` cap reached)."
+        )
+    elif kind is ReviewStatusKind.REVIEWER_CHANGED:
+        line = (
+            "⚠️ The final commit was reviewed with a different methodology binding; "
+            "the active reviewer has not reviewed it."
         )
     elif kind is ReviewStatusKind.REQUIRE_OFF:
         # The leading info emoji is intentional PR-body markdown, not an identifier.

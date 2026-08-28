@@ -392,7 +392,9 @@ class TestReviewImplementationCommand:
         )
 
         assert result.returncode == 0
-        assert "No changes to review" in (result.stdout + result.stderr)
+        assert "No committed, staged, or unstaged changes to review" in (
+            result.stdout + result.stderr
+        )
         assert _read_fake_claude_log(log_file) == []
 
     def test_review_implementation_disabled_skips_ai(
@@ -1003,6 +1005,17 @@ class TestReviewPrCommentsSessionCommands:
         )
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", "fix: address review comments"], cwd=worktree_path)
+
+        docs = _run(
+            [
+                "review-pr-comments-session",
+                "docs",
+                "--not-needed",
+                "E2E fixture has no documentation impact",
+            ],
+            cwd=worktree_path,
+        )
+        assert docs.returncode == 0, docs.stdout + docs.stderr
 
         # --skip-review bypasses the review-ran gate; this contract exercises the
         # done→PR mechanics (thread gate + push + PR update), not the review gate.

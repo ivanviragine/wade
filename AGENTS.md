@@ -15,13 +15,15 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 |------|---------|
 | **the WADE repo** / **this project** | This source repository — `src/wade/`, `templates/`, `tests/`, `scripts/` |
 | **inited project** / **target project** | Any third-party repo that has run `wade init` to adopt the workflow |
-| **skill templates** | Markdown files in `templates/skills/` — the source of truth, part of the WADE repo |
-| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` **per session by worktree bootstrap** (`bootstrap_worktree`), not by `wade init` |
+| **workflow templates** | Fixed WADE lifecycle files in `templates/workflows/`; rendered to `.wade/session/WORKFLOW.md` and never replaceable by skill configuration |
+| **methodology skill templates** | WADE-agnostic replaceable methods in `templates/skills/` (planning, implementation, review, and dependency analysis) |
+| **session skill snapshots** | Immutable copies of active and available skills under `.wade/session/skills/`, including project skills discovered from the worktree and main checkout |
+| **compatibility skills** | Thin phase pointers and WADE command-support skills projected into `.claude/skills/` per worktree bootstrap; they are not the active methodology bundle |
 | **AGENTS.md pointer** | A short `## Git Workflow` block that **worktree bootstrap** injects into an inited project's `AGENTS.md` per session, not by `wade init` |
 
 **This `AGENTS.md` governs development of WADE itself.** Skills, the pointer, and the progressive disclosure architecture are all *outputs* of WADE — artifacts installed into inited projects, not rules for developing WADE.
 
-**WADE uses its own workflow.** This repo is itself an inited project. Follow the `## Git Workflow` pointer at the bottom and the phase-specific skill referenced in your clipboard prompt.
+**WADE uses its own workflow.** This repo is itself an inited project. Follow the `## Git Workflow` pointer at the bottom, then the fixed `.wade/session/WORKFLOW.md` and its selected WORK methodology.
 
 ## Commands
 
@@ -113,13 +115,15 @@ Everything in this repo exists in one of two worlds:
 | WADE repo (source) | Inited project (output) |
 |---------------------|------------------------|
 | `src/wade/` | installed `wade` binary |
-| `templates/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` |
+| `templates/workflows/<session>.md` | `.wade/session/WORKFLOW.md` |
+| `templates/skills/<method>/SKILL.md` | `.wade/session/skills/{builtin,project}/.../SKILL.md` |
+| compatibility/support skills in `templates/skills/` | `.claude/skills/<name>/SKILL.md` |
 | `templates/agents-pointer.md` | `## Git Workflow` block in target `AGENTS.md` |
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` |
 
-When developing WADE, **only touch the left column**. Always edit `templates/skills/<name>/SKILL.md` directly — never edit files inside `.claude/skills/` (those are symlinks in this repo, copies in inited projects).
+When developing WADE, **only touch the left column**. Put lifecycle steps and WADE commands in `templates/workflows/`; put replaceable methodology in WADE-agnostic `templates/skills/<method>/SKILL.md`. Never edit `.claude/skills/` or `.wade/session/` outputs directly.
 
-The right-column artifacts (installed skills, the `## Git Workflow` pointer, and the Claude/Cursor allowlists) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review` and by a standalone `wade task deps`), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
+The right-column artifacts (workflow, frozen skill bundle, compatibility skills, the `## Git Workflow` pointer, and tool configuration) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review`; standalone delegations use operation bundles), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
 
 > Skills system deep dive (symlinks, pointer markers, installation lifecycle): see `docs/dev/skills-system.md`
 
@@ -151,12 +155,10 @@ Before considering any work complete:
 - [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, review-pr-comments-session for reviews)
 - [ ] **Commit** — uses conventional-commit prefix
 
-Note: for inited projects, the doc update pass is now an explicit, mandatory
-closing step in the installed `implementation-session` and
-`review-pr-comments-session` skills (`{doc_update_step}` /
-`templates/skills/_partials/doc-update-step.md`) — not something an agent has
-to remember on its own. This repo's own checklist above is unaffected; it
-still governs what WADE-repo changes require here.
+Note: for inited projects, the doc update pass is an explicit mandatory step in
+the fixed implementation and PR-comment workflows. WADE records an `--updated`
+or reasoned `--not-needed` receipt for the current commit; methodology skills do
+not own or satisfy that step. This repo's own checklist above is unaffected.
 
 > Full 10-item checklist, documentation rules, feedback loop, and correction-driven docs: see `docs/dev/documentation-policies.md`
 
@@ -169,5 +171,6 @@ Read these on-demand when working in a specific area:
 | Modifying architecture, config, or commands | `docs/dev/architecture.md` |
 | Adding an AI tool, provider, or subcommand | `docs/dev/extending.md` |
 | Writing or running tests | `docs/dev/testing.md` |
-| Working on skills, pointer system, or `wade init` | `docs/dev/skills-system.md` |
+| Working on discovery, snapshots, compatibility skills, pointer system, or `wade init` | `docs/dev/skills-system.md` |
+| Working on fixed workflows, dynamic bindings, manifests, or delegation skill contracts | `docs/dev/workflows-and-skills.md` |
 | Updating documentation policies | `docs/dev/documentation-policies.md` |

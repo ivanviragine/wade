@@ -22,11 +22,18 @@ from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.task import parse_tracking_child_ids
+from wade.models.workflow import DelegationKind
 from wade.providers.registry import get_provider
 from wade.services.review_delegation_service import (
     _check_review_enabled,
     _load_review_config,
     _run_review_delegation,
+)
+from wade.services.skill_invocation_service import (
+    PreparedDelegationMethod,
+    SkillInvocationError,
+    cleanup_delegation_bundle,
+    prepare_delegation_method,
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
@@ -425,6 +432,8 @@ def run_coherence_review(
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
     repo_root: Path | None = None,
+    skills: list[str] | None = None,
+    prepared_method: PreparedDelegationMethod | None = None,
 ) -> DelegationResult:
     """Run AI coherence review on the batch context.
 
@@ -438,25 +447,43 @@ def run_coherence_review(
 
     template = load_prompt_template("review-batch.md")
     batch_context_md = _format_batch_context(ctx)
-
-    result = _run_review_delegation(
-        template,
-        "review_batch",
-        content_placeholder="{batch_context}",
-        content=batch_context_md,
-        config=config,
-        cmd_config=cmd_config,
-        ai_tool=ai_tool,
-        model=model,
-        mode=mode,
-        effort=effort,
-        ai_explicit=ai_explicit,
-        model_explicit=model_explicit,
-        effort_explicit=effort_explicit,
-        permission_mode=permission_mode,
-        yolo=yolo,
-        permission_mode_explicit=permission_mode_explicit,
-    )
+    try:
+        prepared = prepared_method or prepare_delegation_method(
+            config,
+            DelegationKind.BATCH_REVIEW,
+            cwd=repo_root or Path.cwd(),
+            skills=skills,
+        )
+        result = _run_review_delegation(
+            template,
+            "review_batch",
+            content=batch_context_md,
+            config=config,
+            cmd_config=cmd_config,
+            ai_tool=ai_tool,
+            model=model,
+            mode=mode,
+            effort=effort,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            effort_explicit=effort_explicit,
+            permission_mode=permission_mode,
+            yolo=yolo,
+            permission_mode_explicit=permission_mode_explicit,
+            delegation_kind=DelegationKind.BATCH_REVIEW,
+            method_section=prepared.method_section,
+            input_label="Batch context",
+            cwd=repo_root or Path.cwd(),
+        )
+    except SkillInvocationError as exc:
+        console.error(str(exc))
+        return DelegationResult(
+            success=False,
+            feedback=str(exc),
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+    cleanup_delegation_bundle(prepared, preserve=not result.success)
 
     # Post findings only when the AI produced actual review output.
     if (
@@ -491,6 +518,7 @@ def review_batch(
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
     project_root: Path | None = None,
+    skills: list[str] | None = None,
 ) -> DelegationResult:
     """Main entry point — run full batch coherence review pipeline.
 
@@ -541,6 +569,24 @@ def review_batch(
             skipped=True,
         )
 
+    # Resolve the always-foreign batch reviewer before creating an integration
+    # branch or PR. No individual implementation manifest may influence it.
+    try:
+        prepared_method = prepare_delegation_method(
+            config,
+            DelegationKind.BATCH_REVIEW,
+            cwd=repo_root,
+            skills=skills,
+        )
+    except SkillInvocationError as exc:
+        console.error(str(exc))
+        return DelegationResult(
+            success=False,
+            feedback=str(exc),
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+
     # Step 2: Create integration branch
     console.step("Creating integration branch...")
     original_branch = git_repo.get_current_branch(repo_root)
@@ -574,6 +620,7 @@ def review_batch(
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
             repo_root=repo_root,
+            prepared_method=prepared_method,
         )
 
         return result
@@ -584,3 +631,5 @@ def review_batch(
             git_repo.checkout(repo_root, original_branch)
         except GitError:
             logger.debug("batch_review.checkout_restore_failed", exc_info=True)
+        # Failures preserve the operation bundle for recovery. Success cleanup
+        # occurs in run_coherence_review.
