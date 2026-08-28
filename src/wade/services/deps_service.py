@@ -674,6 +674,25 @@ def analyze_deps(
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
+        if standalone_worktree is not None and standalone_repo_root is not None:
+            try:
+                from wade.git import worktree as git_worktree
+
+                git_worktree.remove_worktree(
+                    standalone_repo_root,
+                    standalone_worktree,
+                    force=True,
+                )
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "deps.skill_preparation_cleanup_failed",
+                    worktree=str(standalone_worktree),
+                    error=str(cleanup_exc),
+                )
+                console.error(
+                    "Could not clean up the dependency worktree after skill preparation "
+                    f"failed; it was preserved at {standalone_worktree}."
+                )
         return None
 
     # Build context

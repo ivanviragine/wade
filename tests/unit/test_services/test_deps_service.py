@@ -25,6 +25,7 @@ from wade.services.deps_service import (
     parse_deps_output,
     strip_deps_section,
 )
+from wade.services.skill_invocation_service import SkillInvocationError
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -1003,6 +1004,74 @@ class TestAnalyzeDepsIsolationFailure:
         assert result is None
         delegate.assert_not_called()
         # Owned by the parent `wade plan` lifecycle, which flushes its votes.
+        remove.assert_not_called()
+        assert planning_worktree.is_dir()
+
+    def test_skill_preparation_failure_removes_standalone_worktree(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from wade.services.check_service import CheckExitCode, CheckResult, CheckStatus
+
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate)
+        worktree = tmp_path / "deps-worktree"
+        remove = MagicMock()
+        monkeypatch.setattr("wade.git.repo.get_repo_root", lambda _: tmp_path)
+        monkeypatch.setattr(
+            "wade.git.worktree.create_detached_worktree",
+            lambda **_kwargs: worktree,
+        )
+        monkeypatch.setattr(
+            "wade.services.implementation_service.bootstrap_worktree",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "wade.services.check_service.check_session_readiness",
+            lambda *_args, **_kwargs: CheckResult(
+                status=CheckStatus.IN_WORKTREE,
+                exit_code=CheckExitCode.IN_WORKTREE,
+            ),
+        )
+        monkeypatch.setattr(
+            "wade.services.deps_service.prepare_delegation_method",
+            MagicMock(side_effect=SkillInvocationError("unknown dependency skill")),
+        )
+        monkeypatch.setattr("wade.git.worktree.remove_worktree", remove)
+
+        result = analyze_deps(["1", "2"], mode="headless", project_root=tmp_path)
+
+        assert result is None
+        delegate.assert_not_called()
+        remove.assert_called_once_with(tmp_path, worktree, force=True)
+
+    def test_skill_preparation_failure_preserves_planning_worktree(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        delegate = MagicMock()
+        self._configure_headless(monkeypatch, delegate)
+        planning_worktree = tmp_path / "plan-worktree"
+        planning_worktree.mkdir()
+        remove = MagicMock()
+        _stub_ready(monkeypatch)
+        monkeypatch.setattr(
+            "wade.services.deps_service.prepare_delegation_method",
+            MagicMock(side_effect=SkillInvocationError("unknown dependency skill")),
+        )
+        monkeypatch.setattr("wade.git.worktree.remove_worktree", remove)
+
+        result = analyze_deps(
+            ["1", "2"],
+            mode="headless",
+            project_root=tmp_path,
+            planning_worktree=planning_worktree,
+        )
+
+        assert result is None
+        delegate.assert_not_called()
         remove.assert_not_called()
         assert planning_worktree.is_dir()
 

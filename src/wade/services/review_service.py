@@ -1097,6 +1097,9 @@ def start(
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
             network_access=network_access,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
             config=config,
         )
         return True
@@ -1441,6 +1444,9 @@ def _quiet_next_steps_prompt(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     network_access: bool | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
     config: ProjectConfig | None = None,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
@@ -1448,9 +1454,9 @@ def _quiet_next_steps_prompt(
     Used both when ``wade review pr-comments <issue>`` finds nothing to address
     and when the polling loop hits the quiet timeout.
 
-    ``network_access`` carries the caller's explicit ``--network`` / ``--no-network``
-    (``None`` = unset) into a "keep polling → comments found" re-launch, so a later
-    session preserves that decision instead of silently re-resolving to config.
+    Explicit network and skill-binding arguments survive a "keep polling →
+    comments found" re-launch. The quiet path runs before session composition, so
+    dropping them there would silently replace the requested methodology.
     """
     from wade.ui import prompts
 
@@ -1524,6 +1530,9 @@ def _quiet_next_steps_prompt(
                         permission_mode=permission_mode,
                         permission_mode_explicit=permission_mode_explicit,
                         network_access=network_access,
+                        work_skills=work_skills,
+                        review_skills=review_skills,
+                        refresh_skills=refresh_skills,
                     )
                 return
             elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
