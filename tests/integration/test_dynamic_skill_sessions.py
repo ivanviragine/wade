@@ -18,6 +18,7 @@ from wade.services.skill_invocation_service import (
     cleanup_delegation_bundle,
     prepare_delegation_method,
 )
+from wade.skills.materializer import compute_session_bundle_digest
 
 
 def _skill(
@@ -152,6 +153,115 @@ def test_main_only_skill_is_copied_with_resources_and_frozen_until_refresh(
     )
     assert "Second version." in (snapshot / "SKILL.md").read_text(encoding="utf-8")
     assert "Second version." in (source / "SKILL.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "WORKFLOW.md",
+        "reference/recovery.md",
+        "skills/builtin/implementation/SKILL.md",
+    ],
+)
+def test_resume_rejects_modified_physical_session_bundle(
+    tmp_git_repo: Path,
+    relative_path: str,
+) -> None:
+    config = ProjectConfig()
+    initial = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        config,
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+    )
+    assert initial.manifest.bundle_digest == compute_session_bundle_digest(
+        tmp_git_repo / ".wade/session"
+    )
+    target = tmp_git_repo / ".wade/session" / relative_path
+    original = target.read_bytes()
+    target.write_bytes(original + b"\nmodified after materialization\n")
+
+    with pytest.raises(SessionCompositionError, match="integrity validation"):
+        compose_session(
+            tmp_git_repo,
+            tmp_git_repo,
+            config,
+            kind=SessionKind.IMPLEMENTATION,
+            task_id="42",
+        )
+
+    refreshed = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        config,
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+        refresh=True,
+    )
+    assert refreshed.reused is False
+    assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("corruption", ["missing", "extra", "symlink"])
+def test_resume_rejects_structurally_corrupted_session_bundle(
+    tmp_git_repo: Path,
+    corruption: str,
+) -> None:
+    config = ProjectConfig()
+    compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        config,
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+    )
+    bundle = tmp_git_repo / ".wade/session"
+    if corruption == "missing":
+        (bundle / "WORKFLOW.md").unlink()
+    elif corruption == "extra":
+        (bundle / "unexpected.md").write_text("unexpected\n", encoding="utf-8")
+    else:
+        (bundle / "unexpected-link").symlink_to("WORKFLOW.md")
+
+    with pytest.raises(SessionCompositionError, match="integrity validation"):
+        compose_session(
+            tmp_git_repo,
+            tmp_git_repo,
+            config,
+            kind=SessionKind.IMPLEMENTATION,
+            task_id="42",
+        )
+
+    refreshed = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        config,
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+        refresh=True,
+    )
+    assert refreshed.reused is False
+
+
+def test_mapped_review_rejects_modified_frozen_review_skill(tmp_git_repo: Path) -> None:
+    config = ProjectConfig()
+    compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        config,
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+    )
+    review_skill = tmp_git_repo / ".wade/session/skills/builtin/code-review/SKILL.md"
+    review_skill.write_text("modified review method\n", encoding="utf-8")
+
+    with pytest.raises(SkillInvocationError, match="integrity validation"):
+        prepare_delegation_method(
+            config,
+            DelegationKind.CODE_REVIEW,
+            cwd=tmp_git_repo,
+        )
 
 
 def test_ordered_binding_and_worktree_precedence_are_preserved(tmp_path: Path) -> None:

@@ -65,6 +65,7 @@ def test_session_describe_prints_frozen_bindings(tmp_path: Path) -> None:
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
         workflow_revision=1,
+        bundle_digest=f"sha256:{'0' * 64}",
         task_id="42",
         ai_command=AICommandKey.IMPLEMENT,
         bindings={

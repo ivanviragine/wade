@@ -82,6 +82,7 @@ class SessionManifest(BaseModel, frozen=True):
     schema_version: int = Field(default=SESSION_MANIFEST_SCHEMA_VERSION)
     session: SessionKind
     workflow_revision: int
+    bundle_digest: str
     task_id: str | None = None
     ai_command: AICommandKey
     bindings: dict[SkillSlot, ResolvedBinding]
@@ -91,6 +92,13 @@ class SessionManifest(BaseModel, frozen=True):
     def _schema(cls, value: int) -> int:
         if value != SESSION_MANIFEST_SCHEMA_VERSION:
             raise ValueError(f"Unsupported session manifest schema {value}")
+        return value
+
+    @field_validator("bundle_digest")
+    @classmethod
+    def _bundle_digest(cls, value: str) -> str:
+        if not _DIGEST_RE.fullmatch(value):
+            raise ValueError("Bundle digest must be sha256:<64 lowercase hex characters>")
         return value
 
     @model_validator(mode="after")

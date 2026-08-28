@@ -71,6 +71,7 @@ def _record_review(
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
         workflow_revision=1,
+        bundle_digest=f"sha256:{'0' * 64}",
         task_id="42",
         ai_command=AICommandKey.IMPLEMENT,
         bindings={SkillSlot.WORK: _REVIEW_BINDING, SkillSlot.REVIEW: _REVIEW_BINDING},

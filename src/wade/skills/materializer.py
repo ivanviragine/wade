@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -31,6 +32,120 @@ MAX_CATALOG_CHARS = 4_000
 
 class SkillMaterializationError(RuntimeError):
     """A validated skill bundle could not be constructed transactionally."""
+
+
+def _session_bundle_files(
+    directory: Path,
+    *,
+    relative_prefix: Path = Path(),
+) -> list[tuple[str, Path]]:
+    """Collect physical bundle files without following any symlink."""
+
+    try:
+        entries = sorted(directory.iterdir(), key=lambda item: item.name)
+    except OSError as exc:
+        raise SkillMaterializationError(
+            f"Cannot enumerate session bundle {directory}: {exc}"
+        ) from exc
+
+    collected: list[tuple[str, Path]] = []
+    for entry in entries:
+        relative = relative_prefix / entry.name
+        if not relative_prefix.parts and entry.name == "manifest.json":
+            continue
+        try:
+            mode = entry.lstat().st_mode
+        except OSError as exc:
+            raise SkillMaterializationError(
+                f"Cannot inspect session bundle entry {entry}: {exc}"
+            ) from exc
+        if stat.S_ISDIR(mode):
+            collected.extend(_session_bundle_files(entry, relative_prefix=relative))
+        elif stat.S_ISREG(mode):
+            collected.append((relative.as_posix(), entry))
+        else:
+            raise SkillMaterializationError(
+                f"Session bundle entries must be physical files or directories: {entry}"
+            )
+    return collected
+
+
+def compute_session_bundle_digest(bundle_root: Path) -> str:
+    """Hash every physical session file except the self-describing manifest."""
+
+    try:
+        root_mode = bundle_root.lstat().st_mode
+    except OSError as exc:
+        raise SkillMaterializationError(
+            f"Cannot inspect session bundle {bundle_root}: {exc}"
+        ) from exc
+    if not stat.S_ISDIR(root_mode):
+        raise SkillMaterializationError(
+            f"Session bundle is not a physical directory: {bundle_root}"
+        )
+
+    digest = hashlib.sha256()
+    for relative, source in _session_bundle_files(bundle_root):
+        encoded_name = relative.encode("utf-8")
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(source, flags)
+            with os.fdopen(descriptor, "rb") as handle:
+                file_stat = os.fstat(handle.fileno())
+                if not stat.S_ISREG(file_stat.st_mode):
+                    raise SkillMaterializationError(
+                        f"Session bundle entry changed type during validation: {source}"
+                    )
+                digest.update(len(encoded_name).to_bytes(8, "big"))
+                digest.update(encoded_name)
+                digest.update(file_stat.st_size.to_bytes(8, "big"))
+                observed_size = 0
+                while chunk := handle.read(65_536):
+                    observed_size += len(chunk)
+                    digest.update(chunk)
+        except OSError as exc:
+            raise SkillMaterializationError(
+                f"Cannot safely read session bundle entry {source}: {exc}"
+            ) from exc
+        if observed_size != file_stat.st_size:
+            raise SkillMaterializationError(
+                f"Session bundle entry changed while being validated: {source}"
+            )
+    return f"sha256:{digest.hexdigest()}"
+
+
+def validate_session_bundle(worktree_root: Path, manifest: SessionManifest) -> None:
+    """Verify frozen physical content against its manifest before reuse."""
+
+    bundle_root = worktree_root / ".wade" / "session"
+    observed_digest = compute_session_bundle_digest(bundle_root)
+    if observed_digest != manifest.bundle_digest:
+        raise SkillMaterializationError(
+            "Active session bundle content does not match its frozen manifest"
+        )
+
+    prefix = ".wade/session/"
+    checked: set[str] = set()
+    for binding in manifest.bindings.values():
+        for skill in binding.skills:
+            if not skill.materialized_path.startswith(prefix):
+                raise SkillMaterializationError(
+                    "Invalid materialized skill path in session manifest: "
+                    f"{skill.materialized_path}"
+                )
+            if skill.materialized_path in checked:
+                continue
+            checked.add(skill.materialized_path)
+            inspected = inspect_skill(
+                worktree_root / skill.materialized_path,
+                project_root=bundle_root,
+            )
+            if inspected.digest != skill.content_digest or inspected.files != skill.files:
+                raise SkillMaterializationError(
+                    f"Materialized skill does not match its frozen manifest: {skill.canonical_ref}"
+                )
 
 
 def _ensure_owned_directory(root: Path, parts: tuple[str, ...]) -> Path:
@@ -309,6 +424,7 @@ def materialize_session_bundle(
         manifest = SessionManifest(
             session=kind,
             workflow_revision=definition.workflow_revision,
+            bundle_digest=compute_session_bundle_digest(staging),
             task_id=task_id,
             ai_command=definition.ai_command,
             bindings=resolved_bindings,

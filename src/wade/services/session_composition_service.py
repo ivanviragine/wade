@@ -22,7 +22,11 @@ from wade.skills.discovery import (
     discover_project_skills,
     self_init_builtin_templates,
 )
-from wade.skills.materializer import SkillMaterializationError, materialize_session_bundle
+from wade.skills.materializer import (
+    SkillMaterializationError,
+    materialize_session_bundle,
+    validate_session_bundle,
+)
 from wade.skills.resolver import SkillResolutionError
 from wade.skills.validation import SkillValidationError
 from wade.utils.safe_state import read_state_file, state_directory_present
@@ -198,6 +202,29 @@ def session_state_present(worktree_root: Path) -> bool:
     return state_directory_present(worktree_root, ("session",))
 
 
+def _validate_reusable_session_bundle(
+    worktree_root: Path,
+    manifest: SessionManifest,
+) -> None:
+    """Fail closed when frozen workflow metadata or physical content changed."""
+
+    definition = SESSION_DEFINITIONS[manifest.session]
+    if (
+        manifest.workflow_revision != definition.workflow_revision
+        or manifest.ai_command != definition.ai_command
+    ):
+        raise SessionCompositionError(
+            "Active session workflow metadata is stale or invalid; run an explicit skill refresh"
+        )
+    try:
+        validate_session_bundle(worktree_root, manifest)
+    except (SkillMaterializationError, SkillValidationError) as exc:
+        raise SessionCompositionError(
+            f"Active session bundle failed integrity validation: {exc}; "
+            "run an explicit skill refresh"
+        ) from exc
+
+
 def compose_session(
     worktree_root: Path,
     main_root: Path,
@@ -220,6 +247,7 @@ def compose_session(
             "Active session manifest is unreadable or invalid; run an explicit skill refresh"
         )
     if existing is not None and existing.session is kind and not refresh:
+        _validate_reusable_session_bundle(worktree_root, existing)
         if work_override is not None or review_override is not None:
             raise SessionCompositionError(
                 "Active session bindings are frozen; pass --refresh-skills to apply overrides"
@@ -284,4 +312,5 @@ def mapped_session_review_binding(
         SessionKind.REVIEW_PR_COMMENTS,
     }:
         return None
+    _validate_reusable_session_bundle(worktree_root, manifest)
     return manifest.bindings[SkillSlot.REVIEW], manifest.session

@@ -135,6 +135,7 @@ def test_active_session_report_keeps_manifest_winner_and_shadowed_ladder(
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
         workflow_revision=1,
+        bundle_digest=f"sha256:{'0' * 64}",
         ai_command=AICommandKey.IMPLEMENT,
         bindings={SkillSlot.WORK: work, SkillSlot.REVIEW: review},
     )

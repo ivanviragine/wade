@@ -160,6 +160,10 @@ Resume uses the existing manifest and physical snapshots. Config or main-checkou
 changes do not alter the active session. Resume-time overrides without
 `--refresh-skills` fail; `--refresh-skills` or
 `wade session refresh-skills` performs the explicit atomic replacement.
+Before reuse, WADE re-hashes the complete physical bundle (workflow, references,
+support files, catalog, and skill snapshots) and revalidates every active skill
+against its recorded file list and digest. Missing, edited, extra, symlinked, or
+otherwise unsafe content fails closed until an explicit refresh replaces the bundle.
 
 An implementation-to-PR-comment transition is a new session and replaces the
 manifest/workflow. Durable review records survive outside the session bundle,
