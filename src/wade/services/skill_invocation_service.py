@@ -155,13 +155,6 @@ def compose_delegation_prompt(
         if "{review_budget}" in contract
         else contract
     )
-    for legacy_placeholder in (
-        "{plan_content}",
-        "{diff_content}",
-        "{batch_context}",
-        "{context}",
-    ):
-        trusted_contract = trusted_contract.replace(legacy_placeholder, "")
     result_contracts = {
         DelegationKind.PLAN_REVIEW: (
             "Return concise actionable findings ordered by impact. For each finding, name the "

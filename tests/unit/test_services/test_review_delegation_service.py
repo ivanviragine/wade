@@ -900,7 +900,7 @@ class TestFeedbackMarkupSafety:
     (e.g. ``console.print("[success]done[/]")``). Printing it with markup
     enabled made Rich parse ``[/]`` as a closing tag with nothing to close and
     raise ``rich.errors.MarkupError`` — *after* the review had already run,
-    losing the feedback and the ``reviewed@<sha>`` marker.
+    losing the feedback and the structured review receipt.
     """
 
     @patch("wade.services.review_delegation_service.delegate")
@@ -1289,9 +1289,7 @@ class TestReviewPassCountUnaffectedByRetry:
     """One delegate() call → one recorded review pass, even with the internal retry (#366)."""
 
     @patch("wade.services.review_delegation_service.console")
-    @patch("wade.services.review_delegation_service.count_review_passes")
-    @patch("wade.services.review_delegation_service.record_review_pass")
-    @patch("wade.services.review_delegation_service.write_marker")
+    @patch("wade.services.review_delegation_service._record_binding_outcome")
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.load_config")
@@ -1306,9 +1304,7 @@ class TestReviewPassCountUnaffectedByRetry:
         mock_config: MagicMock,
         mock_template: MagicMock,
         mock_delegate: MagicMock,
-        mock_write_marker: MagicMock,
         mock_record: MagicMock,
-        mock_count: MagicMock,
         mock_console: MagicMock,
     ) -> None:
         mock_repo_root.return_value = Path("/repo")
@@ -1316,7 +1312,7 @@ class TestReviewPassCountUnaffectedByRetry:
         mock_diff.return_value = "diff --git a/f.py b/f.py\n+line\n"
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
-        mock_count.return_value = 1
+        mock_record.return_value = 1
         # _delegate_headless may retry internally, but review_implementation calls
         # delegate() once and gets one result — one review→fix cycle consumed.
         mock_delegate.return_value = DelegationResult(
@@ -1489,7 +1485,7 @@ class TestReviewBudgetPlaceholder:
         """The final prompt sent to delegate() has both the diff and the budget line."""
         mock_repo_root.return_value = Path("/repo")
         mock_diff.return_value = "diff --git a/f.py b/f.py\n+new line\n"
-        mock_template.return_value = "Review:\n{review_budget}\n---\n{diff_content}"
+        mock_template.return_value = "Review:\n{review_budget}\n---"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
@@ -1501,7 +1497,6 @@ class TestReviewBudgetPlaceholder:
         assert "diff --git" in call_args.prompt
         assert "No hard deadline" in call_args.prompt
         assert "{review_budget}" not in call_args.prompt
-        assert "{diff_content}" not in call_args.prompt
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -1525,7 +1520,7 @@ class TestReviewBudgetPlaceholder:
         """
         mock_repo_root.return_value = Path("/repo")
         mock_diff.return_value = "diff --git a/review-code.md b/review-code.md\n+{review_budget}\n"
-        mock_template.return_value = "Review:\n{review_budget}\n---\n{diff_content}"
+        mock_template.return_value = "Review:\n{review_budget}\n---"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT

@@ -40,49 +40,8 @@ from wade.services.skill_invocation_service import (
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
-from wade.utils.markers import count_review_passes, record_review_pass, write_marker
 
 logger = structlog.get_logger()
-
-
-def _mark_reviewed() -> None:
-    """Write the legacy review-success marker for an unversioned worktree.
-
-    Versioned sessions use binding-aware JSON records. This compatibility path
-    remains only for worktrees without canonical session state.
-    """
-    try:
-        repo_root = git_repo.get_repo_root(Path.cwd())
-        head = git_repo.rev_parse(repo_root, "HEAD")
-    except GitError:
-        logger.debug("review.reviewed_marker_skipped", exc_info=True)
-        return
-    write_marker(repo_root, "reviewed", head)
-
-
-def _record_review_pass() -> int | None:
-    """Count one legacy implementation-review pass for an unversioned worktree.
-
-    A caller records a pass only after a completed review or a true headless
-    timeout. A launch/configuration failure (for example an unauthenticated
-    Claude subprocess or a sandbox that cannot execute the reviewer) did not
-    review anything and must not spend a ``done.max_review_passes`` slot: doing
-    so could let `done` bypass its review gate solely because the runtime was
-    unavailable. A timeout remains countable because it consumed a real,
-    bounded review attempt. Per-sha markers are idempotent.
-
-    Versioned sessions count binding-aware JSON records instead. Returns the
-    resulting distinct legacy-marker count, or ``None`` if it could not be
-    recorded.
-    """
-    try:
-        repo_root = git_repo.get_repo_root(Path.cwd())
-        head = git_repo.rev_parse(repo_root, "HEAD")
-    except GitError:
-        logger.debug("review.review_pass_marker_skipped", exc_info=True)
-        return None
-    record_review_pass(repo_root, head)
-    return count_review_passes(repo_root)
 
 
 def _announce_review_pass_budget(passes: int, limit: int) -> None:
@@ -619,13 +578,10 @@ def review_implementation(
             exit_code=1,
         )
 
-    versioned = prepared.host_session is not None
     if diffs.empty:
         message = "No committed, staged, or unstaged changes to review."
         console.warn(message)
         _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.NO_DIFF)
-        if not versioned:
-            _mark_reviewed()
         cleanup_delegation_bundle(prepared, preserve=False)
         return DelegationResult(
             success=True,
@@ -694,13 +650,12 @@ def review_implementation(
     # required review for an infrastructure failure (#462).
     if result.success or result.timed_out:
         outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
-        binding_passes = _record_binding_outcome(repo_root, head, prepared, outcome)
-        passes = binding_passes if versioned else _record_review_pass()
+        passes = _record_binding_outcome(repo_root, head, prepared, outcome)
         # Surface the running budget from the command itself so the caller sees
         # how many passes remain before `done` stops requiring re-review — no
         # need to rely on the "run at most N times" rule buried in the
         # skill/prompt. Guarded by an int check so a mocked
-        # `_record_review_pass` in tests never triggers it.
+        # a failed receipt write never triggers it.
         if isinstance(passes, int):
             _announce_review_pass_budget(passes, config.done.max_review_passes)
     else:
@@ -715,8 +670,4 @@ def review_implementation(
             "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
             "then re-run `wade review implementation`."
         )
-    # Record the review-ran marker on any non-hard-failure result (success),
-    # keyed to the current HEAD sha. The `done` review-ran gate reads it.
-    if result.success and not versioned:
-        _mark_reviewed()
     return result

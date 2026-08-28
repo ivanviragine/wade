@@ -119,8 +119,8 @@ class CheckResult(BaseModel):
     git_dir: str | None = None
     # Git-metadata dirs that failed the write probe (WORKTREE_GIT_BLOCKED only).
     blocked_paths: list[str] = Field(default_factory=list)
-    # Session readiness context. ``None`` preserves the legacy bare-worktree
-    # check contract for direct service callers.
+    # Session readiness context. ``None`` preserves the bare-worktree check
+    # contract for direct service callers.
     phase: ReadinessPhase | None = None
     failure: ReadinessFailure | None = None
     tool: str | None = None
@@ -584,7 +584,7 @@ def _readiness_result(
     failure: ReadinessFailure | None = None,
     plan_dir: str | None = None,
 ) -> CheckResult:
-    """Attach phase context to a worktree result without losing legacy fields."""
+    """Attach readiness-phase context to a worktree result."""
     return base.model_copy(
         update={
             "phase": phase,

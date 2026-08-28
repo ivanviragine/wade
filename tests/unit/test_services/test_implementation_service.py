@@ -297,7 +297,7 @@ class TestBootstrapWorktree:
 
         # Create templates in the worktree (mimics a wade repo worktree checkout)
         skills_tpl = worktree / "templates" / "skills"
-        for skill_name in ("task", "plan-session", "implementation-session", "deps"):
+        for skill_name in ("task", "knowledge"):
             (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
             (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
 
@@ -332,7 +332,8 @@ class TestBootstrapWorktree:
 
     def test_selective_skills_only_installs_listed(self, tmp_path: Path) -> None:
         """bootstrap_worktree with skills parameter installs only those skills."""
-        from wade.skills.installer import IMPLEMENT_SKILLS
+        from wade.models.workflow import SessionKind
+        from wade.skills.installer import support_skills_for_session
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -345,17 +346,16 @@ class TestBootstrapWorktree:
             "wade.skills.installer.get_wade_repo_root",
             return_value=tmp_path / "some-other-path",
         ):
-            bootstrap_worktree(worktree, config, repo_root, skills=IMPLEMENT_SKILLS)
+            bootstrap_worktree(
+                worktree,
+                config,
+                repo_root,
+                skills=support_skills_for_session(SessionKind.IMPLEMENTATION),
+            )
 
         skills_dir = worktree / ".claude" / "skills"
-        # IMPLEMENT_SKILLS = ["implementation-session", "task", "knowledge"]
-        assert (skills_dir / "implementation-session").is_dir()
         assert (skills_dir / "task").is_dir()
         assert (skills_dir / "knowledge").is_dir()
-        # Other skills should NOT be installed
-        assert not (skills_dir / "plan-session").exists()
-        assert not (skills_dir / "deps").exists()
-        assert not (skills_dir / "review-pr-comments-session").exists()
 
     def test_self_init_selective_skills(self, tmp_path: Path) -> None:
         """Self-init with skills parameter only symlinks listed skills."""
@@ -367,19 +367,17 @@ class TestBootstrapWorktree:
 
         # Create templates in the worktree
         skills_tpl = worktree / "templates" / "skills"
-        for skill_name in ("task", "plan-session", "implementation-session", "deps"):
+        for skill_name in ("task", "knowledge"):
             (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
             (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
 
         config = ProjectConfig()
         with patch("wade.skills.installer.get_wade_repo_root", return_value=repo_root):
-            bootstrap_worktree(worktree, config, repo_root, skills=["task", "deps"])
+            bootstrap_worktree(worktree, config, repo_root, skills=["task", "knowledge"])
 
         skills_dir = worktree / ".claude" / "skills"
         assert (skills_dir / "task").is_symlink()
-        assert (skills_dir / "deps").is_symlink()
-        assert not (skills_dir / "implementation-session").exists()
-        assert not (skills_dir / "plan-session").exists()
+        assert (skills_dir / "knowledge").is_symlink()
 
 
 class TestBuildImplementationPrompt:

@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from wade.models.workflow import SESSION_DEFINITIONS, SessionKind
+from wade.models.workflow import SESSION_DEFINITIONS
 
 # Set by ``wade plan`` **only** on its supported temp-directory fallback — when
 # no planning worktree could be created (bootstrap failed, or the caller is not
@@ -17,9 +17,13 @@ from wade.models.workflow import SESSION_DEFINITIONS, SessionKind
 PLAN_DIR_ENV_VAR = "WADE_PLAN_DIR"
 
 
-# Compatibility name retained for one release.  This is an alias, not a second
-# enum: identity comparisons and serialized values remain unchanged.
-ReadinessPhase = SessionKind
+class ReadinessPhase(StrEnum):
+    """A WADE session phase whose runtime capabilities can be checked."""
+
+    PLAN = "plan"
+    IMPLEMENTATION = "implementation"
+    REVIEW_PR_COMMENTS = "review-pr-comments"
+    DEPS = "deps"
 
 
 class ReadinessFailure(StrEnum):
@@ -55,7 +59,7 @@ class ReadinessRequirements(BaseModel, frozen=True):
 
 
 READINESS_REQUIREMENTS: dict[ReadinessPhase, ReadinessRequirements] = {
-    kind: ReadinessRequirements(
+    ReadinessPhase(kind.value): ReadinessRequirements(
         ai_command=definition.ai_command.value,
         requires_git_metadata_write=definition.readiness.requires_git_metadata_write,
         requires_github=definition.readiness.requires_github,

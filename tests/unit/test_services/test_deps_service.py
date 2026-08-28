@@ -39,9 +39,13 @@ class TestPromptTemplate:
         assert "bounded" in template
 
     def test_build_prompt(self) -> None:
-        prompt = build_deps_prompt("## Issue #1: Add auth\n\nAdd login page.")
+        prompt = build_deps_prompt(
+            "## Issue #1: Add auth\n\nAdd login page.",
+            '<method position="0" ref="builtin:dependency-analysis">\nMethod\n</method>',
+        )
         assert "## Issue #1: Add auth" in prompt
         assert "Add login page" in prompt
+        assert "builtin:dependency-analysis" in prompt
         assert "<operation-input>" in prompt
         assert "Required result contract" in prompt
 

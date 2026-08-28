@@ -1,6 +1,6 @@
 # Skills, Snapshots, and Pointer System
 
-This document covers project-skill discovery, compatibility installation, and
+This document covers project-skill discovery, support installation, and
 the `AGENTS.md` pointer. The workflow/binding model is documented in
 [Workflows and Dynamic Skills](workflows-and-skills.md).
 
@@ -14,7 +14,7 @@ project:
 | `templates/workflows/<session>.md` | `.wade/session/WORKFLOW.md` |
 | replaceable `templates/skills/<method>/` | `.wade/session/skills/builtin/<method>/` |
 | a target project's native skill roots | `.wade/session/skills/project/<root>/<name>/` |
-| compatibility/support skills in `templates/skills/` | `.claude/skills/<name>/` plus cross-tool projections |
+| support skills in `templates/skills/` | `.claude/skills/<name>/` plus cross-tool projections |
 | `templates/agents-pointer.md` | marker-delimited `## Git Workflow` block in target `AGENTS.md` |
 
 `wade init` does not install any of these session outputs. It writes project
@@ -25,35 +25,29 @@ temporary `.wade/operations/<kind>/<invocation>/` bundle.
 When developing WADE, edit only source templates. Never edit `.wade/session/`
 or `.claude/skills/` in a bootstrapped worktree: they are generated artifacts.
 
-## Three kinds of skill-related content
+## Two kinds of skill-related content
 
 1. **Replaceable methodology skills** — `planning`, `implementation`,
    `review-comments`, `plan-review`, `code-review`, `batch-review`, and
    `dependency-analysis`. They own heuristics and rubrics only and must not
    mention WADE commands, `.wade/`, completion markers, review budgets, or
    session lifecycle.
-2. **Compatibility phase pointers** — `plan-session`,
-   `implementation-session`, and `review-pr-comments-session`. These deprecated
-   tool-native skills only point old discovery paths to
-   `.wade/session/WORKFLOW.md`; they are not the workflow source of truth.
-3. **Fixed command-support skills** — currently `task`, `deps`, and `knowledge`.
+2. **Fixed command-support skills** — currently `task` and `knowledge`.
    These may mention WADE because they are not replaceable session strategy
    slots. Session definitions declare which support skills are needed.
 
 Do not register replaceable generic names in `SKILL_FILES`. A target project may
 legitimately own `.claude/skills/implementation` or
-`.agents/skills/code-review`; compatibility reconciliation must never overwrite
+`.agents/skills/code-review`; support reconciliation must never overwrite
 or prune those names.
 
-## Compatibility installation
+## Support installation
 
-`skills/installer.py` projects only compatibility and support skills into the
-worktree's canonical `.claude/skills/` root. Cross-tool skill roots are derived
-from Crossby's `SKILLS_DIR` mapping and symlinked to that canonical root. The
-deprecated `PLAN_SKILLS`, `IMPLEMENT_SKILLS`, `REVIEW_SKILLS`, and `DEPS_SKILLS`
-exports remain for one compatibility window; runtime code derives selections
-from `SessionDefinition.support_skills` through
-`compatibility_skills_for_session()`.
+`skills/installer.py` projects only fixed support skills into the worktree's
+canonical `.claude/skills/` root. Cross-tool skill roots are derived from
+Crossby's `SKILLS_DIR` mapping and symlinked to that canonical root. Runtime
+code derives each selection from `SessionDefinition.support_skills` through
+`support_skills_for_session()`.
 
 Installation rules:
 
@@ -62,10 +56,9 @@ Installation rules:
   `templates/skills/` tree for authoring convenience;
 - unknown user-owned directories are preserved;
 - only names in `MANAGED_SKILL_NAMES` are reconciled or pruned;
-- phase pointers have no injected partials or reference trees;
 - native links are conveniences only and are never active session snapshots.
 
-The same Crossby mapping drives compatibility projections and project discovery.
+The same Crossby mapping drives support projections and project discovery.
 Contract tests pin the Crossby version/API behavior, root symlink behavior,
 supported tool coverage, and filtered scene handling. Re-run those tests and
 inspect tool coverage whenever the Crossby dependency pin changes.

@@ -853,14 +853,14 @@ def start(
         console.empty()
 
         # Bootstrap
-        from wade.skills.installer import compatibility_skills_for_session
+        from wade.skills.installer import support_skills_for_session
 
         write_plan_md(worktree_path, task, plan_content=plan_content)
         bootstrap_worktree(
             worktree_path,
             config,
             repo_root,
-            skills=compatibility_skills_for_session(SessionKind.IMPLEMENTATION),
+            skills=support_skills_for_session(SessionKind.IMPLEMENTATION),
             selected_ai_tool=resolved_tool,
             session_phase=SessionPhase.IMPLEMENT,
             session_kind=SessionKind.IMPLEMENTATION,

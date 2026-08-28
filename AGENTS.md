@@ -18,7 +18,7 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 | **workflow templates** | Fixed WADE lifecycle files in `templates/workflows/`; rendered to `.wade/session/WORKFLOW.md` and never replaceable by skill configuration |
 | **methodology skill templates** | WADE-agnostic replaceable methods in `templates/skills/` (planning, implementation, review, and dependency analysis) |
 | **session skill snapshots** | Immutable copies of active and available skills under `.wade/session/skills/`, including project skills discovered from the worktree and main checkout |
-| **compatibility skills** | Thin phase pointers and WADE command-support skills projected into `.claude/skills/` per worktree bootstrap; they are not the active methodology bundle |
+| **support skills** | Fixed WADE command-support skills projected into `.claude/skills/` per worktree bootstrap; they are not replaceable methodology |
 | **AGENTS.md pointer** | A short `## Git Workflow` block that **worktree bootstrap** injects into an inited project's `AGENTS.md` per session, not by `wade init` |
 
 **This `AGENTS.md` governs development of WADE itself.** Skills, the pointer, and the progressive disclosure architecture are all *outputs* of WADE — artifacts installed into inited projects, not rules for developing WADE.
@@ -117,13 +117,13 @@ Everything in this repo exists in one of two worlds:
 | `src/wade/` | installed `wade` binary |
 | `templates/workflows/<session>.md` | `.wade/session/WORKFLOW.md` |
 | `templates/skills/<method>/SKILL.md` | `.wade/session/skills/{builtin,project}/.../SKILL.md` |
-| compatibility/support skills in `templates/skills/` | `.claude/skills/<name>/SKILL.md` |
+| support skills in `templates/skills/` | `.claude/skills/<name>/SKILL.md` |
 | `templates/agents-pointer.md` | `## Git Workflow` block in target `AGENTS.md` |
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` |
 
 When developing WADE, **only touch the left column**. Put lifecycle steps and WADE commands in `templates/workflows/`; put replaceable methodology in WADE-agnostic `templates/skills/<method>/SKILL.md`. Never edit `.claude/skills/` or `.wade/session/` outputs directly.
 
-The right-column artifacts (workflow, frozen skill bundle, compatibility skills, the `## Git Workflow` pointer, and tool configuration) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review`; standalone delegations use operation bundles), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
+The right-column artifacts (workflow, frozen skill bundle, support skills, the `## Git Workflow` pointer, and tool configuration) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review`; standalone delegations use operation bundles), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
 
 > Skills system deep dive (symlinks, pointer markers, installation lifecycle): see `docs/dev/skills-system.md`
 
@@ -171,6 +171,6 @@ Read these on-demand when working in a specific area:
 | Modifying architecture, config, or commands | `docs/dev/architecture.md` |
 | Adding an AI tool, provider, or subcommand | `docs/dev/extending.md` |
 | Writing or running tests | `docs/dev/testing.md` |
-| Working on discovery, snapshots, compatibility skills, pointer system, or `wade init` | `docs/dev/skills-system.md` |
+| Working on discovery, snapshots, support skills, pointer system, or `wade init` | `docs/dev/skills-system.md` |
 | Working on fixed workflows, dynamic bindings, manifests, or delegation skill contracts | `docs/dev/workflows-and-skills.md` |
 | Updating documentation policies | `docs/dev/documentation-policies.md` |

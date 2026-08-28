@@ -1,7 +1,7 @@
 """Canonical session and bounded-delegation definitions.
 
-The registries here are pure data.  They are the single mapping point between
-canonical workflow identity and older hook/config/completion representations.
+The registries here are pure data and the single source of truth for workflow
+identity, fixed lifecycle behavior, and dynamic methodology slots.
 """
 
 from __future__ import annotations
@@ -313,10 +313,4 @@ DELEGATION_DEFINITIONS: dict[DelegationKind, DelegationDefinition] = {
 
 SESSION_TO_COMPLETION_KIND: dict[SessionKind, CompletionPolicy] = {
     kind: definition.completion_policy for kind, definition in SESSION_DEFINITIONS.items()
-}
-
-SESSION_PHASE_TO_KIND: dict[SessionPhase, SessionKind] = {
-    definition.session_phase: kind
-    for kind, definition in SESSION_DEFINITIONS.items()
-    if definition.session_phase is not None
 }

@@ -1035,7 +1035,7 @@ class TestRunCoherenceReviewBudgetPlaceholder:
 
         config = _batch_review_config(review_batch_enabled=True)  # mode unset -> interactive
         mock_load_review_config.return_value = (config, config.ai.review_batch)
-        mock_template.return_value = "Review:\n{review_budget}\n---\n{batch_context}"
+        mock_template.return_value = "Review:\n{review_budget}\n---"
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
         )
@@ -1051,4 +1051,3 @@ class TestRunCoherenceReviewBudgetPlaceholder:
         assert "Feature A" in request.prompt
         assert "No hard deadline" in request.prompt
         assert "{review_budget}" not in request.prompt
-        assert "{batch_context}" not in request.prompt

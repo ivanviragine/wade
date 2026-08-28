@@ -19,7 +19,10 @@ from wade.models.config import (
 )
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.session import SyncResult
+from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, SessionManifest
+from wade.models.skill import ResolvedSkill, SkillSlot
 from wade.models.task import Task
+from wade.models.workflow import AICommandKey, DelegationKind, SessionKind
 from wade.services.implementation_service.done import (
     _behind_count,
     _gate_knowledge_valid,
@@ -32,7 +35,7 @@ from wade.services.implementation_service.done import (
     _run_completion_gates,
     _title_fix_hint,
 )
-from wade.utils import markers
+from wade.services.review_record_service import write_review_record
 
 # The package re-exports the ``done``/``sync`` *functions*, shadowing the
 # submodule attributes, so import the module objects explicitly for patching.
@@ -42,6 +45,47 @@ sync_mod = importlib.import_module("wade.services.implementation_service.sync")
 
 def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
+
+
+_REVIEW_BINDING = ResolvedBinding.from_skills(
+    (
+        ResolvedSkill(
+            canonical_ref="builtin:code-review",
+            source_path="templates/skills/code-review",
+            materialized_path=".wade/session/skills/builtin/code-review",
+            content_digest=f"sha256:{'1' * 64}",
+            files=("SKILL.md",),
+        ),
+    )
+)
+
+
+def _record_review(
+    root: Path,
+    commit: str,
+    *,
+    outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
+) -> None:
+    session = root / ".wade" / "session"
+    session.mkdir(parents=True, exist_ok=True)
+    manifest = SessionManifest(
+        session=SessionKind.IMPLEMENTATION,
+        workflow_revision=1,
+        task_id="42",
+        ai_command=AICommandKey.IMPLEMENT,
+        bindings={SkillSlot.WORK: _REVIEW_BINDING, SkillSlot.REVIEW: _REVIEW_BINDING},
+    )
+    (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
+    assert (
+        write_review_record(
+            root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=commit,
+            binding=_REVIEW_BINDING,
+            outcome=outcome,
+        )
+        is not None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +201,17 @@ class TestPlaceholderDetection:
 
 
 class TestReviewRanGate:
-    def test_refuses_without_marker(self, tmp_path: Path) -> None:
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "abc123", skip_review=False) is False
+    def test_refuses_without_receipt(self, tmp_path: Path) -> None:
+        assert _gate_review_ran(ProjectConfig(), tmp_path, "a" * 40, skip_review=False) is False
 
-    def test_passes_with_marker(self, tmp_path: Path) -> None:
-        markers.write_marker(tmp_path, "reviewed", "abc123")
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "abc123", skip_review=False) is True
+    def test_passes_with_matching_receipt(self, tmp_path: Path) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is True
 
-    def test_marker_for_other_sha_refuses(self, tmp_path: Path) -> None:
-        markers.write_marker(tmp_path, "reviewed", "old")
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "new", skip_review=False) is False
+    def test_receipt_for_other_sha_refuses(self, tmp_path: Path) -> None:
+        _record_review(tmp_path, "a" * 40)
+        assert _gate_review_ran(ProjectConfig(), tmp_path, "b" * 40, skip_review=False) is False
 
     def test_skip_review_hatch(self, tmp_path: Path) -> None:
         assert _gate_review_ran(ProjectConfig(), tmp_path, "abc", skip_review=True) is True
@@ -199,12 +244,12 @@ class TestReviewRanCap:
 
     def test_refuses_before_cap_with_pass_count(self, tmp_path: Path, capsys) -> None:
         # One prior pass, no exact-sha marker, limit 2 → refuse "pass 1 of 2".
-        markers.record_review_pass(tmp_path, "sha1")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
         assert (
             _gate_review_ran(
                 ProjectConfig(),
                 tmp_path,
-                "newhead",
+                "a" * 40,
                 skip_review=False,
                 session_type="implementation",
             )
@@ -216,13 +261,13 @@ class TestReviewRanCap:
 
     def test_passes_at_cap_with_notice(self, tmp_path: Path, capsys) -> None:
         # Two distinct reviewed commits reach the cap → complete anyway + notice.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         assert (
             _gate_review_ran(
                 ProjectConfig(),
                 tmp_path,
-                "newhead",
+                "a" * 40,
                 skip_review=False,
                 session_type="implementation",
             )
@@ -234,14 +279,15 @@ class TestReviewRanCap:
         assert "--skip-review" in text
 
     def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
-        # An exact-sha reviewed marker passes even when the review-pass cap is
+        # An exact-sha reviewed receipt passes even when the review-pass cap is
         # already exhausted — the fast path precedes the cap check.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")  # cap (default 2) reached
-        markers.write_marker(tmp_path, "reviewed", "head")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        head = "a" * 40
+        _record_review(tmp_path, head)
         assert (
             _gate_review_ran(
-                ProjectConfig(), tmp_path, "head", skip_review=False, session_type="implementation"
+                ProjectConfig(), tmp_path, head, skip_review=False, session_type="implementation"
             )
             is True
         )
@@ -250,20 +296,20 @@ class TestReviewRanCap:
 
     def test_custom_max_review_passes_honored(self, tmp_path: Path) -> None:
         config = ProjectConfig(done=DoneConfig(max_review_passes=3))
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         # 2 passes < limit 3 → still refuses.
         assert (
             _gate_review_ran(
-                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+                config, tmp_path, "a" * 40, skip_review=False, session_type="implementation"
             )
             is False
         )
-        markers.record_review_pass(tmp_path, "sha3")
+        _record_review(tmp_path, "3" * 40, outcome=ReviewOutcome.TIMED_OUT)
         # 3 passes == limit 3 → passes.
         assert (
             _gate_review_ran(
-                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+                config, tmp_path, "a" * 40, skip_review=False, session_type="implementation"
             )
             is True
         )
@@ -282,13 +328,13 @@ class TestReviewRanCap:
     def test_review_pr_comments_path_never_caps(self, tmp_path: Path) -> None:
         # Even with passes >= limit, the review-pr-comments path keeps the
         # unbounded fast-path-or-refuse behavior — the cap is impl-only.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         assert (
             _gate_review_ran(
                 ProjectConfig(),
                 tmp_path,
-                "newhead",
+                "a" * 40,
                 skip_review=False,
                 session_type="review-pr-comments",
             )

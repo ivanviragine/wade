@@ -49,7 +49,7 @@ class TestWriteWorktreeGitignore:
         content = (worktree / ".gitignore").read_text()
         # Should list specific files, not directories
         assert ".claude/skills/task/SKILL.md" in content
-        assert ".claude/skills/implementation-session/SKILL.md" in content
+        assert ".claude/skills/knowledge/SKILL.md" in content
 
     def test_includes_session_artifacts(self, worktree: Path) -> None:
         write_worktree_gitignore(worktree)

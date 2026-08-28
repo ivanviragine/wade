@@ -31,7 +31,7 @@ architecture test that rejects WADE-specific lifecycle tokens.
 
 `models/workflow.py` is the typed source of truth. `SessionKind` describes a
 WADE-owned shell; `DelegationKind` describes one bounded AI operation. They are
-not interchangeable with human PR labels, legacy hook phases, or `ai.*` config
+not interchangeable with human PR labels, hook-specific phases, or `ai.*` config
 keys; explicit mappings preserve those representations.
 
 Interactive sessions:
@@ -182,8 +182,7 @@ bundles.
 
 ## Binding-aware review state
 
-Versioned sessions do not trust legacy zero-byte review markers. Review attempts
-write one durable record per `(delegation, commit, binding)` under:
+Review attempts write one durable record per `(delegation, commit, binding)` under:
 
 ```text
 .wade/reviews/review@<delegation>@<sha>@<binding-hex>.json
@@ -209,8 +208,8 @@ of only WORK does not invalidate a REVIEW record.
 
 Manifest, review, and documentation-gate state uses descriptor-relative,
 no-follow filesystem operations. Unsafe/malformed/unreadable state is absent for
-gate purposes and fails toward re-review, never toward completion. Legacy markers
-remain accepted only for sessions with no versioned session state.
+gate purposes and fails toward re-review, never toward completion. SHA marker
+files are never accepted as review evidence.
 
 ## Completion-policy alignment
 
@@ -248,7 +247,7 @@ To add or change a replaceable default:
 
 1. create/update `templates/skills/<method>/SKILL.md` and any local resources;
 2. keep it generic and free of WADE lifecycle vocabulary;
-3. add it to the built-in methodology catalog, not the compatibility installer;
+3. add it to the built-in methodology catalog, not the support installer;
 4. evaluate the method on representative tasks and keep its context surface
    within budget;
 5. test custom and default resolution through the same contract.
@@ -264,7 +263,7 @@ workflow contract:
 
 | Method | Recorded task | Quality evidence | Correction from evaluation |
 |---|---|---|---|
-| `builtin:planning` | Decouple lifecycle orchestration, dynamic methods, discovery, frozen state, and compatibility in one cohesive redesign | The resulting plan separated facts and invariants, identified typed ownership boundaries, ordered migration phases, failure cases, context budgets, and unit/integration/E2E contracts instead of reducing the work to template moves | Review feedback exposed ambiguous precedence and receipt semantics; those became explicit mappings and binding-aware records rather than skill prose |
+| `builtin:planning` | Decouple lifecycle orchestration, dynamic methods, discovery, frozen state, and support projection in one cohesive redesign | The resulting plan separated facts and invariants, identified typed ownership boundaries, ordered implementation phases, failure cases, context budgets, and unit/integration/E2E contracts instead of reducing the work to template moves | Review feedback exposed ambiguous precedence and receipt semantics; those became explicit mappings and binding-aware records rather than skill prose |
 | `builtin:implementation` | Make an unknown implementation skill fail before draft-PR, task-label, or project-board mutation | The method translated the goal into an observable negative contract, traced worktree creation through bootstrap and PR retargeting, preserved branch-specific discovery, and produced focused unit plus real CLI coverage before the full suite | The first implementation order still allowed PR mutation before composition; final review caught it and moved immutable bundle preflight ahead of every provider write |
 
 This is a qualitative, repository-evidence review rather than a claim that a

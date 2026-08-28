@@ -25,7 +25,10 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
 )
+from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, SessionManifest
+from wade.models.skill import ResolvedSkill, SkillSlot
 from wade.models.task import Task
+from wade.models.workflow import AICommandKey, DelegationKind, SessionKind
 from wade.services.implementation_service.done import _classify_review, _done_via_pr
 from wade.services.implementation_service.lifecycle import (
     REVIEW_STATUS_MARKER_END,
@@ -40,9 +43,49 @@ from wade.services.implementation_service.usage_tracking import (
     IMPL_USAGE_MARKER_END,
     IMPL_USAGE_MARKER_START,
 )
-from wade.utils import markers
+from wade.services.review_record_service import write_review_record
 
 _DONE = "wade.services.implementation_service.done"
+
+_REVIEW_BINDING = ResolvedBinding.from_skills(
+    (
+        ResolvedSkill(
+            canonical_ref="builtin:code-review",
+            source_path="templates/skills/code-review",
+            materialized_path=".wade/session/skills/builtin/code-review",
+            content_digest=f"sha256:{'1' * 64}",
+            files=("SKILL.md",),
+        ),
+    )
+)
+
+
+def _record_review(
+    root: Path,
+    commit: str,
+    *,
+    outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
+) -> None:
+    session = root / ".wade" / "session"
+    session.mkdir(parents=True, exist_ok=True)
+    manifest = SessionManifest(
+        session=SessionKind.IMPLEMENTATION,
+        workflow_revision=1,
+        task_id="42",
+        ai_command=AICommandKey.IMPLEMENT,
+        bindings={SkillSlot.WORK: _REVIEW_BINDING, SkillSlot.REVIEW: _REVIEW_BINDING},
+    )
+    (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
+    assert (
+        write_review_record(
+            root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=commit,
+            binding=_REVIEW_BINDING,
+            outcome=outcome,
+        )
+        is not None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +94,12 @@ _DONE = "wade.services.implementation_service.done"
 
 
 class TestClassifyReview:
-    def test_reviewed_when_exact_sha_marker_present(self, tmp_path: Path) -> None:
-        markers.write_marker(tmp_path, "reviewed", "head")
-        status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=False)
+    def test_reviewed_when_exact_binding_receipt_present(self, tmp_path: Path) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        status = _classify_review(ProjectConfig(), tmp_path, head, skip_review=False)
         assert status.kind is ReviewStatusKind.REVIEWED
-        assert status.reviewed_sha == "head"
+        assert status.reviewed_sha == head
 
     def test_skip_flag(self, tmp_path: Path) -> None:
         status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=True)
@@ -72,18 +116,18 @@ class TestClassifyReview:
         assert status.kind is ReviewStatusKind.DISABLED
 
     def test_cap_reached_impl_only(self, tmp_path: Path) -> None:
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")  # cap (default 2) reached
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         status = _classify_review(
-            ProjectConfig(), tmp_path, "newhead", skip_review=False, session_type="implementation"
+            ProjectConfig(), tmp_path, "a" * 40, skip_review=False, session_type="implementation"
         )
         assert status.kind is ReviewStatusKind.CAP_REACHED
         assert status.passes == 2
 
     def test_not_reviewed_before_cap(self, tmp_path: Path) -> None:
-        markers.record_review_pass(tmp_path, "sha1")  # 1 < cap 2
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
         status = _classify_review(
-            ProjectConfig(), tmp_path, "newhead", skip_review=False, session_type="implementation"
+            ProjectConfig(), tmp_path, "a" * 40, skip_review=False, session_type="implementation"
         )
         assert status.kind is ReviewStatusKind.NOT_REVIEWED
         assert status.passes == 1
@@ -91,12 +135,12 @@ class TestClassifyReview:
     def test_review_pr_comments_never_caps(self, tmp_path: Path) -> None:
         # The cap is impl-only: even past the limit, review-pr-comments classifies
         # as NOT_REVIEWED (the gate then plainly refuses), never CAP_REACHED.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         status = _classify_review(
             ProjectConfig(),
             tmp_path,
-            "newhead",
+            "a" * 40,
             skip_review=False,
             session_type="review-pr-comments",
         )
@@ -111,31 +155,34 @@ class TestClassifyReview:
         assert status.kind is ReviewStatusKind.DISABLED
 
     def test_reviewed_precedes_skip_flag(self, tmp_path: Path) -> None:
-        # The exact-sha marker is positive evidence and outranks the hatches: a
+        # The exact-sha receipt is positive evidence and outranks the hatches: a
         # commit that was actually reviewed must report REVIEWED even when
         # --skip-review was also passed on this run (#367).
-        markers.write_marker(tmp_path, "reviewed", "head")
-        status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=True)
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        status = _classify_review(ProjectConfig(), tmp_path, head, skip_review=True)
         assert status.kind is ReviewStatusKind.REVIEWED
 
     def test_reviewed_precedes_require_off(self, tmp_path: Path) -> None:
         # A project that permanently sets require_review: false must still
         # report REVIEWED for a commit that was actually reviewed.
-        markers.write_marker(tmp_path, "reviewed", "head")
+        head = "a" * 40
+        _record_review(tmp_path, head)
         config = ProjectConfig(done=DoneConfig(require_review=False))
-        status = _classify_review(config, tmp_path, "head", skip_review=False)
+        status = _classify_review(config, tmp_path, head, skip_review=False)
         assert status.kind is ReviewStatusKind.REVIEWED
 
     def test_reviewed_precedes_disabled(self, tmp_path: Path) -> None:
-        # Even with reviews disabled in config, a genuinely-present marker for
+        # Even with reviews disabled in config, a matching receipt for
         # this exact sha must still report REVIEWED, not DISABLED.
-        markers.write_marker(tmp_path, "reviewed", "head")
+        head = "a" * 40
+        _record_review(tmp_path, head)
         config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
-        status = _classify_review(config, tmp_path, "head", skip_review=False)
+        status = _classify_review(config, tmp_path, head, skip_review=False)
         assert status.kind is ReviewStatusKind.REVIEWED
 
     def test_carries_session_type_and_passes(self, tmp_path: Path) -> None:
-        markers.record_review_pass(tmp_path, "sha1")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
         status = _classify_review(
             ProjectConfig(), tmp_path, "abc1234def", skip_review=True, session_type="implementation"
         )

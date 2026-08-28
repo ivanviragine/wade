@@ -517,7 +517,7 @@ def plan(
     from wade.git import worktree as git_worktree
     from wade.services.implementation_service import _resolve_worktrees_dir, bootstrap_worktree
     from wade.services.knowledge_service import mark_throwaway_knowledge_session
-    from wade.skills.installer import compatibility_skills_for_session
+    from wade.skills.installer import support_skills_for_session
 
     cwd = project_root or Path.cwd()
     try:
@@ -547,7 +547,7 @@ def plan(
                 planning_worktree,
                 config,
                 repo_root,
-                skills=compatibility_skills_for_session(SessionKind.PLAN),
+                skills=support_skills_for_session(SessionKind.PLAN),
                 plan_mode=True,
                 session_phase=SessionPhase.PLAN,
                 session_kind=SessionKind.PLAN,

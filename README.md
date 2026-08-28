@@ -875,9 +875,9 @@ different `delegations.code_review`/`plan_review` value for that session.
 Standalone review, batch, and dependency operations use their delegation
 binding. `wade skills resolve` prints every candidate and the winner.
 
-The tool-native `plan-session`, `implementation-session`, and
-`review-pr-comments-session` skills remain as compatibility pointers for one
-migration window. They are not the workflow or active methodology source.
+Tool-native roots receive only fixed command-support skills. Session lifecycle
+comes from the rendered workflow, while default or custom methodology is frozen
+inside the session bundle. Deprecated phase skills are not installed.
 
 ### Session communication
 

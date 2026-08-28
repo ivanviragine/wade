@@ -758,8 +758,8 @@ class TestWorkDoneCommand:
         output = result.stdout + result.stderr
         assert result.returncode != 0
         assert "Wade-managed files are tracked in git" in output
-        assert ".claude/skills/implementation-session/SKILL.md" in output
-        assert "git rm --cached .claude/skills/implementation-session/SKILL.md" in output
+        assert ".claude/skills/task/SKILL.md" in output
+        assert "git rm --cached .claude/skills/task/SKILL.md" in output
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "edit"]) == 0
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "ready"]) == 0
 

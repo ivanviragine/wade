@@ -640,9 +640,8 @@ class ReviewStatus(BaseModel):
 def _review_pass_phrase(passes: int) -> str:
     """``review attempted on N distinct commit(s)`` — a count of unique commits a
     review delegation ran against, not a count of confirmed-successful reviews.
-    Binding-aware records count completed reviews and real timeouts; legacy
-    unversioned worktrees count their compatibility markers. The phrase must not
-    claim every attempt produced a complete review. Both representations are
+    Binding-aware records count completed reviews and real timeouts. The phrase
+    must not claim every attempt produced a complete review. Records are
     per-commit and idempotent, so same-HEAD retries are never double-counted.
     """
     noun = "commit" if passes == 1 else "commits"

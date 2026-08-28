@@ -9,7 +9,7 @@ Every change **must** include documentation updates as part of the implementatio
 1. **`AGENTS.md`** — Update if the change affects architecture, commands, conventions, design principles, or development workflow.
 2. **`README.md`** — Update if the change affects user-facing behavior: new commands, flags, install steps, configuration options, or supported tools.
 3. **`templates/workflows/`** — *(inited-project artifacts)* Update when fixed session steps, WADE commands, safety rules, completion policy, or workflow-owned references change.
-4. **`templates/skills/`** — *(inited-project artifacts)* Update replaceable built-ins only for generic methodology, rubrics, and domain reasoning; they must remain WADE-agnostic. Update compatibility/support skills only for their narrow command-support purpose.
+4. **`templates/skills/`** — *(inited-project artifacts)* Update replaceable built-ins only for generic methodology, rubrics, and domain reasoning; they must remain WADE-agnostic. Update support skills only for their narrow command-support purpose.
 5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that **worktree bootstrap** injects (per session) into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, refreshed per session by bootstrap (`pointer.ensure_pointer`), never by `wade init` or `wade update`.
 6. **`docs/dev/`** — Update the relevant supplementary doc if the change affects architecture details, testing patterns, extension guides, or skills system internals.
 
@@ -27,7 +27,7 @@ Before considering any work complete, verify each item:
 - [ ] **`README.md`** — updated if user-facing behavior changed (commands, flags, config, install)
 - [ ] **`templates/workflows/`** — updated if fixed session steps, lifecycle rules, or workflow-owned references changed
 - [ ] **`templates/agents-pointer.md`** — updated if the critical inline rules or pointer wording changed
-- [ ] **`templates/skills/`** — generic built-ins updated only for WADE-agnostic methodology; compatibility/support skills updated for their narrow purpose
+- [ ] **`templates/skills/`** — generic built-ins updated only for WADE-agnostic methodology; support skills updated for their narrow purpose
 - [ ] **Workflow/skill boundary** — WADE lifecycle belongs in workflows and deterministic services, never in replaceable skills; the AGENTS.md pointer stays minimal
 - [ ] **`docs/dev/`** — updated if architecture details, testing patterns, extension guides, or skills system docs changed
 - [ ] **Commit** — uses conventional-commit prefix for correct auto-versioning

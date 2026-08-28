@@ -15,11 +15,11 @@ from wade.services.implementation_service import (
 
 class TestCheckTrackedManagedFiles:
     def test_detects_tracked_skill_file(self, tmp_git_repo: Path) -> None:
-        skill_dir = tmp_git_repo / ".claude" / "skills" / "implementation-session"
+        skill_dir = tmp_git_repo / ".claude" / "skills" / "task"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("skill content")
         subprocess.run(
-            ["git", "add", ".claude/skills/implementation-session/SKILL.md"],
+            ["git", "add", ".claude/skills/task/SKILL.md"],
             cwd=tmp_git_repo,
             check=True,
             capture_output=True,
@@ -32,7 +32,7 @@ class TestCheckTrackedManagedFiles:
         )
 
         tracked = _check_tracked_managed_files(tmp_git_repo)
-        assert ".claude/skills/implementation-session/SKILL.md" in tracked
+        assert ".claude/skills/task/SKILL.md" in tracked
 
     def test_detects_tracked_cross_tool_symlink(self, tmp_git_repo: Path) -> None:
         target = tmp_git_repo / ".claude" / "skills"
@@ -124,7 +124,7 @@ class TestCheckTrackedManagedFiles:
 
     def test_returns_sorted_results(self, tmp_git_repo: Path) -> None:
         """Multiple tracked files should be returned sorted."""
-        for name in ["implementation-session", "plan-session"]:
+        for name in ["knowledge", "task"]:
             d = tmp_git_repo / ".claude" / "skills" / name
             d.mkdir(parents=True)
             (d / "SKILL.md").write_text("content")
@@ -145,8 +145,8 @@ class TestCheckTrackedManagedFiles:
         assert tracked == sorted(tracked)
         assert len(tracked) == 2
 
-    def test_detects_legacy_skill(self, tmp_git_repo: Path) -> None:
-        """Legacy skill names should also be detected."""
+    def test_detects_preexisting_legacy_skill(self, tmp_git_repo: Path) -> None:
+        """Legacy names unrelated to this redesign remain managed."""
         d = tmp_git_repo / ".claude" / "skills" / "workflow"
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text("legacy")
@@ -165,6 +165,27 @@ class TestCheckTrackedManagedFiles:
 
         tracked = _check_tracked_managed_files(tmp_git_repo)
         assert ".claude/skills/workflow/SKILL.md" in tracked
+
+    def test_ignores_removed_phase_skill(self, tmp_git_repo: Path) -> None:
+        """Removed phase skill names are no longer Wade-managed artifacts."""
+        d = tmp_git_repo / ".claude" / "skills" / "implementation-session"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("project-owned")
+        subprocess.run(
+            ["git", "add", ".claude/skills/implementation-session/SKILL.md"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add removed phase name"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert tracked == []
 
     def test_detects_tracked_worktree_guard_hook(self, tmp_git_repo: Path) -> None:
         hook_dir = tmp_git_repo / ".claude" / "hooks"
@@ -377,10 +398,8 @@ class TestIdentifySessionDirtyFiles:
         assert ".wade/state" in result
 
     def test_identifies_skill_file(self, tmp_git_repo: Path) -> None:
-        result = _identify_session_dirty_files(
-            [".claude/skills/implementation-session/SKILL.md"], tmp_git_repo
-        )
-        assert ".claude/skills/implementation-session/SKILL.md" in result
+        result = _identify_session_dirty_files([".claude/skills/task/SKILL.md"], tmp_git_repo)
+        assert ".claude/skills/task/SKILL.md" in result
 
     def test_ignores_user_files(self, tmp_git_repo: Path) -> None:
         result = _identify_session_dirty_files(["src/main.py", "README.md"], tmp_git_repo)

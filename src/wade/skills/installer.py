@@ -28,26 +28,17 @@ logger = structlog.get_logger()
 # --- Skill registry: name → list of files ---
 
 SKILL_FILES: dict[str, list[str]] = {
-    # ``task`` remains fixed WADE command support, including its standalone
-    # task/session-summary references. Replaceable generic methods deliberately
-    # do not enter this compatibility registry.
+    # These skills document fixed WADE commands used by workflows. Replaceable
+    # methodology is resolved and snapshotted separately under ``.wade/session``.
     "task": ["SKILL.md", "plan-format.md", "examples.md", "reference/session-summary-format.md"],
-    "plan-session": ["SKILL.md"],
-    "implementation-session": ["SKILL.md"],
-    "review-pr-comments-session": ["SKILL.md"],
-    "deps": ["SKILL.md"],
     "knowledge": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {
-    "plan-session",
-    "implementation-session",
-    "review-pr-comments-session",
-    "knowledge",
-}
+ALWAYS_OVERWRITE = {"knowledge"}
 
-# Old skill names removed in the phase-skill refactor — cleaned up during update
+# Old skill names removed before this redesign. Keep their established cleanup;
+# they are unrelated to session-methodology cutover compatibility.
 _LEGACY_SKILLS = {
     "workflow",
     "sync",
@@ -57,10 +48,10 @@ _LEGACY_SKILLS = {
     "address-reviews-session",
 }
 
-# All skill names Wade manages (current + legacy) — used for safe pruning
+# All tool-native skill names Wade manages — used for safe pruning.
 MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
 
-# Cross-tool directories that get symlinked to the compatibility Claude root.
+# Cross-tool directories that get symlinked to the primary Claude root.
 # Crossby owns the tool-to-root mapping; duplicate roots are emitted once.
 CROSS_TOOL_DIRS = tuple(
     path for path in dict.fromkeys(SKILLS_DIR.values()) if path != SKILLS_DIR[AIToolID.CLAUDE]
@@ -91,29 +82,13 @@ HOOK_CONFIG_FILES = [
     ".codex/hooks.json",
 ]
 
-# --- Native compatibility projections (active methodology lives in .wade/session) ---
-
-_PHASE_COMPATIBILITY_SKILL = {
-    SessionKind.PLAN: "plan-session",
-    SessionKind.IMPLEMENTATION: "implementation-session",
-    SessionKind.REVIEW_PR_COMMENTS: "review-pr-comments-session",
-    SessionKind.DEPS: "deps",
-}
+# --- Native support projections (active methodology lives in .wade/session) ---
 
 
-def compatibility_skills_for_session(kind: SessionKind) -> list[str]:
-    """Derive tool-native compatibility/support projections from definitions."""
+def support_skills_for_session(kind: SessionKind) -> list[str]:
+    """Return fixed command-support skills for a canonical session."""
 
-    definition = SESSION_DEFINITIONS[kind]
-    return [_PHASE_COMPATIBILITY_SKILL[kind], *definition.support_skills]
-
-
-# Deprecated import aliases retained for one compatibility window. Runtime
-# services resolve through ``SessionDefinition`` via the function above.
-PLAN_SKILLS = compatibility_skills_for_session(SessionKind.PLAN)
-DEPS_SKILLS = compatibility_skills_for_session(SessionKind.DEPS)
-IMPLEMENT_SKILLS = compatibility_skills_for_session(SessionKind.IMPLEMENTATION)
-REVIEW_SKILLS = compatibility_skills_for_session(SessionKind.REVIEW_PR_COMMENTS)
+    return list(SESSION_DEFINITIONS[kind].support_skills)
 
 
 def get_worktree_gitignore_entries() -> list[str]:
@@ -269,7 +244,7 @@ def install_skills(
         templates_dir: Override the skills templates directory.
             Useful for worktrees where templates live in the worktree itself.
         skills: If provided, install only the listed skills instead of all
-            ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
+            ``SKILL_FILES``. When ``None``, all support skills are installed.
 
     Returns:
         List of installed paths (relative to project root).  Symlinked skill
@@ -285,7 +260,7 @@ def install_skills(
 
     primary_skills_dir = project_root / ".claude" / "skills"
 
-    # Clean up legacy skill directories from previous versions
+    # Preserve cleanup for names retired before the session-methodology redesign.
     for legacy_name in _LEGACY_SKILLS:
         legacy_dir = primary_skills_dir / legacy_name
         if legacy_dir.is_symlink():
@@ -381,7 +356,7 @@ def remove_skills(project_root: Path) -> list[str]:
             removed.append(cross_dir)
         # Real user-owned directories are not removed
 
-    # Remove skill directories (current + legacy)
+    # Remove Wade-owned support and previously retired skill directories.
     primary_skills_dir = project_root / ".claude" / "skills"
     for skill_name in {*SKILL_FILES, *_LEGACY_SKILLS}:
         skill_dir = primary_skills_dir / skill_name

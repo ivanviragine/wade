@@ -95,17 +95,9 @@ def build_context(
     return "\n".join(lines)
 
 
-def build_deps_prompt(context: str, method_section: str | None = None) -> str:
+def build_deps_prompt(context: str, method_section: str) -> str:
     """Build the full dependency analysis prompt from context."""
     template = get_deps_prompt_template()
-    if method_section is None:
-        # Compatibility for pure prompt-builder callers. Runtime orchestration
-        # always supplies a validated frozen method section.
-        from wade.utils.templates import get_skills_templates_dir
-
-        method_section = (get_skills_templates_dir() / "dependency-analysis/SKILL.md").read_text(
-            encoding="utf-8"
-        )
     return compose_delegation_prompt(
         DelegationKind.DEPENDENCY_ANALYSIS,
         contract=template,
@@ -573,7 +565,7 @@ def analyze_deps(
                 bootstrap_worktree,
             )
             from wade.services.knowledge_service import mark_throwaway_knowledge_session
-            from wade.skills.installer import compatibility_skills_for_session
+            from wade.skills.installer import support_skills_for_session
 
             repo_root = git_repo.get_repo_root(cwd)
             standalone_repo_root = repo_root
@@ -593,7 +585,7 @@ def analyze_deps(
                 standalone_worktree,
                 config,
                 repo_root,
-                skills=compatibility_skills_for_session(SessionKind.DEPS),
+                skills=support_skills_for_session(SessionKind.DEPS),
             )
             # This process flushes the worktree's staged votes before removing
             # it, so it may authorize staging there (a plain detached HEAD may

@@ -1114,16 +1114,16 @@ def start(
         names = ", ".join(f"@{a}" for a in status.changes_requested_by)
         console.info(f"Changes requested by {names} (PR-level review) — launching review session")
 
-    # 5. Re-bootstrap compatibility files and compose the review session bundle.
+    # 5. Re-bootstrap support files and compose the review session bundle.
     from wade.services.session_composition_service import SessionCompositionError
-    from wade.skills.installer import compatibility_skills_for_session
+    from wade.skills.installer import support_skills_for_session
 
     try:
         bootstrap_worktree(
             worktree_path,
             config,
             repo_root,
-            skills=compatibility_skills_for_session(SessionKind.REVIEW_PR_COMMENTS),
+            skills=support_skills_for_session(SessionKind.REVIEW_PR_COMMENTS),
             session_phase=SessionPhase.REVIEW,
             session_kind=SessionKind.REVIEW_PR_COMMENTS,
             task_id=task.id,

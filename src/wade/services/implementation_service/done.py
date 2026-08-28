@@ -51,10 +51,7 @@ from wade.services.review_record_service import (
     has_other_satisfying_binding,
     read_review_record,
 )
-from wade.services.session_composition_service import (
-    load_session_manifest,
-    session_state_present,
-)
+from wade.services.session_composition_service import load_session_manifest
 from wade.services.task_service import remove_in_progress_label
 from wade.ui import prompts
 from wade.ui.console import console
@@ -650,12 +647,10 @@ def _classify_review(
 ) -> ReviewStatus:
     """Classify review validity for the current commit and reviewer identity.
 
-    Versioned sessions trust only structured records matching the frozen review
-    binding. Legacy markers remain available only when canonical session state
-    is completely absent.
+    Only structured records matching the frozen review binding are trusted.
+    Missing or invalid session state fails toward re-review.
     """
     manifest = load_session_manifest(worktree_root)
-    versioned_state = manifest is not None or session_state_present(worktree_root)
     reviewed = False
     reviewer_changed = False
     if manifest is not None and manifest.session in {
@@ -681,11 +676,8 @@ def _classify_review(
             commit=head_sha,
             binding=binding,
         )
-    elif versioned_state:
-        passes = 0
     else:
-        passes = markers.count_review_passes(worktree_root)
-        reviewed = markers.marker_present(worktree_root, "reviewed", head_sha)
+        passes = 0
 
     if reviewed:
         kind = ReviewStatusKind.REVIEWED
@@ -721,8 +713,7 @@ def _gate_review_ran(
     """Refuse unless ``wade review implementation`` ran for ``head_sha``.
 
     Fast path (**both** session types): a successful binding-aware record for
-    ``head_sha`` and the active frozen REVIEW binding means done. Unversioned
-    compatibility worktrees use the legacy exact-sha marker.
+    ``head_sha`` and the active frozen REVIEW binding means done.
 
     Implementation sessions additionally apply a **code-enforced pass cap** so the
     review→fix→re-review loop is bounded (#384). Committing after the last review
@@ -740,7 +731,7 @@ def _gate_review_ran(
     console output.
 
     Auto-skipped when reviews are disabled (``review_implementation.enabled:
-    false``) — the marker is not written then either. Hatches: ``--skip-review``
+    false``). Hatches: ``--skip-review``
     and ``done.require_review: false``.
     """
     status = _classify_review(config, worktree_root, head_sha, skip_review, session_type)

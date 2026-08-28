@@ -1,4 +1,4 @@
-"""Integration contracts for compatibility skill installation and fixed workflows."""
+"""Integration contracts for support-skill installation and fixed workflows."""
 
 from __future__ import annotations
 
@@ -10,18 +10,15 @@ from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.workflow import SessionKind
 from wade.services.session_composition_service import compose_session
 from wade.skills.installer import (
-    DEPS_SKILLS,
-    IMPLEMENT_SKILLS,
-    PLAN_SKILLS,
-    REVIEW_SKILLS,
     SKILL_FILES,
     install_skills,
     remove_skills,
+    support_skills_for_session,
 )
 
 
-class TestCompatibilitySkillInstallation:
-    def test_install_copies_registered_compatibility_skills(self, tmp_git_repo: Path) -> None:
+class TestSupportSkillInstallation:
+    def test_install_copies_registered_support_skills(self, tmp_git_repo: Path) -> None:
         installed = install_skills(tmp_git_repo)
 
         assert installed
@@ -53,24 +50,11 @@ class TestCompatibilitySkillInstallation:
 
         assert second == first
 
-    def test_remove_cleans_only_wade_compatibility_skills(self, tmp_git_repo: Path) -> None:
+    def test_remove_cleans_only_wade_support_skills(self, tmp_git_repo: Path) -> None:
         install_skills(tmp_git_repo)
         remove_skills(tmp_git_repo)
 
         assert not (tmp_git_repo / ".claude/skills").exists()
-
-    @pytest.mark.parametrize(
-        "name",
-        ("plan-session", "implementation-session", "review-pr-comments-session"),
-    )
-    def test_phase_skill_is_a_thin_workflow_pointer(self, tmp_git_repo: Path, name: str) -> None:
-        install_skills(tmp_git_repo, skills=[name])
-        content = (tmp_git_repo / ".claude/skills" / name / "SKILL.md").read_text(encoding="utf-8")
-
-        assert ".wade/session/WORKFLOW.md" in content
-        assert "{review_budget_notes}" not in content
-        assert "done.max_review_passes" not in content
-        assert not (tmp_git_repo / ".claude/skills" / name / "reference").exists()
 
     def test_self_init_uses_live_native_symlinks_only_as_convenience(
         self, tmp_git_repo: Path
@@ -78,61 +62,52 @@ class TestCompatibilitySkillInstallation:
         install_skills(
             tmp_git_repo,
             is_self_init=True,
-            skills=["implementation-session", "implementation", "code-review"],
+            skills=["knowledge", "implementation", "code-review"],
         )
 
         skills_dir = tmp_git_repo / ".claude/skills"
-        assert (skills_dir / "implementation-session").is_symlink()
+        assert (skills_dir / "knowledge").is_symlink()
         assert (skills_dir / "implementation").is_symlink()
         assert (skills_dir / "code-review").is_symlink()
 
 
-class TestSelectiveCompatibilityInstallation:
+class TestSelectiveSupportInstallation:
     @pytest.mark.parametrize(
-        ("selection", "present", "absent"),
+        ("kind", "present"),
         (
-            (
-                IMPLEMENT_SKILLS,
-                {"implementation-session", "task", "knowledge"},
-                {"plan-session", "deps", "review-pr-comments-session"},
-            ),
-            (
-                REVIEW_SKILLS,
-                {"review-pr-comments-session", "task", "knowledge"},
-                {"plan-session", "deps", "implementation-session"},
-            ),
-            (
-                PLAN_SKILLS,
-                {"plan-session", "task", "knowledge"},
-                {"deps", "implementation-session", "review-pr-comments-session"},
-            ),
-            (DEPS_SKILLS, {"deps"}, {"task", "plan-session", "implementation-session"}),
+            (SessionKind.IMPLEMENTATION, {"task", "knowledge"}),
+            (SessionKind.REVIEW_PR_COMMENTS, {"task", "knowledge"}),
+            (SessionKind.PLAN, {"task", "knowledge"}),
+            (SessionKind.DEPS, set()),
         ),
     )
     def test_registry_selection(
         self,
         tmp_git_repo: Path,
-        selection: list[str],
+        kind: SessionKind,
         present: set[str],
-        absent: set[str],
     ) -> None:
+        selection = support_skills_for_session(kind)
         install_skills(tmp_git_repo, skills=selection)
         skills_dir = tmp_git_repo / ".claude/skills"
 
         assert all((skills_dir / name).is_dir() for name in present)
-        assert all(not (skills_dir / name).exists() for name in absent)
+        assert all(not (skills_dir / name).exists() for name in set(SKILL_FILES) - present)
 
     def test_rebootstrap_prunes_only_wade_managed_names(self, tmp_git_repo: Path) -> None:
-        install_skills(tmp_git_repo, skills=IMPLEMENT_SKILLS)
+        install_skills(
+            tmp_git_repo,
+            skills=support_skills_for_session(SessionKind.IMPLEMENTATION),
+        )
         skills_dir = tmp_git_repo / ".claude/skills"
         custom = skills_dir / "my-custom-skill"
         custom.mkdir()
         (custom / "SKILL.md").write_text("# custom\n", encoding="utf-8")
 
-        install_skills(tmp_git_repo, skills=REVIEW_SKILLS)
+        install_skills(tmp_git_repo, skills=support_skills_for_session(SessionKind.DEPS))
 
-        assert not (skills_dir / "implementation-session").exists()
-        assert (skills_dir / "review-pr-comments-session").is_dir()
+        assert not (skills_dir / "task").exists()
+        assert not (skills_dir / "knowledge").exists()
         assert (custom / "SKILL.md").read_text(encoding="utf-8") == "# custom\n"
 
     @pytest.mark.parametrize(
@@ -147,7 +122,10 @@ class TestSelectiveCompatibilityInstallation:
         custom.mkdir(parents=True)
         (custom / "SKILL.md").write_text("# project-owned\n", encoding="utf-8")
 
-        install_skills(tmp_git_repo, skills=IMPLEMENT_SKILLS)
+        install_skills(
+            tmp_git_repo,
+            skills=support_skills_for_session(SessionKind.IMPLEMENTATION),
+        )
 
         assert (custom / "SKILL.md").read_text(encoding="utf-8") == "# project-owned\n"
 

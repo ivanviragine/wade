@@ -143,10 +143,7 @@ class TestPhaseReconciliation:
         assert any("--phase implement" in c for c in removed)
         assert any("--phase plan" in c for c in removed)
         assert not any(c.endswith("--phase review") for c in removed)
-        # The canonical development-build spelling is intentionally revoked in
-        # the compatibility window; the installed hook uses the legacy phase
-        # token until SessionPhase itself is migrated.
-        assert any(c.endswith("--phase review-pr-comments") for c in removed)
+        assert len(removed) == 2
 
     def test_reused_worktree_ends_with_single_entry(self, tmp_path: Path) -> None:
         wt = tmp_path / "wt"

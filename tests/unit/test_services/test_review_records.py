@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -211,16 +210,12 @@ def test_a_to_b_to_a_reuses_receipt_and_work_only_change_preserves_it(
     )
 
 
-def test_legacy_markers_are_ignored_when_versioned_manifest_is_invalid(
+def test_sha_marker_is_never_accepted_as_a_review_receipt(
     tmp_path: Path,
 ) -> None:
     from wade.utils import markers
 
     markers.write_marker(tmp_path, "reviewed", HEAD)
-    session = tmp_path / ".wade" / "session"
-    session.mkdir()
-    (session / "manifest.json").write_text(json.dumps({"schema_version": 999}))
-
     status = _classify_review(ProjectConfig(), tmp_path, HEAD, skip_review=False)
     assert status.kind is ReviewStatusKind.NOT_REVIEWED
 

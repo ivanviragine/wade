@@ -119,7 +119,7 @@ src/wade/
 │   ├── resolver.py      # Explicit builtin/project/path ref resolution
 │   ├── validation.py    # Recursive safety validation and stable digests
 │   ├── materializer.py  # Atomic session/operation physical snapshots
-│   ├── installer.py     # Tool-native compatibility/support projections
+│   ├── installer.py     # Tool-native support projections
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
 ├── config/              # Configuration management
 │   ├── loader.py        # Find + parse .wade.yml (walk up from CWD)
@@ -151,7 +151,7 @@ workflow-owned references. Replaceable methodology remains under
 `templates/skills/`. See [Workflows and Dynamic Skills](workflows-and-skills.md)
 for the ownership boundary, typed registries, precedence, manifests, and review
 record model; see [Skills, Snapshots, and Pointer System](skills-system.md) for
-discovery, compatibility projection, and filesystem rules.
+discovery, support projection, and filesystem rules.
 
 > `templates/hooks/pre-push` is the completion-gate backstop script installed
 > per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
@@ -588,7 +588,7 @@ an unreadable `PLAN.md`, or any exception yields exit 0, so it can never trap a
 session from starting.
 
 - **Policy** (`hooks/policies.py::session_start_context`): assembles compact text
-  by the persisted legacy `SessionPhase` (`implement` / `review` / `plan`). The
+  by the hook-specific `SessionPhase` (`implement` / `review` / `plan`). The
   AI-facing prose lives in `templates/prompts/session-start-<phase>.md` and points
   back to the frozen `.wade/session/WORKFLOW.md`; it never duplicates
   configuration-specific review policy or methodology text. For impl/review the
@@ -655,8 +655,8 @@ HEAD, so any sha-keyed check must precede it):
    empty-staged-with-other-work do not. Implementation sessions cap only
    pass-consuming records for that active reviewer. PR-comment review remains
    uncapped. A successful record under a different reviewer produces the explicit
-   `REVIEWER_CHANGED` classification. Legacy `reviewed@` / `review-pass@` markers
-   are accepted only when no versioned session state exists.
+   `REVIEWER_CHANGED` classification. SHA marker files are never accepted as
+   review evidence.
 5. **documentation decision** (both) — require an `updated` or reasoned
    `not-needed` receipt for the pre-sync HEAD and session kind.
 6. **sync** (both) — auto-sync through the existing service and refuse only on

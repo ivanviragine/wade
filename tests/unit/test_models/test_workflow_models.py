@@ -18,9 +18,9 @@ from wade.models.workflow import (
 )
 
 
-def test_readiness_phase_is_a_compatibility_alias() -> None:
-    assert ReadinessPhase is SessionKind
-    assert set(READINESS_REQUIREMENTS) == set(SessionKind)
+def test_readiness_phases_cover_every_canonical_session_value() -> None:
+    assert {phase.value for phase in ReadinessPhase} == {kind.value for kind in SessionKind}
+    assert set(READINESS_REQUIREMENTS) == set(ReadinessPhase)
 
 
 def test_every_session_has_exactly_one_definition() -> None:
@@ -58,7 +58,7 @@ def test_session_phase_mapping_is_complete_and_unique() -> None:
 
 def test_readiness_and_ai_command_are_registry_derived() -> None:
     for kind, definition in SESSION_DEFINITIONS.items():
-        requirements = READINESS_REQUIREMENTS[kind]
+        requirements = READINESS_REQUIREMENTS[ReadinessPhase(kind.value)]
         assert requirements.ai_command == definition.ai_command.value
         assert requirements.requires_github is definition.readiness.requires_github
         assert (
