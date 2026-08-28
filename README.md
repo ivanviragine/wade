@@ -493,13 +493,14 @@ completion gates remain authoritative.
 
 `wade implementation-session done` (and `review-pr-comments-session done`) is the
 authoritative completion gate: it refuses to finalize until the work is actually
-ready, then writes the `.wade/done@<HEAD>` marker and pushes. Each gate has an
-escape hatch under a `done:` block in `.wade.yml` (all default on):
+ready, then writes the `.wade/done@<HEAD>` marker and pushes. Policy gates normally
+have an escape hatch under a `done:` block in `.wade.yml` (all default on).
+Decision and integrity gates deliberately require an explicit valid outcome:
 
 | Gate | Refuses when… | Hatch |
 |------|---------------|-------|
 | PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (both change-producing session types) | `done.require_pr_summary: false` |
-| Documentation decision | neither an `--updated` nor reasoned `--not-needed` receipt exists for current HEAD | *none; record the decision with the session's `docs` command* |
+| Documentation decision | neither an `--updated` nor reasoned `--not-needed` receipt exists for current HEAD | *no disable toggle; `docs --not-needed "<reason>"` records the explicit no-change outcome* |
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (both change-producing session types) | `done.require_sync: false` |
 | Review ran | `wade review implementation` has no successful record for the current commit **and frozen REVIEW binding**. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles for the active reviewer, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
@@ -878,6 +879,11 @@ binding. `wade skills resolve` prints every candidate and the winner.
 Tool-native roots receive only fixed command-support skills. Session lifecycle
 comes from the rendered workflow, while default or custom methodology is frozen
 inside the session bundle. Deprecated phase skills are not installed.
+
+This redesign is a clean cutover. It does not import pre-redesign phase-skill or
+review-marker state. Resuming an older in-flight worktree creates the current
+session bundle, and its current commit must complete the new review and
+documentation-decision gates before `done` can accept it.
 
 ### Session communication
 

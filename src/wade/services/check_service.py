@@ -814,6 +814,12 @@ _VALID_MERGE_STRATEGIES = {s.value for s in MergeStrategy}
 # Valid complexity keys in the models section
 _VALID_COMPLEXITY_KEYS = {"easy", "medium", "complex", "very_complex"}
 
+# Valid top-level YAML keys are every persisted ProjectConfig field. Runtime-only
+# resolved fields use ``exclude=True`` and must remain invalid in .wade.yml.
+_VALID_PROJECT_CONFIG_KEYS = frozenset(
+    name for name, field in ProjectConfig.model_fields.items() if field.exclude is not True
+)
+
 # Valid keys for the AI config sections, derived from the Pydantic models so the
 # validator's allowlists can't drift from the schema (issue #368). Deriving
 # these — rather than hand-maintaining literal sets — means any field later
@@ -1002,26 +1008,12 @@ def _validate_config_file(config_path: Path) -> list[str]:
     _validate_pydantic_section(raw.get("sessions"), "sessions", SessionsConfig, errors)
     _validate_pydantic_section(raw.get("delegations"), "delegations", DelegationsConfig, errors)
 
-    # Check for unsupported top-level keys
-    supported_keys = {
-        "version",
-        "project",
-        "ai",
-        "models",
-        "provider",
-        "permissions",
-        "hooks",
-        "knowledge",
-        "done",
-        "bot_review",
-        "skills",
-        "sessions",
-        "delegations",
-    }
+    # Check for unsupported top-level keys.
     for key in raw:
-        if key not in supported_keys:
+        if key not in _VALID_PROJECT_CONFIG_KEYS:
             errors.append(
-                f"unsupported key '{key}'. Supported keys: {', '.join(sorted(supported_keys))}"
+                f"unsupported key '{key}'. Supported keys: "
+                f"{', '.join(sorted(_VALID_PROJECT_CONFIG_KEYS))}"
             )
 
     # Try to parse the full config to catch any remaining issues

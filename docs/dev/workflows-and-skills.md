@@ -224,7 +224,10 @@ wade review-pr-comments-session docs --not-needed "reason"
 ```
 
 `done` verifies the receipt rather than pretending to judge documentation
-quality. PR-comment `done` also aligns with its fixed workflow by gating the PR
+quality. This decision has no config disable switch: `--not-needed "reason"` is
+the explicit negative outcome, preserving the mandatory workflow step without
+claiming every change needs a documentation edit. PR-comment `done` also aligns
+with its fixed workflow by gating the PR
 summary, synchronization, conventional title, resolved threads, current-binding
 review, documentation decision, and knowledge validity according to project
 policy.

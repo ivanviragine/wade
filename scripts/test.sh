@@ -5,6 +5,10 @@
 #   ./scripts/test.sh tests/unit/  # unit tests only
 set -euo pipefail
 
+# Keep Rich/Typer output deterministic even when the caller's terminal advertises
+# color support. ANSI sequences otherwise make text assertions environment-dependent.
+export NO_COLOR=1
+
 if [[ "${WADE_INCLUDE_LIVE:-}" == "1" ]]; then
   exec uv run python -m pytest "${@:-tests/}"
 fi
