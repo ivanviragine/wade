@@ -839,6 +839,9 @@ Bindings are ordered and frozen in `.wade/session/manifest.json`. Resuming uses
 the same physical copies even if config or the main checkout changes. To change
 an active session, use `--refresh-skills` with the session command or run
 `wade session refresh-skills`; an override without explicit refresh fails.
+In a worktree-less planning fallback, session diagnostics and refresh target the
+temporary bundle advertised to the agent while continuing to load config and
+project skills from the checkout that launched it.
 
 Example configuration (all sections are optional; omitted values keep the
 defaults):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -9,7 +10,20 @@ import typer
 session_app = typer.Typer(help="Inspect or refresh the active WADE session bundle.")
 
 
+def _fallback_root() -> Path | None:
+    """Return the worktree-less planning bundle root advertised by the parent."""
+
+    from wade.models.readiness import PLAN_DIR_ENV_VAR
+
+    raw = os.environ.get(PLAN_DIR_ENV_VAR)
+    return Path(raw).absolute() if raw else None
+
+
 def _root() -> Path:
+    fallback = _fallback_root()
+    if fallback is not None:
+        return fallback
+
     from wade.git import repo as git_repo
     from wade.git.repo import GitError
 
@@ -52,6 +66,7 @@ def refresh_session_skills(
 
     from wade.config.loader import load_config
     from wade.git import repo as git_repo
+    from wade.git.repo import GitError
     from wade.services.session_composition_service import (
         SessionCompositionError,
         compose_session,
@@ -66,11 +81,26 @@ def refresh_session_skills(
     if existing is None:
         typer.echo("error: no readable active session manifest", err=True)
         raise typer.Exit(1)
-    config = load_config(root)
-    try:
-        main_root = git_repo.main_checkout_root(root)
-    except Exception:
-        main_root = root
+    fallback = _fallback_root()
+    if fallback is None:
+        config_root = root
+        try:
+            main_root = git_repo.main_checkout_root(root)
+        except Exception:
+            main_root = root
+        display_root = ".wade/session"
+    else:
+        # The bundle is in a throwaway plan directory, but config and project
+        # skills still belong to the checkout from which the parent launched
+        # the agent. A caller outside Git deliberately uses its cwd as that
+        # project root, matching initial fallback composition.
+        config_root = Path.cwd()
+        try:
+            main_root = git_repo.get_repo_root(config_root)
+        except GitError:
+            main_root = config_root
+        display_root = str(root / ".wade/session")
+    config = load_config(config_root)
     try:
         result = compose_session(
             root,
@@ -81,6 +111,7 @@ def refresh_session_skills(
             work_skills=skill,
             review_skills=review_skill,
             refresh=True,
+            display_root=display_root,
         )
     except (
         SessionCompositionError,

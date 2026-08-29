@@ -160,6 +160,9 @@ Resume uses the existing manifest and physical snapshots. Config or main-checkou
 changes do not alter the active session. Resume-time overrides without
 `--refresh-skills` fail; `--refresh-skills` or
 `wade session refresh-skills` performs the explicit atomic replacement.
+For a worktree-less planning fallback, both session commands resolve the bundle
+from `WADE_PLAN_DIR`; refresh still loads config and discovers project skills
+from the launch checkout and keeps absolute bundle paths in the rendered workflow.
 Before reuse, WADE re-hashes the complete physical bundle (workflow, references,
 support files, catalog, and skill snapshots) and revalidates every active skill
 against its recorded file list and digest. Missing, edited, extra, symlinked, or
