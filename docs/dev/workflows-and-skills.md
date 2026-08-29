@@ -167,6 +167,9 @@ Before reuse, WADE re-hashes the complete physical bundle (workflow, references,
 support files, catalog, and skill snapshots) and revalidates every active skill
 against its recorded file list and digest. Missing, edited, extra, symlinked, or
 otherwise unsafe content fails closed until an explicit refresh replaces the bundle.
+Before trusting a review receipt, completion applies the same validation and
+requires the manifest's session, workflow revision, and AI-command identity to
+match the invoked completion kind.
 
 An implementation-to-PR-comment transition is a new session and replaces the
 manifest/workflow. Durable review records survive outside the session bundle,

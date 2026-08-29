@@ -75,15 +75,20 @@ def _record_review(
     commit: str,
     *,
     outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
+    session_kind: SessionKind = SessionKind.IMPLEMENTATION,
 ) -> None:
     session = root / ".wade" / "session"
     binding = _materialize_review_bundle(root)
     manifest = SessionManifest(
-        session=SessionKind.IMPLEMENTATION,
+        session=session_kind,
         workflow_revision=1,
         bundle_digest=compute_session_bundle_digest(session),
         task_id="42",
-        ai_command=AICommandKey.IMPLEMENT,
+        ai_command=(
+            AICommandKey.REVIEW_PR_COMMENTS
+            if session_kind is SessionKind.REVIEW_PR_COMMENTS
+            else AICommandKey.IMPLEMENT
+        ),
         bindings={SkillSlot.WORK: binding, SkillSlot.REVIEW: binding},
     )
     (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
@@ -170,8 +175,18 @@ class TestClassifyReview:
     def test_review_pr_comments_never_caps(self, tmp_path: Path) -> None:
         # The cap is impl-only: even past the limit, review-pr-comments classifies
         # as NOT_REVIEWED (the gate then plainly refuses), never CAP_REACHED.
-        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
-        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(
+            tmp_path,
+            "1" * 40,
+            outcome=ReviewOutcome.TIMED_OUT,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
+        _record_review(
+            tmp_path,
+            "2" * 40,
+            outcome=ReviewOutcome.TIMED_OUT,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
         status = _classify_review(
             ProjectConfig(),
             tmp_path,

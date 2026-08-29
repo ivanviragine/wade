@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -74,15 +75,20 @@ def _record_review(
     commit: str,
     *,
     outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
+    session_kind: SessionKind = SessionKind.IMPLEMENTATION,
 ) -> None:
     session = root / ".wade" / "session"
     binding = _materialize_review_bundle(root)
     manifest = SessionManifest(
-        session=SessionKind.IMPLEMENTATION,
+        session=session_kind,
         workflow_revision=1,
         bundle_digest=compute_session_bundle_digest(session),
         task_id="42",
-        ai_command=AICommandKey.IMPLEMENT,
+        ai_command=(
+            AICommandKey.REVIEW_PR_COMMENTS
+            if session_kind is SessionKind.REVIEW_PR_COMMENTS
+            else AICommandKey.IMPLEMENT
+        ),
         bindings={SkillSlot.WORK: binding, SkillSlot.REVIEW: binding},
     )
     (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
@@ -96,6 +102,13 @@ def _record_review(
         )
         is not None
     )
+
+
+def _update_manifest(root: Path, **updates: object) -> None:
+    path = root / ".wade/session/manifest.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(updates)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +243,45 @@ class TestReviewRanGate:
         text = _captured_text(capsys)
         assert "bundle failed integrity validation" in text
         assert "wade session refresh-skills" in text
+
+    def test_stale_workflow_revision_invalidates_matching_receipt(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        _update_manifest(tmp_path, workflow_revision=999)
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+        assert "bundle failed integrity validation" in _captured_text(capsys)
+
+    def test_wrong_session_kind_invalidates_matching_receipt(self, tmp_path: Path, capsys) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        _update_manifest(
+            tmp_path,
+            session=SessionKind.REVIEW_PR_COMMENTS.value,
+            ai_command=AICommandKey.REVIEW_PR_COMMENTS.value,
+        )
+
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                head,
+                skip_review=False,
+                session_type="implementation",
+            )
+            is False
+        )
+        assert "bundle failed integrity validation" in _captured_text(capsys)
+
+    def test_wrong_ai_command_invalidates_matching_receipt(self, tmp_path: Path, capsys) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        _update_manifest(tmp_path, ai_command=AICommandKey.REVIEW_PR_COMMENTS.value)
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+        assert "bundle failed integrity validation" in _captured_text(capsys)
 
     def test_receipt_for_other_sha_refuses(self, tmp_path: Path) -> None:
         _record_review(tmp_path, "a" * 40)
@@ -370,8 +422,18 @@ class TestReviewRanCap:
     def test_review_pr_comments_path_never_caps(self, tmp_path: Path) -> None:
         # Even with passes >= limit, the review-pr-comments path keeps the
         # unbounded fast-path-or-refuse behavior — the cap is impl-only.
-        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
-        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(
+            tmp_path,
+            "1" * 40,
+            outcome=ReviewOutcome.TIMED_OUT,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
+        _record_review(
+            tmp_path,
+            "2" * 40,
+            outcome=ReviewOutcome.TIMED_OUT,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
         assert (
             _gate_review_ran(
                 ProjectConfig(),

@@ -51,10 +51,12 @@ from wade.services.review_record_service import (
     has_other_satisfying_binding,
     read_review_record,
 )
-from wade.services.session_composition_service import load_session_manifest
+from wade.services.session_composition_service import (
+    SessionCompositionError,
+    load_session_manifest,
+    validate_frozen_session_bundle,
+)
 from wade.services.task_service import remove_in_progress_label
-from wade.skills.materializer import SkillMaterializationError, validate_session_bundle
-from wade.skills.validation import SkillValidationError
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import markers
@@ -656,13 +658,15 @@ def _classify_review(
     reviewed = False
     reviewer_changed = False
     bundle_invalid = False
-    if manifest is not None and manifest.session in {
-        SessionKind.IMPLEMENTATION,
-        SessionKind.REVIEW_PR_COMMENTS,
-    }:
+    if manifest is not None:
         try:
-            validate_session_bundle(worktree_root, manifest)
-        except (SkillMaterializationError, SkillValidationError) as exc:
+            expected_kind = SessionKind(str(session_type))
+            validate_frozen_session_bundle(
+                worktree_root,
+                manifest,
+                expected_kind=expected_kind,
+            )
+        except (ValueError, SessionCompositionError) as exc:
             bundle_invalid = True
             passes = 0
             logger.warning(

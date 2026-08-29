@@ -891,9 +891,10 @@ binding. `wade skills resolve` prints every candidate and the winner.
 Tool-native roots receive only fixed command-support skills. Session lifecycle
 comes from the rendered workflow, while default or custom methodology is frozen
 inside the session bundle. Deprecated phase skills are not installed.
-Resume revalidates the complete physical bundle against its manifest digest;
-edited, missing, extra, or unsafe snapshot content requires an explicit
-`--refresh-skills` or `wade session refresh-skills` replacement.
+Resume revalidates workflow identity and the complete physical bundle against
+its manifest digest; completion does the same before trusting a review receipt.
+Stale metadata and edited, missing, extra, or unsafe snapshot content require an
+explicit `--refresh-skills` or `wade session refresh-skills` replacement.
 
 This redesign is a clean cutover. It does not import pre-redesign phase-skill or
 review-marker state. Resuming an older in-flight worktree creates the current

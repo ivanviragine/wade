@@ -202,12 +202,19 @@ def session_state_present(worktree_root: Path) -> bool:
     return state_directory_present(worktree_root, ("session",))
 
 
-def _validate_reusable_session_bundle(
+def validate_frozen_session_bundle(
     worktree_root: Path,
     manifest: SessionManifest,
+    *,
+    expected_kind: SessionKind | None = None,
 ) -> None:
-    """Fail closed when frozen workflow metadata or physical content changed."""
+    """Fail closed when frozen workflow identity, metadata, or content changed."""
 
+    if expected_kind is not None and manifest.session is not expected_kind:
+        raise SessionCompositionError(
+            f"Active session is {manifest.session.value}, not {expected_kind.value}; "
+            "run the matching session command or explicitly refresh the session"
+        )
     definition = SESSION_DEFINITIONS[manifest.session]
     if (
         manifest.workflow_revision != definition.workflow_revision
@@ -247,7 +254,7 @@ def compose_session(
             "Active session manifest is unreadable or invalid; run an explicit skill refresh"
         )
     if existing is not None and existing.session is kind and not refresh:
-        _validate_reusable_session_bundle(worktree_root, existing)
+        validate_frozen_session_bundle(worktree_root, existing, expected_kind=kind)
         if work_override is not None or review_override is not None:
             raise SessionCompositionError(
                 "Active session bindings are frozen; pass --refresh-skills to apply overrides"
@@ -312,5 +319,5 @@ def mapped_session_review_binding(
         SessionKind.REVIEW_PR_COMMENTS,
     }:
         return None
-    _validate_reusable_session_bundle(worktree_root, manifest)
+    validate_frozen_session_bundle(worktree_root, manifest)
     return manifest.bindings[SkillSlot.REVIEW], manifest.session
