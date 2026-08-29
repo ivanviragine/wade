@@ -824,8 +824,10 @@ Project skills are discovered from every skill root supported by the selected
 tool integration, including real or symlinked `.claude/skills`,
 `.agents/skills`, `.cursor/skills`, and `.github/skills` layouts. WADE merges
 the new worktree inventory with the main checkout so local-only/ignored skills
-are available too, while worktree content wins for matching tracked paths. It
-copies the complete skill directory—`SKILL.md`, references, scripts, and
+are available too, while worktree content wins for matching tracked paths.
+Generated `task` and `knowledge` command-support projections are excluded from
+methodology discovery, so they cannot shadow a project skill with the same name.
+WADE copies the complete skill directory—`SKILL.md`, references, scripts, and
 assets—into the session snapshot; source directories are never overwritten or
 pruned.
 

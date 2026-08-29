@@ -59,6 +59,10 @@ Installation rules:
 - native links are conveniences only and are never active session snapshots.
 
 The same Crossby mapping drives support projections and project discovery.
+Discovery recognizes exact copied `task` and `knowledge` projections and excludes
+their real directories from the worktree inventory; a same-name project skill in
+the main checkout remains available. The exclusion is content-aware, so an
+unrelated project-authored skill that merely shares a support name is retained.
 Contract tests pin the Crossby version/API behavior, root symlink behavior,
 supported tool coverage, and filtered scene handling. Re-run those tests and
 inspect tool coverage whenever the Crossby dependency pin changes.

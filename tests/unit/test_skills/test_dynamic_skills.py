@@ -20,6 +20,7 @@ from wade.skills.materializer import (
 )
 from wade.skills.resolver import SkillResolutionError, resolve_skill_refs
 from wade.skills.validation import SkillValidationError, inspect_skill
+from wade.utils.templates import get_skills_templates_dir
 
 
 def _skill(root: Path, relative: str, name: str, body: str = "Use evidence.") -> Path:
@@ -141,6 +142,35 @@ def test_discovery_merges_worktree_and_main_and_deduplicates_symlinked_roots(
     assert set(by_name) == {"tracked", "local-only"}
     assert by_name["tracked"].origin == "worktree"
     assert by_name["local-only"].origin == "main"
+
+
+def test_discovery_excludes_support_projection_without_shadowing_main_skill(
+    tmp_path: Path,
+) -> None:
+    main = tmp_path / "main"
+    worktree = tmp_path / "worktree"
+    main.mkdir()
+    worktree.mkdir()
+    project_task = _skill(main, ".claude/skills", "task", "Project task methodology.")
+    templates = get_skills_templates_dir()
+    shutil.copytree(templates / "task", worktree / ".claude/skills/task")
+    shutil.copytree(templates / "knowledge", worktree / ".claude/skills/knowledge")
+
+    inventory = discover_project_skills(worktree, main)
+    by_name = {item.descriptor.name: item for item in inventory.skills}
+
+    assert set(by_name) == {"task"}
+    assert by_name["task"].origin == "main"
+    assert by_name["task"].source == project_task
+
+
+def test_discovery_keeps_non_projected_skill_with_support_name(tmp_path: Path) -> None:
+    project_task = _skill(tmp_path, ".claude/skills", "task", "Project task methodology.")
+
+    inventory = discover_project_skills(tmp_path, tmp_path)
+
+    assert len(inventory.skills) == 1
+    assert inventory.skills[0].source == project_task
 
 
 def test_discovery_does_not_treat_crossby_scene_projection_as_full_inventory(

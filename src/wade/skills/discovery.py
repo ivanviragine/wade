@@ -5,13 +5,16 @@ from __future__ import annotations
 import fnmatch
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 
 import yaml
-from crossby.config.skills import list_skills
+from crossby.config.skills import SKILLS_DIR, list_skills
+from crossby.models.ai import AIToolID
 from crossby.sync.readers import detect_skills
 
 from wade.models.skill import SkillDescriptor
+from wade.models.workflow import SESSION_DEFINITIONS
 from wade.skills.validation import InspectedSkill, SkillValidationError, inspect_skill
 from wade.utils.templates import get_skills_templates_dir, get_wade_repo_root
 
@@ -34,6 +37,17 @@ class SkillInventory:
     skills: tuple[DiscoveredSkill, ...]
     warnings: tuple[str, ...] = ()
     builtin_templates: Path | None = None
+
+
+_SUPPORT_SKILL_NAMES = tuple(
+    sorted(
+        set(
+            chain.from_iterable(
+                definition.support_skills for definition in SESSION_DEFINITIONS.values()
+            )
+        )
+    )
+)
 
 
 def self_init_builtin_templates(worktree_root: Path, main_root: Path) -> Path | None:
@@ -84,6 +98,34 @@ def _selected_by_filters(
 
 def _root_label(relative_root: str) -> str:
     return relative_root.strip(".").replace("/", "-").replace(".", "") or "root"
+
+
+def _support_projection_roots(root: Path, templates: Path) -> tuple[Path, ...]:
+    """Identify copied WADE command-support skills so they cannot become methodology."""
+
+    primary = root / SKILLS_DIR[AIToolID.CLAUDE]
+    projections: list[Path] = []
+    for name in _SUPPORT_SKILL_NAMES:
+        candidate = primary / name
+        candidate_skill = candidate / "SKILL.md"
+        template_skill = templates / name / "SKILL.md"
+        try:
+            # Target-project projections are regular copies. Symlinked built-ins
+            # in WADE self-init worktrees are excluded separately by resolved root;
+            # do not turn this content check into a symlink-validation bypass.
+            if candidate.is_symlink() or candidate_skill.is_symlink():
+                continue
+            template_content = template_skill.read_bytes()
+            if (
+                not candidate_skill.is_file()
+                or candidate_skill.lstat().st_size != len(template_content)
+                or candidate_skill.read_bytes() != template_content
+            ):
+                continue
+            projections.append(candidate.resolve(strict=True))
+        except OSError:
+            continue
+    return tuple(projections)
 
 
 def _scan_checkout(
@@ -197,7 +239,7 @@ def discover_project_skills(
         )
     packaged = get_skills_templates_dir().resolve()
     live_builtins = self_init_builtin_templates(worktree_root, main_root)
-    excluded_roots = tuple(
+    shared_excluded_roots = tuple(
         dict.fromkeys(
             (
                 packaged,
@@ -219,7 +261,10 @@ def discover_project_skills(
     candidates = _scan_checkout(
         worktree_root,
         origin="worktree",
-        exclude_real_roots=excluded_roots,
+        exclude_real_roots=(
+            *shared_excluded_roots,
+            *_support_projection_roots(worktree_root, packaged),
+        ),
         include_patterns=include_patterns,
         exclude_patterns=exclude_patterns,
     )
@@ -228,7 +273,10 @@ def discover_project_skills(
             _scan_checkout(
                 main_root,
                 origin="main",
-                exclude_real_roots=excluded_roots,
+                exclude_real_roots=(
+                    *shared_excluded_roots,
+                    *_support_projection_roots(main_root, packaged),
+                ),
                 include_patterns=include_patterns,
                 exclude_patterns=exclude_patterns,
             )
