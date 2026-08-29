@@ -225,7 +225,11 @@ of only WORK does not invalidate a REVIEW record.
 Manifest, review, and documentation-gate state uses descriptor-relative,
 no-follow filesystem operations. Unsafe/malformed/unreadable state is absent for
 gate purposes and fails toward re-review, never toward completion. SHA marker
-files are never accepted as review evidence.
+files are never accepted as review evidence. The completion classifier also
+revalidates the physical frozen workflow and skill bundle before it trusts the
+manifest's REVIEW binding, any matching receipt, or the binding's pass count.
+Tampering therefore cannot satisfy either the exact-review fast path or the
+implementation pass cap; refresh the bundle and review again.
 
 ## Completion-policy alignment
 

@@ -655,6 +655,9 @@ HEAD, so any sha-keyed check must precede it):
    remains non-blocking.
 4. **review-ran** (both) — for a versioned session, require a satisfying
    structured record for the pre-sync HEAD and the manifest's REVIEW composite.
+   Before reading records or counting passes, recompute and validate the frozen
+   workflow/skill bundle against the manifest; invalid content is not trusted and
+   cannot reach the exact-review or pass-cap success paths.
    `reviewed` and deterministically empty `no-diff` satisfy the gate; timeout and
    empty-staged-with-other-work do not. Implementation sessions cap only
    pass-consuming records for that active reviewer. PR-comment review remains

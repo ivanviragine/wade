@@ -53,6 +53,8 @@ from wade.services.review_record_service import (
 )
 from wade.services.session_composition_service import load_session_manifest
 from wade.services.task_service import remove_in_progress_label
+from wade.skills.materializer import SkillMaterializationError, validate_session_bundle
+from wade.skills.validation import SkillValidationError
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import markers
@@ -653,29 +655,41 @@ def _classify_review(
     manifest = load_session_manifest(worktree_root)
     reviewed = False
     reviewer_changed = False
+    bundle_invalid = False
     if manifest is not None and manifest.session in {
         SessionKind.IMPLEMENTATION,
         SessionKind.REVIEW_PR_COMMENTS,
     }:
-        binding = manifest.bindings[SkillSlot.REVIEW]
-        record = read_review_record(
-            worktree_root,
-            delegation=DelegationKind.CODE_REVIEW,
-            commit=head_sha,
-            binding=binding,
-        )
-        reviewed = record is not None and record.satisfies_review
-        passes = count_binding_passes(
-            worktree_root,
-            delegation=DelegationKind.CODE_REVIEW,
-            binding=binding,
-        )
-        reviewer_changed = has_other_satisfying_binding(
-            worktree_root,
-            delegation=DelegationKind.CODE_REVIEW,
-            commit=head_sha,
-            binding=binding,
-        )
+        try:
+            validate_session_bundle(worktree_root, manifest)
+        except (SkillMaterializationError, SkillValidationError) as exc:
+            bundle_invalid = True
+            passes = 0
+            logger.warning(
+                "done.review_bundle_invalid",
+                worktree=str(worktree_root),
+                error=str(exc),
+            )
+        else:
+            binding = manifest.bindings[SkillSlot.REVIEW]
+            record = read_review_record(
+                worktree_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                commit=head_sha,
+                binding=binding,
+            )
+            reviewed = record is not None and record.satisfies_review
+            passes = count_binding_passes(
+                worktree_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                binding=binding,
+            )
+            reviewer_changed = has_other_satisfying_binding(
+                worktree_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                commit=head_sha,
+                binding=binding,
+            )
     else:
         passes = 0
 
@@ -687,6 +701,8 @@ def _classify_review(
         kind = ReviewStatusKind.SKIPPED_FLAG
     elif not config.done.require_review:
         kind = ReviewStatusKind.REQUIRE_OFF
+    elif bundle_invalid:
+        kind = ReviewStatusKind.BUNDLE_INVALID
     elif reviewer_changed:
         kind = ReviewStatusKind.REVIEWER_CHANGED
     elif session_type == "implementation" and passes >= config.done.max_review_passes:
@@ -750,6 +766,17 @@ def _gate_review_ran(
         console.error("The current commit was reviewed with a different reviewer binding.")
         console.hint(
             "Run `wade review implementation` with the active session reviewer, then re-run done."
+        )
+        return False
+
+    if kind is ReviewStatusKind.BUNDLE_INVALID:
+        console.error(
+            "The active session bundle failed integrity validation; its review records "
+            "cannot be trusted."
+        )
+        console.hint(
+            "Run `wade session refresh-skills`, re-run `wade review implementation`, "
+            "then re-run done."
         )
         return False
 

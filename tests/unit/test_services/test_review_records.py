@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
@@ -26,16 +28,32 @@ from wade.services.review_record_service import (
     review_record_filename,
     write_review_record,
 )
+from wade.skills.materializer import compute_session_bundle_digest
 
 HEAD = "a" * 40
 
 
-def _binding(name: str, digest_char: str) -> ResolvedBinding:
+def _skill_content(name: str) -> bytes:
+    return f"# {name}\n".encode()
+
+
+def _skill_digest(name: str) -> str:
+    filename = b"SKILL.md"
+    content = _skill_content(name)
+    digest = hashlib.sha256()
+    digest.update(len(filename).to_bytes(8, "big"))
+    digest.update(filename)
+    digest.update(len(content).to_bytes(8, "big"))
+    digest.update(content)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _binding(name: str) -> ResolvedBinding:
     skill = ResolvedSkill(
         canonical_ref=f"project:{name}",
         source_path=f".agents/skills/{name}",
         materialized_path=f".wade/session/skills/project/agents/{name}",
-        content_digest=f"sha256:{digest_char * 64}",
+        content_digest=_skill_digest(name),
         files=("SKILL.md",),
     )
     return ResolvedBinding.from_skills((skill,))
@@ -47,21 +65,31 @@ def _write_manifest(
     work: ResolvedBinding,
     review: ResolvedBinding,
 ) -> None:
+    session = root / ".wade" / "session"
+    if session.exists():
+        shutil.rmtree(session)
+    session.mkdir(parents=True)
+    (session / "WORKFLOW.md").write_text("# Implementation workflow\n", encoding="utf-8")
+    for binding in (work, review):
+        for skill in binding.skills:
+            skill_dir = root / skill.materialized_path
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            name = skill.canonical_ref.removeprefix("project:")
+            (skill_dir / "SKILL.md").write_bytes(_skill_content(name))
+
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
         workflow_revision=1,
-        bundle_digest=f"sha256:{'0' * 64}",
+        bundle_digest=compute_session_bundle_digest(session),
         task_id="123",
         ai_command=AICommandKey.IMPLEMENT,
         bindings={SkillSlot.WORK: work, SkillSlot.REVIEW: review},
     )
-    session = root / ".wade" / "session"
-    session.mkdir(parents=True, exist_ok=True)
     (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
 
 
 def test_outcome_pass_semantics_are_schema_enforced() -> None:
-    binding = _binding("review-a", "1")
+    binding = _binding("review-a")
     with pytest.raises(ValidationError, match="consumes_pass"):
         ReviewRecord(
             commit=HEAD,
@@ -73,7 +101,7 @@ def test_outcome_pass_semantics_are_schema_enforced() -> None:
 
 
 def test_record_is_idempotent_promotable_and_never_downgraded(tmp_path: Path) -> None:
-    binding = _binding("review-a", "1")
+    binding = _binding("review-a")
     timed_out = write_review_record(
         tmp_path,
         delegation=DelegationKind.CODE_REVIEW,
@@ -107,7 +135,7 @@ def test_record_is_idempotent_promotable_and_never_downgraded(tmp_path: Path) ->
 
 
 def test_no_diff_satisfies_without_consuming_a_pass(tmp_path: Path) -> None:
-    binding = _binding("review-a", "1")
+    binding = _binding("review-a")
     record = write_review_record(
         tmp_path,
         delegation=DelegationKind.CODE_REVIEW,
@@ -122,7 +150,7 @@ def test_no_diff_satisfies_without_consuming_a_pass(tmp_path: Path) -> None:
 
 
 def test_filename_body_mismatch_and_malformed_json_are_absent(tmp_path: Path) -> None:
-    binding = _binding("review-a", "1")
+    binding = _binding("review-a")
     reviews = tmp_path / ".wade" / "reviews"
     reviews.mkdir(parents=True)
     wrong_name = review_record_filename(DelegationKind.CODE_REVIEW, "b" * 40, binding.digest)
@@ -139,7 +167,7 @@ def test_filename_body_mismatch_and_malformed_json_are_absent(tmp_path: Path) ->
 
 
 def test_symlinked_reviews_directory_fails_closed(tmp_path: Path) -> None:
-    binding = _binding("review-a", "1")
+    binding = _binding("review-a")
     external = tmp_path / "external"
     external.mkdir()
     (tmp_path / ".wade").mkdir()
@@ -160,9 +188,9 @@ def test_symlinked_reviews_directory_fails_closed(tmp_path: Path) -> None:
 def test_changed_reviewer_is_visible_and_old_passes_do_not_count(
     tmp_path: Path,
 ) -> None:
-    work = _binding("implementation", "3")
-    reviewer_a = _binding("review-a", "1")
-    reviewer_b = _binding("review-b", "2")
+    work = _binding("implementation")
+    reviewer_a = _binding("review-a")
+    reviewer_b = _binding("review-b")
     write_review_record(
         tmp_path,
         delegation=DelegationKind.CODE_REVIEW,
@@ -180,10 +208,10 @@ def test_changed_reviewer_is_visible_and_old_passes_do_not_count(
 def test_a_to_b_to_a_reuses_receipt_and_work_only_change_preserves_it(
     tmp_path: Path,
 ) -> None:
-    work_a = _binding("implementation-a", "3")
-    work_b = _binding("implementation-b", "4")
-    reviewer_a = _binding("review-a", "1")
-    reviewer_b = _binding("review-b", "2")
+    work_a = _binding("implementation-a")
+    work_b = _binding("implementation-b")
+    reviewer_a = _binding("review-a")
+    reviewer_b = _binding("review-b")
     write_review_record(
         tmp_path,
         delegation=DelegationKind.CODE_REVIEW,
@@ -222,8 +250,8 @@ def test_sha_marker_is_never_accepted_as_a_review_receipt(
 
 
 def test_exact_record_reader_requires_the_requested_binding(tmp_path: Path) -> None:
-    reviewer_a = _binding("review-a", "1")
-    reviewer_b = _binding("review-b", "2")
+    reviewer_a = _binding("review-a")
+    reviewer_b = _binding("review-b")
     write_review_record(
         tmp_path,
         delegation=DelegationKind.CODE_REVIEW,

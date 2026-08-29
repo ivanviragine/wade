@@ -614,6 +614,7 @@ class ReviewStatusKind(StrEnum):
     REQUIRE_OFF = "require_off"  # ``done.require_review: false``
     DISABLED = "disabled"  # ``review_implementation.enabled: false``
     CAP_REACHED = "cap_reached"  # impl-only; pass cap hit with no fresh review
+    BUNDLE_INVALID = "bundle_invalid"  # frozen workflow/skill content was altered
     REVIEWER_CHANGED = "reviewer_changed"  # same commit reviewed by another binding
     NOT_REVIEWED = "not_reviewed"  # gate would refuse (rendering fallback)
 
@@ -691,6 +692,8 @@ def _render_review_status(status: ReviewStatus) -> str:
             "⚠️ The final commit was reviewed with a different methodology binding; "
             "the active reviewer has not reviewed it."
         )
+    elif kind is ReviewStatusKind.BUNDLE_INVALID:
+        line = "⚠️ The frozen session bundle failed integrity validation."
     elif kind is ReviewStatusKind.REQUIRE_OFF:
         # The leading info emoji is intentional PR-body markdown, not an identifier.
         line = (

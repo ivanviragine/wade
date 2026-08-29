@@ -44,20 +44,30 @@ from wade.services.implementation_service.usage_tracking import (
     IMPL_USAGE_MARKER_START,
 )
 from wade.services.review_record_service import write_review_record
+from wade.skills.materializer import compute_session_bundle_digest
+from wade.skills.validation import inspect_skill
 
 _DONE = "wade.services.implementation_service.done"
 
-_REVIEW_BINDING = ResolvedBinding.from_skills(
-    (
-        ResolvedSkill(
-            canonical_ref="builtin:code-review",
-            source_path="templates/skills/code-review",
-            materialized_path=".wade/session/skills/builtin/code-review",
-            content_digest=f"sha256:{'1' * 64}",
-            files=("SKILL.md",),
-        ),
+
+def _materialize_review_bundle(root: Path) -> ResolvedBinding:
+    session = root / ".wade" / "session"
+    skill_dir = session / "skills" / "builtin" / "code-review"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (session / "WORKFLOW.md").write_text("# Implementation workflow\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("# Code review methodology\n", encoding="utf-8")
+    inspected = inspect_skill(skill_dir, project_root=session)
+    return ResolvedBinding.from_skills(
+        (
+            ResolvedSkill(
+                canonical_ref="builtin:code-review",
+                source_path="templates/skills/code-review",
+                materialized_path=".wade/session/skills/builtin/code-review",
+                content_digest=inspected.digest,
+                files=inspected.files,
+            ),
+        )
     )
-)
 
 
 def _record_review(
@@ -67,14 +77,14 @@ def _record_review(
     outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
 ) -> None:
     session = root / ".wade" / "session"
-    session.mkdir(parents=True, exist_ok=True)
+    binding = _materialize_review_bundle(root)
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
         workflow_revision=1,
-        bundle_digest=f"sha256:{'0' * 64}",
+        bundle_digest=compute_session_bundle_digest(session),
         task_id="42",
         ai_command=AICommandKey.IMPLEMENT,
-        bindings={SkillSlot.WORK: _REVIEW_BINDING, SkillSlot.REVIEW: _REVIEW_BINDING},
+        bindings={SkillSlot.WORK: binding, SkillSlot.REVIEW: binding},
     )
     (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
     assert (
@@ -82,7 +92,7 @@ def _record_review(
             root,
             delegation=DelegationKind.CODE_REVIEW,
             commit=commit,
-            binding=_REVIEW_BINDING,
+            binding=binding,
             outcome=outcome,
         )
         is not None
@@ -101,6 +111,30 @@ class TestClassifyReview:
         status = _classify_review(ProjectConfig(), tmp_path, head, skip_review=False)
         assert status.kind is ReviewStatusKind.REVIEWED
         assert status.reviewed_sha == head
+
+    def test_tampered_bundle_is_not_trusted(self, tmp_path: Path) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        (tmp_path / ".wade" / "session" / "WORKFLOW.md").write_text(
+            "# Tampered workflow\n", encoding="utf-8"
+        )
+
+        status = _classify_review(ProjectConfig(), tmp_path, head, skip_review=False)
+
+        assert status.kind is ReviewStatusKind.BUNDLE_INVALID
+        assert status.passes == 0
+
+    def test_explicit_skip_remains_available_for_tampered_bundle(self, tmp_path: Path) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        (tmp_path / ".wade" / "session" / "WORKFLOW.md").write_text(
+            "# Tampered workflow\n", encoding="utf-8"
+        )
+
+        status = _classify_review(ProjectConfig(), tmp_path, head, skip_review=True)
+
+        assert status.kind is ReviewStatusKind.SKIPPED_FLAG
+        assert status.passes == 0
 
     def test_skip_flag(self, tmp_path: Path) -> None:
         status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=True)

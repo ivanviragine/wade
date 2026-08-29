@@ -36,6 +36,8 @@ from wade.services.implementation_service.done import (
     _title_fix_hint,
 )
 from wade.services.review_record_service import write_review_record
+from wade.skills.materializer import compute_session_bundle_digest
+from wade.skills.validation import inspect_skill
 
 # The package re-exports the ``done``/``sync`` *functions*, shadowing the
 # submodule attributes, so import the module objects explicitly for patching.
@@ -47,17 +49,24 @@ def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
 
 
-_REVIEW_BINDING = ResolvedBinding.from_skills(
-    (
-        ResolvedSkill(
-            canonical_ref="builtin:code-review",
-            source_path="templates/skills/code-review",
-            materialized_path=".wade/session/skills/builtin/code-review",
-            content_digest=f"sha256:{'1' * 64}",
-            files=("SKILL.md",),
-        ),
+def _materialize_review_bundle(root: Path) -> ResolvedBinding:
+    session = root / ".wade" / "session"
+    skill_dir = session / "skills" / "builtin" / "code-review"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (session / "WORKFLOW.md").write_text("# Implementation workflow\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("# Code review methodology\n", encoding="utf-8")
+    inspected = inspect_skill(skill_dir, project_root=session)
+    return ResolvedBinding.from_skills(
+        (
+            ResolvedSkill(
+                canonical_ref="builtin:code-review",
+                source_path="templates/skills/code-review",
+                materialized_path=".wade/session/skills/builtin/code-review",
+                content_digest=inspected.digest,
+                files=inspected.files,
+            ),
+        )
     )
-)
 
 
 def _record_review(
@@ -67,14 +76,14 @@ def _record_review(
     outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
 ) -> None:
     session = root / ".wade" / "session"
-    session.mkdir(parents=True, exist_ok=True)
+    binding = _materialize_review_bundle(root)
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
         workflow_revision=1,
-        bundle_digest=f"sha256:{'0' * 64}",
+        bundle_digest=compute_session_bundle_digest(session),
         task_id="42",
         ai_command=AICommandKey.IMPLEMENT,
-        bindings={SkillSlot.WORK: _REVIEW_BINDING, SkillSlot.REVIEW: _REVIEW_BINDING},
+        bindings={SkillSlot.WORK: binding, SkillSlot.REVIEW: binding},
     )
     (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
     assert (
@@ -82,7 +91,7 @@ def _record_review(
             root,
             delegation=DelegationKind.CODE_REVIEW,
             commit=commit,
-            binding=_REVIEW_BINDING,
+            binding=binding,
             outcome=outcome,
         )
         is not None
@@ -210,6 +219,18 @@ class TestReviewRanGate:
         _record_review(tmp_path, head)
         assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is True
 
+    def test_tampered_workflow_invalidates_matching_receipt(self, tmp_path: Path, capsys) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        (tmp_path / ".wade" / "session" / "WORKFLOW.md").write_text(
+            "# Tampered workflow\n", encoding="utf-8"
+        )
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+        text = _captured_text(capsys)
+        assert "bundle failed integrity validation" in text
+        assert "wade session refresh-skills" in text
+
     def test_receipt_for_other_sha_refuses(self, tmp_path: Path) -> None:
         _record_review(tmp_path, "a" * 40)
         assert _gate_review_ran(ProjectConfig(), tmp_path, "b" * 40, skip_review=False) is False
@@ -278,6 +299,26 @@ class TestReviewRanCap:
         assert "safety limit reached (2 of 2)" in text
         assert "not re-reviewed" in text.lower()
         assert "--skip-review" in text
+
+    def test_tampered_skill_cannot_satisfy_pass_cap(self, tmp_path: Path, capsys) -> None:
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        skill = tmp_path / ".wade" / "session" / "skills" / "builtin" / "code-review"
+        (skill / "SKILL.md").write_text("# Tampered methodology\n", encoding="utf-8")
+
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "a" * 40,
+                skip_review=False,
+                session_type="implementation",
+            )
+            is False
+        )
+        text = _captured_text(capsys)
+        assert "bundle failed integrity validation" in text
+        assert "safety limit reached" not in text
 
     def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
         # An exact-sha reviewed receipt passes even when the review-pass cap is
