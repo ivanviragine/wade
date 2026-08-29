@@ -606,6 +606,7 @@ def plan(
             )
         except SessionCompositionError as exc:
             console.error(f"Cannot start planning session: {exc}")
+            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             stop_title_keeper()
             return False
     else:
@@ -623,7 +624,16 @@ def plan(
     # Provider setup is intentionally deferred until the session's immutable
     # skill bundle has resolved. An invalid configured or CLI skill must fail
     # before WADE creates labels, issues, PRs, or any other provider-side state.
-    ensure_task_label(provider, config.project.issue_label)
+    try:
+        ensure_task_label(provider, config.project.issue_label)
+    except Exception:
+        # No AI session has run yet, so neither workspace can contain generated
+        # plans or staged knowledge votes. Remove it before preserving the
+        # provider exception for the caller; retries must not leak temp dirs or
+        # registered detached worktrees.
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        stop_title_keeper()
+        raise
 
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
