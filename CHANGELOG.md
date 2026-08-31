@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.54.0] — 2026-08-31
+
+### Features
+
+- enable Codex implementation network access by default (#475) (0679c81)
+
 ## [v0.53.1] — 2026-08-31
 
 ### Bug Fixes
