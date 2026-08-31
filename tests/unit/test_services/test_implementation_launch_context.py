@@ -105,9 +105,12 @@ def _driven_start(
     p(patch(f"{_CORE}.start_title_keeper"))
     p(patch(f"{_CORE}.stop_title_keeper"))
     p(patch(f"{_CORE}.deliver_prompt_if_needed"))
-    p(patch(f"{_CORE}.launch_in_new_terminal", return_value=terminal_launch_succeeds))
+    terminal_launch = p(
+        patch(f"{_CORE}.launch_in_new_terminal", return_value=terminal_launch_succeeds)
+    )
     p(patch("crossby.ai_tools.AbstractAITool.get", return_value=spy))
     with stack:
+        spy.terminal_launch = terminal_launch
         yield spy
 
 
@@ -201,6 +204,7 @@ class TestImplementationLaunchContext:
         assert result.success is True
         assert spy.build_launch_command.call_args.kwargs["working_dir"] == worktree
         assert spy.build_launch_command.call_args.kwargs["network_access"] is True
+        assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
         spy.launch.assert_not_called()
 
     def test_network_disabled_codex_plan_handoff_keeps_nested_launch_guard(

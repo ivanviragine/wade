@@ -1029,7 +1029,12 @@ def start(
 
             if cmd is not None:
                 console.step(f"Launching {resolved_tool} in new terminal...")
-                if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
+                if launch_in_new_terminal(
+                    cmd,
+                    cwd=str(worktree_path),
+                    title=work_title,
+                    wait_for_ready=requires_fresh_codex_handoff,
+                ):
                     console.success(f"Detached AI session for #{task.id}")
                     stop_title_keeper()
                     return ImplementResult(success=True)

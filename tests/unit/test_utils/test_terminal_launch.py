@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -270,6 +271,45 @@ def test_create_temp_script_content(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "cd" in script
     assert "|| exit $?" in script
     assert "exec" in script
+
+
+def test_readiness_script_reports_failed_when_child_exits_immediately(tmp_path: Path) -> None:
+    """A broker success is rejected when its child cannot stay alive."""
+    from wade.utils.terminal import _create_readiness_script
+
+    readiness_file = tmp_path / "launch.ready"
+    readiness_file.touch()
+    launcher_script = _create_readiness_script(
+        ["bash", "-c", "exit 1"],
+        str(tmp_path),
+        str(readiness_file),
+    )
+    try:
+        completed = subprocess.run([launcher_script], capture_output=True, check=False)
+    finally:
+        Path(launcher_script).unlink(missing_ok=True)
+
+    assert completed.returncode == 1
+    assert readiness_file.read_text() == "failed\n"
+
+
+def test_readiness_script_reports_ready_for_a_live_child(tmp_path: Path) -> None:
+    """A child that survives the stability window confirms the handoff."""
+    from wade.utils.terminal import _create_readiness_script, _wait_for_launch_readiness
+
+    readiness_file = tmp_path / "launch.ready"
+    readiness_file.touch()
+    launcher_script = _create_readiness_script(
+        ["bash", "-c", "sleep 1"],
+        str(tmp_path),
+        str(readiness_file),
+    )
+    process = subprocess.Popen([launcher_script])
+    try:
+        assert _wait_for_launch_readiness(str(readiness_file), timeout=2.0) is True
+        assert process.wait(timeout=2.0) == 0
+    finally:
+        Path(launcher_script).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
