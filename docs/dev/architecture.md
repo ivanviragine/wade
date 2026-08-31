@@ -499,6 +499,17 @@ picks (implement / batch / review). `None` (unset) still re-resolves per the
 routed command's own config, matching how a non-explicit `permission_mode` is
 threaded.
 
+Planning itself is always network-off, including when it later offers an
+accepted single-issue implementation handoff. The internal `plan_handoff`
+intent keeps implementation-network resolution at `implementation_service.start`.
+If that handoff originates in Codex, resolves the implementation tool to Codex,
+and resolves network access to enabled, implementation must create a fresh
+detached Codex launch with an explicit `network_access=True` pin. It cannot reuse
+the planner's immutable network-off sandbox. If the detached launch cannot be
+created, the handoff fails closed and prints `wade implement <issue> --network`
+for the user to run from a new host terminal; it must not fall back to an inline
+or nested agent. All other nested-agent starts retain the ordinary launch guard.
+
 ### Phase-aware session readiness (#462)
 
 `check_service.check_session_readiness()` applies the declarative

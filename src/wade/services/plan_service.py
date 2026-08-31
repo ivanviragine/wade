@@ -1539,7 +1539,10 @@ def _offer_to_implement(
         return False
 
     try:
-        result = start_implementation_session(target=issue_number)
+        # Planning always launches with network disabled.  Tell implementation
+        # startup this is an accepted handoff so it can establish a fresh Codex
+        # context when its independently resolved policy needs network access.
+        result = start_implementation_session(target=issue_number, plan_handoff=True)
         return result.success
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)
