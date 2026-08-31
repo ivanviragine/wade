@@ -481,10 +481,12 @@ review detached/inline launches (`implementation_service/core.py`,
 makes local Git metadata writes work under `network_access=False`. GitHub API
 calls — including readiness's `gh api user` and review-data fetch/resolve — and
 remote Git operations (`git fetch`/`git push`, the network legs of `sync`/`done`)
-need `network_access=True`. WADE resolves a
-`network_access: bool` through `resolve_network_access()` (CLI
-`--network`/`--no-network` > command config > global `ai.network_access` > **on
-for `implement` and `review_pr_comments`, off for all other commands**) and
+need `network_access=True`. For `implement` and `review_pr_comments`, WADE
+resolves `network_access: bool` through `resolve_network_access()` (CLI
+`--network`/`--no-network` > command config > global `ai.network_access` >
+**enabled by default**). Planning, dependency analysis, bounded reviews, and
+every command outside `NETWORK_ENABLED_BY_DEFAULT_COMMANDS` are forcibly
+disabled regardless of CLI or configuration. WADE
 **always passes it explicitly** to the builder, so an ambient
 `network_access = true` in the user's Codex `config.toml` can never silently
 change a WADE-managed sandbox. Only Codex acts on either value — crossby
