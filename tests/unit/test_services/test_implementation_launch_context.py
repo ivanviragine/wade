@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wade.git.pr import PRLookup, PRRef
-from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
+from wade.models.config import AICommandConfig, AIConfig, ProjectConfig, ProjectSettings
 from wade.models.permission import PermissionMode
 from wade.models.task import Task, TaskState
 from wade.models.worktree import Worktree
@@ -32,7 +32,15 @@ _CORE = "wade.services.implementation_service.core"
 
 
 @contextlib.contextmanager
-def _driven_start(worktree_path: Path, *, network_access_config: bool) -> Iterator[MagicMock]:
+def _driven_start(
+    worktree_path: Path,
+    *,
+    network_access_config: bool,
+    implement_network_access_config: bool | None = None,
+    detected_env: str | None = None,
+    resolved_tool: str = "codex",
+    terminal_launch_succeeds: bool = True,
+) -> Iterator[MagicMock]:
     """Patch impl start()'s prerequisites and yield the spy AI adapter.
 
     Every heavy step between ``start()`` entry and the AI launch is stubbed so the
@@ -40,7 +48,10 @@ def _driven_start(worktree_path: Path, *, network_access_config: bool) -> Iterat
     worktree at *worktree_path*, and ``network_access`` resolved from config.
     """
     config = ProjectConfig(
-        ai=AIConfig(network_access=network_access_config),
+        ai=AIConfig(
+            network_access=network_access_config,
+            implement=AICommandConfig(network_access=implement_network_access_config),
+        ),
         project=ProjectSettings(main_branch="main", branch_prefix="feat"),
     )
     task = Task(id="42", title="Fix the widget", body="broken", state=TaskState.OPEN)
@@ -80,23 +91,26 @@ def _driven_start(worktree_path: Path, *, network_access_config: bool) -> Iterat
     p(patch(f"{_CORE}.bootstrap_worktree"))
     p(patch(f"{_CORE}._catchup_and_surface_staleness", return_value=None))
     p(patch(f"{_CORE}.build_implementation_prompt", return_value="PROMPT"))
-    p(patch(f"{_CORE}.resolve_ai_tool", return_value="codex"))
+    p(patch(f"{_CORE}.resolve_ai_tool", return_value=resolved_tool))
     p(patch(f"{_CORE}.resolve_model", return_value=None))
     p(patch(f"{_CORE}.resolve_effort", return_value=None))
     p(
         patch(
             f"{_CORE}.confirm_ai_selection",
-            return_value=("codex", None, None, PermissionMode.DEFAULT),
+            return_value=(resolved_tool, None, None, PermissionMode.DEFAULT),
         )
     )
-    p(patch(f"{_CORE}._detect_ai_cli_env", return_value=None))
+    p(patch(f"{_CORE}._detect_ai_cli_env", return_value=detected_env))
     p(patch(f"{_CORE}.set_terminal_title"))
     p(patch(f"{_CORE}.start_title_keeper"))
     p(patch(f"{_CORE}.stop_title_keeper"))
     p(patch(f"{_CORE}.deliver_prompt_if_needed"))
-    p(patch(f"{_CORE}.launch_in_new_terminal", return_value=True))
+    terminal_launch = p(
+        patch(f"{_CORE}.launch_in_new_terminal", return_value=terminal_launch_succeeds)
+    )
     p(patch("crossby.ai_tools.AbstractAITool.get", return_value=spy))
     with stack:
+        spy.terminal_launch = terminal_launch
         yield spy
 
 
@@ -164,3 +178,130 @@ class TestImplementationLaunchContext:
         kwargs = spy.build_resume_command.call_args.kwargs
         assert kwargs["working_dir"] == worktree
         assert kwargs["network_access"] is True
+
+    @pytest.mark.parametrize(
+        ("global_network_access", "implement_network_access"),
+        [(True, None), (False, True)],
+        ids=["global-policy", "implement-policy"],
+    )
+    def test_network_enabled_codex_plan_handoff_launches_fresh_detached_context(
+        self,
+        worktree: Path,
+        global_network_access: bool,
+        implement_network_access: bool | None,
+    ) -> None:
+        """A Codex plan handoff cannot reuse the planner's network-off sandbox."""
+        with _driven_start(
+            worktree,
+            network_access_config=global_network_access,
+            implement_network_access_config=implement_network_access,
+            detected_env="CODEX_CLI",
+        ) as spy:
+            spy.build_launch_command.return_value = ["codex"]
+
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        assert spy.build_launch_command.call_args.kwargs["working_dir"] == worktree
+        assert spy.build_launch_command.call_args.kwargs["network_access"] is True
+        assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
+        spy.launch.assert_not_called()
+
+    def test_network_disabled_codex_plan_handoff_keeps_nested_launch_guard(
+        self, worktree: Path
+    ) -> None:
+        """A false policy must not gain network access merely to leave planning."""
+        with _driven_start(
+            worktree,
+            network_access_config=False,
+            detected_env="CODEX_CLI",
+        ) as spy:
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        spy.build_launch_command.assert_not_called()
+        spy.launch.assert_not_called()
+
+    def test_failed_fresh_codex_plan_handoff_fails_closed_with_restart_command(
+        self, worktree: Path
+    ) -> None:
+        """The handoff must never fall through to an inline planner context."""
+        with (
+            _driven_start(
+                worktree,
+                network_access_config=True,
+                detected_env="CODEX_CLI",
+                terminal_launch_succeeds=False,
+            ) as spy,
+            patch(f"{_CORE}.console") as mock_console,
+        ):
+            spy.build_launch_command.return_value = ["codex"]
+
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is False
+        spy.launch.assert_not_called()
+        mock_console.detail.assert_any_call("wade implement 42 --network")
+
+    @pytest.mark.parametrize("command_error", [ValueError, KeyError])
+    def test_fresh_codex_plan_handoff_fails_closed_when_command_build_fails(
+        self, worktree: Path, command_error: type[Exception]
+    ) -> None:
+        """A builder failure must not degrade to an unconfigured ``codex`` command."""
+        with (
+            _driven_start(
+                worktree,
+                network_access_config=True,
+                detected_env="CODEX_CLI",
+            ) as spy,
+            patch(f"{_CORE}.console") as mock_console,
+            patch(f"{_CORE}.launch_in_new_terminal") as mock_launch,
+        ):
+            spy.build_launch_command.side_effect = command_error("build failed")
+
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is False
+        mock_launch.assert_not_called()
+        spy.launch.assert_not_called()
+        mock_console.detail.assert_any_call("wade implement 42 --network")
+
+    def test_non_handoff_codex_session_keeps_nested_launch_guard(self, worktree: Path) -> None:
+        """Ordinary ``wade implement`` calls still do not recursively launch Codex."""
+        with _driven_start(
+            worktree,
+            network_access_config=True,
+            detected_env="CODEX_CLI",
+        ) as spy:
+            result = start(target="42")
+
+        assert result.success is True
+        spy.build_launch_command.assert_not_called()
+        spy.launch.assert_not_called()
+
+    def test_non_codex_plan_handoff_keeps_nested_launch_guard(self, worktree: Path) -> None:
+        """A plan handoff to another implementation tool cannot escape the guard."""
+        with _driven_start(
+            worktree,
+            network_access_config=True,
+            detected_env="CODEX_CLI",
+            resolved_tool="claude",
+        ) as spy:
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        spy.build_launch_command.assert_not_called()
+        spy.launch.assert_not_called()
+
+    def test_other_ai_session_marker_keeps_nested_launch_guard(self, worktree: Path) -> None:
+        """Only a Codex-originated handoff gets the fresh-context exception."""
+        with _driven_start(
+            worktree,
+            network_access_config=True,
+            detected_env="CLAUDE_CODE",
+        ) as spy:
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        spy.build_launch_command.assert_not_called()
+        spy.launch.assert_not_called()

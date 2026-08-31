@@ -434,6 +434,7 @@ def start(
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
+    plan_handoff: bool = False,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
 
@@ -453,6 +454,10 @@ def start(
         project_root: Repository root (defaults to CWD).
         detach: If True, launch AI in a new terminal tab.
         cd_only: If True, create worktree and print path only (no AI launch).
+        plan_handoff: Internal marker for an accepted ``wade plan`` handoff.
+            A network-enabled Codex implementation must launch in a fresh
+            detached context rather than inherit the planner's network-off
+            sandbox.
 
     Returns:
         ImplementResult with success/merged status.
@@ -931,9 +936,19 @@ def start(
             return ImplementResult(success=True)
 
         # AI-initiated start guard: if we're inside an AI CLI session,
-        # don't launch another AI tool — just print the worktree path.
+        # don't launch another AI tool — just print the worktree path.  The
+        # one exception is a plan handoff from Codex to a network-enabled Codex
+        # implementation: network is a launch-time sandbox property, and the
+        # planner always ran with it disabled, so that handoff needs a fresh
+        # detached process instead of reusing this agent context.
         detected_env = _detect_ai_cli_env()
-        if detected_env:
+        requires_fresh_codex_handoff = (
+            plan_handoff
+            and detected_env == "CODEX_CLI"
+            and resolved_tool == AIToolID.CODEX.value
+            and resolved_network_access
+        )
+        if detected_env and not requires_fresh_codex_handoff:
             logger.info(
                 "implementation.ai_launch_skipped",
                 reason="inside_ai_cli",
@@ -960,8 +975,10 @@ def start(
         except OSError:
             logger.warning("implementation.transcript_dir_failed")
 
-        # Detach mode: launch AI tool in a new terminal, don't block
-        if detach and resolved_tool:
+        # Detach mode: launch AI tool in a new terminal, don't block.  A
+        # network-enabled Codex plan handoff is forced through this path so it
+        # cannot inherit the planner's immutable network-off sandbox.
+        if (detach or requires_fresh_codex_handoff) and resolved_tool:
             cmd: list[str] | None = None
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
@@ -995,18 +1012,40 @@ def start(
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
                         working_dir=worktree_path,
-                        network_access=resolved_network_access,
+                        # ``requires_fresh_codex_handoff`` already established
+                        # the resolved value is true; pin it explicitly for the
+                        # new Codex process rather than relying on ambient config.
+                        network_access=(
+                            True if requires_fresh_codex_handoff else resolved_network_access
+                        ),
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
-                cmd = [resolved_tool]
+                # A fresh Codex handoff must retain its explicit sandbox,
+                # network, permission, and prompt arguments.  Do not replace a
+                # failed build with bare ``codex``, which would bypass them.
+                if not requires_fresh_codex_handoff:
+                    cmd = [resolved_tool]
 
-            console.step(f"Launching {resolved_tool} in new terminal...")
-            assert cmd is not None  # guaranteed by the two branches above
-            if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
-                console.success(f"Detached AI session for #{task.id}")
+            if cmd is not None:
+                console.step(f"Launching {resolved_tool} in new terminal...")
+                if launch_in_new_terminal(
+                    cmd,
+                    cwd=str(worktree_path),
+                    title=work_title,
+                    wait_for_ready=requires_fresh_codex_handoff,
+                ):
+                    console.success(f"Detached AI session for #{task.id}")
+                    stop_title_keeper()
+                    return ImplementResult(success=True)
+            if requires_fresh_codex_handoff:
+                console.error(
+                    "Could not launch a fresh Codex implementation session with network access."
+                )
+                console.hint("Open a new host terminal, then run:")
+                console.detail(f"wade implement {task.id} --network")
                 stop_title_keeper()
-                return ImplementResult(success=True)
+                return ImplementResult(success=False)
             console.warn("Could not launch in new terminal — falling back to inline")
             detach = False
             # Fall through to inline launch below

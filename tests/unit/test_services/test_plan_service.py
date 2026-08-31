@@ -1170,7 +1170,7 @@ class TestOfferToImplement:
             result = _offer_to_implement("42")
 
             assert result is True
-            mock_start.assert_called_once_with(target="42")
+            mock_start.assert_called_once_with(target="42", plan_handoff=True)
 
     def test_user_declines_returns_none(self) -> None:
         """Declining the prompt returns None without flushing or starting."""

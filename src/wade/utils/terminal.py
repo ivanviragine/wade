@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
+from pathlib import Path
 
 import structlog
 
@@ -20,6 +21,9 @@ _title_keeper_thread: threading.Thread | None = None
 _title_keeper_running = False
 
 _TERMINAL_TITLE_MAX_LEN = 50
+_LAUNCH_READY_TIMEOUT_SECONDS = 5.0
+_LAUNCH_READY_POLL_SECONDS = 0.05
+_LAUNCH_STABILITY_SECONDS = 0.5
 
 
 def _truncate_terminal_title(text: str) -> str:
@@ -126,6 +130,74 @@ def _create_temp_script(command: list[str], cwd: str | None = None) -> str:
     return tmp_path
 
 
+def _create_readiness_file() -> str:
+    """Create an empty, private file used for a detached-launch acknowledgement."""
+    import tempfile
+
+    fd, path = tempfile.mkstemp(prefix="wade-launch-", suffix=".ready")
+    os.close(fd)
+    return path
+
+
+def _create_readiness_script(
+    command: list[str],
+    cwd: str | None,
+    readiness_file: str,
+) -> str:
+    """Create a launcher which acknowledges only after its child stays alive.
+
+    Terminal brokers can confirm that they accepted a tab/window request but
+    cannot observe a command executed inside it.  This wrapper reports
+    ``ready`` only after the command has remained alive briefly, which catches
+    an unavailable executable and launch-time failures before the caller
+    reports a successful handoff.
+    """
+    import tempfile
+
+    cmd_str = " ".join(shlex.quote(str(c)) for c in command)
+    quoted_cwd = shlex.quote(cwd or ".")
+    quoted_readiness_file = shlex.quote(readiness_file)
+    with tempfile.NamedTemporaryFile(prefix="wade-", suffix=".sh", delete=False, mode="w") as f:
+        tmp_path = f.name
+        f.write(
+            "#!/usr/bin/env bash\n"
+            f"cd {quoted_cwd} || {{ printf 'failed\\n' > {quoted_readiness_file}; exit 1; }}\n"
+            f"{cmd_str} &\n"
+            "child_pid=$!\n"
+            f"sleep {_LAUNCH_STABILITY_SECONDS}\n"
+            'if kill -0 "$child_pid" 2>/dev/null; then\n'
+            f"  printf 'ready\\n' > {quoted_readiness_file}\n"
+            "else\n"
+            '  wait "$child_pid"\n'
+            f"  printf 'failed\\n' > {quoted_readiness_file}\n"
+            "  exit 1\n"
+            "fi\n"
+            'wait "$child_pid"\n'
+        )
+    os.chmod(tmp_path, 0o700)
+    return tmp_path
+
+
+def _wait_for_launch_readiness(
+    readiness_file: str,
+    timeout: float = _LAUNCH_READY_TIMEOUT_SECONDS,
+) -> bool:
+    """Wait for the detached launch wrapper to acknowledge a live child."""
+    deadline = time.monotonic() + timeout
+    path = Path(readiness_file)
+    while time.monotonic() < deadline:
+        try:
+            status = path.read_text()
+        except OSError:
+            return False
+        if status == "ready\n":
+            return True
+        if status == "failed\n":
+            return False
+        time.sleep(_LAUNCH_READY_POLL_SECONDS)
+    return False
+
+
 def detect_terminal() -> str | None:
     """Detect the current terminal emulator.
 
@@ -154,12 +226,36 @@ def launch_in_new_terminal(
     command: list[str],
     cwd: str | None = None,
     title: str | None = None,
+    *,
+    wait_for_ready: bool = False,
 ) -> bool:
     """Launch a command in a new terminal window/tab.
 
     Tries Ghostty, iTerm2, Terminal.app, tmux in order.
-    Returns True if launched successfully, False otherwise.
+    Returns True if launched successfully, False otherwise.  When
+    ``wait_for_ready`` is set, require a brief child-process acknowledgement
+    rather than treating terminal-broker acceptance as success.
     """
+    if not wait_for_ready:
+        return _launch_in_new_terminal(command, cwd=cwd, title=title)
+
+    readiness_file = _create_readiness_file()
+    launcher_script = _create_readiness_script(command, cwd, readiness_file)
+    try:
+        if not _launch_in_new_terminal([launcher_script], title=title):
+            return False
+        return _wait_for_launch_readiness(readiness_file)
+    finally:
+        _safe_unlink(launcher_script)
+        _safe_unlink(readiness_file)
+
+
+def _launch_in_new_terminal(
+    command: list[str],
+    cwd: str | None = None,
+    title: str | None = None,
+) -> bool:
+    """Launch a command in a new terminal window/tab without confirmation."""
     terminal = detect_terminal()
 
     if terminal == "ghostty":

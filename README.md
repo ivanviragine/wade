@@ -694,6 +694,15 @@ flag enables it there. Precedence for the commands that honor it is
 enable network for a WADE-managed sandbox. Enabling network never disables the
 sandbox and never changes approval-policy semantics.
 
+An accepted single-issue plan handoff starts implementation from a planning
+session that is always network-off. When both the planning tool and resolved
+implementation tool are Codex and the implementation policy resolves to enabled,
+WADE starts a fresh detached Codex context with network explicitly enabled;
+reusing the planner process would retain its immutable network-off sandbox. If
+WADE cannot open that detached context, the handoff fails rather than reporting
+an implementation session ready. Open a new host terminal and run the displayed
+`wade implement <issue> --network` command to continue with the required policy.
+
 ### Session readiness and least-privilege remediation
 
 Every `wade` command an agent runs is a child of the AI tool. It inherits that
