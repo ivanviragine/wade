@@ -25,6 +25,7 @@ from wade.models.config import (
 )
 from wade.models.hooks import SessionPhase, StopGuard
 from wade.models.task import Task
+from wade.models.workflow import SessionKind
 from wade.skills.pointer import is_pointer_only
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
@@ -415,10 +416,10 @@ def _install_stop_hook(
 def _session_start_command(tool_value: str, quoted_root: str, phase_value: str) -> str:
     """Build the installed ``wade-hook session_start`` command for one tool + phase.
 
-    Single source of truth so the install path and the stale-phase revocation
+    Single source of truth so the install path and stale-phase revocation
     (``hooks_remove``) in :func:`_install_session_start_hook` construct
     byte-identical commands: crossby matches a removal by exact command string, so
-    any drift between the two would silently fail to reconcile a prior phase's hook.
+    any drift between the two would silently fail to reconcile a prior phase hook.
 
     ``--guard context`` is a descriptive label, not a dispatch key: the runtime
     routes session_start by the *event* positional (``_is_session_start``), never by
@@ -442,7 +443,7 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
     Installed only for tools that fire a SessionStart hook
     (``supports_session_start_hook`` — Claude/Codex/Copilot/Cursor as of crossby
     0.17; **agy is skipped**, its DECISION dialect having no verified context
-    channel, so it degrades to the always-loaded skill). This mirrors how
+    channel, so it degrades to the launch-loaded workflow). This mirrors how
     :func:`_install_stop_hook` gates on ``supports_stop_hook``.
 
     ``tools=[]`` is **load-bearing**: ``_tools_to_matcher([])`` returns ``.*``, so
@@ -457,7 +458,7 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
     re-bootstraps with ``SessionPhase.REVIEW``). crossby's hook writers dedup by
     exact command, so a prior ``--phase implement`` entry would survive alongside
     the new ``--phase review`` one and **both** would fire, injecting contradictory
-    phase reminders. Every other-phase variant is therefore revoked via
+    reminders. Every other phase is therefore revoked via
     ``hooks_remove`` so exactly one SessionStart hook remains after re-bootstrap.
     """
     import shlex
@@ -472,15 +473,15 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
             continue
         command = _session_start_command(tool_id.value, root, phase.value)
         hook = HookEntry(event="session_start", tools=[], command=command)
-        # Revoke this tool's SessionStart command for every *other* phase, so a
+        # Revoke this tool's SessionStart command for every other phase, so a
         # reused worktree (impl → review) ends up with exactly one entry rather
-        # than a stale phase firing alongside the current one. sync() adds before
+        # than a stale hook firing alongside the current one. sync() adds before
         # it removes, and no removal ever equals `command` (distinct --phase), so
         # the entry just installed is never clobbered.
+        stale_phase_values = {other.value for other in SessionPhase if other is not phase}
         stale_removals = [
-            ("session_start", _session_start_command(tool_id.value, root, other.value))
-            for other in SessionPhase
-            if other != phase
+            ("session_start", _session_start_command(tool_id.value, root, value))
+            for value in sorted(stale_phase_values)
         ]
         _log_sync_result(
             writer.sync(SyncData(hooks=[hook], hooks_remove=stale_removals), worktree_path),
@@ -488,7 +489,9 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
         )
 
     logger.info(
-        "implementation.session_start_hook_installed", path=str(worktree_path), phase=phase.value
+        "implementation.session_start_hook_installed",
+        path=str(worktree_path),
+        phase=phase.value,
     )
 
 
@@ -1038,6 +1041,12 @@ def bootstrap_worktree(
     plan_mode: bool = False,
     selected_ai_tool: str | None = None,
     session_phase: SessionPhase | None = None,
+    session_kind: SessionKind | None = None,
+    task_id: str | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
+    compose_session_only: bool = False,
 ) -> None:
     """Run post-creation bootstrap: copy files, install skills, run hooks.
 
@@ -1050,14 +1059,36 @@ def bootstrap_worktree(
         selected_ai_tool: Effective AI tool for this session (e.g. ``"cursor"``).
             When provided, takes precedence over persisted config when deciding
             whether to configure tool-specific worktree settings.
-        session_phase: The wade session kind (implement / review / plan). When set,
-            a SessionStart context-injection hook is installed for that phase; when
-            ``None`` (e.g. ``task deps`` sessions) no such hook is installed. This
-            is an **independent** signal from ``plan_mode`` (which selects the
-            write/stop guard) — the two are correlated (``plan_mode is True`` iff
-            ``session_phase is SessionPhase.PLAN``), an invariant pinned by a test
-            rather than derived in code.
+        session_phase: Established SessionStart hook context variant. Interactive
+            session callers provide it explicitly; dependency operations omit it.
+        session_kind: Canonical session identity. Interactive sessions install a
+            frozen workflow/methodology bundle; ``None`` and ``deps`` do not.
+        task_id: Stable provider task identity persisted in the session manifest.
+        work_skills: Ordered CLI override for the session WORK slot.
+        review_skills: Ordered CLI override for the session REVIEW slot.
+        refresh_skills: Explicitly replace an existing frozen session bundle.
+        compose_session_only: Resolve and materialize only the immutable session
+            bundle. This preflight mode deliberately skips hooks, copied files, and
+            tool configuration so callers can reject invalid skill bindings before
+            any provider-side mutation.
     """
+    if compose_session_only:
+        if session_kind is None or session_kind is SessionKind.DEPS:
+            raise ValueError("compose_session_only requires an interactive session kind")
+        from wade.services.session_composition_service import compose_session
+
+        compose_session(
+            worktree_path,
+            repo_root,
+            config,
+            kind=session_kind,
+            task_id=task_id,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh=refresh_skills,
+        )
+        return
+
     # Copy configured files + internal wade files that must always be present
     copy_files = _effective_copy_files(config)
     for filename in copy_files:
@@ -1081,76 +1112,31 @@ def bootstrap_worktree(
         _carry_forward_pending_votes(worktree_path, repo_root, config)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import SKILL_FILES, get_wade_repo_root, install_skills
+    from wade.skills.installer import (
+        SKILL_FILES,
+        get_wade_repo_root,
+        install_skills,
+    )
 
     is_self = repo_root.resolve() == get_wade_repo_root().resolve()
 
-    # Suppress review step placeholders when reviews are explicitly disabled.
-    # An empty string (or disabled one-liner) overrides the default file-based partial.
-    skill_extra_partials: dict[str, str] = {}
-    if config.ai.review_plan.enabled is False:
-        skill_extra_partials["{review_plan_step}"] = (
-            "7. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
-        )
-    if config.ai.review_implementation.enabled is False:
-        skill_extra_partials["{review_enforcement_rule}"] = ""
-        skill_extra_partials["{review_implementation_closing_step}"] = (
-            "**Step 1 — ~~Review~~** — skipped"
-            " (`review_implementation.enabled: false` in `.wade.yml`)."
-        )
-
-    # {review_budget_notes} (review-budget.md) is shared by all three session
-    # skills, so — unlike the placeholders above — one global override string
-    # would be wrong for whichever skill's review command is still enabled. Its
-    # "review is required unless trivial" guidance is only contradictory for
-    # the skill(s) whose own review flag is off, so scope the override to what
-    # this call is actually installing. Every current call site passes an
-    # explicit, mutually-exclusive skills= list (plan-session XOR
-    # {implementation-session, review-pr-comments-session} — see
-    # PLAN_SKILLS/IMPLEMENT_SKILLS/REVIEW_SKILLS), so the two categories below
-    # never both apply in practice. Guard the ambiguous case explicitly anyway
-    # (skills=None, or a future caller mixing both) — a single extra_partials
-    # dict can't hold two different override strings for two different skill
-    # files, so if the call installs *both* categories at once, overriding for
-    # either flag alone would clobber the other skill's (possibly still-enabled)
-    # guidance with the wrong disabled-reason text — not just when both flags
-    # are off. Decline to override in that case — falling back to the full,
-    # non-contradictory-if-verbose default — rather than risk wrong text in one
-    # file (#450 review follow-up).
-    installing = set(skills) if skills is not None else set(SKILL_FILES)
-    plan_selected = "plan-session" in installing
-    impl_selected = (
-        "implementation-session" in installing or "review-pr-comments-session" in installing
-    )
-    plan_review_off = config.ai.review_plan.enabled is False
-    impl_review_off = config.ai.review_implementation.enabled is False
-
-    if plan_selected and impl_selected:
-        if plan_review_off or impl_review_off:
-            logger.debug(
-                "implementation.review_budget_notes_ambiguous_skip", skills=sorted(installing)
-            )
-    elif plan_selected and plan_review_off:
-        skill_extra_partials["{review_budget_notes}"] = (
-            "## Review budget & skip guidance\n\n"
-            "Skipped — `review_plan.enabled: false` in `.wade.yml` disables plan review."
-        )
-    elif impl_selected and impl_review_off:
-        skill_extra_partials["{review_budget_notes}"] = (
-            "## Review budget & skip guidance\n\n"
-            "Skipped — `review_implementation.enabled: false` in `.wade.yml` disables "
-            "`wade review implementation` and the `done` review gate."
-        )
+    # Dynamic methodology is physically snapshotted under `.wade/session`. In
+    # WADE's own developer worktrees, retain tool-native links to packaged
+    # defaults for authoring convenience; project discovery excludes their
+    # resolved template roots.
     if is_self:
+        from wade.skills.catalog import BUILTIN_METHODOLOGY_SKILLS
+
         # Worktree has its own templates/ checkout — symlink to those
         wt_templates = worktree_path / "templates" / "skills"
+        support = list(SKILL_FILES) if skills is None else skills
+        selected = list(dict.fromkeys([*support, *BUILTIN_METHODOLOGY_SKILLS]))
         install_skills(
             worktree_path,
             is_self_init=True,
             force=True,
             templates_dir=wt_templates,
-            skills=skills,
-            extra_partials=skill_extra_partials or None,
+            skills=selected,
         )
     else:
         install_skills(
@@ -1158,7 +1144,6 @@ def bootstrap_worktree(
             is_self_init=False,
             force=True,
             skills=skills,
-            extra_partials=skill_extra_partials or None,
         )
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
@@ -1168,6 +1153,30 @@ def bootstrap_worktree(
     pointer.ensure_pointer(worktree_path)
     _suppress_pointer_artifacts(worktree_path)
     logger.debug("implementation.bootstrap_pointer", path=str(worktree_path))
+
+    # Compose the immutable workflow + active/inventory skill snapshots. Deps
+    # passes no interactive kind and intentionally has no session bundle.
+    if session_kind is not None and session_kind is not SessionKind.DEPS:
+        from wade.services.session_composition_service import compose_session
+
+        composition = compose_session(
+            worktree_path,
+            repo_root,
+            config,
+            kind=session_kind,
+            task_id=task_id,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh=refresh_skills,
+        )
+        if composition.resolution is not None:
+            for warning in composition.resolution.warnings:
+                logger.warning("session.skill_binding_shadowed", warning=warning)
+        logger.info(
+            "implementation.session_composed",
+            session=session_kind.value,
+            reused=composition.reused,
+        )
 
     # Always propagate allowlist to worktree — configure_allowlist is idempotent.
     # wade's base pattern is guaranteed so ``wade ...`` stays pre-authorized even
@@ -1239,10 +1248,9 @@ def bootstrap_worktree(
         # PostToolUse in-turn lint feedback (opt-in) for context-capable tools.
         _install_post_tool_use_lint_hook(worktree_path, config)
 
-    # SessionStart context injection: re-inject a compact, phase-gated task
-    # reminder on startup/resume/compaction (all sessions with a known phase;
-    # `task deps` passes None and opts out). Independent of plan_mode — a plan
-    # worktree installs both the plan write/stop guards AND this hook.
+    # SessionStart context injection: re-inject a compact session-gated task
+    # reminder on startup/resume/compaction. A plan worktree installs both the
+    # plan write/stop guards and this hook; dependency operations opt out.
     if session_phase is not None:
         _install_session_start_hook(worktree_path, phase=session_phase)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,7 +20,10 @@ from wade.models.config import (
 )
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.session import SyncResult
+from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, SessionManifest
+from wade.models.skill import ResolvedSkill, SkillSlot
 from wade.models.task import Task
+from wade.models.workflow import AICommandKey, DelegationKind, SessionKind
 from wade.services.implementation_service.done import (
     _behind_count,
     _gate_knowledge_valid,
@@ -32,7 +36,9 @@ from wade.services.implementation_service.done import (
     _run_completion_gates,
     _title_fix_hint,
 )
-from wade.utils import markers
+from wade.services.review_record_service import write_review_record
+from wade.skills.materializer import compute_session_bundle_digest
+from wade.skills.validation import inspect_skill
 
 # The package re-exports the ``done``/``sync`` *functions*, shadowing the
 # submodule attributes, so import the module objects explicitly for patching.
@@ -42,6 +48,67 @@ sync_mod = importlib.import_module("wade.services.implementation_service.sync")
 
 def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
+
+
+def _materialize_review_bundle(root: Path) -> ResolvedBinding:
+    session = root / ".wade" / "session"
+    skill_dir = session / "skills" / "builtin" / "code-review"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (session / "WORKFLOW.md").write_text("# Implementation workflow\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("# Code review methodology\n", encoding="utf-8")
+    inspected = inspect_skill(skill_dir, project_root=session)
+    return ResolvedBinding.from_skills(
+        (
+            ResolvedSkill(
+                canonical_ref="builtin:code-review",
+                source_path="templates/skills/code-review",
+                materialized_path=".wade/session/skills/builtin/code-review",
+                content_digest=inspected.digest,
+                files=inspected.files,
+            ),
+        )
+    )
+
+
+def _record_review(
+    root: Path,
+    commit: str,
+    *,
+    outcome: ReviewOutcome = ReviewOutcome.REVIEWED,
+    session_kind: SessionKind = SessionKind.IMPLEMENTATION,
+) -> None:
+    session = root / ".wade" / "session"
+    binding = _materialize_review_bundle(root)
+    manifest = SessionManifest(
+        session=session_kind,
+        workflow_revision=1,
+        bundle_digest=compute_session_bundle_digest(session),
+        task_id="42",
+        ai_command=(
+            AICommandKey.REVIEW_PR_COMMENTS
+            if session_kind is SessionKind.REVIEW_PR_COMMENTS
+            else AICommandKey.IMPLEMENT
+        ),
+        bindings={SkillSlot.WORK: binding, SkillSlot.REVIEW: binding},
+    )
+    (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
+    assert (
+        write_review_record(
+            root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=commit,
+            binding=binding,
+            outcome=outcome,
+        )
+        is not None
+    )
+
+
+def _update_manifest(root: Path, **updates: object) -> None:
+    path = root / ".wade/session/manifest.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(updates)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +224,68 @@ class TestPlaceholderDetection:
 
 
 class TestReviewRanGate:
-    def test_refuses_without_marker(self, tmp_path: Path) -> None:
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "abc123", skip_review=False) is False
+    def test_refuses_without_receipt(self, tmp_path: Path) -> None:
+        assert _gate_review_ran(ProjectConfig(), tmp_path, "a" * 40, skip_review=False) is False
 
-    def test_passes_with_marker(self, tmp_path: Path) -> None:
-        markers.write_marker(tmp_path, "reviewed", "abc123")
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "abc123", skip_review=False) is True
+    def test_passes_with_matching_receipt(self, tmp_path: Path) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is True
 
-    def test_marker_for_other_sha_refuses(self, tmp_path: Path) -> None:
-        markers.write_marker(tmp_path, "reviewed", "old")
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "new", skip_review=False) is False
+    def test_tampered_workflow_invalidates_matching_receipt(self, tmp_path: Path, capsys) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        (tmp_path / ".wade" / "session" / "WORKFLOW.md").write_text(
+            "# Tampered workflow\n", encoding="utf-8"
+        )
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+        text = _captured_text(capsys)
+        assert "bundle failed integrity validation" in text
+        assert "wade session refresh-skills" in text
+
+    def test_stale_workflow_revision_invalidates_matching_receipt(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        _update_manifest(tmp_path, workflow_revision=999)
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+        assert "bundle failed integrity validation" in _captured_text(capsys)
+
+    def test_wrong_session_kind_invalidates_matching_receipt(self, tmp_path: Path, capsys) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        _update_manifest(
+            tmp_path,
+            session=SessionKind.REVIEW_PR_COMMENTS.value,
+            ai_command=AICommandKey.REVIEW_PR_COMMENTS.value,
+        )
+
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                head,
+                skip_review=False,
+                session_type="implementation",
+            )
+            is False
+        )
+        assert "bundle failed integrity validation" in _captured_text(capsys)
+
+    def test_wrong_ai_command_invalidates_matching_receipt(self, tmp_path: Path, capsys) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        _update_manifest(tmp_path, ai_command=AICommandKey.REVIEW_PR_COMMENTS.value)
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+        assert "bundle failed integrity validation" in _captured_text(capsys)
+
+    def test_receipt_for_other_sha_refuses(self, tmp_path: Path) -> None:
+        _record_review(tmp_path, "a" * 40)
+        assert _gate_review_ran(ProjectConfig(), tmp_path, "b" * 40, skip_review=False) is False
 
     def test_skip_review_hatch(self, tmp_path: Path) -> None:
         assert _gate_review_ran(ProjectConfig(), tmp_path, "abc", skip_review=True) is True
@@ -199,12 +318,12 @@ class TestReviewRanCap:
 
     def test_refuses_before_cap_with_pass_count(self, tmp_path: Path, capsys) -> None:
         # One prior pass, no exact-sha marker, limit 2 → refuse "pass 1 of 2".
-        markers.record_review_pass(tmp_path, "sha1")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
         assert (
             _gate_review_ran(
                 ProjectConfig(),
                 tmp_path,
-                "newhead",
+                "a" * 40,
                 skip_review=False,
                 session_type="implementation",
             )
@@ -216,13 +335,13 @@ class TestReviewRanCap:
 
     def test_passes_at_cap_with_notice(self, tmp_path: Path, capsys) -> None:
         # Two distinct reviewed commits reach the cap → complete anyway + notice.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         assert (
             _gate_review_ran(
                 ProjectConfig(),
                 tmp_path,
-                "newhead",
+                "a" * 40,
                 skip_review=False,
                 session_type="implementation",
             )
@@ -233,15 +352,36 @@ class TestReviewRanCap:
         assert "not re-reviewed" in text.lower()
         assert "--skip-review" in text
 
-    def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
-        # An exact-sha reviewed marker passes even when the review-pass cap is
-        # already exhausted — the fast path precedes the cap check.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")  # cap (default 2) reached
-        markers.write_marker(tmp_path, "reviewed", "head")
+    def test_tampered_skill_cannot_satisfy_pass_cap(self, tmp_path: Path, capsys) -> None:
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        skill = tmp_path / ".wade" / "session" / "skills" / "builtin" / "code-review"
+        (skill / "SKILL.md").write_text("# Tampered methodology\n", encoding="utf-8")
+
         assert (
             _gate_review_ran(
-                ProjectConfig(), tmp_path, "head", skip_review=False, session_type="implementation"
+                ProjectConfig(),
+                tmp_path,
+                "a" * 40,
+                skip_review=False,
+                session_type="implementation",
+            )
+            is False
+        )
+        text = _captured_text(capsys)
+        assert "bundle failed integrity validation" in text
+        assert "safety limit reached" not in text
+
+    def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
+        # An exact-sha reviewed receipt passes even when the review-pass cap is
+        # already exhausted — the fast path precedes the cap check.
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        head = "a" * 40
+        _record_review(tmp_path, head)
+        assert (
+            _gate_review_ran(
+                ProjectConfig(), tmp_path, head, skip_review=False, session_type="implementation"
             )
             is True
         )
@@ -250,20 +390,20 @@ class TestReviewRanCap:
 
     def test_custom_max_review_passes_honored(self, tmp_path: Path) -> None:
         config = ProjectConfig(done=DoneConfig(max_review_passes=3))
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.TIMED_OUT)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.TIMED_OUT)
         # 2 passes < limit 3 → still refuses.
         assert (
             _gate_review_ran(
-                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+                config, tmp_path, "a" * 40, skip_review=False, session_type="implementation"
             )
             is False
         )
-        markers.record_review_pass(tmp_path, "sha3")
+        _record_review(tmp_path, "3" * 40, outcome=ReviewOutcome.TIMED_OUT)
         # 3 passes == limit 3 → passes.
         assert (
             _gate_review_ran(
-                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+                config, tmp_path, "a" * 40, skip_review=False, session_type="implementation"
             )
             is True
         )
@@ -282,13 +422,23 @@ class TestReviewRanCap:
     def test_review_pr_comments_path_never_caps(self, tmp_path: Path) -> None:
         # Even with passes >= limit, the review-pr-comments path keeps the
         # unbounded fast-path-or-refuse behavior — the cap is impl-only.
-        markers.record_review_pass(tmp_path, "sha1")
-        markers.record_review_pass(tmp_path, "sha2")
+        _record_review(
+            tmp_path,
+            "1" * 40,
+            outcome=ReviewOutcome.TIMED_OUT,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
+        _record_review(
+            tmp_path,
+            "2" * 40,
+            outcome=ReviewOutcome.TIMED_OUT,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
         assert (
             _gate_review_ran(
                 ProjectConfig(),
                 tmp_path,
-                "newhead",
+                "a" * 40,
                 skip_review=False,
                 session_type="review-pr-comments",
             )
@@ -483,6 +633,11 @@ class TestRunCompletionGatesOrder:
                 done_mod, "_gate_resolved_threads", side_effect=_record("resolved_threads")
             ),
             patch.object(done_mod, "_gate_review_ran", side_effect=_record("review_ran")),
+            patch.object(
+                done_mod,
+                "_gate_documentation_decision",
+                side_effect=_record("documentation"),
+            ),
             patch.object(done_mod, "_gate_sync", side_effect=_record("sync")),
             patch.object(done_mod, "_gate_knowledge_valid", side_effect=_record("knowledge_valid")),
         ):
@@ -511,15 +666,19 @@ class TestRunCompletionGatesOrder:
             "pr_title",
             "pr_summary",
             "review_ran",
+            "documentation",
             "sync",
             "knowledge_valid",
         ]
 
-    def test_review_runs_title_threads_review_then_knowledge_and_never_syncs(self) -> None:
+    def test_review_runs_title_summary_threads_review_docs_sync_then_knowledge(self) -> None:
         assert self._order("review-pr-comments") == [
             "pr_title",
+            "pr_summary",
             "resolved_threads",
             "review_ran",
+            "documentation",
+            "sync",
             "knowledge_valid",
         ]
 

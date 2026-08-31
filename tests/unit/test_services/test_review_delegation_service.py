@@ -13,12 +13,47 @@ from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.permission import PermissionMode
+from wade.models.session_manifest import ResolvedBinding
+from wade.models.skill import ResolvedSkill
+from wade.services import review_delegation_service as rds
 from wade.services.review_delegation_service import (
     _committed_diff_fallback,
+    _ReviewDiffs,
     _run_review_delegation,
     review_implementation,
     review_plan,
 )
+from wade.services.skill_invocation_service import PreparedDelegationMethod
+
+
+def _prepared_method() -> PreparedDelegationMethod:
+    skill = ResolvedSkill(
+        canonical_ref="builtin:code-review",
+        source_path="templates/skills/code-review",
+        materialized_path=".wade/operations/code-review/test/skills/builtin/code-review",
+        content_digest=f"sha256:{'1' * 64}",
+        files=("SKILL.md",),
+    )
+    return PreparedDelegationMethod(
+        binding=ResolvedBinding.from_skills((skill,)),
+        method_section="<method>Review carefully.</method>",
+        host_session=None,
+        operation_bundle=None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stable_review_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests focused on delegation; bundle integration is tested separately."""
+
+    monkeypatch.setattr(
+        rds,
+        "prepare_delegation_method",
+        lambda *args, **kwargs: _prepared_method(),
+    )
+    monkeypatch.setattr(rds.git_repo, "rev_parse", lambda *args, **kwargs: "a" * 40)
+    monkeypatch.setattr(rds.git_repo, "get_current_branch", lambda *args, **kwargs: "main")
+    monkeypatch.setattr(rds.git_repo, "detect_main_branch", lambda *args, **kwargs: "main")
 
 
 def _review_config(
@@ -96,6 +131,46 @@ class TestReviewPlan:
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.PROMPT
         assert "# My Plan" in call_args.prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_plan_dir_only_review_uses_adjacent_frozen_session(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        plan_root = tmp_path / "detached-plan"
+        repo_root = tmp_path / "source-repo"
+        repo_root.mkdir()
+        monkeypatch.chdir(repo_root)
+        plan_file = plan_root / "output" / "PLAN.md"
+        plan_file.parent.mkdir(parents=True)
+        plan_file.write_text("# Plan\n", encoding="utf-8")
+        (plan_root / ".wade/session").mkdir(parents=True)
+        captured: dict[str, Path] = {}
+
+        def prepare(*_args: object, **kwargs: object) -> PreparedDelegationMethod:
+            cwd = kwargs["cwd"]
+            assert isinstance(cwd, Path)
+            captured["cwd"] = cwd
+            return _prepared_method()
+
+        monkeypatch.setattr(rds, "prepare_delegation_method", prepare)
+        mock_template.return_value = "Review the plan."
+        mock_config.return_value = _review_config(review_plan_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        assert review_plan(str(plan_file)).success
+        assert captured["cwd"] == plan_root
+        request = mock_delegate.call_args.args[0]
+        assert request.cwd == repo_root
+        assert request.trusted_dirs == [str(plan_root)]
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -303,8 +378,8 @@ class TestReviewPlan:
         notices = " ".join(
             str(call.args[0]) for call in mock_console.info.call_args_list if call.args
         )
-        # Tiny prompt → floor budget; worst_case = floor + retry.
-        worst_case = 600 + extended_timeout(600)
+        request = mock_delegate.call_args[0][0]
+        worst_case = request.timeout + extended_timeout(request.timeout)
         assert str(worst_case) in notices
         assert "retr" in notices.lower()  # mentions the retry
 
@@ -397,8 +472,7 @@ class TestReviewCode:
         mock_fallback.return_value = ""
         result = review_implementation()
         assert result.success is True
-        assert "No changes" in result.feedback
-        mock_fallback.assert_called_once_with()
+        assert "No committed, staged, or unstaged changes" in result.feedback
 
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.git.repo.diff_worktree")
@@ -454,7 +528,7 @@ class TestReviewCode:
         mock_repo_root.return_value = Path("/repo")
         mock_diff.return_value = ""
         review_implementation(staged=True)
-        assert mock_diff.call_args.kwargs["staged"] is True
+        assert any(call.kwargs.get("staged") is True for call in mock_diff.call_args_list)
 
     @patch("wade.services.review_delegation_service.load_config")
     def test_enabled_false_skips_before_git_diff(
@@ -488,6 +562,24 @@ class TestReviewCode:
         result = review_implementation(mode="bad_value")
         assert result.success is False
         assert "Invalid delegation mode" in result.feedback
+        assert result.exit_code == 1
+
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_self_review_ack_rejects_external_launch_options(
+        self,
+        mock_config: MagicMock,
+    ) -> None:
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+
+        result = review_implementation(
+            ack_self_review=True,
+            mode="headless",
+            ai_tool="claude",
+            ai_explicit=True,
+        )
+
+        assert result.success is False
+        assert "cannot be combined" in result.feedback
         assert result.exit_code == 1
 
     @patch("wade.services.review_delegation_service.delegate")
@@ -831,7 +923,7 @@ class TestFeedbackMarkupSafety:
     (e.g. ``console.print("[success]done[/]")``). Printing it with markup
     enabled made Rich parse ``[/]`` as a closing tag with nothing to close and
     raise ``rich.errors.MarkupError`` — *after* the review had already run,
-    losing the feedback and the ``reviewed@<sha>`` marker.
+    losing the feedback and the structured review receipt.
     """
 
     @patch("wade.services.review_delegation_service.delegate")
@@ -984,29 +1076,28 @@ class TestCommittedDiffFallback:
 # ---------------------------------------------------------------------------
 
 
-class TestReviewImplementationFallback:
+class TestReviewImplementationChangeSets:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
     @patch("wade.git.repo.get_repo_root")
-    def test_fallback_used_when_working_tree_empty(
+    def test_committed_changes_are_reviewed(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
-        mock_fallback: MagicMock,
+        mock_diffs: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
         mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = ""
-        mock_fallback.return_value = "diff --git a/f.py b/f.py\n+committed line\n"
-        mock_template.return_value = "Review:\n{diff_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
+        mock_diffs.return_value = _ReviewDiffs(
+            committed="diff --git a/f.py b/f.py\n+committed line\n",
+            staged="",
+            unstaged="",
         )
+        mock_template.return_value = "Review:\n{diff_content}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="LGTM", mode=DelegationMode.PROMPT
         )
@@ -1014,79 +1105,75 @@ class TestReviewImplementationFallback:
         result = review_implementation()
 
         assert result.success is True
-        assert result.skipped is not True
-        call_args = mock_delegate.call_args[0][0]
-        assert "committed line" in call_args.prompt
+        assert "committed line" in mock_delegate.call_args[0][0].prompt
 
-    @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
     @patch("wade.git.repo.get_repo_root")
-    def test_fallback_not_called_in_staged_mode(
+    def test_empty_staged_scope_does_not_hide_other_changes(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
-        mock_fallback: MagicMock,
+        mock_diffs: MagicMock,
     ) -> None:
         mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = ""
-        mock_fallback.return_value = "should not be used"
+        mock_diffs.return_value = _ReviewDiffs(
+            committed="diff --git a/f.py b/f.py",
+            staged="",
+            unstaged="",
+        )
 
         result = review_implementation(staged=True)
 
-        mock_fallback.assert_not_called()
         assert result.skipped is True
+        assert "Stage the intended changes" in result.feedback
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
     @patch("wade.git.repo.get_repo_root")
-    def test_working_tree_diff_takes_priority(
+    def test_default_input_includes_all_nonempty_change_sets(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
-        mock_fallback: MagicMock,
+        mock_diffs: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
         mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = "diff --git a/f.py b/f.py\n+working tree line\n"
-        mock_fallback.return_value = "should not be used"
-        mock_template.return_value = "Review:\n{diff_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
+        mock_diffs.return_value = _ReviewDiffs(
+            committed="committed line",
+            staged="staged line",
+            unstaged="working tree line",
         )
+        mock_template.return_value = "Review:\n{diff_content}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
 
         result = review_implementation()
 
-        mock_fallback.assert_not_called()
         assert result.success is True
-        call_args = mock_delegate.call_args[0][0]
-        assert "working tree line" in call_args.prompt
+        prompt = mock_delegate.call_args[0][0].prompt
+        assert "committed line" in prompt
+        assert "staged line" in prompt
+        assert "working tree line" in prompt
 
-    @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
     @patch("wade.git.repo.get_repo_root")
-    def test_fallback_returns_empty_skips_review(
+    def test_all_empty_change_sets_skip_review(
         self,
         mock_repo_root: MagicMock,
-        mock_diff: MagicMock,
-        mock_fallback: MagicMock,
+        mock_diffs: MagicMock,
     ) -> None:
         mock_repo_root.return_value = Path("/repo")
-        mock_diff.return_value = ""
-        mock_fallback.return_value = ""
+        mock_diffs.return_value = _ReviewDiffs(committed="", staged="", unstaged="")
 
         result = review_implementation()
 
         assert result.success is True
         assert result.skipped is True
-        assert "No changes" in result.feedback
+        assert "No committed, staged, or unstaged changes" in result.feedback
 
 
 # ---------------------------------------------------------------------------
@@ -1225,9 +1312,7 @@ class TestReviewPassCountUnaffectedByRetry:
     """One delegate() call → one recorded review pass, even with the internal retry (#366)."""
 
     @patch("wade.services.review_delegation_service.console")
-    @patch("wade.services.review_delegation_service.count_review_passes")
-    @patch("wade.services.review_delegation_service.record_review_pass")
-    @patch("wade.services.review_delegation_service.write_marker")
+    @patch("wade.services.review_delegation_service._record_binding_outcome")
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.load_config")
@@ -1242,17 +1327,15 @@ class TestReviewPassCountUnaffectedByRetry:
         mock_config: MagicMock,
         mock_template: MagicMock,
         mock_delegate: MagicMock,
-        mock_write_marker: MagicMock,
         mock_record: MagicMock,
-        mock_count: MagicMock,
         mock_console: MagicMock,
     ) -> None:
         mock_repo_root.return_value = Path("/repo")
-        mock_rev_parse.return_value = "abc123"
+        mock_rev_parse.return_value = "a" * 40
         mock_diff.return_value = "diff --git a/f.py b/f.py\n+line\n"
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
-        mock_count.return_value = 1
+        mock_record.return_value = 1
         # _delegate_headless may retry internally, but review_implementation calls
         # delegate() once and gets one result — one review→fix cycle consumed.
         mock_delegate.return_value = DelegationResult(
@@ -1425,7 +1508,7 @@ class TestReviewBudgetPlaceholder:
         """The final prompt sent to delegate() has both the diff and the budget line."""
         mock_repo_root.return_value = Path("/repo")
         mock_diff.return_value = "diff --git a/f.py b/f.py\n+new line\n"
-        mock_template.return_value = "Review:\n{review_budget}\n---\n{diff_content}"
+        mock_template.return_value = "Review:\n{review_budget}\n---"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
@@ -1437,7 +1520,6 @@ class TestReviewBudgetPlaceholder:
         assert "diff --git" in call_args.prompt
         assert "No hard deadline" in call_args.prompt
         assert "{review_budget}" not in call_args.prompt
-        assert "{diff_content}" not in call_args.prompt
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -1461,7 +1543,7 @@ class TestReviewBudgetPlaceholder:
         """
         mock_repo_root.return_value = Path("/repo")
         mock_diff.return_value = "diff --git a/review-code.md b/review-code.md\n+{review_budget}\n"
-        mock_template.return_value = "Review:\n{review_budget}\n---\n{diff_content}"
+        mock_template.return_value = "Review:\n{review_budget}\n---"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT

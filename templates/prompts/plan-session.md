@@ -1,14 +1,12 @@
-Follow @.claude/skills/plan-session/SKILL.md for session rules — build a todo
-list from its workflow steps before starting work.
+# Managed planning session
 
-**First action:** run `wade plan-session check`. Write a plan only when it
-reports `IN_WORKTREE` or `PLAN_DIR_ONLY`; in `PLAN_DIR_ONLY` write only to its
-`plandir=…` and do not run `wade knowledge rate`. Follow its specific
-`reason=…` remediation rather than disabling your sandbox broadly.
+Read `{session_bundle}/WORKFLOW.md` first. It is authoritative for lifecycle,
+safety, required steps, plan output, review, validation, and exit. Then read
+each WORK methodology `SKILL.md` listed there. Read
+`{session_bundle}/AVAILABLE_SKILLS.md` only when an additional project method would
+help; availability does not activate a skill. If a skill conflicts with the
+workflow, the workflow wins.
 
-# Goal
-
-Plan a feature: break it into one or more tasks and write a plan file for
-each to {plan_dir}/ (one file per task). You won't create the tasks or
-implement the feature — after you exit, wade reads the plan files and creates the
-task(s) and draft PR(s) automatically.
+Plan the requested feature and write one plan file per task under `{plan_dir}`.
+Do not create tasks or implement code. After exit, the trusted parent process
+creates the issue(s) and draft PR(s).

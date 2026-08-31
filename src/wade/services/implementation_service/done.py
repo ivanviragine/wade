@@ -14,9 +14,12 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.skill import SkillSlot
+from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services import bot_trigger
+from wade.services.documentation_receipt_service import read_documentation_receipt
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
     find_worktree_path,
@@ -43,6 +46,16 @@ from wade.services.implementation_service.lifecycle import (
     _strip_summary_section,
 )
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
+from wade.services.review_record_service import (
+    count_binding_passes,
+    has_other_satisfying_binding,
+    read_review_record,
+)
+from wade.services.session_composition_service import (
+    SessionCompositionError,
+    load_session_manifest,
+    validate_frozen_session_bundle,
+)
 from wade.services.task_service import remove_in_progress_label
 from wade.ui import prompts
 from wade.ui.console import console
@@ -410,7 +423,7 @@ def _run_completion_gates(
 ) -> bool:
     """Run the gate set for ``session_type`` in the fixed order. True ⇒ proceed.
 
-    Order matters: auto-sync (implementation only) can advance HEAD via a merge
+    Order matters: auto-sync can advance HEAD via a merge
     commit, so the review-ran gate — which is keyed to the sha the agent actually
     reviewed — runs against the **pre-sync HEAD**, before sync. A clean,
     zero-conflict merge of main is therefore accepted without a fresh review (a
@@ -424,6 +437,8 @@ def _run_completion_gates(
     if session_type == "review-pr-comments":
         if not _gate_pr_title(config, provider, issue_number):
             return False
+        if not _gate_pr_summary(config, worktree_root):
+            return False
         if not _gate_resolved_threads(config, provider, repo_root, branch):
             return False
         # review-pr-comments keeps the unbounded fast-path-or-refuse behavior:
@@ -431,6 +446,10 @@ def _run_completion_gates(
         if not _gate_review_ran(
             config, worktree_root, pre_sync_head, skip_review, session_type=session_type
         ):
+            return False
+        if not _gate_documentation_decision(worktree_root, pre_sync_head, session_type):
+            return False
+        if not _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type):
             return False
         return _gate_knowledge_valid(config, worktree_root)
 
@@ -443,12 +462,45 @@ def _run_completion_gates(
         config, worktree_root, pre_sync_head, skip_review, session_type=session_type
     ):
         return False
+    if not _gate_documentation_decision(worktree_root, pre_sync_head, session_type):
+        return False
     if not _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type):
         return False
     # Runs LAST — after sync merges the base branch into the worktree, the local
     # `merge=union` point where a structural corruption of KNOWLEDGE.md could be
     # introduced. Validating here keeps a union-corrupted file from shipping.
     return _gate_knowledge_valid(config, worktree_root)
+
+
+def _gate_documentation_decision(
+    worktree_root: Path,
+    head_sha: str,
+    session_type: str,
+) -> bool:
+    """Require an explicit documentation-impact decision for current HEAD."""
+
+    try:
+        session = SessionKind(session_type)
+    except ValueError:
+        return False
+    receipt = read_documentation_receipt(
+        worktree_root,
+        session=session,
+        commit=head_sha,
+    )
+    if receipt is not None:
+        return True
+    command = (
+        "review-pr-comments-session"
+        if session is SessionKind.REVIEW_PR_COMMENTS
+        else "implementation-session"
+    )
+    console.error("Documentation impact has not been recorded for the current commit.")
+    console.hint(
+        f"Run `wade {command} docs --updated` or "
+        f'`wade {command} docs --not-needed "<reason>"`, then re-run done.'
+    )
+    return False
 
 
 def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
@@ -597,24 +649,55 @@ def _classify_review(
     skip_review: bool,
     session_type: SessionType | str = SessionType.IMPLEMENTATION,
 ) -> ReviewStatus:
-    """Classify the review-ran outcome for ``head_sha`` — the single source of
-    truth shared by :func:`_gate_review_ran` (pass/refuse) and the PR-body
-    renderer (:func:`_render_review_status`), so the branching can't drift.
+    """Classify review validity for the current commit and reviewer identity.
 
-    Pure and side-effect-free: it only reads sha-keyed markers and config. The
-    exact-sha fast path is checked **first** — a ``reviewed@<head_sha>`` marker
-    is positive evidence that review ran, so it outranks the ``--skip-review`` /
-    ``require_review`` hatches and the disabled flag: a reviewed commit must
-    never be reported as skipped/gate-disabled (#367). Only when no marker
-    exists do the hatches and disabled flag take over, followed by the
-    impl-only pass cap. The pass count (distinct ``review-pass@*`` markers) is
-    read for **both** session types — a listdir failure yields ``0`` (fail
-    toward re-gating), never a false "cap reached" — and carried on the
-    returned object for honest rendering.
+    Only structured records matching the frozen review binding are trusted.
+    Missing or invalid session state fails toward re-review.
     """
-    passes = markers.count_review_passes(worktree_root)
+    manifest = load_session_manifest(worktree_root)
+    reviewed = False
+    reviewer_changed = False
+    bundle_invalid = False
+    if manifest is not None:
+        try:
+            expected_kind = SessionKind(str(session_type))
+            validate_frozen_session_bundle(
+                worktree_root,
+                manifest,
+                expected_kind=expected_kind,
+            )
+        except (ValueError, SessionCompositionError) as exc:
+            bundle_invalid = True
+            passes = 0
+            logger.warning(
+                "done.review_bundle_invalid",
+                worktree=str(worktree_root),
+                error=str(exc),
+            )
+        else:
+            binding = manifest.bindings[SkillSlot.REVIEW]
+            record = read_review_record(
+                worktree_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                commit=head_sha,
+                binding=binding,
+            )
+            reviewed = record is not None and record.satisfies_review
+            passes = count_binding_passes(
+                worktree_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                binding=binding,
+            )
+            reviewer_changed = has_other_satisfying_binding(
+                worktree_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                commit=head_sha,
+                binding=binding,
+            )
+    else:
+        passes = 0
 
-    if markers.marker_present(worktree_root, "reviewed", head_sha):
+    if reviewed:
         kind = ReviewStatusKind.REVIEWED
     elif config.ai.review_implementation.enabled is False:
         kind = ReviewStatusKind.DISABLED
@@ -622,6 +705,10 @@ def _classify_review(
         kind = ReviewStatusKind.SKIPPED_FLAG
     elif not config.done.require_review:
         kind = ReviewStatusKind.REQUIRE_OFF
+    elif bundle_invalid:
+        kind = ReviewStatusKind.BUNDLE_INVALID
+    elif reviewer_changed:
+        kind = ReviewStatusKind.REVIEWER_CHANGED
     elif session_type == "implementation" and passes >= config.done.max_review_passes:
         kind = ReviewStatusKind.CAP_REACHED
     else:
@@ -645,17 +732,16 @@ def _gate_review_ran(
 ) -> bool:
     """Refuse unless ``wade review implementation`` ran for ``head_sha``.
 
-    Fast path (**both** session types): an exact-sha ``reviewed@<head_sha>``
-    marker means done — a review for the current commit always passes on the
-    first try.
+    Fast path (**both** session types): a successful binding-aware record for
+    ``head_sha`` and the active frozen REVIEW binding means done.
 
     Implementation sessions additionally apply a **code-enforced pass cap** so the
     review→fix→re-review loop is bounded (#384). Committing after the last review
     moves the tip sha and invalidates the exact-sha marker; without a bound the
     agent re-reviews, re-commits, and loops forever. Once
-    ``done.max_review_passes`` distinct commits have carried a delegation-backed
-    ``review-pass@<sha>`` marker, ``done`` completes **anyway** — with a prominent
-    notice — rather than looping. ``review-pr-comments`` sessions keep the
+    ``done.max_review_passes`` distinct commits have consumed a review pass for
+    the active binding, ``done`` completes **anyway** — with a prominent notice —
+    rather than looping. ``review-pr-comments`` sessions keep the
     unbounded fast-path-or-refuse behavior; #384 is scoped to impl sessions and
     this gate is shared (knowledge 851bb6ec), so the cap branch is impl-only.
 
@@ -665,7 +751,7 @@ def _gate_review_ran(
     console output.
 
     Auto-skipped when reviews are disabled (``review_implementation.enabled:
-    false``) — the marker is not written then either. Hatches: ``--skip-review``
+    false``). Hatches: ``--skip-review``
     and ``done.require_review: false``.
     """
     status = _classify_review(config, worktree_root, head_sha, skip_review, session_type)
@@ -679,6 +765,24 @@ def _gate_review_ran(
         ReviewStatusKind.REVIEWED,
     ):
         return True
+
+    if kind is ReviewStatusKind.REVIEWER_CHANGED:
+        console.error("The current commit was reviewed with a different reviewer binding.")
+        console.hint(
+            "Run `wade review implementation` with the active session reviewer, then re-run done."
+        )
+        return False
+
+    if kind is ReviewStatusKind.BUNDLE_INVALID:
+        console.error(
+            "The active session bundle failed integrity validation; its review records "
+            "cannot be trusted."
+        )
+        console.hint(
+            "Run `wade session refresh-skills`, re-run `wade review implementation`, "
+            "then re-run done."
+        )
+        return False
 
     if kind is ReviewStatusKind.CAP_REACHED:
         limit = config.done.max_review_passes

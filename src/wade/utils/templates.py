@@ -43,6 +43,12 @@ def get_skills_templates_dir() -> Path:
     return get_templates_dir() / "skills"
 
 
+def get_workflows_templates_dir() -> Path:
+    """Get the path to the fixed workflow templates directory."""
+
+    return get_templates_dir() / "workflows"
+
+
 def load_prompt_template(name: str) -> str:
     """Load a prompt template by name from templates/prompts/.
 
@@ -55,6 +61,15 @@ def load_prompt_template(name: str) -> str:
     template = get_templates_dir() / "prompts" / name
     if not template.is_file():
         raise FileNotFoundError(f"Prompt template not found: {template}")
+    return template.read_text(encoding="utf-8").strip()
+
+
+def load_workflow_template(name: str) -> str:
+    """Load a fixed workflow template by name from ``templates/workflows``."""
+
+    template = get_workflows_templates_dir() / name
+    if not template.is_file():
+        raise FileNotFoundError(f"Workflow template not found: {template}")
     return template.read_text(encoding="utf-8").strip()
 
 

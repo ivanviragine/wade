@@ -37,6 +37,7 @@ htmlcov/
 .wade/
 CLAUDE.md
 PLAN.md
+!templates/workflows/plan.md
 PR-SUMMARY.md
 
 # OS

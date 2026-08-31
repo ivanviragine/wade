@@ -709,7 +709,14 @@ class TestValidateConfig:
         config.write_text("version: 2\nunknown_key: value\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
-        assert any("unsupported key" in e for e in result.errors)
+        error = next(error for error in result.errors if "unsupported key" in error)
+        supported = set(error.partition("Supported keys: ")[2].split(", "))
+        persisted = {
+            name for name, field in ProjectConfig.model_fields.items() if field.exclude is not True
+        }
+
+        assert supported == persisted
+        assert {"config_path", "project_root"}.isdisjoint(supported)
 
     def test_invalid_models_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

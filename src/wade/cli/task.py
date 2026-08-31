@@ -263,6 +263,11 @@ def deps(
         autocompletion=complete_permission_modes,
     ),
     check: bool = typer.Option(False, "--check", help="Validate existing dependencies."),
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None,
+        "--skill",
+        help="Dependency-analysis methodology skill ref. Repeat for an ordered binding.",
+    ),
 ) -> None:
     """Analyze dependencies between issues."""
     from wade.services.deps_service import analyze_deps
@@ -334,5 +339,6 @@ def deps(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        skills=skill,
     )
     raise typer.Exit(0 if graph is not None else 1)

@@ -1,3 +1,4 @@
-PR-comment review phase; task context is in PLAN.md. First action: run `wade review-pr-comments-session check`; proceed only when it reports `IN_WORKTREE`.
-Work through the unresolved review threads, then wrap up with `wade review-pr-comments-session done`.
-Review budget: `wade review implementation` (may be required before `done`) prints your live time budget.
+PR-comment review session. Re-read `.wade/session/WORKFLOW.md`; it owns feedback
+scope, review, docs, sync, thread resolution, and completion. First run
+`wade review-pr-comments-session check`, verify fetched feedback, complete every
+fixed closing step, then use `wade review-pr-comments-session done`.

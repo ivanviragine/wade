@@ -25,6 +25,21 @@ pytestmark = [
 ]
 
 
+def _record_implementation_docs(worktree_path: Path) -> None:
+    """Record the mandatory current-commit documentation decision for a fixture."""
+
+    result = _run(
+        [
+            "implementation-session",
+            "docs",
+            "--not-needed",
+            "E2E fixture has no documentation impact",
+        ],
+        cwd=worktree_path,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 class TestImplementTaskCommand:
     """Test `wade implement` via CLI subprocess."""
 
@@ -175,6 +190,115 @@ class TestImplementTaskCommand:
         )
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "create"]) == 0
 
+    def test_implement_cd_snapshots_main_only_custom_skills_under_fixed_workflow(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """Custom methodology is copied, while WADE still owns every required step."""
+        issue_number = 43
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title="Use project session methods",
+            body="## Tasks\n- Exercise dynamic skills\n",
+        )
+        work_skill = e2e_repo / ".agents/skills/domain-implementation"
+        work_skill.mkdir(parents=True)
+        (work_skill / "SKILL.md").write_text(
+            "---\n"
+            "name: domain-implementation\n"
+            "description: Implement this project's domain behavior.\n"
+            "---\n\n"
+            "Trace domain invariants from input through persistence.\n",
+            encoding="utf-8",
+        )
+        (work_skill / "reference").mkdir()
+        (work_skill / "reference/invariants.md").write_text(
+            "# Domain invariants\n",
+            encoding="utf-8",
+        )
+        review_skill = e2e_repo / ".claude/skills/security-review"
+        review_skill.mkdir(parents=True)
+        (review_skill / "SKILL.md").write_text(
+            "---\n"
+            "name: security-review\n"
+            "description: Review trust boundaries and authorization.\n"
+            "---\n\n"
+            "Follow untrusted data across each authorization boundary.\n",
+            encoding="utf-8",
+        )
+        _init_origin_remote(e2e_repo)
+
+        result = _run(
+            [
+                "implement",
+                str(issue_number),
+                "--cd",
+                "--skill",
+                "project:domain-implementation",
+                "--review-skill",
+                "project:security-review",
+            ],
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        worktree = Path(result.stdout.strip())
+        manifest = json.loads((worktree / ".wade/session/manifest.json").read_text())
+        assert manifest["bindings"]["work"]["skills"][0]["canonical_ref"] == (
+            "project:domain-implementation"
+        )
+        assert manifest["bindings"]["review"]["skills"][0]["canonical_ref"] == (
+            "project:security-review"
+        )
+
+        work_snapshot = (
+            worktree / ".wade/session/skills/project/agents-skills/domain-implementation"
+        )
+        assert (work_snapshot / "reference/invariants.md").is_file()
+        assert not work_snapshot.is_symlink()
+        workflow = (worktree / ".wade/session/WORKFLOW.md").read_text(encoding="utf-8")
+        for required in (
+            "**Check readiness.**",
+            "**Apply the WORK methodology.**",
+            "**Method review.**",
+            "**Documentation [mandatory decision].**",
+            "**Sync.**",
+            "**Done.**",
+        ):
+            assert required in workflow
+
+    def test_unknown_custom_skill_fails_before_provider_mutation(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """An unresolved active ref may create a local worktree, but no remote state."""
+        issue_number = 45
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title="Reject missing session method",
+            body="## Tasks\n- Fail before mutation\n",
+        )
+        _init_origin_remote(e2e_repo)
+
+        result = _run(
+            ["implement", str(issue_number), "--cd", "--skill", "project:missing"],
+            cwd=e2e_repo,
+        )
+
+        assert result.returncode != 0
+        assert "was not found" in result.stderr
+        for mutation in (
+            ["pr", "create"],
+            ["pr", "edit"],
+            ["issue", "edit"],
+            ["issue", "comment"],
+            ["label", "create"],
+        ):
+            assert _count_gh_calls(mock_gh_cli["log_file"], mutation) == 0
+
     def test_implement_task_cd_runs_setup_worktree_hook(
         self,
         e2e_repo: Path,
@@ -315,6 +439,7 @@ class TestWorkDoneCommand:
         (worktree_path / "implementation.txt").write_text("work done contract\\n", encoding="utf-8")
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+        _record_implementation_docs(worktree_path)
         assert _git(["status", "--porcelain"], cwd=worktree_path).stdout.strip() == ""
 
         # --skip-review bypasses the review-ran completion gate — this contract
@@ -373,6 +498,7 @@ class TestWorkDoneCommand:
         (worktree_path / "implementation.txt").write_text("bot trigger\n", encoding="utf-8")
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+        _record_implementation_docs(worktree_path)
         return worktree_path
 
     def test_done_offers_bot_triggers_without_posting(
@@ -466,6 +592,7 @@ class TestWorkDoneCommand:
         )
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+        _record_implementation_docs(worktree_path)
 
         result = _run(["implementation-session", "done", "--skip-review"], cwd=worktree_path)
         assert result.returncode == 0
@@ -486,9 +613,10 @@ class TestWorkDoneCommand:
         """#384: review→commit→done refuses once, then completes on the 2nd pass.
 
         The default review mode is ``prompt`` (self-review, no AI subprocess), so
-        each ``wade review implementation`` exits 2 and records a delegation-backed
-        ``review-pass@<HEAD>`` marker. Committing after each review invalidates the
-        exact-sha ``reviewed`` marker — the exact loop the cap must bound.
+        each ``wade review implementation`` exits 2 without certifying itself.
+        The explicit acknowledgement records the completed self-review. Committing
+        afterward invalidates the exact-commit success — the loop the active-binding
+        pass cap must bound.
         """
         issue_number = 84
         issue_title = "fix: bound the review loop"
@@ -520,8 +648,10 @@ class TestWorkDoneCommand:
         _commit("v1\n")
         review1 = _run(["review", "implementation"], cwd=worktree_path)
         assert review1.returncode == 2, review1.stdout + review1.stderr
+        ack1 = _run(["review", "implementation", "--ack-self-review"], cwd=worktree_path)
+        assert ack1.returncode == 0, ack1.stdout + ack1.stderr
 
-        _commit("v2\n")  # new commit → the reviewed@<sha> marker is now stale
+        _commit("v2\n")  # new commit → the prior review record is now stale
         done1 = _run(["implementation-session", "done"], cwd=worktree_path)
         out1 = " ".join((done1.stdout + done1.stderr).split())
         assert done1.returncode != 0, out1
@@ -532,8 +662,11 @@ class TestWorkDoneCommand:
         # --- Pass 2: review again, commit again — done SUCCEEDS at the cap. ---
         review2 = _run(["review", "implementation"], cwd=worktree_path)
         assert review2.returncode == 2, review2.stdout + review2.stderr
+        ack2 = _run(["review", "implementation", "--ack-self-review"], cwd=worktree_path)
+        assert ack2.returncode == 0, ack2.stdout + ack2.stderr
 
         _commit("v3\n")  # still a newer, un-reviewed commit — but the cap is hit
+        _record_implementation_docs(worktree_path)
         done2 = _run(["implementation-session", "done"], cwd=worktree_path)
         out2 = " ".join((done2.stdout + done2.stderr).split())
         assert done2.returncode == 0, out2
@@ -547,16 +680,15 @@ class TestWorkDoneCommand:
         assert "cap reached" in body
         assert "✅ Reviewed" not in body
 
-    def test_review_pass_count_survives_second_implement(
+    def test_review_records_survive_second_implement(
         self,
         e2e_repo: Path,
         mock_gh_cli: MockGhCli,
     ) -> None:
-        """#384: the review-pass count persists across a second `wade implement`.
+        """Binding-aware review history persists across a second `wade implement`.
 
-        The markers live in the worktree's ``.wade/`` and no code path (bootstrap
-        included) clears the ``review-pass@*`` family, so the idempotent
-        worktree-reuse re-run must not reset the cap to 0.
+        Durable records live outside ``.wade/session``. Idempotent worktree reuse
+        may re-bootstrap compatibility files but must preserve review history.
         """
         issue_number = 85
         _seed_mock_issue(
@@ -572,16 +704,20 @@ class TestWorkDoneCommand:
         worktree_path = Path(start_result.stdout.strip())
         assert worktree_path.is_dir()
 
-        # Simulate a completed delegation-backed review pass.
-        marker = worktree_path / ".wade" / ("review-pass@" + "d" * 40)
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("", encoding="utf-8")
+        review = _run(["review", "implementation"], cwd=worktree_path)
+        assert review.returncode == 0, review.stdout + review.stderr
+        records = sorted((worktree_path / ".wade/reviews").glob("*.json"))
+        assert records
+        before = {path.name: path.read_bytes() for path in records}
 
         again_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert again_result.returncode == 0
         assert Path(again_result.stdout.strip()) == worktree_path
-        # The marker (and thus the pass count) survived the re-bootstrap.
-        assert marker.is_file()
+        after = {
+            path.name: path.read_bytes()
+            for path in sorted((worktree_path / ".wade/reviews").glob("*.json"))
+        }
+        assert after == before
 
     def test_work_done_fails_when_managed_claude_files_were_force_committed(
         self,
@@ -627,8 +763,8 @@ class TestWorkDoneCommand:
         output = result.stdout + result.stderr
         assert result.returncode != 0
         assert "Wade-managed files are tracked in git" in output
-        assert ".claude/skills/implementation-session/SKILL.md" in output
-        assert "git rm --cached .claude/skills/implementation-session/SKILL.md" in output
+        assert ".claude/skills/task/SKILL.md" in output
+        assert "git rm --cached .claude/skills/task/SKILL.md" in output
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "edit"]) == 0
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "ready"]) == 0
 
@@ -681,6 +817,7 @@ class TestReviewStatusBlockContract:
         (worktree_path / "impl.txt").write_text("work\n", encoding="utf-8")
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+        _record_implementation_docs(worktree_path)
 
         branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path).stdout.strip()
         return worktree_path, branch
@@ -713,10 +850,12 @@ class TestReviewStatusBlockContract:
             e2e_repo, mock_gh_cli, 362, "fix: record the reviewed status"
         )
 
-        # A real self-review pass (default prompt mode, exit 2) writes the
-        # sha-keyed reviewed@<HEAD> marker the done gate later reads.
+        # Default prompt mode emits the review but cannot certify itself; the
+        # separate acknowledgement writes the record the done gate later reads.
         review = _run(["review", "implementation"], cwd=worktree_path)
         assert review.returncode == 2, review.stdout + review.stderr
+        acknowledged = _run(["review", "implementation", "--ack-self-review"], cwd=worktree_path)
+        assert acknowledged.returncode == 0, acknowledged.stdout + acknowledged.stderr
         head = _git(["rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
 
         result = _run(["implementation-session", "done"], cwd=worktree_path)

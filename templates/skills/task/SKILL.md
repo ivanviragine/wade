@@ -21,7 +21,7 @@ project's `wade` infrastructure. Task creation itself is provider-neutral;
 > **This is standalone task creation — not a planning session.** In a
 > `wade plan` session you do **not** run `wade task create`: you write plan
 > files and exit, and wade creates the tasks (and draft PRs) after you leave
-> (see @.claude/skills/plan-session/SKILL.md). Use this skill only when the user
+> (see `.wade/session/WORKFLOW.md`). Use this skill only when the user
 > asks to create tasks directly.
 
 > **Never use `gh issue create` directly.** Always use `wade task create`.
@@ -237,7 +237,8 @@ additional actions. The human will start the work session when ready.
 
 For implementation details when working on child issues of a tracking/epic
 (PR association, post-merge checklist updates, closing parent issues),
-see @.claude/skills/implementation-session/SKILL.md.
+see `.wade/session/reference/tracking-issues.md` in an active implementation
+session.
 
 ## Rules
 

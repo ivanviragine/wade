@@ -8,9 +8,11 @@ import shutil
 from pathlib import Path
 
 import structlog
+from crossby.config.skills import SKILLS_DIR
+from crossby.models.ai import AIToolID
 
 from wade.models.config import ProjectConfig
-from wade.skills.doc_targets import detect_doc_targets, format_doc_targets
+from wade.models.workflow import SESSION_DEFINITIONS, SessionKind
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
 # Back-compat re-exports — moved to wade.utils.templates (#382), kept here so the
@@ -23,70 +25,20 @@ from wade.utils.templates import load_prompt_template as load_prompt_template
 
 logger = structlog.get_logger()
 
-# Placeholder substitutions applied when skill files are copied to a project.
-# Maps placeholder string → relative path inside templates/skills/_partials/.
-#
-# ``{review_budget_notes}`` (review-budget.md) is the single source of truth for
-# the shared time-budget / pass-cap / timeout-vs-error / trivial-skip rules
-# (#450). It is referenced from exactly 3 skills — plan-session,
-# implementation-session, review-pr-comments-session — not 4: `wade review
-# batch` is a standalone human-invoked CLI command with no session skill of its
-# own (its worktrees come from `wade implement-batch`), so its copy of this
-# guidance rides in the `review-batch.md` prompt's `{review_budget}` line
-# instead. Do not "fix" this by adding a batch skill.
-_SKILL_PARTIALS: dict[str, str] = {
-    "{user_interaction_prompt}": "_partials/user-interaction.md",
-    "{review_enforcement_rule}": "_partials/review-enforcement-rule.md",
-    "{review_plan_step}": "_partials/review-plan-step.md",
-    "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
-    "{review_budget_notes}": "_partials/review-budget.md",
-    "{doc_update_step}": "_partials/doc-update-step.md",
-    "{knowledge_step}": "_partials/knowledge-step.md",
-}
-
-
 # --- Skill registry: name → list of files ---
 
 SKILL_FILES: dict[str, list[str]] = {
-    # ``reference/session-summary-format.md`` is the canonical session-summary /
-    # decision convention (#443). ``task`` installs in every session type
-    # (PLAN/IMPLEMENT/REVIEW_SKILLS), so hosting it here makes the file resolve via
-    # ``@`` from plan-, implementation-, and review-session skills alike.
+    # These skills document fixed WADE commands used by workflows. Replaceable
+    # methodology is resolved and snapshotted separately under ``.wade/session``.
     "task": ["SKILL.md", "plan-format.md", "examples.md", "reference/session-summary-format.md"],
-    "plan-session": ["SKILL.md", "reference/plan-format.md"],
-    "implementation-session": [
-        "SKILL.md",
-        "reference/recovery.md",
-        "reference/pr-summary-format.md",
-        "reference/doc-update.md",
-        "reference/tracking-issues.md",
-        "reference/new-plan.md",
-    ],
-    "review-pr-comments-session": [
-        "SKILL.md",
-        "reference/recovery.md",
-        "reference/doc-update.md",
-    ],
-    "deps": ["SKILL.md"],
     "knowledge": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {
-    "plan-session",
-    "implementation-session",
-    "review-pr-comments-session",
-    "knowledge",
-}
+ALWAYS_OVERWRITE = {"knowledge"}
 
-# Skills whose SKILL.md files contain placeholder strings (see _SKILL_PARTIALS) that
-# must be expanded at install time.  These cannot be installed as plain directory
-# symlinks in self-init mode because the agent would see unexpanded placeholders.
-# Currently the same set as ALWAYS_OVERWRITE — kept separate because the concerns
-# are distinct and may diverge if new skills are added.
-INJECT_SKILLS = {"plan-session", "implementation-session", "review-pr-comments-session"}
-
-# Old skill names removed in the phase-skill refactor — cleaned up during update
+# Old skill names removed before this redesign. Keep their established cleanup;
+# they are unrelated to session-methodology cutover compatibility.
 _LEGACY_SKILLS = {
     "workflow",
     "sync",
@@ -96,11 +48,14 @@ _LEGACY_SKILLS = {
     "address-reviews-session",
 }
 
-# All skill names Wade manages (current + legacy) — used for safe pruning
+# All tool-native skill names Wade manages — used for safe pruning.
 MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
 
-# Cross-tool directories that get symlinked to .claude/skills
-CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".cursor/skills"]
+# Cross-tool directories that get symlinked to the primary Claude root.
+# Crossby owns the tool-to-root mapping; duplicate roots are emitted once.
+CROSS_TOOL_DIRS = tuple(
+    path for path in dict.fromkeys(SKILLS_DIR.values()) if path != SKILLS_DIR[AIToolID.CLAUDE]
+)
 
 # LEGACY: standalone guard scripts that older wade versions copied into each
 # worktree's ``.{tool}/hooks/`` dir. Guards are now the versioned ``wade hook``
@@ -127,12 +82,13 @@ HOOK_CONFIG_FILES = [
     ".codex/hooks.json",
 ]
 
-# --- Command-to-skill mapping: which skills each session type needs ---
+# --- Native support projections (active methodology lives in .wade/session) ---
 
-PLAN_SKILLS: list[str] = ["plan-session", "task", "deps", "knowledge"]
-DEPS_SKILLS: list[str] = ["deps"]
-IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task", "knowledge"]
-REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task", "knowledge"]
+
+def support_skills_for_session(kind: SessionKind) -> list[str]:
+    """Return fixed command-support skills for a canonical session."""
+
+    return list(SESSION_DEFINITIONS[kind].support_skills)
 
 
 def get_worktree_gitignore_entries() -> list[str]:
@@ -278,22 +234,17 @@ def install_skills(
     force: bool = False,
     templates_dir: Path | None = None,
     skills: list[str] | None = None,
-    extra_partials: dict[str, str] | None = None,
 ) -> list[str]:
     """Install skill files to a project.
 
     Args:
         project_root: Root of the target project.
         is_self_init: If True, symlink skill directories instead of copying files.
-            Skills in ``INJECT_SKILLS`` are always processed copies even in this mode,
-            because their templates contain placeholders that must be expanded.
         force: If True, overwrite existing files.
         templates_dir: Override the skills templates directory.
             Useful for worktrees where templates live in the worktree itself.
         skills: If provided, install only the listed skills instead of all
-            ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
-        extra_partials: Placeholder overrides. Caller-supplied values win over
-            the ``{doc_targets}`` value computed here from ``project_root``.
+            ``SKILL_FILES``. When ``None``, all support skills are installed.
 
     Returns:
         List of installed paths (relative to project root).  Symlinked skill
@@ -307,12 +258,9 @@ def install_skills(
         logger.warning("skills.templates_not_found", path=str(templates_dir))
         return installed
 
-    computed_partials = {"{doc_targets}": format_doc_targets(detect_doc_targets(project_root))}
-    extra_partials = {**computed_partials, **(extra_partials or {})}
-
     primary_skills_dir = project_root / ".claude" / "skills"
 
-    # Clean up legacy skill directories from previous versions
+    # Preserve cleanup for names retired before the session-methodology redesign.
     for legacy_name in _LEGACY_SKILLS:
         legacy_dir = primary_skills_dir / legacy_name
         if legacy_dir.is_symlink():
@@ -322,18 +270,33 @@ def install_skills(
             shutil.rmtree(legacy_dir)
             logger.debug("skills.removed_legacy", name=legacy_name)
 
+    # Generic methodology built-ins are never managed in target tool roots:
+    # doing so could overwrite a project-owned skill with the same ordinary
+    # name. WADE self-init worktrees alone get native symlinks as an authoring
+    # convenience; active sessions still use physical `.wade/session` snapshots.
+    available_files = SKILL_FILES
+    if is_self_init:
+        from wade.skills.catalog import BUILTIN_METHODOLOGY_SKILLS
+
+        available_files = {
+            **SKILL_FILES,
+            **{name: ["SKILL.md"] for name in BUILTIN_METHODOLOGY_SKILLS},
+        }
+
     # Determine which skills to install
     if skills is not None:
-        invalid = set(skills) - set(SKILL_FILES.keys())
+        invalid = set(skills) - set(available_files)
         if invalid:
             logger.warning("skills.unknown_skill_names", names=sorted(invalid))
-        skill_items = {name: SKILL_FILES[name] for name in skills if name in SKILL_FILES}
+        skill_items = {name: available_files[name] for name in skills if name in available_files}
 
         # Prune stale skills: remove Wade-managed skills not in the requested
         # set (ensures clean per-command isolation on worktree reuse).
         # Only remove known Wade-managed names — leave user-owned dirs untouched.
         if primary_skills_dir.is_dir():
-            stale_managed = MANAGED_SKILL_NAMES - set(skill_items)
+            stale_managed = (
+                set(available_files) | _LEGACY_SKILLS if is_self_init else MANAGED_SKILL_NAMES
+            ) - set(skill_items)
             for entry in primary_skills_dir.iterdir():
                 if entry.name in stale_managed and (entry.is_symlink() or entry.is_dir()):
                     if entry.is_symlink():
@@ -342,24 +305,14 @@ def install_skills(
                         shutil.rmtree(entry)
                     logger.debug("skills.pruned_stale", name=entry.name)
     else:
-        skill_items = SKILL_FILES
+        skill_items = available_files
 
     for skill_name, files in skill_items.items():
-        if is_self_init and skill_name not in INJECT_SKILLS:
-            # Symlink the whole directory (no partials expansion needed)
+        if is_self_init:
             _link_skill_dir(project_root, skill_name, templates_dir)
             installed.append(f".claude/skills/{skill_name}")
         else:
-            # Copy individual files, expanding partials if present.
-            # In self-init mode, INJECT_SKILLS must be processed copies so agents
-            # see expanded content rather than raw placeholder strings.
-            overwrite = is_self_init or force or skill_name in ALWAYS_OVERWRITE
-
-            # Remove existing symlink for inject skills in self-init before creating dir
-            if is_self_init and skill_name in INJECT_SKILLS:
-                link = primary_skills_dir / skill_name
-                if link.is_symlink():
-                    link.unlink()
+            overwrite = force or skill_name in ALWAYS_OVERWRITE
 
             for filename in files:
                 src = templates_dir / skill_name / filename
@@ -370,8 +323,6 @@ def install_skills(
                     src,
                     dest,
                     overwrite=overwrite,
-                    skills_templates_dir=templates_dir,
-                    extra_partials=extra_partials,
                 ):
                     installed.append(f".claude/skills/{skill_name}/{filename}")
 
@@ -405,7 +356,7 @@ def remove_skills(project_root: Path) -> list[str]:
             removed.append(cross_dir)
         # Real user-owned directories are not removed
 
-    # Remove skill directories (current + legacy)
+    # Remove Wade-owned support and previously retired skill directories.
     primary_skills_dir = project_root / ".claude" / "skills"
     for skill_name in {*SKILL_FILES, *_LEGACY_SKILLS}:
         skill_dir = primary_skills_dir / skill_name
@@ -430,69 +381,17 @@ def remove_skills(project_root: Path) -> list[str]:
     return removed
 
 
-def _expand_partials(
-    content: str,
-    skills_templates_dir: Path,
-    extra_partials: dict[str, str] | None = None,
-) -> str:
-    """Expand placeholder strings in *content* using partial template files.
-
-    ``extra_partials`` (placeholder → replacement string) are applied first, so
-    callers can override or suppress any entry in ``_SKILL_PARTIALS`` by passing
-    an empty string.  File-based partials in ``_SKILL_PARTIALS`` are applied
-    afterwards for any placeholders still present, then ``extra_partials`` is
-    re-applied so placeholders nested inside a just-expanded file partial (e.g.
-    ``{doc_targets}`` inside ``doc-update-step.md``) also resolve.  Unknown
-    partial paths are left unchanged with a warning.
-    """
-    if extra_partials:
-        for placeholder, replacement in extra_partials.items():
-            content = content.replace(placeholder, replacement)
-    for placeholder, rel_path in _SKILL_PARTIALS.items():
-        if placeholder not in content:
-            continue
-        partial = skills_templates_dir / rel_path
-        if not partial.is_file():
-            logger.warning("skills.partial_not_found", path=str(partial))
-            continue
-        content = content.replace(placeholder, partial.read_text(encoding="utf-8").rstrip())
-    if extra_partials:
-        for placeholder, replacement in extra_partials.items():
-            content = content.replace(placeholder, replacement)
-    return content
-
-
 def _copy_skill_file(
     src: Path,
     dest: Path,
     overwrite: bool = False,
-    skills_templates_dir: Path | None = None,
-    extra_partials: dict[str, str] | None = None,
 ) -> bool:
-    """Copy a single skill file, creating parent dirs as needed.
-
-    If ``skills_templates_dir`` is provided, placeholder strings in the file
-    content (see ``_SKILL_PARTIALS``) are expanded before writing.  Any
-    ``extra_partials`` overrides are applied first (see ``_expand_partials``).
-
-    Returns True if file was installed, False if skipped.
-    """
+    """Copy a single skill file, creating parent dirs as needed."""
     if dest.exists() and not overwrite:
         return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    content = src.read_text(encoding="utf-8")
-    needs_expansion = skills_templates_dir is not None and any(
-        p in content for p in _SKILL_PARTIALS
-    )
-    if needs_expansion or extra_partials:
-        base_templates_dir = skills_templates_dir or src.parent.parent
-        content = _expand_partials(
-            content,
-            base_templates_dir,
-            extra_partials=extra_partials,
-        )
-    dest.write_text(content, encoding="utf-8")
+    dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     logger.debug("skills.copied", src=str(src), dest=str(dest))
     return True
 

@@ -1,7 +1,8 @@
 ## Git Workflow
 
-**First action every session** — read the skill referenced in your clipboard
-prompt for full session rules.
+**First action every managed session** — read `.wade/session/WORKFLOW.md` and
+the exact active WORK skill files it lists. The workflow owns lifecycle and
+safety; replaceable skills own methodology only.
 
 Critical rules you must always follow:
 

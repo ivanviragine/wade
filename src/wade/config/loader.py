@@ -10,12 +10,14 @@ import yaml
 
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    CONFIG_SCHEMA_VERSION,
     WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     AIConfig,
     BotReviewConfig,
     CommitMsgConfig,
     ComplexityModelMapping,
+    DelegationsConfig,
     DoneConfig,
     HooksConfig,
     KnowledgeConfig,
@@ -26,6 +28,8 @@ from wade.models.config import (
     ProjectSettings,
     ProviderConfig,
     ReviewBotConfig,
+    SessionsConfig,
+    SkillsConfig,
 )
 from wade.models.permission import coerce_permission_mode
 from wade.models.session import MergeStrategy
@@ -178,7 +182,7 @@ def _parse_tier_value(v: Any) -> tuple[str | None, str | None]:
 
 def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     """Build a ProjectConfig from raw YAML dict."""
-    version = raw.get("version", 2)
+    version = raw.get("version", CONFIG_SCHEMA_VERSION)
 
     # Parse project section
     project_raw = _section_mapping(raw, "project")
@@ -335,6 +339,13 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     bot_review_raw = _section_mapping(raw, "bot_review")
     bot_review = _parse_bot_review(bot_review_raw)
 
+    # Dynamic skill discovery and binding sections. These are optional and
+    # Pydantic-defaulted, but unlike older sections their nested models are
+    # strict so unsupported session/delegation slots fail rather than vanish.
+    skills = SkillsConfig.model_validate(_section_mapping(raw, "skills"))
+    sessions = SessionsConfig.model_validate(_section_mapping(raw, "sessions"))
+    delegations = DelegationsConfig.model_validate(_section_mapping(raw, "delegations"))
+
     return ProjectConfig(
         version=version,
         project=project,
@@ -344,6 +355,9 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         permissions=permissions,
         hooks=hooks,
         knowledge=knowledge,
+        skills=skills,
+        sessions=sessions,
+        delegations=delegations,
         done=done,
         bot_review=bot_review,
         config_path=str(config_path),

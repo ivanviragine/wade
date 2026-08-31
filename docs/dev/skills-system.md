@@ -1,259 +1,211 @@
-# Skills System
+# Skills, Snapshots, and Pointer System
 
-Detailed documentation for the skills, pointer, and installation system. For the compact overview of the "two worlds" boundary, see `AGENTS.md`.
+This document covers project-skill discovery, support installation, and
+the `AGENTS.md` pointer. The workflow/binding model is documented in
+[Workflows and Dynamic Skills](workflows-and-skills.md).
 
-## Two Worlds: WADE repo vs inited projects
+## Two worlds
 
-This boundary is critical. Everything in this repo exists in one of two worlds:
+Everything belongs either to the WADE source repository or to an inited target
+project:
 
-| WADE repo (source) | Inited project (output) |
-|---------------------|------------------------|
-| `src/wade/` | installed `wade` binary (via pip/uv) |
-| `templates/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` |
-| `templates/agents-pointer.md` | `## Git Workflow` block in target `AGENTS.md` |
-| `AGENTS.md` (this file) | target project's own `AGENTS.md` (different content) |
-| `.wade.yml` (this repo's config) | target project's own `.wade.yml` |
+| WADE source | Per-session target output |
+|---|---|
+| `templates/workflows/<session>.md` | `.wade/session/WORKFLOW.md` |
+| replaceable `templates/skills/<method>/` | `.wade/session/skills/builtin/<method>/` |
+| a target project's native skill roots | `.wade/session/skills/project/<root>/<name>/` |
+| support skills in `templates/skills/` | `.claude/skills/<name>/` plus cross-tool projections |
+| `templates/agents-pointer.md` | marker-delimited `## Git Workflow` block in target `AGENTS.md` |
 
-When developing wade, **only touch the left column**. The right column is what a project gets after adopting wade — `wade init` writes `.wade.yml` and the manifest, then worktree bootstrap (per `wade implement`/`plan`/`review` session, or a standalone `wade task deps`) installs the skills, pointer, and allowlists.
+`wade init` does not install any of these session outputs. It writes project
+configuration and the init manifest. Interactive bootstrap creates the fixed
+workflow and frozen session bundle; bounded foreign delegations create a
+temporary `.wade/operations/<kind>/<invocation>/` bundle.
 
-## AGENTS.md and CLAUDE.md
+When developing WADE, edit only source templates. Never edit `.wade/session/`
+or `.claude/skills/` in a bootstrapped worktree: they are generated artifacts.
 
-`AGENTS.md` is the canonical agent guidance file for this repo. `CLAUDE.md` is a committed symlink -> `AGENTS.md`, providing Claude Code discovery without duplicating content. **Always edit `AGENTS.md` directly** — changes reflect in `CLAUDE.md` automatically via the symlink.
+## Two kinds of skill-related content
 
-In inited projects, **worktree bootstrap** (not `wade init`) writes the workflow pointer per session to whichever of `AGENTS.md` / `CLAUDE.md` already exists (preferring `AGENTS.md`), or creates `AGENTS.md` if neither exists.
+1. **Replaceable methodology skills** — `planning`, `implementation`,
+   `review-comments`, `plan-review`, `code-review`, `batch-review`, and
+   `dependency-analysis`. They own heuristics and rubrics only and must not
+   mention WADE commands, `.wade/`, completion markers, review budgets, or
+   session lifecycle.
+2. **Fixed command-support skills** — currently `task` and `knowledge`.
+   These may mention WADE because they are not replaceable session strategy
+   slots. Session definitions declare which support skills are needed.
 
-## Skill File Symlink Structure
+Do not register replaceable generic names in `SKILL_FILES`. A target project may
+legitimately own `.claude/skills/implementation` or
+`.agents/skills/code-review`; support reconciliation must never overwrite
+or prune those names.
 
-When a session bootstraps a worktree in this repo (self-init mode), the installer creates symlinks *in the worktree* so edits to skill templates are reflected immediately:
+## Support installation
 
-```
-.claude/skills/plan-session              ->  processed copy (self-init exception via INJECT_SKILLS)
-.claude/skills/implementation-session   ->  processed copy (self-init exception via INJECT_SKILLS)
-.claude/skills/review-pr-comments-session ->  processed copy (self-init exception via INJECT_SKILLS)
-.claude/skills/task                     ->  ../../templates/skills/task                     (symlink)
-.claude/skills/deps                     ->  ../../templates/skills/deps                     (symlink)
+`skills/installer.py` projects only fixed support skills into the worktree's
+canonical `.claude/skills/` root. Cross-tool skill roots are derived from
+Crossby's `SKILLS_DIR` mapping and symlinked to that canonical root. Runtime
+code derives each selection from `SessionDefinition.support_skills` through
+`support_skills_for_session()`.
 
-.github/skills/              ->  (same targets, separate symlinks)
-.agents/skills/              ->  (same targets, separate symlinks)
-.cursor/skills/              ->  (same targets, separate symlinks)
-```
+Installation rules:
 
-Note: These symlinks are created **per session by worktree bootstrap** (`install_skills(..., is_self_init=True)`), not by `wade init`. They live in the session's worktree, not on main; a fresh session recreates them.
+- target projects receive copies;
+- WADE self-init worktrees receive symlinks to their live
+  `templates/skills/` tree for authoring convenience;
+- unknown user-owned directories are preserved;
+- only names in `MANAGED_SKILL_NAMES` are reconciled or pruned;
+- native links are conveniences only and are never active session snapshots.
 
-**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.cursor/skills/` directly. In this repo those are symlinks back to templates; in inited projects they are copies re-installed each session.
+The same Crossby mapping drives support projections and project discovery.
+Discovery recognizes exact copied `task` and `knowledge` projections and excludes
+their real directories from the worktree inventory; a same-name project skill in
+the main checkout remains available. The exclusion is content-aware, so an
+unrelated project-authored skill that merely shares a support name is retained.
+Contract tests pin the Crossby version/API behavior, root symlink behavior,
+supported tool coverage, and filtered scene handling. Re-run those tests and
+inspect tool coverage whenever the Crossby dependency pin changes.
 
-In inited projects, worktree bootstrap copies skill files (not symlinks) into each session's worktree, so agents read standalone files. They are refreshed every session, and skills no longer live on main at all (`wade update` actively migrates any legacy on-main skills off).
+## Project-skill discovery
 
-## Skill Installation Lifecycle
+`skills/discovery.py` scans supported skill roots in this order:
 
-**Worktree bootstrap** installs skills file-by-file via the `skills/installer.py` module — per session, into the session's worktree. (`install_skills()` is called only from `bootstrap_worktree` in `implementation_service/bootstrap.py`, never from `wade init`.) When adding a new skill:
+1. the session worktree;
+2. the main checkout, when it differs.
 
-1. Create the skill template in `templates/skills/<name>/SKILL.md`
-2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`. `SKILL_FILES` lists **every** file to install for a skill, including any `reference/<file>.md` (see [Progressive Disclosure](#progressive-disclosure-reference-files-and-the-context-budget)). Files not listed here are not installed and are not gitignored — `get_worktree_gitignore_entries()` derives its paths from this same map.
-3. Add the skill directory to the cleanup logic in `init_service.py` (deinit path)
-4. Reference the skill from `plan-session/SKILL.md`, `implementation-session/SKILL.md`, or `review-pr-comments-session/SKILL.md` as appropriate
+A directory is a skill only when it contains `SKILL.md`. Discovery deduplicates
+tool roots resolving to the same location and applies `skills.project.include`
+and `exclude` patterns. The worktree wins for the same source-root/name identity;
+main-only local or ignored skills are added afterward. This prevents a dirty
+tracked main-checkout copy from replacing branch-specific worktree content while
+still making local-only skills available to the session.
 
-The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on wade itself. Exception: skills in `INJECT_SKILLS` (currently all three session skills) are always installed as processed copies — even in self-init mode — because their templates contain placeholder strings that must be expanded before agents read them (see Partial Templates below).
+Crossby scene projections are selection views, not full inventories. If a
+filtered projection is active alongside an unfiltered source, WADE warns and
+scans the source. If only the projection is available, discovery fails rather
+than silently omitting skills.
 
-## Partial Templates
+Resolution forms are explicit:
 
-Shared content that appears verbatim in multiple skill templates lives in `templates/skills/_partials/`. Template files reference partials via placeholder strings defined in `_SKILL_PARTIALS` in `installer.py`:
+- `builtin:<name>` — a packaged replaceable default;
+- `project:<name>` — a unique discovered project skill;
+- `path:<repository-relative-skill-directory>` — an exact source when names
+  collide.
 
-```text
-{user_interaction_prompt}  →  _partials/user-interaction.md
-```
+Same-name/different-content `project:` candidates are ambiguous and fail.
+Identical paths or content deduplicate. Missing, unsafe, ambiguous, and
+oversized configured/active refs fail before AI launch or provider mutation.
 
-The installer expands these placeholders when copying skill files to a project. The `_partials/` directory is never installed into target projects — it is consumed at install time only.
+WADE self-init is special in two narrow ways: discovery excludes tool-native
+links resolving into packaged/live `templates/skills/`, while `builtin:` refs
+resolve from the current worktree's live templates. Their physical session copy
+still freezes those developer edits for the session.
 
-**To add a new partial:**
-1. Create `templates/skills/_partials/<name>.md`
-2. Add an entry to `_SKILL_PARTIALS` in `installer.py`
-3. Use the placeholder string in the relevant skill template(s)
-4. Add the skill to `INJECT_SKILLS` if it is not already there
+## Validation and physical snapshots
 
-Partials carry **no H2 heading of their own** when a session folds multiple
-sections around them. For example `user-interaction.md` is injected inside each
-skill's `## Talking to the user` section — it may use `###` subheadings (e.g. its
-`### Communication style` block) but never its own H2, so the skill owns the
-single H2 and the fold never produces a duplicate.
+Every discovered or selected skill is recursively inspected before copying:
 
-Partials also carry **no step number**. `doc-update-step.md` is inserted at a
-different position in each session (Step 2 in implement, after review; Step 1 in
-review-pr-comments), so the numbered heading lives in each `SKILL.md` and the
-partial holds only the shared body.
+- `SKILL.md` is required;
+- only regular files and directories are accepted;
+- broken, cyclic, or project-external symlinks are rejected;
+- safe internal symlinks are dereferenced;
+- file-count, per-file, and total-byte limits are enforced;
+- relative paths and file contents feed a deterministic SHA-256 digest.
 
-`review-budget.md` is the canonical source for the shared review time-budget,
-pass-cap, timeout-vs-error, and trivial-change-skip rules (`{review_budget_notes}`)
-— referenced from all **three** session skills so every review workflow states
-identical guidance by default. `wade review batch` intentionally has **no**
-session skill (its worktrees come from `wade implement-batch`, not a session
-command), so its copy of this guidance rides in the `{review_budget}` line of
-`templates/prompts/review-batch.md` instead — do not "fix" the 3-vs-4 count by
-adding a batch skill.
+Interactive materialization writes a staging directory and atomically replaces
+only `.wade/session/`. It copies every discovered project skill for optional
+on-demand use, the active built-ins, fixed support instructions, workflow
+references, `AVAILABLE_SKILLS.md`, and `manifest.json`. Availability does not
+activate a skill: only ordered manifest bindings control WORK and REVIEW.
 
-When `review_plan.enabled: false` or `review_implementation.enabled: false` is
-set in `.wade.yml`, `bootstrap_worktree` (`implementation_service/bootstrap.py`)
-overrides `{review_budget_notes}` with a one-line "skipped" note instead of the
-full guidance — otherwise an agent would be told review is required unless
-trivial for a review command that is explicitly disabled. Because the
-placeholder is shared by all three skills but each `bootstrap_worktree` call
-only ever installs one of {`plan-session`} vs {`implementation-session`,
-`review-pr-comments-session`}, the override is scoped to whichever skill(s) the
-call is actually installing rather than applied globally.
+Session snapshots never point to the main checkout and never modify a native
+project skill. Refresh replaces only `.wade/session/`; durable review history in
+`.wade/reviews/` and any live `.wade/operations/` bundle remain outside that
+transaction. Successful foreign operations remove their own bundle; failed
+recoverable operations may retain it.
 
-## Documentation Targets
+## Documentation targets
 
-The closing documentation pass names the files a project actually maintains.
-That list is **detected per project**, not hardcoded: `install_skills` calls
-`src/wade/skills/doc_targets.py` and injects the result as `{doc_targets}` into
-`doc-update-step.md`.
+`src/wade/skills/doc_targets.py` detects the documentation files a project
+actually maintains. `detect_doc_targets()` returns existing root files in this
+order—`README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`—plus `docs/` when
+it is source rather than generated output. `format_doc_targets()` falls back to
+the project's documentation generally when none exists.
 
-- `detect_doc_targets(project_root)` returns the root doc files that exist
-  (`README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, in that order) plus
-  `docs/` when it exists and is not generated build output.
-- `format_doc_targets(targets)` renders a backtick-quoted list, falling back to
-  *"the project's documentation, if it has any"* when nothing is detected, so the
-  step still reads correctly in a doc-less project.
+The fixed implementation and PR-comment workflows render this list into
+`templates/workflows/_partials/documentation-step.md`. The target detector no
+longer expands a skill partial. After updating docs or deciding they are not
+needed, the session records a current-commit receipt; `done` verifies it.
 
-**Generated-docs guard.** Instructing an agent to edit generated output is worse
-than silence — the edit is real, plausible, committed, and erased by the next
-build. `docs/` is skipped when `docs/_build` exists or `.gitignore` contains a
-bare `docs` entry. Site-generator *config* files (`mkdocs.yml`,
-`docusaurus.config.js`, `docs/conf.py`, `docs/.vitepress`, `docs/book.toml`,
-`docs/_config.yml`) are deliberately **not** treated as generated markers: under
-each tool's default convention they mark `docs/` as hand-authored *source*, so
-treating them as output would exclude `docs/` for the most common case.
+`docs/` is treated as generated when `docs/_build` exists or `.gitignore`
+contains a bare `docs` entry. Site-generator configuration such as `mkdocs.yml`,
+`docs/conf.py`, or `docs/.vitepress` identifies hand-authored source and is not
+an exclusion signal.
 
-`{doc_targets}` is a **computed** placeholder — it is resolved in
-`install_skills`, not read from a file in `_SKILL_PARTIALS`. Two consequences:
-`_expand_partials` re-applies `extra_partials` after the file-partial loop so a
-placeholder nested inside an expanded partial still resolves, and the budget test
-must render it explicitly (see below). Caller-supplied `extra_partials` win over
-the computed value.
+## Context and progressive disclosure
 
-## Progressive Disclosure: reference/ files and the context budget
+The old combined phase-skill ceiling is replaced by separately testable
+surfaces:
 
-Every wade session opens with a launch prompt that inlines the phase `SKILL.md`
-(via the bare `@` reference), before the agent reads any code. To keep that
-opening payload small, each rule lives on exactly **one** surface, and reference
-material is loaded **just-in-time** rather than eagerly.
+| Surface | Limit |
+|---|---:|
+| SessionStart reminder | 800 characters |
+| interactive launch prompt | 2,000 characters |
+| fixed rendered workflow | 12,000 characters |
+| active WORK `SKILL.md` text | 6,000 characters |
+| launch + workflow + WORK method | 20,000 characters |
+| on-demand catalog excerpt | 4,000 characters |
+| delegation method text | 8,000 characters |
+| delegation envelope excluding operation input | 10,000 characters |
 
-### Ownership model
+The pre-extraction default combined surfaces measured approximately 14.5k
+characters. The 20k ceiling permits the deliberate workflow/method split; it is
+an upper bound, not a size target. `tests/integration/test_skill_context_budget.py`
+pins interactive surfaces. Delegation composition separately enforces its method
+and envelope limits.
 
-| Surface | Owns | Never contains |
-|---|---|---|
-| **`SKILL.md`** | the durable *how* + judgment a gate can't check + **one** copy of the workflow | recovery procedures, exit-code tables, format templates, restated checklists |
-| **Launch prompt** (`templates/prompts/*.md`) | the *what* — this task/issue/plan-dir + a one-line "build a todo from the skill" + the first command | the workflow (the skill has it) |
-| **`reference/*.md`** next to `SKILL.md` | recovery procedures, formats, edge cases — read on demand | anything on the happy path |
-| **CLI output** | what to do *now*, at the moment something fails (already emitted by wade) | — |
+Workflow references under `.wade/session/reference/` hold lifecycle recovery and
+output contracts. Skill-local `reference/`, `scripts/`, and assets travel with
+the skill and remain methodology resources. The launch prompt loads the fixed
+workflow and active WORK method; REVIEW text is loaded only inside the bounded
+review operation. `AVAILABLE_SKILLS.md` is read on demand.
 
-Each phase skill points at its reference files with a one-line `@`-pointer.
-`implementation-session/SKILL.md` points at `reference/recovery.md` for
-sync/catchup conflict handling, `reference/pr-summary-format.md` for the
-PR-summary format, `reference/doc-update.md` for the closing documentation pass,
-and — from the `## Skills reference` index — `reference/tracking-issues.md`
-(child/epic issues) and `reference/new-plan.md` (finalizing a plan mid-session).
-`review-pr-comments-session` points at its own `reference/recovery.md` and
-`reference/doc-update.md`. The `task` skill uses the same pattern with
-`plan-format.md` + `examples.md`, plus `reference/session-summary-format.md` —
-the shared **session-summary / decision convention** (emoji step-status legend
-✅/⚠️/❌/⏭️, the final-summary skeleton, the recommended-first dialog-label rules, and
-one worked example per session type). It is hosted under `task` deliberately:
-`task` installs in **every** session type (`PLAN`/`IMPLEMENT`/`REVIEW_SKILLS`), so
-all three session skills — plus `deps` — resolve it via the one
-`@.claude/skills/task/reference/session-summary-format.md` pointer. The inline
-"Present results" trigger in each session skill is self-sufficient without it, so
-a session type where that `@`-path fails to resolve still renders a correct
-summary.
+## AGENTS.md and CLAUDE.md pointer
 
-Reference files must be registered in `SKILL_FILES` (see [Skill Installation
-Lifecycle](#skill-installation-lifecycle)) using the `reference/<file>.md` path,
-or they are not installed. Review needs its **own** `reference/recovery.md` and
-`reference/doc-update.md` — it cannot point at implementation-session's, because
-`REVIEW_SKILLS` installs only `review-pr-comments-session`, `task`, and
-`knowledge`. Some duplication between the paired files is expected and correct.
+`AGENTS.md` is canonical in this repo; the committed `CLAUDE.md` symlink exposes
+the same content to Claude. In a target worktree, bootstrap prefers an existing
+`AGENTS.md`, then `CLAUDE.md`, and otherwise creates `AGENTS.md`.
 
-### The session-start budget test
+The injected pointer is deliberately small. It tells the agent to read
+`.wade/session/WORKFLOW.md`, its selected methodology, and the task input. The
+project's own instructions precede the pointer and remain authoritative for
+project policy; the fixed WADE workflow remains authoritative for WADE lifecycle
+mechanics.
 
-`tests/integration/test_skill_context_budget.py` pins the combined size of the
-session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
-reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **13,700**)
-for each of implement / plan / review, so the budget cannot silently regress. The
-unit is **chars** (a deliberate proxy for tokens; measured token savings differ
-slightly). If a skill edit pushes a session over budget, move the added detail
-into a `reference/*.md` and leave a one-line pointer rather than inflating the
-always-loaded `SKILL.md` — or, for a short load-bearing note that must be
-always-loaded, bump `BUDGET_CHARS` with a documented reason (the ceiling exists to
-force that decision to be explicit and reviewed, not to forbid it).
+The pointer is marker-delimited:
 
-**Computed placeholders must be rendered, not left literal.** `{doc_targets}` is
-resolved per project at install time (see [Documentation
-Targets](#documentation-targets)) rather than read from a partial file, so
-`_expand_partials` alone leaves the 14-char placeholder in place and
-under-measures every real install. The test therefore expands it with the
-largest set the detector can produce (all root doc files + `docs/`, ~64 chars) so
-the ceiling reflects a worst-case project. Any future computed placeholder added
-to a `SKILL.md` must be given the same treatment, or the budget silently drifts.
-
-## Agent Skills (templates/skills/)
-
-> **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects **per session by worktree bootstrap**. They are *not* guidance for developing wade itself — they teach AI agents in target projects how to use the wade workflow. When you are developing wade, treat these files as **output artifacts** you are authoring, not as rules you follow.
-
-Skill templates are Markdown files installed to an inited project's `.claude/skills/` **per session by worktree bootstrap** (`bootstrap_worktree`), with symlinks from `.github/skills/`, `.agents/skills/`, and `.cursor/skills/` for cross-tool discovery. They teach AI agents the wade workflow via phase-specific session skills and on-demand task skills.
-
-### Phase-Specific Skill Architecture (for inited projects)
-
-> **Scope: inited projects.** The following describes how wade structures agent-facing documentation *in the projects it is installed into* — not how this repo's own documentation is organized.
-
-Skills are organized into **phase skills** (one per session type) and **task skills** (on-demand reference):
-
-1. **AGENTS.md pointer** — **worktree bootstrap** (via `pointer.ensure_pointer`) reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md` per session. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
-2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`wade plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
-3. **`templates/skills/implementation-session/SKILL.md`** — Self-contained rules for implementation sessions (`wade implement`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
-4. **`templates/skills/review-pr-comments-session/SKILL.md`** — Self-contained rules for review sessions (`wade review pr-comments`). Covers review fetching, thread resolution, syncing, and session closing. No planning or implementation rules.
-5. **`templates/skills/task/SKILL.md`** — On-demand skill for standalone issue creation outside of planning sessions.
-6. **`templates/skills/deps/SKILL.md`** — On-demand skill for dependency analysis.
-
-Each phase skill is self-contained — agents only read the skill for their current phase. This eliminates noise from irrelevant rules. When adding new agent-facing commands or workflows:
-- **Put implementation rules** in `implementation-session/SKILL.md`
-- **Put planning rules** in `plan-session/SKILL.md`
-- **Put review rules** in `review-pr-comments-session/SKILL.md`
-- **Create or update a task skill** in `templates/skills/` for on-demand reference
-- Keep the AGENTS.md pointer minimal — it should only direct agents to their phase skill
-
-### Pointer Placement & Precedence
-
-The workflow pointer in `AGENTS.md` is strictly secondary to the project's own documentation.
-- **Placement**: Append to the end of `AGENTS.md` (or intelligent insertion after existing sections), but **never** force it to the top. The project's own context and rules must come first.
-- **Style**: Avoid overly aggressive alerts (e.g., `[!IMPORTANT]`) in the pointer itself, as it can distract from project-specific high-priority rules.
-- **Precedence**: If a project's `AGENTS.md` defines rules that conflict with the workflow skill, the project's rules win. The workflow skill handles the *mechanics* of wade; the project handles the *policy*.
-
-## Pointer Marker System
-
-The AGENTS.md workflow pointer uses HTML comment markers to enable robust detection and refresh:
-
-```
+```markdown
 <!-- wade:pointer:start -->
 ## Git Workflow
 ...
 <!-- wade:pointer:end -->
 ```
 
-**Functions in `skills/pointer.py`:**
-- `has_pointer(file_path)` — Checks if file has marker-delimited pointer block
-- `extract_pointer_content(file_path)` — Extracts text between markers (for staleness comparison)
-- `remove_pointer(file_path)` — Removes marker-wrapped block; falls back to old-style `## Git Workflow` section removal for backward compatibility
-- `write_pointer(file_path)` — Appends marker-wrapped pointer to file
-- `ensure_pointer(project_root)` — High-level: find AGENTS.md/CLAUDE.md, detect staleness, refresh if needed
+`skills/pointer.py` detects, compares, refreshes, and removes this block. It also
+migrates the old unmarked `## Git Workflow` form and deletes an otherwise empty
+file during removal. Change injected text in `templates/agents-pointer.md`, not
+in a generated worktree copy.
 
-**`ensure_pointer()` logic:**
-- Markers present -> Extract inner content and compare to current template
-  - Match -> No-op (already current)
-  - Different -> Remove old block and write new one (refresh)
-- Old-style (no markers) -> Remove via line-based fallback and write with markers (migrate)
-- Not present -> Create new file or append (new install)
+## Diagnostics
 
-**`remove_pointer()` removal:**
-- Uses marker-based detection (primary), old-style `## Git Workflow` section scanning (fallback)
-- Deletes file if it would be empty after removal
-- Gracefully preserves project content in AGENTS.md
+- `wade skills list` shows built-ins and the validated merged project inventory.
+- `wade skills resolve --session <kind>` and `--delegation <kind>` show ordered
+  refs, precedence candidates, winner, provenance, and binding digest.
+- `wade skills check` validates discovery and every explicit configured ref.
+- `wade session describe` displays the active frozen manifest.
+- `wade session refresh-skills` explicitly rediscovers and atomically replaces
+  the current session bundle.
+
+`wade check-config` also validates configured refs. Diagnostics are read-only
+except the explicitly named refresh command.

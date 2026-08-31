@@ -34,10 +34,14 @@ import re
 from enum import StrEnum
 
 from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
-from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from wade.models.permission import PermissionMode, coerce_permission_mode
 from wade.models.session import MergeStrategy
+from wade.models.skill import SkillRef
+from wade.models.workflow import AICommandKey
+
+CONFIG_SCHEMA_VERSION = 2
 
 # wade's own command pattern — the base allowlist entry that must always be
 # pre-authorized so agents can run ``wade ...`` without manual approval.
@@ -107,15 +111,7 @@ class AICommandConfig(BaseModel):
     timeout: int | None = None
 
 
-AI_COMMAND_NAMES: tuple[str, ...] = (
-    "plan",
-    "deps",
-    "implement",
-    "review_plan",
-    "review_implementation",
-    "review_batch",
-    "review_pr_comments",
-)
+AI_COMMAND_NAMES: tuple[str, ...] = tuple(command.value for command in AICommandKey)
 """Canonical per-command AI config sections supported by WADE."""
 
 
@@ -161,6 +157,103 @@ class KnowledgeConfig(BaseModel):
 
     enabled: bool = False
     path: str = "KNOWLEDGE.md"
+
+
+class ProjectSkillDiscoveryConfig(BaseModel):
+    """Read-only discovery policy for project-owned Agent Skills."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    discover: bool = True
+    include: tuple[str, ...] = ("*",)
+    exclude: tuple[str, ...] = ()
+
+    @field_validator("include", "exclude")
+    @classmethod
+    def _patterns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not isinstance(pattern, str) or not pattern.strip() for pattern in value):
+            raise ValueError("Skill include/exclude patterns must be non-empty strings")
+        return value
+
+
+class SkillsConfig(BaseModel):
+    """Top-level project-skill discovery configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: ProjectSkillDiscoveryConfig = Field(default_factory=ProjectSkillDiscoveryConfig)
+
+
+class SessionSkillConfig(BaseModel):
+    """Optional session-slot overrides; ``None`` means use normal precedence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    work: tuple[SkillRef, ...] | None = None
+    review: tuple[SkillRef, ...] | None = None
+
+    @field_validator("work", "review")
+    @classmethod
+    def _nonempty_binding(cls, value: tuple[SkillRef, ...] | None) -> tuple[SkillRef, ...] | None:
+        if value == ():
+            raise ValueError("Configured skill bindings cannot be empty")
+        return value
+
+
+class SessionConfig(BaseModel):
+    """Configuration for one interactive session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skills: SessionSkillConfig = Field(default_factory=SessionSkillConfig)
+
+
+class SessionsConfig(BaseModel):
+    """Interactive session binding configuration.
+
+    ``deps`` is intentionally absent: dependency methodology is configured only
+    through ``delegations.dependency_analysis``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan: SessionConfig = Field(default_factory=SessionConfig)
+    implementation: SessionConfig = Field(default_factory=SessionConfig)
+    review_pr_comments: SessionConfig = Field(default_factory=SessionConfig)
+
+
+class DelegationSkillConfig(BaseModel):
+    """Optional bounded-delegation work binding override."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    work: tuple[SkillRef, ...] | None = None
+
+    @field_validator("work")
+    @classmethod
+    def _nonempty_binding(cls, value: tuple[SkillRef, ...] | None) -> tuple[SkillRef, ...] | None:
+        if value == ():
+            raise ValueError("Configured skill bindings cannot be empty")
+        return value
+
+
+class DelegationConfig(BaseModel):
+    """Configuration for one bounded delegation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skills: DelegationSkillConfig = Field(default_factory=DelegationSkillConfig)
+
+
+class DelegationsConfig(BaseModel):
+    """All bounded-delegation binding configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_review: DelegationConfig = Field(default_factory=DelegationConfig)
+    code_review: DelegationConfig = Field(default_factory=DelegationConfig)
+    batch_review: DelegationConfig = Field(default_factory=DelegationConfig)
+    dependency_analysis: DelegationConfig = Field(default_factory=DelegationConfig)
 
 
 class PreCommitConfig(BaseModel):
@@ -410,7 +503,7 @@ class ProjectConfig(BaseModel):
     parses the YAML file and constructs this model.
     """
 
-    version: int = 2
+    version: int = CONFIG_SCHEMA_VERSION
 
     project: ProjectSettings = ProjectSettings()
     ai: AIConfig = AIConfig()
@@ -419,6 +512,9 @@ class ProjectConfig(BaseModel):
     permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
+    delegations: DelegationsConfig = Field(default_factory=DelegationsConfig)
     done: DoneConfig = DoneConfig()
     bot_review: BotReviewConfig = Field(default_factory=BotReviewConfig)
 

@@ -1,4 +1,4 @@
-"""Detect a project's documentation targets for the doc-update-step skill partial."""
+"""Detect a project's documentation targets for fixed workflow rendering."""
 
 from __future__ import annotations
 

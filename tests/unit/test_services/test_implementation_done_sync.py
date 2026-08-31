@@ -1324,6 +1324,10 @@ class TestDone:
             patch(
                 "wade.services.implementation_service.done.get_provider", return_value=mock_provider
             ),
+            patch(
+                "wade.services.implementation_service.done.read_documentation_receipt",
+                return_value=MagicMock(),
+            ),
             patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):
             mock_pr.return_value = True
@@ -1388,6 +1392,10 @@ class TestDone:
             patch(
                 "wade.services.implementation_service.done.get_provider", return_value=mock_provider
             ),
+            patch(
+                "wade.services.implementation_service.done.read_documentation_receipt",
+                return_value=MagicMock(),
+            ),
             patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):
             mock_pr.return_value = True
@@ -1435,6 +1443,10 @@ class TestDone:
             ),
             patch(
                 "wade.services.implementation_service.done.get_provider", return_value=mock_provider
+            ),
+            patch(
+                "wade.services.implementation_service.done.read_documentation_receipt",
+                return_value=MagicMock(),
             ),
             patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):

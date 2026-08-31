@@ -28,6 +28,7 @@ from wade.models.config import (
 )
 from wade.models.session import MergeStatus
 from wade.models.task import Task
+from wade.models.workflow import SessionKind
 from wade.models.worktree import Worktree
 from wade.services.implementation_service import (
     _BATCH_STATUS_DONE,
@@ -163,6 +164,27 @@ class TestEffectiveCopyFiles:
 
 
 class TestBootstrapWorktree:
+    def test_compose_session_only_skips_full_bootstrap(self, tmp_path: Path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        (repo_root / ".env").write_text("SECRET=123\n")
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        config = ProjectConfig(hooks=HooksConfig(copy_to_worktree=[".env"]))
+
+        with patch("wade.services.session_composition_service.compose_session") as compose_session:
+            bootstrap_worktree(
+                worktree,
+                config,
+                repo_root,
+                session_kind=SessionKind.IMPLEMENTATION,
+                compose_session_only=True,
+            )
+
+        compose_session.assert_called_once()
+        assert not (worktree / ".env").exists()
+        assert not (worktree / ".claude").exists()
+
     def test_copies_configured_files(self, tmp_path: Path) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -275,7 +297,7 @@ class TestBootstrapWorktree:
 
         # Create templates in the worktree (mimics a wade repo worktree checkout)
         skills_tpl = worktree / "templates" / "skills"
-        for skill_name in ("task", "plan-session", "implementation-session", "deps"):
+        for skill_name in ("task", "knowledge"):
             (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
             (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
 
@@ -310,7 +332,8 @@ class TestBootstrapWorktree:
 
     def test_selective_skills_only_installs_listed(self, tmp_path: Path) -> None:
         """bootstrap_worktree with skills parameter installs only those skills."""
-        from wade.skills.installer import IMPLEMENT_SKILLS
+        from wade.models.workflow import SessionKind
+        from wade.skills.installer import support_skills_for_session
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -323,17 +346,16 @@ class TestBootstrapWorktree:
             "wade.skills.installer.get_wade_repo_root",
             return_value=tmp_path / "some-other-path",
         ):
-            bootstrap_worktree(worktree, config, repo_root, skills=IMPLEMENT_SKILLS)
+            bootstrap_worktree(
+                worktree,
+                config,
+                repo_root,
+                skills=support_skills_for_session(SessionKind.IMPLEMENTATION),
+            )
 
         skills_dir = worktree / ".claude" / "skills"
-        # IMPLEMENT_SKILLS = ["implementation-session", "task", "knowledge"]
-        assert (skills_dir / "implementation-session").is_dir()
         assert (skills_dir / "task").is_dir()
         assert (skills_dir / "knowledge").is_dir()
-        # Other skills should NOT be installed
-        assert not (skills_dir / "plan-session").exists()
-        assert not (skills_dir / "deps").exists()
-        assert not (skills_dir / "review-pr-comments-session").exists()
 
     def test_self_init_selective_skills(self, tmp_path: Path) -> None:
         """Self-init with skills parameter only symlinks listed skills."""
@@ -345,19 +367,17 @@ class TestBootstrapWorktree:
 
         # Create templates in the worktree
         skills_tpl = worktree / "templates" / "skills"
-        for skill_name in ("task", "plan-session", "implementation-session", "deps"):
+        for skill_name in ("task", "knowledge"):
             (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
             (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
 
         config = ProjectConfig()
         with patch("wade.skills.installer.get_wade_repo_root", return_value=repo_root):
-            bootstrap_worktree(worktree, config, repo_root, skills=["task", "deps"])
+            bootstrap_worktree(worktree, config, repo_root, skills=["task", "knowledge"])
 
         skills_dir = worktree / ".claude" / "skills"
         assert (skills_dir / "task").is_symlink()
-        assert (skills_dir / "deps").is_symlink()
-        assert not (skills_dir / "implementation-session").exists()
-        assert not (skills_dir / "plan-session").exists()
+        assert (skills_dir / "knowledge").is_symlink()
 
 
 class TestBuildImplementationPrompt:
@@ -1067,6 +1087,47 @@ class TestImplementationStart:
 
         assert result.success is False
 
+    def test_invalid_skill_fails_before_draft_pr_or_provider_mutation(self, tmp_path: Path) -> None:
+        """Skill preflight is the mutation boundary for implementation start."""
+        from wade.services.session_composition_service import SessionCompositionError
+
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider",
+                return_value=mock_provider,
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.worktree.create_worktree"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+            patch(
+                "wade.services.implementation_service.core.bootstrap_worktree",
+                side_effect=SessionCompositionError("unknown project:missing"),
+            ),
+            patch("wade.services.implementation_service.core.bootstrap_draft_pr") as draft_pr,
+            patch("wade.services.implementation_service.core.add_in_progress_label") as add_label,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start(
+                "42",
+                project_root=tmp_path,
+                work_skills=["project:missing"],
+            )
+
+        assert result.success is False
+        draft_pr.assert_not_called()
+        add_label.assert_not_called()
+        mock_provider.move_to_in_progress.assert_not_called()
+
     def test_cd_only_prints_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """cd_only=True → worktree path printed to stdout, no AI launched, returns True."""
         task = self._make_task()
@@ -1625,6 +1686,29 @@ class TestImplementationBatch:
         assert "--model" in cmd
         idx = cmd.index("--model")
         assert cmd[idx + 1] == "claude-sonnet-4-6"
+
+    def test_dynamic_skill_flags_are_forwarded_in_order(self, tmp_path: Path) -> None:
+        """Each batch child receives the parent's complete ordered binding request."""
+        stack, mocks = self._batch_patches(tmp_path)
+        with stack:
+            batch(
+                ["1"],
+                project_root=tmp_path,
+                work_skills=["project:first", "builtin:implementation"],
+                review_skills=["project:security"],
+                refresh_skills=True,
+            )
+
+        cmd = mocks["launch_batch_in_terminals"].call_args[0][0][0][0]
+        assert cmd[-7:] == [
+            "--skill",
+            "project:first",
+            "--skill",
+            "builtin:implementation",
+            "--review-skill",
+            "project:security",
+            "--refresh-skills",
+        ]
 
     def test_dependency_cycle_returns_false(self, tmp_path: Path) -> None:
         """Dependency cycle in graph.partition() returns False with clean error."""
@@ -2718,8 +2802,8 @@ class TestStartTrackingDetection:
         mock_batch.assert_called_once()
         mock_create.assert_called_once()
 
-    def test_tracking_issue_forwards_ai_params(self, tmp_path: Path) -> None:
-        """AI tool/model/effort/yolo parameters are forwarded to batch()."""
+    def test_tracking_issue_forwards_ai_and_skill_params(self, tmp_path: Path) -> None:
+        """AI selection and dynamic bindings are forwarded to batch()."""
         task = self._tracking_task()
         mock_provider = MagicMock()
         mock_provider.read_task.return_value = task
@@ -2750,6 +2834,9 @@ class TestStartTrackingDetection:
                 model_explicit=True,
                 effort_explicit=True,
                 yolo=True,
+                work_skills=["project:implementation"],
+                review_skills=["project:security"],
+                refresh_skills=True,
             )
 
         call_kwargs = mock_batch.call_args.kwargs
@@ -2760,6 +2847,9 @@ class TestStartTrackingDetection:
         assert call_kwargs["model_explicit"] is True
         assert call_kwargs["effort_explicit"] is True
         assert call_kwargs["yolo"] is True
+        assert call_kwargs["work_skills"] == ["project:implementation"]
+        assert call_kwargs["review_skills"] == ["project:security"]
+        assert call_kwargs["refresh_skills"] is True
 
 
 # ---------------------------------------------------------------------------

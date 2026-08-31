@@ -2189,6 +2189,9 @@ class TestQuietNextStepsPrompt:
             permission_mode=None,
             permission_mode_explicit=False,
             network_access=None,
+            work_skills=None,
+            review_skills=None,
+            refresh_skills=False,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -2225,6 +2228,9 @@ class TestQuietNextStepsPrompt:
             ai_explicit=True,
             model_explicit=True,
             permission_mode="yolo",
+            work_skills=["project:implementation-review"],
+            review_skills=["project:security-review"],
+            refresh_skills=True,
         )
 
         mock_start.assert_called_once_with(
@@ -2240,6 +2246,9 @@ class TestQuietNextStepsPrompt:
             permission_mode="yolo",
             permission_mode_explicit=False,
             network_access=None,
+            work_skills=["project:implementation-review"],
+            review_skills=["project:security-review"],
+            refresh_skills=True,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")

@@ -11,6 +11,22 @@ review_pr_comments_session_app = typer.Typer(
 )
 
 
+@review_pr_comments_session_app.command("docs")
+def docs(
+    updated: bool = typer.Option(False, "--updated"),
+    not_needed: str | None = typer.Option(None, "--not-needed"),
+) -> None:
+    """Record the mandatory documentation-impact decision for current HEAD."""
+
+    from wade.cli.session_shared import record_documentation_decision
+
+    record_documentation_decision(
+        "review-pr-comments",
+        updated=updated,
+        not_needed=not_needed,
+    )
+
+
 @review_pr_comments_session_app.command()
 def check() -> None:
     """Verify worktree safety for AI agents.
@@ -101,12 +117,9 @@ def done(
         trigger_bots=trigger_bots,
     )
     if success:
-        from wade.cli.session_shared import DOC_PASS_ADVISORY
         from wade.models.review import format_review_status_summary
         from wade.services.review_service import get_review_status
         from wade.ui.console import console
-
-        console.warn(DOC_PASS_ADVISORY)
 
         status = get_review_status()
         if status is not None:

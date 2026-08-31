@@ -1,4 +1,4 @@
-"""Tests that ``done`` commands print the doc-pass advisory on success (#360)."""
+"""Post-done output after documentation became a deterministic pre-done gate."""
 
 from __future__ import annotations
 
@@ -11,8 +11,6 @@ from wade.cli.main import app
 
 runner = CliRunner()
 
-# Console word-wraps long lines, so match a short, unwrapped substring rather
-# than the full DOC_PASS_ADVISORY sentence.
 ADVISORY_MARKER = "Documentation pass not confirmed"
 
 
@@ -23,12 +21,12 @@ def ready_runtime() -> object:
         yield
 
 
-class TestImplementationSessionDoneDocPassAdvisory:
+class TestImplementationSessionDoneOutput:
     @patch("wade.services.implementation_service.done", return_value=True)
-    def test_advisory_shown_on_success(self, _mock_done: MagicMock) -> None:
+    def test_obsolete_advisory_hidden_on_success(self, _mock_done: MagicMock) -> None:
         result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 0
-        assert ADVISORY_MARKER in result.output
+        assert ADVISORY_MARKER not in result.output
 
     @patch("wade.services.implementation_service.done", return_value=False)
     def test_advisory_hidden_when_done_fails(self, _mock_done: MagicMock) -> None:
@@ -37,15 +35,15 @@ class TestImplementationSessionDoneDocPassAdvisory:
         assert ADVISORY_MARKER not in result.output
 
 
-class TestReviewPrCommentsSessionDoneDocPassAdvisory:
+class TestReviewPrCommentsSessionDoneOutput:
     @patch("wade.services.review_service.get_review_status", return_value=None)
     @patch("wade.services.implementation_service.done", return_value=True)
-    def test_advisory_shown_on_success(
+    def test_obsolete_advisory_hidden_on_success(
         self, _mock_done: MagicMock, _mock_status: MagicMock
     ) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "done"])
         assert result.exit_code == 0
-        assert ADVISORY_MARKER in result.output
+        assert ADVISORY_MARKER not in result.output
 
     @patch("wade.services.implementation_service.done", return_value=False)
     def test_advisory_hidden_when_done_fails(self, _mock_done: MagicMock) -> None:

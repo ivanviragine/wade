@@ -41,6 +41,7 @@ from wade.models.review import (
     format_review_threads_markdown,
 )
 from wade.models.task import Task
+from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services import bot_trigger
@@ -897,6 +898,9 @@ def start(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     network_access: bool | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
 ) -> bool:
     """Start a review-addressing session on an issue.
 
@@ -905,7 +909,7 @@ def start(
     2. Find existing worktree (or recover from remote branch)
     3. Find PR for the branch (error if missing or merged)
     4. Quick-check for unresolved review threads
-    5. Install review-pr-comments-session skill, build prompt, launch AI
+    5. Compose the fixed review workflow and dynamic methods, then launch AI
     6. Post-session: capture token usage, update PR, add labels
     7. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
 
@@ -1093,6 +1097,9 @@ def start(
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
             network_access=network_access,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
             config=config,
         )
         return True
@@ -1110,12 +1117,26 @@ def start(
         names = ", ".join(f"@{a}" for a in status.changes_requested_by)
         console.info(f"Changes requested by {names} (PR-level review) — launching review session")
 
-    # 5. Re-bootstrap skills (ensures review-pr-comments-session skill is installed)
-    from wade.skills.installer import REVIEW_SKILLS
+    # 5. Re-bootstrap support files and compose the review session bundle.
+    from wade.services.session_composition_service import SessionCompositionError
+    from wade.skills.installer import support_skills_for_session
 
-    bootstrap_worktree(
-        worktree_path, config, repo_root, skills=REVIEW_SKILLS, session_phase=SessionPhase.REVIEW
-    )
+    try:
+        bootstrap_worktree(
+            worktree_path,
+            config,
+            repo_root,
+            skills=support_skills_for_session(SessionKind.REVIEW_PR_COMMENTS),
+            session_phase=SessionPhase.REVIEW,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+            task_id=task.id,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
+        )
+    except SessionCompositionError as exc:
+        console.error(f"Cannot start review session: {exc}")
+        return False
 
     # 6. Resolve AI tool, model, effort, and autonomy under the dedicated
     # ``review_pr_comments`` config key (#389) so this auto-launched session
@@ -1423,6 +1444,9 @@ def _quiet_next_steps_prompt(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     network_access: bool | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
     config: ProjectConfig | None = None,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
@@ -1430,9 +1454,9 @@ def _quiet_next_steps_prompt(
     Used both when ``wade review pr-comments <issue>`` finds nothing to address
     and when the polling loop hits the quiet timeout.
 
-    ``network_access`` carries the caller's explicit ``--network`` / ``--no-network``
-    (``None`` = unset) into a "keep polling → comments found" re-launch, so a later
-    session preserves that decision instead of silently re-resolving to config.
+    Explicit network and skill-binding arguments survive a "keep polling →
+    comments found" re-launch. The quiet path runs before session composition, so
+    dropping them there would silently replace the requested methodology.
     """
     from wade.ui import prompts
 
@@ -1506,6 +1530,9 @@ def _quiet_next_steps_prompt(
                         permission_mode=permission_mode,
                         permission_mode_explicit=permission_mode_explicit,
                         network_access=network_access,
+                        work_skills=work_skills,
+                        review_skills=review_skills,
+                        refresh_skills=refresh_skills,
                     )
                 return
             elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):

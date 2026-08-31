@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
-from wade.models.config import AI_COMMAND_NAMES
+from wade.models.workflow import SESSION_DEFINITIONS
 
 # Set by ``wade plan`` **only** on its supported temp-directory fallback — when
 # no planning worktree could be created (bootstrap failed, or the caller is not
@@ -18,7 +18,7 @@ PLAN_DIR_ENV_VAR = "WADE_PLAN_DIR"
 
 
 class ReadinessPhase(StrEnum):
-    """A WADE session phase whose capabilities can be checked before edits."""
+    """A WADE session phase whose runtime capabilities can be checked."""
 
     PLAN = "plan"
     IMPLEMENTATION = "implementation"
@@ -57,44 +57,13 @@ class ReadinessRequirements(BaseModel, frozen=True):
     requires_github: bool = False
     supports_staged_knowledge_votes: bool = False
 
-    @field_validator("ai_command")
-    @classmethod
-    def _known_ai_command(cls, value: str) -> str:
-        """Reject a command name ``get_ai_tool`` would silently ignore.
-
-        An unknown section name is not an error there — it falls through to
-        ``ai.default_tool`` — so a typo would quietly disable a phase's
-        per-command tool override instead of failing.
-        """
-        if value not in AI_COMMAND_NAMES:
-            raise ValueError(f"Unknown AI command section {value!r}: use one of {AI_COMMAND_NAMES}")
-        return value
-
 
 READINESS_REQUIREMENTS: dict[ReadinessPhase, ReadinessRequirements] = {
-    # These worktrees author only plan/dependency artifacts and an optional
-    # `.wade/` rating transport record. They do not fetch, push, or finalize a
-    # PR themselves, so a correctly-contained runtime needs neither gitdir
-    # writes nor GitHub credentials/network access.
-    ReadinessPhase.PLAN: ReadinessRequirements(
-        ai_command="plan",
-        supports_staged_knowledge_votes=True,
-    ),
-    ReadinessPhase.DEPS: ReadinessRequirements(
-        ai_command="deps",
-        supports_staged_knowledge_votes=True,
-    ),
-    # These agents run fetch/sync/done and review-thread commands directly.
-    # PR operations are GitHub-backed even when the task provider is Markdown
-    # or ClickUp, so this is deliberately independent of provider selection.
-    ReadinessPhase.IMPLEMENTATION: ReadinessRequirements(
-        ai_command="implement",
-        requires_git_metadata_write=True,
-        requires_github=True,
-    ),
-    ReadinessPhase.REVIEW_PR_COMMENTS: ReadinessRequirements(
-        ai_command="review_pr_comments",
-        requires_git_metadata_write=True,
-        requires_github=True,
-    ),
+    ReadinessPhase(kind.value): ReadinessRequirements(
+        ai_command=definition.ai_command.value,
+        requires_git_metadata_write=definition.readiness.requires_git_metadata_write,
+        requires_github=definition.readiness.requires_github,
+        supports_staged_knowledge_votes=definition.readiness.supports_staged_knowledge_votes,
+    )
+    for kind, definition in SESSION_DEFINITIONS.items()
 }

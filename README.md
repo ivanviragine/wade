@@ -25,7 +25,8 @@ while WADE handles the git and GitHub plumbing around every AI session.
   project conventions are loaded into the AI automatically.
 - **Agent guardrails** — on hook-capable AI tools, per-session hooks keep the AI
   inside its worktree and route it through a completion gate before any push;
-  hookless tools fall back to skill rules (see the tool support table).
+  hookless tools retain the same fixed workflow and deterministic service gates
+  (see the tool support table).
 - **Quality gates** — opt-in pre-commit lint/test and conventional-commit checks,
   plus an AI code-review pass before the PR is marked ready.
 - **Pluggable task providers** — GitHub Issues, ClickUp, or a committed Markdown
@@ -54,8 +55,8 @@ wade 42
 
 With no open PR for task #42 yet, WADE starts an implementation session: it
 creates an isolated git worktree, launches your AI tool with the full task
-loaded — title, description, labels, and all your project conventions — and
-Skills guide the AI from first commit to open PR without you touching git again.
+loaded — title, description, labels, and all your project conventions — and a
+fixed workflow plus selected methodology guide it from first commit to open PR.
 Want the AI to break the work down first? Run `wade plan` — planning is a
 deliberate step, not something `wade 42` guesses at from a missing plan.
 
@@ -95,7 +96,7 @@ wade implement-batch 42 43 44   # three worktrees, three AI sessions, zero stash
 | `git fetch && checkout && pull && checkout -b ...` before every task | `wade 42` — one command, done |
 | Copy-paste task title + description into AI chat every time | Full task context + project conventions loaded automatically |
 | One task at a time, or stash-juggle between branches | Parallel tasks in isolated worktrees, zero conflicts |
-| Re-explain your branching rules, test commands, linters every session | Skills teach the AI your conventions once |
+| Re-explain lifecycle and review rules every session | A fixed workflow carries them; dynamic skills add your methodology |
 | PRs opened on stale branches — reviewer sees conflict noise, asks for a rebase, CI fails | AI merges the latest main and resolves conflicts before the PR — reviewer sees only your changes |
 | Write the PR description, link the task, clean up the branch — manually | The AI ships the PR. You just review |
 | Manually pick the right model for each task | Automatic model routing based on task complexity |
@@ -203,6 +204,12 @@ wade plan ─▶ tasks + draft PRs ─▶ wade <N> ─▶ AI implements in an is
 | `wade update` | Upgrade WADE and refresh project files |
 | `wade deinit` | Remove WADE from the current project |
 | `wade check-config` | Validate `.wade.yml` configuration |
+| `wade skills list` | List built-in methods and discovered project skills |
+| `wade skills resolve --session <kind>` | Explain effective session bindings and precedence |
+| `wade skills resolve --delegation <kind>` | Explain an effective standalone delegation binding |
+| `wade skills check` | Deep-check discovered trees and configured skill refs |
+| `wade session describe` | Show the active session's frozen workflow/bindings |
+| `wade session refresh-skills` | Explicitly rediscover and replace active skill snapshots |
 | `wade knowledge add` | Append a project learning from stdin (unavailable in a plan/deps session) |
 | `wade knowledge get` | Print the current project knowledge file |
 | `wade knowledge rate` | Record an up / down / stale vote for a knowledge entry |
@@ -223,16 +230,17 @@ These are invoked by the AI during a session — you normally don't run them by 
 | Command | Description |
 |---------|-------------|
 | `wade implementation-session check` | Verify the implementation session's Git, GitHub, and required local capabilities before edits |
+| `wade implementation-session docs --updated \| --not-needed "reason"` | Record the required documentation-impact decision for current HEAD |
 | `wade implementation-session sync` | Sync the branch onto the base branch |
 | `wade implementation-session done` | Completion gate — runs the gates, pushes, and opens/updates the PR |
-| `wade review-pr-comments-session check \| sync \| done` | Same lifecycle for a review session |
+| `wade review-pr-comments-session check \| docs \| sync \| done` | Same lifecycle and documentation receipt for a review session |
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
 | `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
@@ -285,6 +293,13 @@ WADE splits review into an **AI review pass** you or the agent can invoke, and
 | `wade review batch <N>` | Coherence across parallel implementation branches |
 | `wade review pr-comments <N>` | Starts a session to address human/bot PR comments |
 | `wade review trigger <N>` | Posts configured bot-review trigger comments on the task's PR |
+
+Prompt-mode implementation review prints the bounded review prompt and exits 2;
+printing it does not certify that a review happened. After performing that
+self-review and addressing its findings, run
+`wade review implementation --ack-self-review` to write the current commit and
+frozen-review-binding receipt. Successful headless or interactive reviews write
+the same receipt directly.
 
 To fetch the unresolved comments themselves during a review session, the agent
 runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads with
@@ -477,21 +492,24 @@ deliberate obfuscation (variable indirection, command substitution, subshells).
 | Antigravity CLI | ✅ | ✅ |
 
 The remaining supported tools (OpenCode, VS Code, Antigravity IDE) expose no hook
-mechanism WADE can install into, so they receive neither guard — session rules
-there rest on the skill files alone.
+mechanism WADE can install into, so they receive neither hook guard. Their
+session still loads the fixed workflow, and deterministic lifecycle commands and
+completion gates remain authoritative.
 
 ### Completion gates
 
 `wade implementation-session done` (and `review-pr-comments-session done`) is the
 authoritative completion gate: it refuses to finalize until the work is actually
-ready, then writes the `.wade/done@<HEAD>` marker and pushes. Each gate has an
-escape hatch under a `done:` block in `.wade.yml` (all default on):
+ready, then writes the `.wade/done@<HEAD>` marker and pushes. Policy gates normally
+have an escape hatch under a `done:` block in `.wade.yml` (all default on).
+Decision and integrity gates deliberately require an explicit valid outcome:
 
 | Gate | Refuses when… | Hatch |
 |------|---------------|-------|
-| PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (implementation only) | `done.require_pr_summary: false` |
-| Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
-| Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (both change-producing session types) | `done.require_pr_summary: false` |
+| Documentation decision | neither an `--updated` nor reasoned `--not-needed` receipt exists for current HEAD | *no disable toggle; `docs --not-needed "<reason>"` records the explicit no-change outcome* |
+| Sync | the branch is behind main — auto-syncs first, refuses only on conflict (both change-producing session types) | `done.require_sync: false` |
+| Review ran | `wade review implementation` has no successful external-review or explicitly acknowledged self-review record for the current commit **and frozen REVIEW binding**, or the frozen workflow/skill bundle no longer matches its manifest. Bundle validation happens before receipts or pass counts are trusted. Prompt emission alone never satisfies this gate. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles for the active reviewer, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
@@ -505,11 +523,11 @@ bypasses the backstop in one flag — this is a quality/backstop layer that make
 the gate hard to skip, not an airtight boundary.
 
 `done` also writes a **`## Review Status`** line into the PR body recording the
-review outcome — reviewed at `<sha>`, skipped via `--skip-review`, gate disabled
-(`done.require_review: false` / `ai.review_implementation.enabled: false`), or
-completed at the review-pass cap — with the review-pass count. A skipped or
-never-run review is therefore visible to reviewers in the PR itself, not just in
-the worktree-local `.wade/` markers that are discarded when the session ends.
+review outcome — reviewed at `<sha>`, reviewer changed, skipped via
+`--skip-review`, gate disabled (`done.require_review: false` /
+`ai.review_implementation.enabled: false`), or completed at the active review
+binding's pass cap. A skipped, stale-reviewer, or never-run review is therefore
+visible to reviewers rather than hidden in worktree state.
 
 ## Task Providers
 
@@ -782,15 +800,106 @@ Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are p
 
 ## Agent Skills
 
-wade installs Skills that teach your AI agent the workflow — task format, planning rules, implementation session rules, and dependency analysis. Skills, the `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for every session (when you run `wade plan`/`wade implement`/`wade review`, or a standalone `wade task deps`), for every supported tool. Nothing to configure manually.
+WADE keeps the workflow fixed while letting you replace the methodology. Every
+interactive session gets an authoritative `.wade/session/WORKFLOW.md`; it still
+contains planning/implementation/review steps, documentation, synchronization,
+and `done` regardless of which skills are selected. Agent Skills control only
+*how* the WORK or REVIEW step reasons.
 
-| Skill | Purpose |
-|-------|---------|
-| `task` | Task creation and plan format |
-| `plan-session` | Planning session rules and workflow |
-| `implementation-session` | Implementation session rules and workflow |
-| `review-pr-comments-session` | Review session rules and workflow |
-| `deps` | Dependency analysis between tasks |
+Default replaceable methods:
+
+| Operation | WORK method | REVIEW method |
+|---|---|---|
+| planning session | `builtin:planning` | `builtin:plan-review` |
+| implementation session | `builtin:implementation` | `builtin:code-review` |
+| PR-comment session | `builtin:review-comments` | `builtin:code-review` |
+| batch review | `builtin:batch-review` | — |
+| dependency analysis | `builtin:dependency-analysis` | — |
+
+Custom skills stay generic: they do not need to mention WADE, worktrees,
+session commands, markers, review budgets, or `done`. WADE wraps their
+methodology in its fixed lifecycle or bounded operation contract.
+
+Project skills are discovered from every skill root supported by the selected
+tool integration, including real or symlinked `.claude/skills`,
+`.agents/skills`, `.cursor/skills`, and `.github/skills` layouts. WADE merges
+the new worktree inventory with the main checkout so local-only/ignored skills
+are available too, while worktree content wins for matching tracked paths.
+Generated `task` and `knowledge` command-support projections are excluded from
+methodology discovery, so they cannot shadow a project skill with the same name.
+WADE copies the complete skill directory—`SKILL.md`, references, scripts, and
+assets—into the session snapshot; source directories are never overwritten or
+pruned.
+
+Use explicit refs:
+
+- `builtin:<name>` for a bundled default;
+- `project:<name>` for a unique discovered project skill;
+- `path:<repo-relative-directory>` to select one exact source when names collide.
+
+Bindings are ordered and frozen in `.wade/session/manifest.json`. Resuming uses
+the same physical copies even if config or the main checkout changes. To change
+an active session, use `--refresh-skills` with the session command or run
+`wade session refresh-skills`; an override without explicit refresh fails.
+In a worktree-less planning fallback, session diagnostics and refresh target the
+temporary bundle advertised to the agent while continuing to load config and
+project skills from the checkout that launched it.
+
+Example configuration (all sections are optional; omitted values keep the
+defaults):
+
+```yaml
+skills:
+  project:
+    discover: true
+    include: ["*"]
+    exclude: []
+
+sessions:
+  implementation:
+    skills:
+      work: [project:django-implementation]
+      review: [project:security-review]
+  plan:
+    skills:
+      work: [builtin:planning]
+  review_pr_comments:
+    skills:
+      work: [builtin:review-comments]
+
+delegations:
+  code_review:
+    skills:
+      work: [project:security-review]
+  plan_review:
+    skills:
+      work: [builtin:plan-review]
+  batch_review:
+    skills:
+      work: [builtin:batch-review]
+  dependency_analysis:
+    skills:
+      work: [builtin:dependency-analysis]
+```
+
+For a new session the order is CLI override, session binding, mapped delegation
+binding for REVIEW, then built-in default. A session REVIEW binding wins over a
+different `delegations.code_review`/`plan_review` value for that session.
+Standalone review, batch, and dependency operations use their delegation
+binding. `wade skills resolve` prints every candidate and the winner.
+
+Tool-native roots receive only fixed command-support skills. Session lifecycle
+comes from the rendered workflow, while default or custom methodology is frozen
+inside the session bundle. Deprecated phase skills are not installed.
+Resume revalidates workflow identity and the complete physical bundle against
+its manifest digest; completion does the same before trusting a review receipt.
+Stale metadata and edited, missing, extra, or unsafe snapshot content require an
+explicit `--refresh-skills` or `wade session refresh-skills` replacement.
+
+This redesign is a clean cutover. It does not import pre-redesign phase-skill or
+review-marker state. Resuming an older in-flight worktree creates the current
+session bundle, and its current commit must complete the new review and
+documentation-decision gates before `done` can accept it.
 
 ### Session communication
 

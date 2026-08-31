@@ -142,7 +142,8 @@ class TestPhaseReconciliation:
         assert all(event == "session_start" for event, _ in data.hooks_remove)
         assert any("--phase implement" in c for c in removed)
         assert any("--phase plan" in c for c in removed)
-        assert not any("--phase review" in c for c in removed)
+        assert not any(c.endswith("--phase review") for c in removed)
+        assert len(removed) == 2
 
     def test_reused_worktree_ends_with_single_entry(self, tmp_path: Path) -> None:
         wt = tmp_path / "wt"
@@ -287,10 +288,15 @@ class TestSignalConsistency:
                 )
                 installed.setdefault(module.__name__, []).append(actual_phase)
 
-        # Each known caller installs exactly the phase its session needs — one call
-        # per module, mapped to the phase above. Comparing the whole dict pins both
-        # correctness (right phase) and presence (no module silently dropped).
-        assert installed == {name: [phase] for name, phase in self._EXPECTED_PHASE.items()}
-        # Guard the guard: all four known call sites must be present, so a new one
-        # added without wiring session_phase trips this count.
-        assert seen == 4
+        # Every known caller must install only the phase its session needs. An
+        # implementation start deliberately has two bootstrap passes: a
+        # composition-only preflight before provider mutation, followed by the
+        # full bootstrap reusing that frozen bundle. Pin phase consistency and
+        # caller presence without treating that safety preflight as a duplicate
+        # lifecycle signal.
+        assert set(installed) == set(self._EXPECTED_PHASE)
+        for module_name, phases in installed.items():
+            assert phases
+            assert set(phases) == {self._EXPECTED_PHASE[module_name]}
+        # Guard the guard: every discovered call was classified above.
+        assert seen == sum(len(phases) for phases in installed.values())

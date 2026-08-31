@@ -392,7 +392,9 @@ class TestReviewImplementationCommand:
         )
 
         assert result.returncode == 0
-        assert "No changes to review" in (result.stdout + result.stderr)
+        assert "No committed, staged, or unstaged changes to review" in (
+            result.stdout + result.stderr
+        )
         assert _read_fake_claude_log(log_file) == []
 
     def test_review_implementation_disabled_skips_ai(
@@ -454,6 +456,21 @@ class TestReviewImplementationCommand:
         output = result.stdout + result.stderr
         assert "diff --git" in output
         assert "SELF-REVIEW" in output
+        assert "--ack-self-review" in output
+        reviews_dir = e2e_repo / ".wade/reviews"
+        assert not list(reviews_dir.glob("review@code-review@*.json"))
+
+        acknowledged = _run(
+            ["review", "implementation", "--staged", "--ack-self-review"],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert acknowledged.returncode == 0
+        assert "Self-review acknowledged" in acknowledged.stdout + acknowledged.stderr
+        records = list(reviews_dir.glob("review@code-review@*.json"))
+        assert len(records) == 1
+        assert json.loads(records[0].read_text(encoding="utf-8"))["outcome"] == "reviewed"
         assert _read_fake_claude_log(log_file) == []
 
 
@@ -1003,6 +1020,17 @@ class TestReviewPrCommentsSessionCommands:
         )
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", "fix: address review comments"], cwd=worktree_path)
+
+        docs = _run(
+            [
+                "review-pr-comments-session",
+                "docs",
+                "--not-needed",
+                "E2E fixture has no documentation impact",
+            ],
+            cwd=worktree_path,
+        )
+        assert docs.returncode == 0, docs.stdout + docs.stderr
 
         # --skip-review bypasses the review-ran gate; this contract exercises the
         # done→PR mechanics (thread gate + push + PR update), not the review gate.

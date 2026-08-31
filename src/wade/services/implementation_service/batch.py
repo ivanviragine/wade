@@ -74,6 +74,9 @@ def _build_implement_cmd(
     permission_mode_explicit: bool,
     network_access: bool | None = None,
     chain_ids: list[str] | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
 ) -> list[str]:
     """Build the ``wade implement`` child command for one batch issue.
 
@@ -113,6 +116,12 @@ def _build_implement_cmd(
         cmd.append("--network")
     elif network_access is False:
         cmd.append("--no-network")
+    for skill in work_skills or ():
+        cmd.extend(["--skill", skill])
+    for skill in review_skills or ():
+        cmd.extend(["--review-skill", skill])
+    if refresh_skills:
+        cmd.append("--refresh-skills")
     if chain_ids:
         cmd.extend(["--chain", ",".join(chain_ids)])
     return cmd
@@ -132,6 +141,9 @@ def check_tracking_issue_and_batch(
     permission_mode: str | None = None,
     network_access: bool | None = None,
     cd_only: bool = False,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
 ) -> bool | None:
     """Detect tracking issues and redirect to batch implementation.
 
@@ -168,6 +180,9 @@ def check_tracking_issue_and_batch(
             yolo=yolo,
             permission_mode=permission_mode,
             network_access=network_access,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
         )
     return False
 
@@ -185,6 +200,9 @@ def batch(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     network_access: bool | None = None,
+    work_skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
 ) -> bool:
     """Start parallel implementation sessions for multiple issues.
 
@@ -280,6 +298,9 @@ def batch(
             permission_mode_explicit=permission_mode_explicit,
             network_access=network_access,
             chain_ids=chain_ids,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
         )
 
     # Collect all items to launch in one batch

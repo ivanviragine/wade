@@ -41,6 +41,7 @@ from wade.services.plan_service import (
     validate_plan_dir,
     validate_plan_files,
 )
+from wade.services.session_composition_service import SessionCompositionError
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -58,7 +59,8 @@ class TestPromptTemplate:
         rendered = render_plan_prompt("/tmp/wade-plan-abc123")
         assert "/tmp/wade-plan-abc123" in rendered
         assert "{plan_dir}" not in rendered
-        assert "# Goal" in rendered
+        assert ".wade/session/WORKFLOW.md" in rendered
+        assert "trusted parent process" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +839,127 @@ class TestPlanOrchestrator:
         ):
             assert plan() is False
             mock_console.error.assert_called_once()
+
+    def test_fallback_composition_failure_removes_partial_temp_bundle(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        fallback_dir = tmp_path / "wade-plan-fallback"
+        fallback_dir.mkdir()
+
+        def fail_composition(*args, **kwargs) -> None:
+            partial = fallback_dir / ".wade" / "session"
+            partial.mkdir(parents=True)
+            (partial / "partial.txt").write_text("partial")
+            raise SessionCompositionError("invalid custom skill")
+
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("not a repo")),
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(fallback_dir)),
+            patch(
+                "wade.services.session_composition_service.compose_session",
+                side_effect=fail_composition,
+            ),
+            patch("wade.services.plan_service.ensure_task_label") as ensure_label,
+            patch("wade.services.plan_service.run_ai_planning_session") as launch,
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
+            patch("wade.services.plan_service.console"),
+        ):
+            assert plan(project_root=tmp_path) is False
+
+        assert not fallback_dir.exists()
+        ensure_label.assert_not_called()
+        launch.assert_not_called()
+        stop_keeper.assert_called_once()
+
+    def test_provider_setup_failure_removes_fallback_temp_dir(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        fallback_dir = tmp_path / "wade-plan-fallback"
+        fallback_dir.mkdir()
+
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("not a repo")),
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(fallback_dir)),
+            patch("wade.services.session_composition_service.compose_session"),
+            patch(
+                "wade.services.plan_service.ensure_task_label",
+                side_effect=RuntimeError("provider unavailable"),
+            ),
+            patch("wade.services.plan_service.run_ai_planning_session") as launch,
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
+            patch("wade.services.plan_service.console"),
+            pytest.raises(RuntimeError, match="provider unavailable"),
+        ):
+            plan(project_root=tmp_path)
+
+        assert not fallback_dir.exists()
+        launch.assert_not_called()
+        stop_keeper.assert_called_once()
+
+    def test_provider_setup_failure_removes_detached_planning_worktree(
+        self, tmp_path: Path
+    ) -> None:
+        provider = MagicMock()
+        worktree = tmp_path / "plan-worktree"
+
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.plan_service.report_retained_vote_recovery"),
+            patch("wade.git.worktree.create_detached_worktree", return_value=worktree),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.knowledge_service.mark_throwaway_knowledge_session"),
+            patch(
+                "wade.services.plan_service.ensure_task_label",
+                side_effect=RuntimeError("provider unavailable"),
+            ),
+            patch("wade.git.worktree.remove_worktree") as remove_worktree,
+            patch("wade.services.plan_service.run_ai_planning_session") as launch,
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
+            patch("wade.services.plan_service.console"),
+            pytest.raises(RuntimeError, match="provider unavailable"),
+        ):
+            plan(project_root=tmp_path)
+
+        remove_worktree.assert_called_once_with(tmp_path, worktree, force=True)
+        launch.assert_not_called()
+        stop_keeper.assert_called_once()
 
     def test_plan_creates_issues_from_plan_files_without_snapshot_fallback(
         self, tmp_path: Path

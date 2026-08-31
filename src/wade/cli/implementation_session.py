@@ -11,6 +11,22 @@ implementation_session_app = typer.Typer(
 )
 
 
+@implementation_session_app.command("docs")
+def docs(
+    updated: bool = typer.Option(False, "--updated"),
+    not_needed: str | None = typer.Option(None, "--not-needed"),
+) -> None:
+    """Record the mandatory documentation-impact decision for current HEAD."""
+
+    from wade.cli.session_shared import record_documentation_decision
+
+    record_documentation_decision(
+        "implementation",
+        updated=updated,
+        not_needed=not_needed,
+    )
+
+
 @implementation_session_app.command()
 def check() -> None:
     """Verify worktree safety for AI agents.
@@ -153,14 +169,11 @@ def done(
         trigger_bots=trigger_bots,
     )
     if success:
-        from wade.cli.session_shared import DOC_PASS_ADVISORY
         from wade.ui.console import console
 
         # The review-ran gate now enforces that `wade review implementation` ran
         # for this sha before `done` succeeds, so the old post-done "review not
         # confirmed" advisory is redundant (and would contradict the gate).
-        console.warn(DOC_PASS_ADVISORY)
-
         # Reflect the actual close mode — `--no-close` leaves the issue open, so
         # advertising "closes #N on merge" would be a false completion handle.
         close_handle = "issue stays open (--no-close)" if no_close else "closes #N on merge"

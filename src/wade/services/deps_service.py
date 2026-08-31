@@ -20,6 +20,7 @@ from wade.models.config import ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.permission import PermissionMode
+from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -38,6 +39,12 @@ from wade.services.delegation_service import (
 from wade.services.knowledge_recovery import (
     RETAINED_VOTE_RECOVERY_HINT,
     report_retained_vote_recovery,
+)
+from wade.services.skill_invocation_service import (
+    SkillInvocationError,
+    cleanup_delegation_bundle,
+    compose_delegation_prompt,
+    prepare_delegation_method,
 )
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
@@ -88,10 +95,16 @@ def build_context(
     return "\n".join(lines)
 
 
-def build_deps_prompt(context: str) -> str:
+def build_deps_prompt(context: str, method_section: str) -> str:
     """Build the full dependency analysis prompt from context."""
     template = get_deps_prompt_template()
-    return template.replace("{context}", context)
+    return compose_delegation_prompt(
+        DelegationKind.DEPENDENCY_ANALYSIS,
+        contract=template,
+        method_section=method_section,
+        input_label="Task context",
+        input_content=context,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +449,7 @@ def analyze_deps(
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
     planning_worktree: Path | None = None,
+    skills: list[str] | None = None,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
@@ -450,8 +464,8 @@ def analyze_deps(
         mode: Delegation mode override (prompt/headless/interactive).
             Defaults to config ``ai.deps.mode``, then ``headless``.
         planning_worktree: If provided (e.g. from plan auto-deps), reuse this
-            worktree instead of creating a new one.  The worktree already has
-            deps skill installed via ``PLAN_SKILLS``.
+            worktree instead of creating a new one. Dependency methodology is
+            still resolved into its own foreign operation bundle.
 
     Returns the DependencyGraph, or None on failure.
     """
@@ -551,7 +565,7 @@ def analyze_deps(
                 bootstrap_worktree,
             )
             from wade.services.knowledge_service import mark_throwaway_knowledge_session
-            from wade.skills.installer import DEPS_SKILLS
+            from wade.skills.installer import support_skills_for_session
 
             repo_root = git_repo.get_repo_root(cwd)
             standalone_repo_root = repo_root
@@ -567,7 +581,12 @@ def analyze_deps(
                 repo_root=repo_root,
                 worktree_dir=wt_dir,
             )
-            bootstrap_worktree(standalone_worktree, config, repo_root, skills=DEPS_SKILLS)
+            bootstrap_worktree(
+                standalone_worktree,
+                config,
+                repo_root,
+                skills=support_skills_for_session(SessionKind.DEPS),
+            )
             # This process flushes the worktree's staged votes before removing
             # it, so it may authorize staging there (a plain detached HEAD may
             # not — nothing would ever flush it).
@@ -642,9 +661,43 @@ def analyze_deps(
                 )
             return None
 
+    # Dependency analysis is always a foreign bounded operation—even when its
+    # contained deps session reuses a planning worktree. Resolve and snapshot
+    # its own binding without touching the host session bundle.
+    operation_root = deps_cwd or (project_root or Path.cwd())
+    try:
+        prepared_method = prepare_delegation_method(
+            config,
+            DelegationKind.DEPENDENCY_ANALYSIS,
+            cwd=operation_root,
+            skills=skills,
+        )
+    except SkillInvocationError as exc:
+        console.error(str(exc))
+        if standalone_worktree is not None and standalone_repo_root is not None:
+            try:
+                from wade.git import worktree as git_worktree
+
+                git_worktree.remove_worktree(
+                    standalone_repo_root,
+                    standalone_worktree,
+                    force=True,
+                )
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "deps.skill_preparation_cleanup_failed",
+                    worktree=str(standalone_worktree),
+                    error=str(cleanup_exc),
+                )
+                console.error(
+                    "Could not clean up the dependency worktree after skill preparation "
+                    f"failed; it was preserved at {standalone_worktree}."
+                )
+        return None
+
     # Build context
     context = build_context(provider, issue_numbers)
-    prompt = build_deps_prompt(context)
+    prompt = build_deps_prompt(context, prepared_method.method_section)
 
     valid_numbers = set(issue_numbers)
     task_titles: dict[str, str] = {}
@@ -698,7 +751,7 @@ def analyze_deps(
         model=resolved_model,
         effort=effort_str,
         allowed_commands=config.permissions.allowed_commands,
-        cwd=deps_cwd,
+        cwd=operation_root,
         timeout=deps_timeout,
         permission_mode=effective_permission_mode,
         explicit_timeout=deps_explicit_timeout,
@@ -708,6 +761,7 @@ def analyze_deps(
         if delegation_result.success and delegation_result.feedback
         else None
     )
+    cleanup_delegation_bundle(prepared_method, preserve=not delegation_result.success)
 
     if delegation_mode == DelegationMode.PROMPT:
         if output:

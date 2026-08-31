@@ -19,7 +19,12 @@ review_app = typer.Typer(
 )
 
 
-def _finalize_review_result(result: DelegationResult, complete_message: str) -> None:
+def _finalize_review_result(
+    result: DelegationResult,
+    complete_message: str,
+    *,
+    self_review_followup: str | None = None,
+) -> None:
     """Print status message and exit with the appropriate code.
 
     Shared by plan, implementation, and batch review commands.
@@ -31,6 +36,7 @@ def _finalize_review_result(result: DelegationResult, complete_message: str) -> 
             console.info(
                 "SELF-REVIEW — read the review prompt above, perform the review "
                 "yourself, and address any issues before proceeding."
+                + (f" {self_review_followup}" if self_review_followup else "")
             )
         else:
             console.info(complete_message)
@@ -75,6 +81,9 @@ def review_plan_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="Review methodology skill ref. Repeat for an ordered binding."
+    ),
 ) -> None:
     """Review a plan file."""
     from wade.services.review_delegation_service import review_plan
@@ -91,6 +100,7 @@ def review_plan_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        skills=skill,
     )
     _finalize_review_result(
         result,
@@ -124,6 +134,14 @@ def review_implementation_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="Review methodology skill ref. Repeat for an ordered binding."
+    ),
+    ack_self_review: bool = typer.Option(
+        False,
+        "--ack-self-review",
+        help="After prompt-mode self-review, write its binding-aware completion receipt.",
+    ),
 ) -> None:
     """Review code changes."""
     from wade.services.review_delegation_service import review_implementation
@@ -140,11 +158,23 @@ def review_implementation_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        skills=skill,
+        ack_self_review=ack_self_review,
     )
+    if ack_self_review:
+        if result.success and not result.skipped:
+            from wade.ui.console import console
+
+            console.info(result.feedback)
+        raise typer.Exit(0 if result.success else 1)
     _finalize_review_result(
         result,
         "REVIEW COMPLETE — address any actionable feedback above, "
         "then proceed to wade implementation-session done.",
+        self_review_followup=(
+            "When the self-review is complete, run "
+            "`wade review implementation --ack-self-review` to write the receipt."
+        ),
     )
 
 
@@ -171,6 +201,15 @@ def review_pr_comments_cmd(
         help="Allow network access inside the Codex sandbox (default: off; "
         "required for git fetch/push under Codex). Overrides ai.network_access.",
     ),
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
+    ),
+    review_skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--review-skill", help="Closing review skill ref. Repeat for an ordered binding."
+    ),
+    refresh_skills: bool = typer.Option(
+        False, "--refresh-skills", help="Explicitly replace a resumed session's frozen skills."
+    ),
 ) -> None:
     """Address PR review comments."""
     from wade.services.review_service import start as do_start
@@ -189,6 +228,9 @@ def review_pr_comments_cmd(
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
         network_access=network_access,
+        work_skills=skill,
+        review_skills=review_skill,
+        refresh_skills=refresh_skills,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -237,6 +279,9 @@ def review_batch_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    skill: list[str] | None = typer.Option(  # noqa: B008
+        None, "--skill", help="Batch review methodology skill ref. Repeat for an ordered binding."
+    ),
 ) -> None:
     """Run coherence review on a batch of parallel implementation branches."""
     from wade.services.batch_review_service import review_batch
@@ -253,6 +298,7 @@ def review_batch_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        skills=skill,
     )
     _finalize_review_result(
         result,
