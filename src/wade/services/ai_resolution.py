@@ -206,9 +206,7 @@ def resolve_permission_mode(
 ) -> PermissionMode:
     """Resolve the autonomy tier from args -> config -> ``default``.
 
-    Non-interactive commands return ``False`` before this chain is evaluated.
-    For interactive lifecycle commands, the fallback chain (highest precedence
-    first) is:
+    The fallback chain (highest precedence first) is:
       1. Explicit ``--permission-mode`` CLI value
       2. ``--yolo`` CLI alias (equivalent to ``permission_mode=yolo``)
       3. Command/global config (``ai.<command>.permission_mode`` / ``yolo``,

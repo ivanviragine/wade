@@ -478,8 +478,10 @@ review detached/inline launches (`implementation_service/core.py`,
 `working_dir` with network **off** for their worktree-capable paths.
 
 **Filesystem writes and network are independent axes.** The `working_dir` grant
-makes local git work under `network_access=False`. Only `git fetch`/`git push`
-(the network legs of `sync`/`done`) need `network_access=True`. WADE resolves a
+makes local Git metadata writes work under `network_access=False`. GitHub API
+calls — including readiness's `gh api user` and review-data fetch/resolve — and
+remote Git operations (`git fetch`/`git push`, the network legs of `sync`/`done`)
+need `network_access=True`. WADE resolves a
 `network_access: bool` through `resolve_network_access()` (CLI
 `--network`/`--no-network` > command config > global `ai.network_access` > **on
 for `implement` and `review_pr_comments`, off for all other commands**) and
