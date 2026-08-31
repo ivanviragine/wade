@@ -239,6 +239,29 @@ class TestImplementationLaunchContext:
         spy.launch.assert_not_called()
         mock_console.detail.assert_any_call("wade implement 42 --network")
 
+    @pytest.mark.parametrize("command_error", [ValueError, KeyError])
+    def test_fresh_codex_plan_handoff_fails_closed_when_command_build_fails(
+        self, worktree: Path, command_error: type[Exception]
+    ) -> None:
+        """A builder failure must not degrade to an unconfigured ``codex`` command."""
+        with (
+            _driven_start(
+                worktree,
+                network_access_config=True,
+                detected_env="CODEX_CLI",
+            ) as spy,
+            patch(f"{_CORE}.console") as mock_console,
+            patch(f"{_CORE}.launch_in_new_terminal") as mock_launch,
+        ):
+            spy.build_launch_command.side_effect = command_error("build failed")
+
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is False
+        mock_launch.assert_not_called()
+        spy.launch.assert_not_called()
+        mock_console.detail.assert_any_call("wade implement 42 --network")
+
     def test_non_handoff_codex_session_keeps_nested_launch_guard(self, worktree: Path) -> None:
         """Ordinary ``wade implement`` calls still do not recursively launch Codex."""
         with _driven_start(

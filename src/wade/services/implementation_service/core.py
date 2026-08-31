@@ -1021,15 +1021,18 @@ def start(
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
-                cmd = [resolved_tool]
+                # A fresh Codex handoff must retain its explicit sandbox,
+                # network, permission, and prompt arguments.  Do not replace a
+                # failed build with bare ``codex``, which would bypass them.
+                if not requires_fresh_codex_handoff:
+                    cmd = [resolved_tool]
 
-            console.step(f"Launching {resolved_tool} in new terminal...")
-            if cmd is not None and launch_in_new_terminal(
-                cmd, cwd=str(worktree_path), title=work_title
-            ):
-                console.success(f"Detached AI session for #{task.id}")
-                stop_title_keeper()
-                return ImplementResult(success=True)
+            if cmd is not None:
+                console.step(f"Launching {resolved_tool} in new terminal...")
+                if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
+                    console.success(f"Detached AI session for #{task.id}")
+                    stop_title_keeper()
+                    return ImplementResult(success=True)
             if requires_fresh_codex_handoff:
                 console.error(
                     "Could not launch a fresh Codex implementation session with network access."
