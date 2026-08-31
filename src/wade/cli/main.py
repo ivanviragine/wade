@@ -217,13 +217,14 @@ _PERMISSION_MODE_OPT = typer.Option(
 # Shared tri-state flag for the Codex sandbox network policy. ``--network``
 # enables network access inside the sandbox (needed for git fetch/push, hence
 # the network legs of sync/done); ``--no-network`` forces it off; omitted (None)
-# defers to ``ai.network_access`` config, which itself defaults to disabled. Only
-# Codex acts on it — every other tool ignores it upstream.
+# defers to command/global config and then the command default. Interactive
+# implementation and PR-comment sessions default on; other commands default off.
+# Only Codex acts on it — every other tool ignores it upstream.
 _NETWORK_ACCESS_OPT = typer.Option(
     None,
     "--network/--no-network",
-    help="Allow network access inside the Codex sandbox (default: off; "
-    "required for git fetch/push under Codex). Overrides ai.network_access.",
+    help="Allow network access inside the Codex sandbox (default: on for implementation "
+    "and PR-comment sessions). Overrides ai.network_access.",
 )
 
 
@@ -411,6 +412,7 @@ def implement_batch_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref forwarded to every child session."
     ),
@@ -458,6 +460,7 @@ def implement_batch_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        network_access=network_access,
         work_skills=skill,
         review_skills=review_skill,
         refresh_skills=refresh_skills,

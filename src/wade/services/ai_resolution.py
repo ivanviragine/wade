@@ -22,7 +22,7 @@ import structlog
 from crossby.ai_tools import AbstractAITool
 from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.models.config import AICommandConfig, ProjectConfig
+from wade.models.config import NETWORK_ENABLED_BY_DEFAULT_COMMANDS, AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode
 from wade.models.permission import (
     PermissionMode,
@@ -206,7 +206,9 @@ def resolve_permission_mode(
 ) -> PermissionMode:
     """Resolve the autonomy tier from args -> config -> ``default``.
 
-    Fallback chain (highest precedence first):
+    Non-interactive commands return ``False`` before this chain is evaluated.
+    For interactive lifecycle commands, the fallback chain (highest precedence
+    first) is:
       1. Explicit ``--permission-mode`` CLI value
       2. ``--yolo`` CLI alias (equivalent to ``permission_mode=yolo``)
       3. Command/global config (``ai.<command>.permission_mode`` / ``yolo``,
@@ -246,21 +248,24 @@ def resolve_network_access(
     config: ProjectConfig,
     command: str = "plan",
 ) -> bool:
-    """Resolve the Codex sandbox network policy from args -> config -> ``False``.
+    """Resolve the Codex sandbox network policy from args -> config -> command default.
 
     Fallback chain (highest precedence first):
       1. Explicit ``--network`` / ``--no-network`` CLI value
       2. Command-specific config (``ai.<command>.network_access``)
       3. Global config (``ai.network_access``)
-      4. ``False`` (network **disabled by default**)
+      4. Command default: enabled for ``implement`` and ``review_pr_comments``;
+         disabled for all other commands.
 
-    Network is off unless the project (or CLI) opts in — this is a deliberate
-    safety default: wade forwards the resolved bool as an explicit pin so an
-    ambient Codex ``config.toml`` can never silently enable network access for a
-    wade-managed sandbox. Non-Codex tools ignore the value (crossby
-    capability-gates it via ``supports_network_access``), so this resolves for
-    every tool but only Codex acts on it.
+    Wade forwards the resolved bool as an explicit pin so an ambient Codex
+    ``config.toml`` can never silently change network access for a wade-managed
+    sandbox. Non-Codex tools ignore the value (crossby capability-gates it via
+    ``supports_network_access``), so this resolves for every tool but only Codex
+    acts on it. Non-interactive commands remain disabled even when the project
+    config enables network globally.
     """
+    if command not in NETWORK_ENABLED_BY_DEFAULT_COMMANDS:
+        return False
     if network_access is not None:
         return network_access
     return config.get_network_access(command)

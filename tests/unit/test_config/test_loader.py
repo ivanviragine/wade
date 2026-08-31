@@ -410,14 +410,17 @@ class TestParseCommandConfig:
         assert config.ai.implement.network_access is True
         assert config.get_network_access("implement") is True
 
-    def test_network_access_defaults_to_none(self, tmp_path: Path) -> None:
-        # Unset at both levels — the resolver falls through to disabled.
+    def test_network_access_defaults_follow_the_command(self, tmp_path: Path) -> None:
+        # Unset config keeps the field unset; the resolver then selects the
+        # interactive-lifecycle or offline command default.
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: codex\n")
         config = parse_config_file(config_path)
         assert config.ai.network_access is None
         assert config.ai.implement.network_access is None
-        assert config.get_network_access("implement") is False
+        assert config.get_network_access("implement") is True
+        assert config.get_network_access("review_pr_comments") is True
+        assert config.get_network_access("plan") is False
 
     def test_enabled_false_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

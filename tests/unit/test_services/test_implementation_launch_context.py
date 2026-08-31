@@ -35,7 +35,7 @@ _CORE = "wade.services.implementation_service.core"
 def _driven_start(
     worktree_path: Path,
     *,
-    network_access_config: bool,
+    network_access_config: bool | None = None,
     implement_network_access_config: bool | None = None,
     detected_env: str | None = None,
     resolved_tool: str = "codex",
@@ -133,8 +133,15 @@ class TestImplementationLaunchContext:
         assert kwargs["working_dir"] == worktree
         assert kwargs["network_access"] is True
 
-    def test_inline_initial_network_defaults_off(self, worktree: Path) -> None:
-        # With config off and no flag, the explicit pin resolves to False.
+    def test_inline_initial_network_defaults_on(self, worktree: Path) -> None:
+        # With config unset and no flag, the interactive lifecycle gets its
+        # explicit enabled pin.
+        with _driven_start(worktree) as spy:
+            spy.launch.side_effect = RuntimeError("stop-after-capture")
+            start(target="42")
+        assert spy.launch.call_args.kwargs["network_access"] is True
+
+    def test_inline_initial_global_no_network_disables_default(self, worktree: Path) -> None:
         with _driven_start(worktree, network_access_config=False) as spy:
             spy.launch.side_effect = RuntimeError("stop-after-capture")
             start(target="42")
@@ -142,7 +149,7 @@ class TestImplementationLaunchContext:
 
     def test_inline_initial_flag_overrides_config(self, worktree: Path) -> None:
         # --no-network (network_access=False) overrides config True.
-        with _driven_start(worktree, network_access_config=True) as spy:
+        with _driven_start(worktree) as spy:
             spy.launch.side_effect = RuntimeError("stop-after-capture")
             start(target="42", network_access=False)
         assert spy.launch.call_args.kwargs["network_access"] is False
@@ -181,16 +188,20 @@ class TestImplementationLaunchContext:
 
     @pytest.mark.parametrize(
         ("global_network_access", "implement_network_access"),
-        [(True, None), (False, True)],
-        ids=["global-policy", "implement-policy"],
+        [(None, None), (True, None), (False, True)],
+        ids=["default-policy", "global-policy", "implement-policy"],
     )
     def test_network_enabled_codex_plan_handoff_launches_fresh_detached_context(
         self,
         worktree: Path,
-        global_network_access: bool,
+        global_network_access: bool | None,
         implement_network_access: bool | None,
     ) -> None:
-        """A Codex plan handoff cannot reuse the planner's network-off sandbox."""
+        """A Codex plan handoff cannot reuse the planner's network-off sandbox.
+
+        The default-policy case verifies the accepted handoff launches a fresh
+        enabled context without a project-level network opt-in.
+        """
         with _driven_start(
             worktree,
             network_access_config=global_network_access,

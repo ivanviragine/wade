@@ -550,10 +550,10 @@ class TestReviewServiceStart:
         assert kwargs["working_dir"] == tmp_path / "wt"
         assert kwargs["network_access"] is True
 
-    def test_inline_launch_network_defaults_off(
+    def test_inline_launch_network_defaults_on(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
-        """With both flags omitted and config unset, the pin resolves to False.
+        """With both flags omitted and config unset, the pin resolves to True.
 
         Uses a real ``ProjectConfig()`` (network unset) so ``resolve_network_access``
         reads the genuine default rather than a MagicMock truthy value — this
@@ -579,7 +579,7 @@ class TestReviewServiceStart:
         ):
             start(target="42")
 
-        assert spy.launch.call_args.kwargs["network_access"] is False
+        assert spy.launch.call_args.kwargs["network_access"] is True
 
     def test_inline_launch_explicit_no_network(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]

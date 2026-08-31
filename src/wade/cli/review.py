@@ -198,8 +198,8 @@ def review_pr_comments_cmd(
     network_access: bool | None = typer.Option(
         None,
         "--network/--no-network",
-        help="Allow network access inside the Codex sandbox (default: off; "
-        "required for git fetch/push under Codex). Overrides ai.network_access.",
+        help="Allow network access inside the Codex sandbox (default: on for PR-comment "
+        "sessions). Overrides ai.network_access.",
     ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."

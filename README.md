@@ -240,7 +240,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `implement`, `implement-batch`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
@@ -671,15 +671,17 @@ needed, and it only affects Codex (every other tool ignores it).
 above makes **local** git work (stage, commit, stash, ref updates, and the
 local legs of `sync`/`done`) succeed with **network off**. Only operations that
 reach the network — `git fetch` (hence `sync`) and `git push` (hence the network
-leg of `done`) — need network access, which is **disabled by default**. Enable
-it explicitly per invocation with `--network` on `wade implement` / `wade review
-pr-comments`, or in `.wade.yml`:
+leg of `done`) — need network access. It is **enabled by default** for the
+interactive lifecycle commands `wade implement` (including its batch children)
+and `wade review pr-comments`, because their readiness, sync, and completion
+steps require GitHub. Choose offline operation explicitly with `--no-network`,
+or in `.wade.yml`:
 
 ```yaml
 ai:
-  network_access: true          # default for the interactive session commands
+  network_access: false         # offline opt-out for interactive session commands
   implement:
-    network_access: false       # per-command override wins
+    network_access: true        # per-command override wins
 ```
 
 The policy applies to the **interactive session commands** — `wade implement`
@@ -689,10 +691,12 @@ may need `fetch`/`push`. The headless/analytical paths (`plan`, `deps`,
 they never fetch or push, so `ai.network_access` does not apply to them and no
 flag enables it there. Precedence for the commands that honor it is
 `--network`/`--no-network` > `ai.<command>.network_access` >
-`ai.network_access` > **off**. WADE always passes an explicit pin, so an ambient
+`ai.network_access` > **on for `implement` and `review_pr_comments`, otherwise
+off**. WADE always passes an explicit pin, so an ambient
 `network_access = true` in your own Codex `config.toml` can never silently
-enable network for a WADE-managed sandbox. Enabling network never disables the
-sandbox and never changes approval-policy semantics.
+enable network for a WADE-managed sandbox. Enabling network permits outbound
+access for commands inside the Codex workspace-write sandbox; it does not
+disable filesystem sandboxing or change approval-policy semantics.
 
 An accepted single-issue plan handoff starts implementation from a planning
 session that is always network-off. When both the planning tool and resolved
@@ -762,8 +766,9 @@ timeout still counts as a bounded review attempt, so the review/fix loop cannot
 run forever.
 
 For Codex, keep `--sandbox workspace-write`; WADE/crossby add only the linked
-worktree's private/common Git metadata directories, and you must enable
-`network_access` explicitly for implementation/review sessions that need GitHub.
+worktree's private/common Git metadata directories. Implementation and PR-comment
+sessions have network access by default for their GitHub lifecycle; use
+`--no-network` or `ai.network_access: false` when an offline sandbox is required.
 For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
 the GitHub domains needed by the session rather than choosing unrestricted shell
 access. Copilot and VS Code need network plus usable `gh` credentials in their

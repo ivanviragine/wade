@@ -1173,8 +1173,9 @@ def start(
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
-    # Codex sandbox network policy (default disabled); always pinned explicitly
-    # at launch so ambient Codex config can never silently enable it.
+    # Codex sandbox network policy (enabled by default for this interactive
+    # lifecycle); always pinned explicitly so ambient Codex config cannot
+    # silently change it.
     resolved_network_access = resolve_network_access(network_access, config, "review_pr_comments")
 
     if not detach:
