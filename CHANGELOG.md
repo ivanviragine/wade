@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.53.0] — 2026-08-31
+
+### Features
+
+- decouple session workflows from dynamic skills (#470) (3f588a4)
+
 ## [v0.52.0] — 2026-08-23
 
 ### Features
