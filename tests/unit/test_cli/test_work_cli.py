@@ -118,6 +118,13 @@ class TestWorkOtherCommands:
         assert result.exit_code == 1
         assert "Provide at least one issue number." in result.output
 
+    def test_batch_forwards_explicit_network_opt_out(self) -> None:
+        with patch("wade.services.implementation_service.batch", return_value=True) as mock_batch:
+            result = runner.invoke(app, ["implement-batch", "42", "--no-network"])
+
+        assert result.exit_code == 0
+        assert mock_batch.call_args.kwargs["network_access"] is False
+
     def test_remove_all_alias_sets_stale_mode(self) -> None:
         with patch("wade.services.implementation_service.remove", return_value=True) as mock_remove:
             result = runner.invoke(worktree_app, ["remove", "--all", "--force"])

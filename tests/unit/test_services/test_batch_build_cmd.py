@@ -145,8 +145,8 @@ class TestBuildImplementCmd:
         assert "--network" not in cmd
 
     def test_omits_network_flag_when_unset(self) -> None:
-        """Unset (``None``) forwards no flag — each child re-resolves from config,
-        mirroring the implicit-permission-mode path."""
+        """Unset (``None``) forwards no flag — each child re-resolves its
+        interactive network default and config, mirroring permission mode."""
         cmd = _build_implement_cmd(
             "42",
             tool="codex",

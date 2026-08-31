@@ -702,11 +702,20 @@ class TestConfirmAiSelectionAlwaysDisplays:
 
 
 class TestResolveNetworkAccess:
-    """``resolve_network_access`` precedence: flag > command config > global > False."""
+    """Network precedence: flag > command config > global > command default."""
 
-    def test_default_is_false_when_unset(self) -> None:
-        # Nothing configured, no flag — network is disabled by default.
-        assert resolve_network_access(None, ProjectConfig(), "implement") is False
+    @pytest.mark.parametrize("command", ["implement", "review_pr_comments"])
+    def test_interactive_lifecycle_commands_default_to_network_enabled(self, command: str) -> None:
+        # Nothing configured and no flag: their mandatory GitHub lifecycle needs network.
+        assert resolve_network_access(None, ProjectConfig(), command) is True
+
+    @pytest.mark.parametrize(
+        "command", ["plan", "deps", "review_plan", "review_implementation", "review_batch"]
+    )
+    def test_headless_and_planning_commands_default_to_network_disabled(self, command: str) -> None:
+        config = ProjectConfig(ai=AIConfig(network_access=True))
+        assert resolve_network_access(None, config, command) is False
+        assert resolve_network_access(True, config, command) is False
 
     def test_explicit_flag_true_wins_over_config_false(self) -> None:
         config = ProjectConfig(ai=AIConfig(network_access=False))
@@ -728,6 +737,15 @@ class TestResolveNetworkAccess:
         assert resolve_network_access(None, config, "implement") is True
         # A different command falls back to the (disabled) global.
         assert resolve_network_access(None, config, "review_pr_comments") is False
+
+    def test_command_config_false_disables_an_interactive_default(self) -> None:
+        config = ProjectConfig(
+            ai=AIConfig(
+                network_access=True,
+                implement=AICommandConfig(network_access=False),
+            )
+        )
+        assert resolve_network_access(None, config, "implement") is False
 
     def test_global_config_used_when_no_command_override(self) -> None:
         config = ProjectConfig(ai=AIConfig(network_access=True))
@@ -752,7 +770,9 @@ class TestResolveNetworkAccess:
     def test_get_network_access_command_over_global_over_default(self) -> None:
         # ProjectConfig.get_network_access is the config-level resolver the
         # service resolver defers to; verify its fallback chain directly.
-        assert ProjectConfig().get_network_access("implement") is False
+        assert ProjectConfig().get_network_access("implement") is True
+        assert ProjectConfig().get_network_access("review_pr_comments") is True
+        assert ProjectConfig().get_network_access("plan") is False
         cfg = ProjectConfig(
             ai=AIConfig(
                 network_access=True,

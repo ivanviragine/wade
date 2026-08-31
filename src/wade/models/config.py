@@ -115,6 +115,15 @@ AI_COMMAND_NAMES: tuple[str, ...] = tuple(command.value for command in AICommand
 """Canonical per-command AI config sections supported by WADE."""
 
 
+NETWORK_ENABLED_BY_DEFAULT_COMMANDS: frozenset[str] = frozenset(
+    {
+        AICommandKey.IMPLEMENT,
+        AICommandKey.REVIEW_PR_COMMENTS,
+    }
+)
+"""Interactive Codex session commands whose required lifecycle needs network access."""
+
+
 LEGACY_AI_COMMAND_ALIASES: dict[str, str] = {"work": "implement"}
 """Back-compat aliases accepted in config validation/loading paths."""
 
@@ -127,11 +136,11 @@ class AIConfig(BaseModel):
     effort: str | None = None
     permission_mode: str | None = None
     yolo: bool | None = None
-    # Global Codex sandbox network policy (default disabled). ``None`` here is
-    # the unset state that :meth:`ProjectConfig.get_network_access` resolves to
-    # ``False`` — network is off unless a project opts in. Wade always passes an
-    # explicit pin at launch so ambient Codex ``config.toml`` can never silently
-    # enable network for a wade-managed sandbox.
+    # Global Codex sandbox network policy. ``None`` defers to the command's
+    # built-in default: enabled for interactive implementation and PR-comment
+    # sessions, disabled for every other command. Wade always passes an explicit
+    # pin at launch so ambient Codex ``config.toml`` can never silently change
+    # a wade-managed sandbox.
     network_access: bool | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
@@ -598,15 +607,19 @@ class ProjectConfig(BaseModel):
         """Resolve the Codex sandbox network policy for a command.
 
         Fallback: command-specific ``ai.<command>.network_access`` → global
-        ``ai.network_access`` → ``False``. Network is **disabled by default**;
-        an explicit ``True`` at either level opts in. Only Codex honors this
-        (crossby capability-gates every other tool), and wade always forwards
-        the resolved bool so ambient Codex config can never silently flip it on.
+        ``ai.network_access`` → command default. Interactive implementation and
+        PR-comment sessions default to enabled because their required lifecycle
+        reaches GitHub; all other commands are always disabled. Only Codex
+        honors this (crossby capability-gates every other tool), and wade always
+        forwards the resolved bool so ambient Codex config can never silently
+        flip it on.
         """
+        if command and command not in NETWORK_ENABLED_BY_DEFAULT_COMMANDS:
+            return False
         if command:
             cmd_config = getattr(self.ai, command, None)
             if isinstance(cmd_config, AICommandConfig) and cmd_config.network_access is not None:
                 return cmd_config.network_access
         if self.ai.network_access is not None:
             return self.ai.network_access
-        return False
+        return command in NETWORK_ENABLED_BY_DEFAULT_COMMANDS

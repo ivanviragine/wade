@@ -644,9 +644,10 @@ def start(
             permission_mode, yolo, config, "implement"
         )
 
-        # Resolve the Codex sandbox network policy (default disabled). Always
-        # passed explicitly at launch so ambient Codex config can never silently
-        # enable network for this wade-managed sandbox; only Codex acts on it.
+        # Resolve the Codex sandbox network policy (enabled by default for this
+        # interactive lifecycle). Always passed explicitly at launch so ambient
+        # Codex config can never silently change this wade-managed sandbox; only
+        # Codex acts on it.
         resolved_network_access = resolve_network_access(network_access, config, "implement")
 
         # When resuming, override the resolved tool and skip interactive confirmation
