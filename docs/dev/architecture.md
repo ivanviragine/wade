@@ -772,7 +772,7 @@ models:                      # values below are crossby's claude defaults, not w
     easy: claude-haiku-4.5
     medium: claude-sonnet-5
     complex: claude-sonnet-5
-    very_complex: claude-fable-5.1
+    very_complex: claude-opus-5
 provider:
   name: github
 hooks:
