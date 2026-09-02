@@ -477,7 +477,8 @@ on and shell containment is **not** widened — only these two metadata roots ar
 added. The six threaded sites are the impl detached/inline × initial/resume and
 review detached/inline launches (`implementation_service/core.py`,
 `review_service.py`); `delegation_service`/`plan_service` thread the same
-`working_dir` with network **off** for their worktree-capable paths.
+`working_dir` for their worktree-capable paths, under the same network constant
+as everything else — there is no network-off launch path left.
 
 **One axis, not two.** `ai.sandbox` is the single cross-tool boolean deciding
 whether the AI runtime launches inside its own filesystem sandbox;

@@ -17,9 +17,9 @@ from wade.models.permission import PermissionMode
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
-    _display_ai_selection,
     confirm_ai_selection,
     describe_sandbox,
+    display_ai_selection,
     resolve_effort,
     resolve_sandbox,
     valid_effort_levels,
@@ -855,14 +855,14 @@ class TestDescribeSandbox:
 
     def test_display_renders_the_profile_line(self) -> None:
         with patch("wade.ui.console.console.kv") as mock_kv:
-            _display_ai_selection(_CLAUDE, _MODEL_A, None, PermissionMode.DEFAULT, False)
+            display_ai_selection(_CLAUDE, _MODEL_A, None, PermissionMode.DEFAULT, False)
         rendered = dict(_kv_pairs(mock_kv))
         assert "Sandbox" in rendered
         assert "unrestricted" in rendered["Sandbox"]
 
     def test_display_omits_the_line_when_no_profile_resolved(self) -> None:
         with patch("wade.ui.console.console.kv") as mock_kv:
-            _display_ai_selection(_CLAUDE, _MODEL_A, None, PermissionMode.DEFAULT, None)
+            display_ai_selection(_CLAUDE, _MODEL_A, None, PermissionMode.DEFAULT, None)
         assert "Sandbox" not in dict(_kv_pairs(mock_kv))
 
 

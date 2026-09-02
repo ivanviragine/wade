@@ -303,6 +303,18 @@ class TestStripRetiredNetworkAccess:
         raw: dict = {"ai": "nonsense"}
         assert strip_retired_network_access(raw) is False
 
+    def test_strips_null_valued_keys(self) -> None:
+        """``network_access:`` with no value is a removal, not a no-op.
+
+        A value-based ``pop(key, None) is not None`` test reports "unchanged"
+        here, so ``run_all_migrations`` skips its write-back and the retired key
+        survives on disk — re-warning the user on every subsequent run.
+        """
+        raw: dict = {"ai": {"network_access": None, "implement": {"network_access": None}}}
+        assert strip_retired_network_access(raw) is True
+        assert "network_access" not in raw["ai"]
+        assert "network_access" not in raw["ai"]["implement"]
+
     def test_run_all_migrations_strips_the_retired_key(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
@@ -320,6 +332,19 @@ class TestStripRetiredNetworkAccess:
         assert "network_access" not in migrated["ai"]["implement"]
         assert migrated["ai"]["default_tool"] == "codex"
         assert migrated["ai"]["implement"]["yolo"] is True
+
+    def test_run_all_migrations_persists_null_valued_key_removal(self, tmp_path: Path) -> None:
+        """The write-back must fire for a valueless key, globally and per command."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  network_access:\n  implement:\n    network_access:\n"
+        )
+        assert run_all_migrations(config_path) is True
+        migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert "network_access" not in migrated["ai"]
+        assert "network_access" not in migrated["ai"]["implement"]
+        # Now genuinely clean on disk, so the deprecation warning stops recurring.
+        assert run_all_migrations(config_path) is False
 
     def test_run_all_migrations_is_idempotent_on_a_migrated_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

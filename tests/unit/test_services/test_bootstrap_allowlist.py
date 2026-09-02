@@ -405,6 +405,35 @@ class TestBootstrapPlanMode:
             for hook in entry["hooks"]
         )
 
+    @pytest.mark.parametrize("sandbox", [True, False], ids=["confined", "unrestricted"])
+    def test_plan_guard_is_never_narrowed_by_the_profile(
+        self, tmp_path: Path, sandbox: bool
+    ) -> None:
+        """The plan guard is profile-independent, unlike the worktree guard.
+
+        The worktree guard narrows under a confining sandbox because the sandbox
+        already covers tool-call writes. The plan guard has no such overlap: it
+        restricts writes to *plan artifacts*, which is finer-grained than any
+        directory boundary, so both profiles must install it in full.
+        """
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(
+                worktree_path, self._config(), repo_root, plan_mode=True, sandbox=sandbox
+            )
+
+        codex = json.loads((worktree_path / ".codex" / "hooks.json").read_text("utf-8"))
+        pre_entries = codex["hooks"]["PreToolUse"]
+        assert pre_entries, "Codex must receive a plan guard under either profile"
+        assert {entry.get("matcher") for entry in pre_entries} != {"Bash"}
+        assert any(
+            "--guard plan" in hook["command"] for entry in pre_entries for hook in entry["hooks"]
+        )
+
     def test_worktree_guard_defaults_to_the_full_matcher(self, tmp_path: Path) -> None:
         # The default profile is unrestricted, so an omitted ``sandbox`` must
         # fail safe to the wide guard rather than the narrowed one.

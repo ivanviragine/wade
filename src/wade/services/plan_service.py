@@ -771,6 +771,7 @@ def plan(
                     planning_worktree=planning_worktree,
                     effort=resolved_effort,
                     yolo=resolved_yolo,
+                    sandbox=resolved_sandbox,
                 )
                 if not _cleanup_plan_dir_or_worktree(
                     plan_dir, repo_root, planning_worktree, config
@@ -827,6 +828,7 @@ def plan(
                     planning_worktree=planning_worktree,
                     effort=resolved_effort,
                     yolo=resolved_yolo,
+                    sandbox=resolved_sandbox,
                 )
                 if failed_files:
                     # Some plans never became draft PRs (e.g. an unresolvable declared
@@ -1398,8 +1400,12 @@ def _finalize_issues(
     planning_worktree: Path | None = None,
     effort: EffortLevel | None = None,
     yolo: bool = False,
+    sandbox: bool | None = None,
 ) -> bool | None:
     """Finalize newly created issues: token summaries, labels, hints.
+
+    *sandbox* is the planning session's resolved profile, carried only so an
+    accepted implement offer can hand it to the implementation session.
 
     Returns a bool if the user accepted the offer to implement (single issue),
     or None if no interactive offer was made.
@@ -1502,9 +1508,10 @@ def _finalize_issues(
                 before_start=lambda: _flush_planning_votes_before_implementation(
                     planning_worktree, repo_root, config
                 ),
+                plan_sandbox=sandbox,
             )
         else:
-            result = _offer_to_implement(issue_numbers[0])
+            result = _offer_to_implement(issue_numbers[0], plan_sandbox=sandbox)
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -1541,8 +1548,13 @@ def _offer_to_implement(
     issue_number: str,
     *,
     before_start: Callable[[], bool] | None = None,
+    plan_sandbox: bool | None = None,
 ) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
+
+    *plan_sandbox* is this planning session's **resolved** profile, forwarded so
+    the handoff compares against the planner that actually ran rather than
+    re-resolving config and losing a ``--sandbox`` / ``--no-sandbox`` override.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
     or None if the prompt was skipped (non-TTY) or declined.
@@ -1563,10 +1575,15 @@ def _offer_to_implement(
         return False
 
     try:
-        # Planning always launches with network disabled.  Tell implementation
-        # startup this is an accepted handoff so it can establish a fresh Codex
-        # context when its independently resolved policy needs network access.
-        result = start_implementation_session(target=issue_number, plan_handoff=True)
+        # Tell implementation startup this is an accepted handoff, and under
+        # which profile the planner is running, so it can establish a fresh Codex
+        # context when its independently resolved profile is more permissive than
+        # the process it would otherwise inherit.
+        result = start_implementation_session(
+            target=issue_number,
+            plan_handoff=True,
+            plan_sandbox=plan_sandbox,
+        )
         return result.success
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)

@@ -396,7 +396,7 @@ def resolve_yolo(
     return resolve_permission_mode(None, yolo, config, command) is PermissionMode.YOLO
 
 
-def _display_ai_selection(
+def display_ai_selection(
     tool: str | None,
     model: str | None,
     effort: EffortLevel | None,
@@ -404,6 +404,10 @@ def _display_ai_selection(
     sandbox: bool | None = None,
 ) -> None:
     """Print the resolved AI selection (tool, model, effort, permission, sandbox).
+
+    Public because a launch path that skips :func:`confirm_ai_selection`
+    entirely — a detached review, which has no interactive loop to run — still
+    owes the user the posture it is about to launch under.
 
     The permission-mode line is **always** printed with a human-readable
     descriptor (including ``default``), so every launch states both which tier
@@ -471,7 +475,7 @@ def confirm_ai_selection(
     from wade.ui import prompts
 
     # Always surface the resolved selection once, before the skip guard below.
-    _display_ai_selection(
+    display_ai_selection(
         resolved_tool, resolved_model, resolved_effort, resolved_permission_mode, sandbox
     )
 
@@ -497,7 +501,7 @@ def confirm_ai_selection(
         # iteration was already rendered by the hoisted call above — don't
         # double-print it.
         if not first_render:
-            _display_ai_selection(tool, model, effort, permission_mode, sandbox)
+            display_ai_selection(tool, model, effort, permission_mode, sandbox)
         first_render = False
 
         # Build menu dynamically based on which flags were NOT explicit.

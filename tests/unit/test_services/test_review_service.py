@@ -634,6 +634,38 @@ class TestReviewServiceStart:
         kwargs = spy.build_launch_command.call_args.kwargs
         assert kwargs["working_dir"] == tmp_path / "wt"
         assert kwargs["sandbox"] is True
+        assert kwargs["network_access"] is True
+
+    def test_detached_launch_still_states_the_sandbox_profile(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """Detach skips the confirmation loop, never the posture display.
+
+        A detached run launches a real runtime under the resolved profile, so
+        leaving the display behind the ``not detach`` guard hides from the user
+        whether that process is confined or holds host access.
+        """
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        spy = MagicMock()
+        spy.build_launch_command.return_value = ["codex"]
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=spy),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch(
+                "wade.services.review_service.launch_in_new_terminal",
+                return_value=True,
+            ),
+            patch("wade.services.review_service.display_ai_selection") as mock_display,
+        ):
+            start(target="42", detach=True, sandbox=True)
+
+        mock_display.assert_called_once()
+        assert mock_display.call_args.args[-1] is True
+        # The interactive loop stays skipped — display only.
+        mock_setup["confirm_ai_selection"].assert_not_called()
 
     def test_quiet_prompt_relaunch_forwards_sandbox(self, tmp_path: Path) -> None:
         """``--no-sandbox`` survives a 'keep polling → comments found' re-launch.

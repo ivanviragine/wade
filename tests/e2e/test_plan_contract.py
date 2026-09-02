@@ -200,12 +200,16 @@ class TestPlanSessionDoneCommand:
 
 
 class TestPlanSandboxProfileContract:
-    """`wade plan` accepts the profile and keeps its plan guard in both (#478).
+    """`wade plan` exposes the sandbox profile on its CLI surface (#478).
 
     ``plan`` had no network flag before this change; it is a launch path like any
-    other, so it must accept ``--sandbox``/``--no-sandbox``. The plan-artifact
-    guard is finer-grained than any directory sandbox and is installed in full
-    regardless of the profile.
+    other, so it must accept and document ``--sandbox``/``--no-sandbox``. Scope
+    is deliberately the parsed surface: ``--help`` returns before resolution, and
+    driving a real plan run here would need a stubbed AI launch and provider,
+    duplicating coverage the unit suite already owns — sandbox resolution and
+    launch forwarding in ``test_ai_resolution`` /
+    ``test_implementation_launch_context``, and the profile-independent plan
+    guard in ``test_bootstrap_allowlist``.
     """
 
     @pytest.mark.parametrize("flag", ["--sandbox", "--no-sandbox"])

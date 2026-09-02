@@ -438,6 +438,7 @@ def start(
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
     plan_handoff: bool = False,
+    plan_sandbox: bool | None = None,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
 
@@ -461,6 +462,12 @@ def start(
             An unrestricted Codex implementation must launch in a fresh detached
             context rather than inherit a sandboxed planner's process, which
             cannot drop its sandbox after start.
+        plan_sandbox: The profile the handing-off planner actually launched
+            under. Passed rather than re-resolved because ``wade plan --sandbox``
+            / ``--no-sandbox`` can override config, and a re-resolution would
+            compare this session against a planner that never existed. ``None``
+            (no handoff, or a caller that predates the parameter) falls back to
+            re-resolving ``ai.plan.sandbox``.
 
     Returns:
         ImplementResult with success/merged status.
@@ -959,12 +966,23 @@ def start(
         # sandbox against this one's. Note the polarity flip: the old flag fired
         # on the permissive value being True (network on), this one fires on the
         # permissive value being False (sandbox off).
+        #
+        # The planner's profile is the one it *launched* with, forwarded through
+        # the handoff — not a fresh resolution. ``wade plan --sandbox`` /
+        # ``--no-sandbox`` outranks config, so re-resolving here would compare
+        # this session against a planner that never ran: an explicitly sandboxed
+        # planner would read as unrestricted and hit the ordinary nested-launch
+        # guard instead of opening the fresh context it needs, and the inverse
+        # override would force a detached launch nothing asked for.
         detected_env = _detect_ai_cli_env()
+        planner_sandbox = (
+            plan_sandbox if plan_sandbox is not None else resolve_sandbox(None, config, "plan")
+        )
         requires_fresh_codex_handoff = (
             plan_handoff
             and detected_env == "CODEX_CLI"
             and resolved_tool == AIToolID.CODEX.value
-            and resolve_sandbox(None, config, "plan")
+            and planner_sandbox
             and not resolved_sandbox
         )
         if detected_env and not requires_fresh_codex_handoff:

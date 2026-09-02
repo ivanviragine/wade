@@ -49,6 +49,7 @@ from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
     confirm_ai_selection,
+    display_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
@@ -1185,7 +1186,20 @@ def start(
         console.error(f"Cannot start review session: {exc}")
         return False
 
-    if not detach:
+    if detach:
+        # Detach skips the confirmation loop — there is no attached session to
+        # renegotiate the selection for — but not the *display*. A detached
+        # launch still starts a runtime under the resolved profile, and the user
+        # must be able to see whether that process is confined or holds host
+        # access, exactly as the attached path shows them.
+        display_ai_selection(
+            resolved_tool,
+            resolved_model,
+            resolved_effort,
+            resolved_permission_mode,
+            resolved_sandbox,
+        )
+    else:
         (
             resolved_tool,
             resolved_model,

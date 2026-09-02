@@ -15,6 +15,14 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 - replace the Codex network pin with a cross-tool sandbox profile (ce1657b)
 
+### Documentation
+
+- document the sandbox profile and surface breaking changes in release notes (5fe6961)
+
+### Chores
+
+- capture sandbox-profile gotchas from #478 (cb601c4)
+
 ## [v0.54.2] — 2026-09-02
 
 ### Chores
@@ -448,6 +456,11 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 - add "auto" and "accept-edits" permission modes (#338) (5b82060)
 
 ## [v0.33.0] — 2026-07-23
+
+### Breaking Changes
+
+- replace Gemini CLI support with Antigravity CLI (bump crossby to 0.10.x) (#336) (c54af6d)
+  Gemini CLI is no longer a supported AI tool. Projects with ai.default_tool: gemini (or a per-command tool: gemini) must switch to antigravity-cli or another supported tool.
 
 ### Features
 

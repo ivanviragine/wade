@@ -50,6 +50,11 @@ PREFIX_PATTERNS: dict[str, re.Pattern[str]] = {
 BREAKING_PATTERN: re.Pattern[str] = re.compile(r"^[a-z]+(\([^)]*\))?\!:\s*(.+)$")
 BREAKING_HEADER = "Breaking Changes"
 
+# Any conventional subject, `!` or not — used to strip the type prefix off a
+# footer-only breaking commit so its entry reads like every neighbouring one
+# ("drop the legacy loader", not "feat: drop the legacy loader").
+CONVENTIONAL_SUBJECT_PATTERN: re.Pattern[str] = re.compile(r"^[a-z]+(\([^)]*\))?\!?:\s*(.+)$")
+
 # The Conventional Commits `BREAKING CHANGE:` footer carries what the subject
 # cannot: what broke and how to opt back in. Captured through the end of its
 # paragraph so a multi-line footer survives.
@@ -57,6 +62,12 @@ BREAKING_FOOTER_PATTERN: re.Pattern[str] = re.compile(
     r"^BREAKING[ -]CHANGE:\s*(.+?)(?=\n\s*\n|\Z)",
     re.MULTILINE | re.DOTALL,
 )
+
+# Field/record separators for the bulk `git log` below. ASCII unit/record
+# separators rather than `|`/newline because the body is multi-line free text and
+# may contain either.
+_FIELD_SEP = "\x1f"
+_RECORD_SEP = "\x1e"
 
 
 def git(*args: str) -> str:
@@ -78,35 +89,43 @@ def get_tags() -> list[str]:
     return [t for t in raw.splitlines() if re.match(r"^v\d+\.\d+\.\d+$", t)]
 
 
-def get_commits(commit_range: str) -> list[tuple[str, str]]:
-    """Get commits in a range as (subject, hash) pairs.
+def get_commits(commit_range: str) -> list[tuple[str, str, str]]:
+    """Get commits in a range as (subject, hash, body) triples.
+
+    The body comes from this one batched call rather than a per-commit lookup:
+    a `BREAKING CHANGE:` footer can appear under an ordinary subject, so every
+    commit's body has to be inspected, and ``generate()`` re-runs this for every
+    tag range in history — one ``git log`` per commit would be thousands of
+    subprocesses per regeneration.
 
     Filters out version-bump and branch-scaffold noise — both are
     wade-generated commits that carry no user-facing release content.
     """
-    raw = git("log", commit_range, "--pretty=format:%s|%h", "--no-merges")
+    raw = git(
+        "log",
+        commit_range,
+        f"--pretty=format:%s{_FIELD_SEP}%h{_FIELD_SEP}%B{_RECORD_SEP}",
+        "--no-merges",
+    )
     if not raw:
         return []
     commits = []
-    for line in raw.splitlines():
-        if "|" not in line:
+    for record in raw.split(_RECORD_SEP):
+        record = record.strip("\n")
+        if not record:
             continue
-        subject, sha = line.rsplit("|", 1)
+        parts = record.split(_FIELD_SEP)
+        if len(parts) < 3:
+            continue
+        subject, sha, body = parts[0], parts[1], _FIELD_SEP.join(parts[2:])
         if subject.startswith(("chore: bump version", "chore: scaffold branch")):
             continue
-        commits.append((subject.strip(), sha.strip()))
+        commits.append((subject.strip(), sha.strip(), body))
     return commits
 
 
-def breaking_note(sha: str) -> str:
-    """Return the commit's ``BREAKING CHANGE:`` footer as one line, or ``""``.
-
-    Read per breaking commit rather than from the bulk ``git log`` above,
-    because the footer is a body paragraph and breaking commits are rare — a
-    second cheap lookup beats parsing multi-line bodies out of the batched
-    format string.
-    """
-    body = git("log", "-1", "--format=%B", sha)
+def breaking_note(body: str) -> str:
+    """Return the commit body's ``BREAKING CHANGE:`` footer as one line, or ``""``."""
     match = BREAKING_FOOTER_PATTERN.search(body)
     if not match:
         return ""
@@ -124,13 +143,23 @@ def format_range(commit_range: str) -> str:
 
     # Breaking changes lead, and are *also* listed under their own type below —
     # duplicated on purpose so a reader skimming "Features" still sees them.
+    #
+    # Conventional Commits declares a break *either* way: `feat!:` in the subject
+    # or a `BREAKING CHANGE:` footer under an ordinary one. Requiring the subject
+    # marker would drop every footer-only break from the section that exists to
+    # surface it.
     breaking: list[str] = []
-    for subject, sha in commits:
+    for subject, sha, body in commits:
         match = BREAKING_PATTERN.match(subject)
-        if not match:
+        note = breaking_note(body)
+        if not match and not note:
             continue
-        breaking.append(f"- {match.group(2)} ({sha})")
-        note = breaking_note(sha)
+        if match:
+            description = match.group(2)
+        else:
+            conventional = CONVENTIONAL_SUBJECT_PATTERN.match(subject)
+            description = conventional.group(2) if conventional else subject
+        breaking.append(f"- {description} ({sha})")
         if note:
             breaking.append(f"  {note}")
     if breaking:
@@ -141,7 +170,7 @@ def format_range(commit_range: str) -> str:
     for prefix, header in SECTIONS:
         pattern = PREFIX_PATTERNS[prefix]
         items: list[str] = []
-        for subject, sha in commits:
+        for subject, sha, _body in commits:
             match = pattern.match(subject)
             if match:
                 msg = match.group(2)
@@ -153,7 +182,9 @@ def format_range(commit_range: str) -> str:
             output_parts.extend(items)
 
     # Unmatched commits → "Other Changes"
-    other = [f"- {subject} ({sha})" for subject, sha in commits if subject not in matched_subjects]
+    other = [
+        f"- {subject} ({sha})" for subject, sha, _ in commits if subject not in matched_subjects
+    ]
     if other:
         output_parts.append("\n### Other Changes\n")
         output_parts.extend(other)

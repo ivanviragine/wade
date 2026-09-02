@@ -710,7 +710,7 @@ docs/dev/architecture.md's .wade.yml example hardcodes crossby's claude complexi
 
 ## d7e3010043a2 | 2026-09-02 | implementation | tags: hooks, codex, gotcha, sandbox | Issue #478
 
-sandboxes_writes is a STATIC crossby capability but the write boundary became launch-dependent once ai.sandbox existed (#478): it describes what a tool can do, not what this launch will do. Any code branching on it — today only _install_guard_hooks in implementation_service/bootstrap.py — must also consult the resolved profile, or under sandbox=False (Codex --sandbox danger-full-access) the worktree-containment guard narrows to the shell token and tool-call writes outside the worktree are guarded by nothing. Extends a44493f7, which documents the narrow-don't-skip rule but predates a disableable sandbox.
+`sandboxes_writes` is a STATIC crossby capability but the write boundary became launch-dependent once `ai.sandbox` existed (#478): it describes what a tool can do, not what this launch will do. Any code branching on it — today only `_install_guard_hooks` in `implementation_service/bootstrap.py` — must also consult the resolved profile, or under `sandbox=False` (Codex `--sandbox danger-full-access`) the worktree-containment guard narrows to the shell token and tool-call writes outside the worktree are guarded by nothing. Extends a44493f7, which documents the narrow-don't-skip rule but predates a disableable sandbox.
 
 ---
 

@@ -195,6 +195,10 @@ class TestImplementationLaunchContext:
         kwargs = spy.build_launch_command.call_args.kwargs
         assert kwargs["working_dir"] == worktree
         assert kwargs["sandbox"] is True
+        # Detached launches take the same unconditional network pin as inline
+        # ones — omitting it here would silently strip fetch/push from every
+        # `wade implement --detach` session.
+        assert kwargs["network_access"] is True
 
     def test_detached_resume(self, worktree: Path) -> None:
         # Detached resume → build_resume_command(); _resume_autonomy_args appended.
@@ -237,6 +241,11 @@ class TestImplementationLaunchContext:
 
         assert result.success is True
         assert spy.build_launch_command.call_args.kwargs["working_dir"] == worktree
+        # Assert the profile in *every* route, not just the unset-implement one
+        # the polarity test below covers: a precedence regression in the global
+        # or command override case would otherwise spawn the fresh context and
+        # then confine it anyway — the exact confinement the handoff escapes.
+        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
         assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
         spy.launch.assert_not_called()
 
@@ -258,6 +267,46 @@ class TestImplementationLaunchContext:
 
         assert result.success is True
         assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
+
+    def test_forwarded_planner_profile_outranks_plan_config(self, worktree: Path) -> None:
+        """``wade plan --sandbox`` beats an unset/unrestricted ``ai.plan.sandbox``.
+
+        Re-resolving the planner's profile from config here would read this
+        explicitly sandboxed planner as unrestricted, apply the ordinary
+        nested-launch guard, and strand the implementation inside a sandbox it
+        was never meant to inherit.
+        """
+        with _driven_start(
+            worktree,
+            plan_sandbox_config=False,
+            detected_env="CODEX_CLI",
+        ) as spy:
+            spy.build_launch_command.return_value = ["codex"]
+            result = start(target="42", plan_handoff=True, plan_sandbox=True)
+
+        assert result.success is True
+        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
+        spy.launch.assert_not_called()
+
+    def test_forwarded_unrestricted_planner_suppresses_a_needless_handoff(
+        self, worktree: Path
+    ) -> None:
+        """The inverse override: ``--no-sandbox`` beats ``ai.plan.sandbox: true``.
+
+        The planner already has host access, so there is nothing to escape and no
+        second process to spawn. Re-resolving config would force a detached
+        launch nothing asked for.
+        """
+        with _driven_start(
+            worktree,
+            plan_sandbox_config=True,
+            detected_env="CODEX_CLI",
+        ) as spy:
+            result = start(target="42", plan_handoff=True, plan_sandbox=False)
+
+        assert result.success is True
+        spy.build_launch_command.assert_not_called()
+        spy.launch.assert_not_called()
 
     def test_matching_profiles_keep_the_nested_launch_guard(self, worktree: Path) -> None:
         """No profile mismatch, no reason to spawn a second process.

@@ -664,8 +664,11 @@ runtime boundary only — it never relaxes WADE's own guards (see below).
 | `sandbox: false` (**default**) | Launch the runtime unrestricted. Codex gets `--sandbox danger-full-access`, Cursor `--sandbox disabled`. Repository commands and delegated child tools keep **normal host access and credentials**. |
 | `sandbox: true` | Launch the runtime confined. Codex gets `--sandbox workspace-write`, Cursor `--sandbox enabled`. |
 
-Network access is **on in both profiles** and is no longer configurable — every
-WADE session needs it for `git fetch`/`push`, `gh`, and package installs.
+Network access is **on in both profiles** and is no longer configurable — it is
+enabled for every WADE launch. Not every phase needs it (planning and
+dependency analysis deliberately do not), but the phases that do — `git
+fetch`/`push`, `gh`, package installs — cannot work without it, and the profile
+is fixed at launch.
 
 Set it globally or per command, and override it on any launch command
 (`implement`, `implement-batch`, `plan`, `review pr-comments`, `smart-start`,

@@ -105,6 +105,19 @@ RETIRED_NETWORK_ACCESS_KEY = "network_access"
 """The Codex-only network pin retired by #478 in favour of ``ai.sandbox``."""
 
 
+def _pop_if_present(mapping: dict[str, Any], key: str) -> bool:
+    """Remove *key* from *mapping* and report whether it was there.
+
+    Presence-based rather than value-based so a YAML null (``key:`` with no
+    value) still counts as a removal — the case a ``pop(key, None) is not None``
+    test silently reports as "unchanged".
+    """
+    if key not in mapping:
+        return False
+    del mapping[key]
+    return True
+
+
 def strip_retired_network_access(raw: dict[str, Any]) -> bool:
     """Remove the retired ``ai.network_access`` pin, global and per-command (#478).
 
@@ -122,9 +135,14 @@ def strip_retired_network_access(raw: dict[str, Any]) -> bool:
     if not isinstance(ai, dict):
         return False
 
-    changed = ai.pop(RETIRED_NETWORK_ACCESS_KEY, None) is not None
+    # Test *presence*, not the popped value: `network_access:` with no value is
+    # valid YAML for ``None``, and a value-based check would drop the key in
+    # memory while reporting no change. ``run_all_migrations`` would then skip
+    # the write-back, leaving the retired key on disk and `wade check` repeating
+    # its deprecation warning on every run.
+    changed = _pop_if_present(ai, RETIRED_NETWORK_ACCESS_KEY)
     for value in ai.values():
-        if isinstance(value, dict) and value.pop(RETIRED_NETWORK_ACCESS_KEY, None) is not None:
+        if isinstance(value, dict) and _pop_if_present(value, RETIRED_NETWORK_ACCESS_KEY):
             changed = True
 
     if changed:
