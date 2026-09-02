@@ -4,6 +4,14 @@ Every expectation here is derived from ``crossby.data.MODELS`` rather than
 hardcoded, so a Crossby version bump that changes the catalog cannot make these
 tests stale — it can only make them fail if ``complete_models`` stops tracking
 the catalog. Re-run on every Crossby dependency change.
+
+Two assertions are deliberate *vacuity guards* rather than assertions about
+``complete_models``: they check that the live catalog still has the shape a test
+needs to prove anything (Claude and Codex catalogs differing; some cross-tool
+overlap existing). A catalog reshaped enough to break one of those premises will
+fail the guard, and its message names that cause so the failure is not misread
+as a wade regression. They are kept because without them the test they guard
+passes vacuously, which is the worse failure mode.
 """
 
 from __future__ import annotations
@@ -66,6 +74,15 @@ class TestCompleteModelsWithExplicitTool:
 
     def test_repeated_flag_unions_the_selected_catalogs(self) -> None:
         assert complete_models(_ctx([_CLAUDE, _CODEX]), "") == _catalog(_CLAUDE, _CODEX)
+
+    def test_the_same_tool_twice_is_deduplicated(self) -> None:
+        """Dedup holds by construction, without relying on tools sharing models.
+
+        The union case above pairs Claude with Codex, whose catalogs are
+        disjoint today, so it never actually exercises deduplication on this
+        branch. Repeating one tool forces every candidate to collide.
+        """
+        assert complete_models(_ctx([_CLAUDE, _CLAUDE]), "") == _catalog(_CLAUDE)
 
     def test_unknown_tool_yields_no_candidates(self) -> None:
         assert complete_models(_ctx("not-a-tool"), "") == []
