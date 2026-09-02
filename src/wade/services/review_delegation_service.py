@@ -20,6 +20,7 @@ from wade.models.workflow import DelegationKind
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
@@ -202,16 +203,9 @@ def _run_review_delegation(
         resolved_permission_mode = resolve_permission_mode(
             permission_mode, yolo, config, command=command
         )
-        try:
-            resolved_sandbox = resolve_sandbox(None, config, command, tool=resolved_tool)
-        except SandboxCapabilityError as e:
-            console.error(str(e))
-            return DelegationResult(
-                success=False,
-                feedback=str(e),
-                mode=delegation_mode,
-                exit_code=1,
-            )
+        # The capability check waits until after the confirmation UI below,
+        # which can still change the tool.
+        resolved_sandbox = resolve_sandbox(None, config, command)
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — this
@@ -239,6 +233,20 @@ def _run_review_delegation(
                 sandbox=resolved_sandbox,
             )
         )
+
+        # Checked against the *confirmed* tool: the menu above may have switched
+        # to a runtime that cannot honor the requested profile.
+        if resolved_tool:
+            try:
+                enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+            except SandboxCapabilityError as e:
+                console.error(str(e))
+                return DelegationResult(
+                    success=False,
+                    feedback=str(e),
+                    mode=delegation_mode,
+                    exit_code=1,
+                )
 
         # Re-apply the headless safety rule after confirm: interactive changes are
         # honored, but a headless launch always stays DEFAULT regardless.

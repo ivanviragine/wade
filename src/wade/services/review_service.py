@@ -1594,9 +1594,10 @@ def _post_review_lifecycle(
     non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
 
     ``sandbox`` *is* threaded (unlike effort): ``wade review pr-comments``
-    has a ``--network`` / ``--no-network`` flag, so an explicit pin must survive a
-    "wait for new reviews" re-launch rather than re-resolve to config. ``None``
-    (unset) still re-resolves, matching the non-explicit ``permission_mode`` path.
+    has a ``--sandbox`` / ``--no-sandbox`` flag, so an explicit profile must
+    survive a "wait for new reviews" re-launch rather than re-resolve to config.
+    ``None`` (unset) still re-resolves, matching the non-explicit
+    ``permission_mode`` path.
     """
     from wade.ui import prompts
 

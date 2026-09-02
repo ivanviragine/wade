@@ -37,6 +37,7 @@ from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
@@ -481,12 +482,9 @@ def plan(
     resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
 
     # Resolve the AI-runtime sandbox profile. A planning session is a launch path
-    # like any other, so it carries the profile too (#478).
-    try:
-        resolved_sandbox = resolve_sandbox(sandbox, config, "plan", tool=resolved_tool)
-    except SandboxCapabilityError as e:
-        console.error(str(e))
-        return False
+    # like any other, so it carries the profile too (#478). The capability check
+    # waits until after the confirmation UI, which can still change the tool.
+    resolved_sandbox = resolve_sandbox(sandbox, config, "plan")
 
     console.rule("wade plan")
 
@@ -507,6 +505,14 @@ def plan(
     resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
     if not resolved_tool:
         console.error("No AI tool selected.")
+        return False
+
+    # Checked against the *confirmed* tool: the menu above may have switched to a
+    # runtime that cannot honor the requested profile.
+    try:
+        enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+    except SandboxCapabilityError as e:
+        console.error(str(e))
         return False
 
     # Pre-load existing issue context when issue_id is supplied

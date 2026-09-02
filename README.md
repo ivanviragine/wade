@@ -240,7 +240,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `implement`, `implement-batch`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, `review pr-comments`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
@@ -312,7 +312,7 @@ for reviews"** after `wade implementation-session done` and comments land —
 resolves its tool, model, effort, and autonomy tier from a dedicated
 `ai.review_pr_comments` section (the same keys every `ai.<command>` section
 accepts: `tool`, `model`, `effort`, `mode`, `permission_mode` / `yolo`,
-`network_access`, `enabled`, `timeout`):
+`sandbox`, `enabled`, `timeout`):
 
 ```yaml
 ai:
@@ -653,59 +653,108 @@ appends a clearly labeled stderr tail containing at most the final 20 non-empty
 lines and 4,000 characters; if stdout is empty, that diagnostic is shown as the
 failure feedback, and any truncation is labeled.
 
-### Codex sandbox & network policy
+### AI runtime sandbox profile
 
-When WADE launches [Codex](https://github.com/openai/codex) in a linked
-worktree, Codex runs under `--sandbox workspace-write`, which confines writes to
-the worktree tree. A worktree's git metadata, however, lives **outside** that
-tree (`<main>/.git/worktrees/<wt>` and `<main>/.git`), so without extra grants
-every git write — `git add`/commit, ref updates, stash, and `wade
-sync`/`done` — fails with `Unable to create …/index.lock` or `could not write
-index`. WADE fixes this automatically: it passes the worktree's absolute path to
-the launcher, which grants those out-of-root git-metadata dirs as sandbox
-writable roots (the OS sandbox otherwise stays fully enabled — this widens
-nothing else). This is transparent; no Codex config or manual approval is
-needed, and it only affects Codex (every other tool ignores it).
+`ai.sandbox` is a single cross-tool boolean that decides whether WADE launches
+the **AI runtime** inside its own filesystem sandbox. It governs the external
+runtime boundary only — it never relaxes WADE's own guards (see below).
 
-**Filesystem writes and network access are independent.** The metadata grant
-above makes **local** git work (stage, commit, stash, ref updates, and the
-local legs of `sync`/`done`) succeed with **network off**. Only operations that
-reach the network — `git fetch` (hence `sync`) and `git push` (hence the network
-leg of `done`) — need network access. It is **enabled by default** for the
-interactive lifecycle commands `wade implement` (including its batch children)
-and `wade review pr-comments`, because their readiness, sync, and completion
-steps require GitHub. Choose offline operation explicitly with `--no-network`,
-or in `.wade.yml`:
+| Setting | Meaning |
+|---------|---------|
+| `sandbox: false` (**default**) | Launch the runtime unrestricted. Codex gets `--sandbox danger-full-access`, Cursor `--sandbox disabled`. Repository commands and delegated child tools keep **normal host access and credentials**. |
+| `sandbox: true` | Launch the runtime confined. Codex gets `--sandbox workspace-write`, Cursor `--sandbox enabled`. |
+
+Network access is **on in both profiles** and is no longer configurable — every
+WADE session needs it for `git fetch`/`push`, `gh`, and package installs.
+
+Set it globally or per command, and override it on any launch command
+(`implement`, `implement-batch`, `plan`, `review pr-comments`, `smart-start`,
+and the `i`/`r`/`p` aliases) with `--sandbox` / `--no-sandbox`:
 
 ```yaml
 ai:
-  network_access: false         # offline opt-out for interactive session commands
+  sandbox: true                 # confine every session's runtime
   implement:
-    network_access: true        # per-command override wins
+    sandbox: false              # ...except implementation (per-command wins)
 ```
 
-The policy applies to the **interactive session commands** — `wade implement`
-and `wade review pr-comments` — which are the ones that run `sync`/`done` and so
-may need `fetch`/`push`. The headless/analytical paths (`plan`, `deps`,
-`review plan`/`implementation`/`batch`) are **always** network-off by design:
-they never fetch or push, so `ai.network_access` does not apply to them and no
-flag enables it there. Precedence for the commands that honor it is
-`--network`/`--no-network` > `ai.<command>.network_access` >
-`ai.network_access` > **on for `implement` and `review_pr_comments`, otherwise
-off**. WADE always passes an explicit pin, so an ambient
-`network_access = true` in your own Codex `config.toml` can never silently
-enable network for a WADE-managed sandbox. Enabling network permits outbound
-access for commands inside the Codex workspace-write sandbox; it does not
-disable filesystem sandboxing or change approval-policy semantics.
+Precedence: `--sandbox`/`--no-sandbox` > `ai.<command>.sandbox` > `ai.sandbox` >
+**unrestricted**. WADE pins the resolved profile explicitly in *both* directions,
+so an ambient setting in your own Codex `config.toml` can never silently move the
+boundary of a WADE-managed session. The resolved profile is printed at launch
+next to the tool, model, effort, and permission mode, with its meaning spelled
+out — the security posture is never left implicit.
 
-An accepted single-issue plan handoff starts implementation from a planning
-session that is always network-off. When both the planning tool and resolved
-implementation tool are Codex and the implementation policy resolves to enabled,
-WADE starts a fresh detached Codex context with network explicitly enabled;
-reusing the planner process would retain its immutable network-off sandbox. If
-WADE cannot open that detached context, the handoff fails rather than reporting
-an implementation session ready. Open a new host terminal and run the displayed
-`wade implement <issue> --network` command to continue with the required policy.
+> **Why unrestricted is the default.** WADE runs a deliberately multi-model
+> workflow: a session delegates to reviewers and dependency analysers that
+> authenticate separately. Every `wade` command is a child of the AI runtime, so
+> a sandboxed outer runtime hands its sandbox to every child — and a separately
+> authenticated reviewer such as Claude Code loses its normal host login. That is
+> what makes delegated multi-model sessions fail in practice (#478).
+
+**`unrestricted` is not "unattended".** The profile is orthogonal to
+`permission_mode`: it moves the OS boundary, not the approval tier. Codex's
+`--sandbox danger-full-access` is a distinct flag from
+`--dangerously-bypass-approvals-and-sandbox`, so disabling the sandbox never
+implies `yolo` and never changes the resolved autonomy tier. Treat it as an
+intentional project opt-in to host access, not as a synonym for skipping prompts.
+
+Only tools with a sandbox toggle (Codex, Cursor) act on the setting. The
+capability handling is deliberately **asymmetric**, because the default is
+`false`:
+
+- `sandbox: false` on a tool that never sandboxed anything (Claude, Copilot, …)
+  is a silent no-op — those runtimes are already unrestricted.
+- `sandbox: true` **explicitly requested** on a tool with no sandbox toggle is a
+  visible error naming the tool. WADE cannot impose a boundary the runtime does
+  not have, and will not pretend it did. No tool ever receives an invented flag.
+
+#### Worktree git metadata under `sandbox: true`
+
+A worktree's git metadata lives **outside** the worktree tree
+(`<main>/.git/worktrees/<wt>` and `<main>/.git`), so under `workspace-write`
+every git write — `git add`/commit, ref updates, stash, and `wade sync`/`done` —
+would fail with `Unable to create …/index.lock` or `could not write index`. WADE
+fixes this automatically: it passes the worktree's absolute path to the launcher,
+which grants those out-of-root git-metadata dirs as sandbox writable roots (the
+OS sandbox otherwise stays fully enabled — this widens nothing else). It is
+transparent, needs no Codex config or manual approval, and is inert under
+`sandbox: false`, where there is no boundary to widen.
+
+#### WADE's own guards are unaffected
+
+Disabling the runtime sandbox does not disable WADE's containment. The
+worktree-containment guard actually gets **wider**: under `sandbox: true` it is
+narrowed to the shell token (Codex's sandbox already covers tool-call writes, but
+permits `/tmp` and `$TMPDIR`, so a shell redirect can still escape), while under
+`sandbox: false` the **full** matcher is installed because nothing else covers
+tool-call writes outside the worktree. The plan-artifact guard, lifecycle hooks,
+the Stop hook, and the pre-push backstop are identical in both profiles.
+
+#### Plan → implement handoff
+
+The sandbox is a launch-time OS property: a process started confined cannot drop
+its sandbox later. So when an accepted plan handoff runs inside a **sandboxed**
+Codex planner and the implementation profile resolves to **unrestricted**, WADE
+starts a fresh detached Codex context rather than reusing the planner process. If
+it cannot open that context, the handoff fails rather than reporting an
+implementation session ready — open a new host terminal and run the displayed
+`wade implement <issue> --no-sandbox` command. When both sessions resolve to the
+same profile there is no mismatch and the ordinary nested-launch guard applies.
+
+#### Migrating from `ai.network_access`
+
+`ai.network_access` was a Codex-only network pin, enabled by default for
+`implement` and `review_pr_comments` and off everywhere else. It is **retired**.
+An existing `.wade.yml` that still carries it keeps loading and passes
+`wade check` with a **warning, not an error**; the key is ignored and stripped on
+the next config migration. Replace it with `ai.sandbox` if you want the old
+confinement back:
+
+```yaml
+ai:
+  sandbox: true                 # restores the pre-#478 Codex behaviour
+```
 
 ### Session readiness and least-privilege remediation
 
@@ -765,10 +814,11 @@ credentials, PATH, or sandbox execution access, it does not consume a
 timeout still counts as a bounded review attempt, so the review/fix loop cannot
 run forever.
 
-For Codex, keep `--sandbox workspace-write`; WADE/crossby add only the linked
-worktree's private/common Git metadata directories. Implementation and PR-comment
-sessions have network access by default for their GitHub lifecycle; use
-`--no-network` or `ai.network_access: false` when an offline sandbox is required.
+For Codex, WADE launches unsandboxed by default so delegated tools keep their
+own host credentials; set `ai.sandbox: true` (or pass `--sandbox`) to keep
+`--sandbox workspace-write`, where WADE/crossby add only the linked worktree's
+private/common Git metadata directories. Every session has network access in
+both profiles for its GitHub lifecycle.
 For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
 the GitHub domains needed by the session rather than choosing unrestricted shell
 access. Copilot and VS Code need network plus usable `gh` credentials in their

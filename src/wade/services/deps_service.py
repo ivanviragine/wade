@@ -26,6 +26,7 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
@@ -509,11 +510,9 @@ def analyze_deps(
         resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
         resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
         resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "deps")
-        try:
-            resolved_sandbox = resolve_sandbox(None, config, "deps", tool=resolved_tool)
-        except SandboxCapabilityError as e:
-            console.error(str(e))
-            return None
+        # The capability check waits until after the confirmation UI below,
+        # which can still change the tool.
+        resolved_sandbox = resolve_sandbox(None, config, "deps")
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — not
@@ -547,6 +546,14 @@ def analyze_deps(
         )
         if not resolved_tool:
             console.error("No AI tool selected.")
+            return None
+
+        # Checked against the *confirmed* tool: the menu above may have switched
+        # to a runtime that cannot honor the requested profile.
+        try:
+            enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+        except SandboxCapabilityError as e:
+            console.error(str(e))
             return None
 
         # Re-apply the headless safety rule after confirm: interactive changes are

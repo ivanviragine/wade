@@ -923,3 +923,61 @@ class TestNetworkAccessRetirement:
             text = path.read_text(encoding="utf-8")
             assert "--network" not in text, f"{path.name} still declares a --network flag"
             assert "--no-network" not in text
+
+
+class TestCapabilityCheckFollowsTheConfirmedTool:
+    """The check must run against the tool that actually launches.
+
+    ``confirm_ai_selection`` can switch the tool interactively, so a check wired
+    to the pre-confirmation value would let a user pick a toggle-less runtime
+    under ``sandbox: true`` and launch it silently unsandboxed — the exact
+    "never silently downgraded" invariant this feature exists to hold.
+    """
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "wade.services.plan_service",
+            "wade.services.deps_service",
+            "wade.services.review_delegation_service",
+            "wade.services.review_service",
+            "wade.services.implementation_service.core",
+        ],
+    )
+    def test_enforcement_happens_after_confirmation(self, module: str) -> None:
+        import importlib
+
+        source = pathlib.Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
+        if "confirm_ai_selection(" not in source:
+            pytest.skip(f"{module} has no confirmation UI")
+
+        assert "enforce_sandbox_capability(" in source, (
+            f"{module} resolves a sandbox profile but never enforces its capability"
+        )
+        # Every service resolves the value first and enforces later, so the
+        # enforcement call must appear after the confirmation call.
+        assert source.index("enforce_sandbox_capability(", source.index("def ")) > source.index(
+            "confirm_ai_selection("
+        ), f"{module} enforces the capability before the tool is confirmed"
+
+    def test_no_service_resolves_with_a_tool_before_confirming(self) -> None:
+        """``resolve_sandbox(tool=...)`` is the resolve-and-check shorthand.
+
+        It is only safe where resolution immediately precedes the launch. No
+        service that shows a confirmation menu may use it, or the check would
+        again bind to the pre-confirmation tool.
+        """
+        import wade
+
+        root = pathlib.Path(wade.__file__).parent
+        offenders = []
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if "confirm_ai_selection(" in text and "resolve_sandbox(" in text:
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    if "resolve_sandbox(" in line and "tool=" in line:
+                        offenders.append(f"{path.name}:{lineno}")
+        assert not offenders, (
+            "a service with a confirmation menu must resolve the profile without "
+            f"a tool and enforce it after confirmation — found: {offenders}"
+        )

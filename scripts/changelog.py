@@ -43,6 +43,21 @@ PREFIX_PATTERNS: dict[str, re.Pattern[str]] = {
     prefix: re.compile(rf"^{prefix}(\([^)]*\))?\!?:\s*(.+)$") for prefix, _ in SECTIONS
 }
 
+# A conventional-commit subject marks a breaking change with `!` before the colon
+# (`feat!:`, `refactor(config)!:`). Without this the `\!?` above silently swallows
+# the marker and a breaking change reads exactly like an ordinary one in the
+# released notes — the thing a reader most needs to see first.
+BREAKING_PATTERN: re.Pattern[str] = re.compile(r"^[a-z]+(\([^)]*\))?\!:\s*(.+)$")
+BREAKING_HEADER = "Breaking Changes"
+
+# The Conventional Commits `BREAKING CHANGE:` footer carries what the subject
+# cannot: what broke and how to opt back in. Captured through the end of its
+# paragraph so a multi-line footer survives.
+BREAKING_FOOTER_PATTERN: re.Pattern[str] = re.compile(
+    r"^BREAKING[ -]CHANGE:\s*(.+?)(?=\n\s*\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
 
 def git(*args: str) -> str:
     """Run a git command and return stdout."""
@@ -83,6 +98,21 @@ def get_commits(commit_range: str) -> list[tuple[str, str]]:
     return commits
 
 
+def breaking_note(sha: str) -> str:
+    """Return the commit's ``BREAKING CHANGE:`` footer as one line, or ``""``.
+
+    Read per breaking commit rather than from the bulk ``git log`` above,
+    because the footer is a body paragraph and breaking commits are rare — a
+    second cheap lookup beats parsing multi-line bodies out of the batched
+    format string.
+    """
+    body = git("log", "-1", "--format=%B", sha)
+    match = BREAKING_FOOTER_PATTERN.search(body)
+    if not match:
+        return ""
+    return " ".join(match.group(1).split())
+
+
 def format_range(commit_range: str) -> str:
     """Format commits in a range as grouped Markdown sections."""
     commits = get_commits(commit_range)
@@ -91,6 +121,21 @@ def format_range(commit_range: str) -> str:
 
     output_parts: list[str] = []
     matched_subjects: set[str] = set()
+
+    # Breaking changes lead, and are *also* listed under their own type below —
+    # duplicated on purpose so a reader skimming "Features" still sees them.
+    breaking: list[str] = []
+    for subject, sha in commits:
+        match = BREAKING_PATTERN.match(subject)
+        if not match:
+            continue
+        breaking.append(f"- {match.group(2)} ({sha})")
+        note = breaking_note(sha)
+        if note:
+            breaking.append(f"  {note}")
+    if breaking:
+        output_parts.append(f"\n### {BREAKING_HEADER}\n")
+        output_parts.extend(breaking)
 
     # Group by conventional commit type
     for prefix, header in SECTIONS:
