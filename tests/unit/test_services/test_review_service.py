@@ -526,7 +526,7 @@ class TestReviewServiceStart:
     def test_inline_launch_receives_worktree_context(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
-        """The review inline launch site passes working_dir + explicit network_access."""
+        """The review inline launch site passes working_dir + explicit sandbox."""
         from wade.models.permission import PermissionMode
 
         mock_setup[
@@ -543,21 +543,23 @@ class TestReviewServiceStart:
             patch("crossby.ai_tools.AbstractAITool.get", return_value=spy),
             patch("wade.services.review_service.deliver_prompt_if_needed"),
         ):
-            # --network forces the pin on; it must reach the builder verbatim.
-            start(target="42", network_access=True)
+            # --sandbox forces confinement on; it must reach the builder verbatim.
+            start(target="42", sandbox=True)
 
         kwargs = spy.launch.call_args.kwargs
         assert kwargs["working_dir"] == tmp_path / "wt"
+        assert kwargs["sandbox"] is True
+        # Network is no longer a wade-managed axis — it is pinned on either way.
         assert kwargs["network_access"] is True
 
-    def test_inline_launch_network_defaults_on(
+    def test_inline_launch_sandbox_defaults_off(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
-        """With both flags omitted and config unset, the pin resolves to True.
+        """With the flag omitted and config unset, the profile resolves to False.
 
-        Uses a real ``ProjectConfig()`` (network unset) so ``resolve_network_access``
+        Uses a real ``ProjectConfig()`` (sandbox unset) so ``resolve_sandbox``
         reads the genuine default rather than a MagicMock truthy value — this
-        verifies the *omitted-option* default, not an explicit ``--no-network``.
+        verifies the *omitted-option* default, not an explicit ``--no-sandbox``.
         """
         from wade.models.config import ProjectConfig
         from wade.models.permission import PermissionMode
@@ -579,12 +581,13 @@ class TestReviewServiceStart:
         ):
             start(target="42")
 
+        assert spy.launch.call_args.kwargs["sandbox"] is False
         assert spy.launch.call_args.kwargs["network_access"] is True
 
-    def test_inline_launch_explicit_no_network(
+    def test_inline_launch_explicit_no_sandbox(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
-        """With ``--no-network``, the explicit pin reaches the builder as False."""
+        """With ``--no-sandbox``, the explicit profile reaches the builder as False."""
         from wade.models.permission import PermissionMode
 
         mock_setup[
@@ -601,9 +604,9 @@ class TestReviewServiceStart:
             patch("crossby.ai_tools.AbstractAITool.get", return_value=spy),
             patch("wade.services.review_service.deliver_prompt_if_needed"),
         ):
-            start(target="42", network_access=False)
+            start(target="42", sandbox=False)
 
-        assert spy.launch.call_args.kwargs["network_access"] is False
+        assert spy.launch.call_args.kwargs["sandbox"] is False
 
     def test_detached_launch_receives_worktree_context(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
@@ -626,17 +629,17 @@ class TestReviewServiceStart:
                 return_value=True,
             ),
         ):
-            start(target="42", detach=True, network_access=True)
+            start(target="42", detach=True, sandbox=True)
 
         kwargs = spy.build_launch_command.call_args.kwargs
         assert kwargs["working_dir"] == tmp_path / "wt"
-        assert kwargs["network_access"] is True
+        assert kwargs["sandbox"] is True
 
-    def test_quiet_prompt_relaunch_forwards_network(self, tmp_path: Path) -> None:
-        """``--no-network`` survives a 'keep polling → comments found' re-launch.
+    def test_quiet_prompt_relaunch_forwards_sandbox(self, tmp_path: Path) -> None:
+        """``--no-sandbox`` survives a 'keep polling → comments found' re-launch.
 
         Without threading, the nested ``start()`` would re-resolve from config —
-        silently re-enabling network on a project whose config turns it on.
+        silently re-sandboxing the session on a project whose config turns it on.
         """
         from wade.services.review_service import PollOutcome
 
@@ -655,13 +658,13 @@ class TestReviewServiceStart:
             patch("wade.services.review_service.start") as mock_start,
         ):
             _quiet_next_steps_prompt(
-                tmp_path, "feat/42", "42", tmp_path, 99, provider, network_access=False
+                tmp_path, "feat/42", "42", tmp_path, 99, provider, sandbox=False
             )
 
-        assert mock_start.call_args.kwargs["network_access"] is False
+        assert mock_start.call_args.kwargs["sandbox"] is False
 
-    def test_post_lifecycle_relaunch_forwards_network(self, tmp_path: Path) -> None:
-        """``--no-network`` survives a 'wait for new reviews → comments found' re-launch."""
+    def test_post_lifecycle_relaunch_forwards_sandbox(self, tmp_path: Path) -> None:
+        """``--no-sandbox`` survives a 'wait for new reviews → comments found' re-launch."""
         from wade.services.review_service import PollOutcome
 
         with (
@@ -674,10 +677,10 @@ class TestReviewServiceStart:
             patch("wade.services.review_service.start") as mock_start,
         ):
             _post_review_lifecycle(
-                tmp_path, "feat/42", "42", tmp_path, 99, MagicMock(), network_access=False
+                tmp_path, "feat/42", "42", tmp_path, 99, MagicMock(), sandbox=False
             )
 
-        assert mock_start.call_args.kwargs["network_access"] is False
+        assert mock_start.call_args.kwargs["sandbox"] is False
 
     def test_resolves_worktree_by_issue_when_title_drifted(
         self, mock_setup: dict[str, MagicMock]
@@ -2188,7 +2191,7 @@ class TestQuietNextStepsPrompt:
             effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
-            network_access=None,
+            sandbox=None,
             work_skills=None,
             review_skills=None,
             refresh_skills=False,
@@ -2245,7 +2248,7 @@ class TestQuietNextStepsPrompt:
             effort_explicit=False,
             permission_mode="yolo",
             permission_mode_explicit=False,
-            network_access=None,
+            sandbox=None,
             work_skills=["project:implementation-review"],
             review_skills=["project:security-review"],
             refresh_skills=True,
@@ -2608,7 +2611,7 @@ class TestPostReviewLifecycle:
             model_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
-            network_access=None,
+            sandbox=None,
             config=None,
         )
 
@@ -2643,7 +2646,7 @@ class TestPostReviewLifecycle:
             model_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
-            network_access=None,
+            sandbox=None,
         )
 
     @patch("wade.services.review_service.start")
@@ -2690,7 +2693,7 @@ class TestPostReviewLifecycle:
             model_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
-            network_access=None,
+            sandbox=None,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")

@@ -1,11 +1,12 @@
-"""Wiring tests for the four implementation-session launch sites (#423).
+"""Wiring tests for the four implementation-session launch sites (#423, #478).
 
-Proves ``implementation_service.start()`` threads the absolute ``working_dir``
-and the resolved ``network_access`` into every Codex launch/resume builder:
-inline initial (``launch``), inline resume (``build_resume_command``), detached
-initial (``build_launch_command``), and detached resume. A spy adapter whose
-build/launch call aborts the run (so the heavy post-session flow never runs)
-lets each test assert only the kwargs the call site passed.
+Proves ``implementation_service.start()`` threads the absolute ``working_dir``,
+the unconditional ``network_access`` pin, and the resolved ``sandbox`` profile
+into every Codex launch/resume builder: inline initial (``launch``), inline
+resume (``build_resume_command``), detached initial (``build_launch_command``),
+and detached resume. A spy adapter whose build/launch call aborts the run (so the
+heavy post-session flow never runs) lets each test assert only the kwargs the
+call site passed.
 
 Companion to ``test_codex_worktree_launch_context.py`` (which proves the real
 crossby Codex adapter *acts* on those kwargs) and the review-side wiring tests in
@@ -35,8 +36,9 @@ _CORE = "wade.services.implementation_service.core"
 def _driven_start(
     worktree_path: Path,
     *,
-    network_access_config: bool | None = None,
-    implement_network_access_config: bool | None = None,
+    sandbox_config: bool | None = None,
+    implement_sandbox_config: bool | None = None,
+    plan_sandbox_config: bool | None = None,
     detected_env: str | None = None,
     resolved_tool: str = "codex",
     terminal_launch_succeeds: bool = True,
@@ -45,12 +47,15 @@ def _driven_start(
 
     Every heavy step between ``start()`` entry and the AI launch is stubbed so the
     flow reaches the launch site with ``resolved_tool="codex"``, an existing
-    worktree at *worktree_path*, and ``network_access`` resolved from config.
+    worktree at *worktree_path*, and the ``sandbox`` profile resolved from config.
+    ``plan_sandbox_config`` sets ``ai.plan.sandbox`` — the *planner's* profile,
+    which the plan-handoff predicate compares against this session's.
     """
     config = ProjectConfig(
         ai=AIConfig(
-            network_access=network_access_config,
-            implement=AICommandConfig(network_access=implement_network_access_config),
+            sandbox=sandbox_config,
+            implement=AICommandConfig(sandbox=implement_sandbox_config),
+            plan=AICommandConfig(sandbox=plan_sandbox_config),
         ),
         project=ProjectSettings(main_branch="main", branch_prefix="feat"),
     )
@@ -122,41 +127,55 @@ def worktree(tmp_path: Path) -> Path:
 
 
 class TestImplementationLaunchContext:
-    """All four core.py launch sites thread working_dir + resolved network_access."""
+    """All four core.py launch sites thread working_dir + network pin + sandbox."""
 
     def test_inline_initial_launch(self, worktree: Path) -> None:
         # Inline initial → adapter.launch(); abort right after the call.
-        with _driven_start(worktree, network_access_config=True) as spy:
+        with _driven_start(worktree, sandbox_config=True) as spy:
             spy.launch.side_effect = RuntimeError("stop-after-capture")
             start(target="42")
         kwargs = spy.launch.call_args.kwargs
         assert kwargs["working_dir"] == worktree
-        assert kwargs["network_access"] is True
+        assert kwargs["sandbox"] is True
 
-    def test_inline_initial_network_defaults_on(self, worktree: Path) -> None:
-        # With config unset and no flag, the interactive lifecycle gets its
-        # explicit enabled pin.
+    def test_inline_initial_sandbox_defaults_off(self, worktree: Path) -> None:
+        # With config unset and no flag, the session launches unrestricted so
+        # delegated child tools keep their own host credentials (#478).
         with _driven_start(worktree) as spy:
             spy.launch.side_effect = RuntimeError("stop-after-capture")
             start(target="42")
-        assert spy.launch.call_args.kwargs["network_access"] is True
+        assert spy.launch.call_args.kwargs["sandbox"] is False
 
-    def test_inline_initial_global_no_network_disables_default(self, worktree: Path) -> None:
-        with _driven_start(worktree, network_access_config=False) as spy:
+    def test_inline_initial_global_sandbox_enables_confinement(self, worktree: Path) -> None:
+        with _driven_start(worktree, sandbox_config=True) as spy:
             spy.launch.side_effect = RuntimeError("stop-after-capture")
             start(target="42")
-        assert spy.launch.call_args.kwargs["network_access"] is False
+        assert spy.launch.call_args.kwargs["sandbox"] is True
 
     def test_inline_initial_flag_overrides_config(self, worktree: Path) -> None:
-        # --no-network (network_access=False) overrides config True.
-        with _driven_start(worktree) as spy:
+        # --no-sandbox (sandbox=False) overrides a config that turns it on.
+        with _driven_start(worktree, sandbox_config=True) as spy:
             spy.launch.side_effect = RuntimeError("stop-after-capture")
-            start(target="42", network_access=False)
-        assert spy.launch.call_args.kwargs["network_access"] is False
+            start(target="42", sandbox=False)
+        assert spy.launch.call_args.kwargs["sandbox"] is False
+
+    def test_network_access_is_pinned_on_regardless_of_profile(self, worktree: Path) -> None:
+        """Network is no longer a wade-managed axis — it is on in both profiles.
+
+        It still has to be *passed*: crossby's ``network_access`` defaults to
+        ``False``, so a sandboxed launch that omitted it would pin
+        ``sandbox_workspace_write.network_access=false`` and take the network away
+        from the very lifecycle (fetch/push, ``gh``) that requires it.
+        """
+        for profile in (True, False):
+            with _driven_start(worktree, sandbox_config=profile) as spy:
+                spy.launch.side_effect = RuntimeError("stop-after-capture")
+                start(target="42")
+            assert spy.launch.call_args.kwargs["network_access"] is True
 
     def test_inline_resume(self, worktree: Path) -> None:
         # Inline resume → build_resume_command(); abort at run_with_transcript.
-        with _driven_start(worktree, network_access_config=True) as spy:
+        with _driven_start(worktree, sandbox_config=True) as spy:
             spy.build_resume_command.return_value = ["codex", "resume"]
             with patch(
                 "wade.utils.process.run_with_transcript",
@@ -165,47 +184,51 @@ class TestImplementationLaunchContext:
                 start(target="42", resume_session_id="sess-1", resume_ai_tool="codex")
         kwargs = spy.build_resume_command.call_args.kwargs
         assert kwargs["working_dir"] == worktree
+        assert kwargs["sandbox"] is True
         assert kwargs["network_access"] is True
 
     def test_detached_initial_launch(self, worktree: Path) -> None:
         # Detached initial → build_launch_command(); launch_in_new_terminal stubbed True.
-        with _driven_start(worktree, network_access_config=True) as spy:
+        with _driven_start(worktree, sandbox_config=True) as spy:
             spy.build_launch_command.return_value = ["codex"]
             start(target="42", detach=True)
         kwargs = spy.build_launch_command.call_args.kwargs
         assert kwargs["working_dir"] == worktree
-        assert kwargs["network_access"] is True
+        assert kwargs["sandbox"] is True
 
     def test_detached_resume(self, worktree: Path) -> None:
         # Detached resume → build_resume_command(); _resume_autonomy_args appended.
-        with _driven_start(worktree, network_access_config=True) as spy:
+        with _driven_start(worktree, sandbox_config=True) as spy:
             spy.build_resume_command.return_value = ["codex", "resume"]
             spy.build_launch_command.return_value = ["codex"]
             start(target="42", detach=True, resume_session_id="sess-1", resume_ai_tool="codex")
         kwargs = spy.build_resume_command.call_args.kwargs
         assert kwargs["working_dir"] == worktree
-        assert kwargs["network_access"] is True
+        assert kwargs["sandbox"] is True
 
     @pytest.mark.parametrize(
-        ("global_network_access", "implement_network_access"),
-        [(None, None), (True, None), (False, True)],
+        ("global_sandbox", "implement_sandbox"),
+        [(None, None), (True, False), (None, False)],
         ids=["default-policy", "global-policy", "implement-policy"],
     )
-    def test_network_enabled_codex_plan_handoff_launches_fresh_detached_context(
+    def test_sandboxed_planner_handoff_launches_fresh_unrestricted_context(
         self,
         worktree: Path,
-        global_network_access: bool | None,
-        implement_network_access: bool | None,
+        global_sandbox: bool | None,
+        implement_sandbox: bool | None,
     ) -> None:
-        """A Codex plan handoff cannot reuse the planner's network-off sandbox.
+        """A sandboxed Codex planner cannot become unrestricted in-process.
 
-        The default-policy case verifies the accepted handoff launches a fresh
-        enabled context without a project-level network opt-in.
+        The sandbox is a launch-time OS property, so honoring an unrestricted
+        implementation profile requires a fresh detached process. Each case
+        reaches ``implement`` unrestricted by a different route; the planner is
+        pinned sandboxed throughout.
         """
         with _driven_start(
             worktree,
-            network_access_config=global_network_access,
-            implement_network_access_config=implement_network_access,
+            sandbox_config=global_sandbox,
+            implement_sandbox_config=implement_sandbox,
+            plan_sandbox_config=True,
             detected_env="CODEX_CLI",
         ) as spy:
             spy.build_launch_command.return_value = ["codex"]
@@ -214,19 +237,54 @@ class TestImplementationLaunchContext:
 
         assert result.success is True
         assert spy.build_launch_command.call_args.kwargs["working_dir"] == worktree
-        assert spy.build_launch_command.call_args.kwargs["network_access"] is True
         assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
         spy.launch.assert_not_called()
 
-    def test_network_disabled_codex_plan_handoff_keeps_nested_launch_guard(
-        self, worktree: Path
-    ) -> None:
-        """A false policy must not gain network access merely to leave planning."""
+    def test_forced_handoff_branch_resolves_to_the_permissive_profile(self, worktree: Path) -> None:
+        """Guards the polarity flip between the retired pin and this profile.
+
+        The old predicate forced ``network_access=True`` — *permissive*. A
+        token-level rename to ``sandbox=True`` would force *restrictive* and
+        silently invert the intent, re-creating exactly the confinement the
+        handoff exists to escape. The forced value must be ``False``.
+        """
         with _driven_start(
             worktree,
-            network_access_config=False,
+            plan_sandbox_config=True,
             detected_env="CODEX_CLI",
         ) as spy:
+            spy.build_launch_command.return_value = ["codex"]
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
+
+    def test_matching_profiles_keep_the_nested_launch_guard(self, worktree: Path) -> None:
+        """No profile mismatch, no reason to spawn a second process.
+
+        Both sessions sandboxed: the planner's process already has the boundary
+        implementation wants, so the ordinary nested-launch guard applies.
+        """
+        with _driven_start(
+            worktree,
+            sandbox_config=True,
+            plan_sandbox_config=True,
+            detected_env="CODEX_CLI",
+        ) as spy:
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        spy.build_launch_command.assert_not_called()
+        spy.launch.assert_not_called()
+
+    def test_unrestricted_planner_keeps_the_nested_launch_guard(self, worktree: Path) -> None:
+        """An already-unrestricted planner has nothing to escape.
+
+        This is the default-config case: with ``ai.sandbox`` unset both sessions
+        resolve unrestricted, so the retired network-pin handoff would have fired
+        here and now correctly does not.
+        """
+        with _driven_start(worktree, detected_env="CODEX_CLI") as spy:
             result = start(target="42", plan_handoff=True)
 
         assert result.success is True
@@ -240,7 +298,7 @@ class TestImplementationLaunchContext:
         with (
             _driven_start(
                 worktree,
-                network_access_config=True,
+                plan_sandbox_config=True,
                 detected_env="CODEX_CLI",
                 terminal_launch_succeeds=False,
             ) as spy,
@@ -252,7 +310,7 @@ class TestImplementationLaunchContext:
 
         assert result.success is False
         spy.launch.assert_not_called()
-        mock_console.detail.assert_any_call("wade implement 42 --network")
+        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
 
     @pytest.mark.parametrize("command_error", [ValueError, KeyError])
     def test_fresh_codex_plan_handoff_fails_closed_when_command_build_fails(
@@ -262,7 +320,7 @@ class TestImplementationLaunchContext:
         with (
             _driven_start(
                 worktree,
-                network_access_config=True,
+                plan_sandbox_config=True,
                 detected_env="CODEX_CLI",
             ) as spy,
             patch(f"{_CORE}.console") as mock_console,
@@ -275,13 +333,13 @@ class TestImplementationLaunchContext:
         assert result.success is False
         mock_launch.assert_not_called()
         spy.launch.assert_not_called()
-        mock_console.detail.assert_any_call("wade implement 42 --network")
+        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
 
     def test_non_handoff_codex_session_keeps_nested_launch_guard(self, worktree: Path) -> None:
         """Ordinary ``wade implement`` calls still do not recursively launch Codex."""
         with _driven_start(
             worktree,
-            network_access_config=True,
+            plan_sandbox_config=True,
             detected_env="CODEX_CLI",
         ) as spy:
             result = start(target="42")
@@ -294,7 +352,7 @@ class TestImplementationLaunchContext:
         """A plan handoff to another implementation tool cannot escape the guard."""
         with _driven_start(
             worktree,
-            network_access_config=True,
+            plan_sandbox_config=True,
             detected_env="CODEX_CLI",
             resolved_tool="claude",
         ) as spy:
@@ -308,7 +366,7 @@ class TestImplementationLaunchContext:
         """Only a Codex-originated handoff gets the fresh-context exception."""
         with _driven_start(
             worktree,
-            network_access_config=True,
+            plan_sandbox_config=True,
             detected_env="CLAUDE_CODE",
         ) as spy:
             result = start(target="42", plan_handoff=True)

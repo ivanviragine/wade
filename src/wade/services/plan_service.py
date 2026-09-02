@@ -26,7 +26,7 @@ from crossby.ai_tools.transcript import (
 from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
 
 from wade.config.loader import load_config
-from wade.models.config import ProjectConfig
+from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.task import CloseReason, PlanFile, Task
@@ -34,11 +34,14 @@ from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
+    LAUNCH_NETWORK_ACCESS,
+    SandboxCapabilityError,
     confirm_ai_selection,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
@@ -298,6 +301,7 @@ def run_ai_planning_session(
     cwd: Path | None = None,
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
     session_bundle: str = ".wade/session",
+    sandbox: bool = DEFAULT_SANDBOX,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -370,10 +374,12 @@ def run_ai_planning_session(
         allowed_commands=allowed_commands,
         # A planning session may run in a linked planning worktree; grant its
         # out-of-root git metadata so a sandboxed Codex plan session can commit
-        # generated plan artefacts. Network off — planning never fetches/pushes.
-        # Inert for a main checkout and for every non-Codex tool.
+        # generated plan artefacts. Inert for a main checkout, for every tool
+        # without a sandbox, and under an unrestricted profile (where crossby
+        # skips the grants because there is no boundary to widen).
         working_dir=session_cwd,
-        network_access=False,
+        network_access=LAUNCH_NETWORK_ACCESS,
+        sandbox=sandbox,
         **permission_mode_launch_kwargs(permission_mode),
     )
     console.info(f"Plan directory: {plan_dir}")
@@ -444,6 +450,7 @@ def plan(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
@@ -473,6 +480,14 @@ def plan(
     # Resolve autonomy / permission mode (yolo is a back-compat alias)
     resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
 
+    # Resolve the AI-runtime sandbox profile. A planning session is a launch path
+    # like any other, so it carries the profile too (#478).
+    try:
+        resolved_sandbox = resolve_sandbox(sandbox, config, "plan", tool=resolved_tool)
+    except SandboxCapabilityError as e:
+        console.error(str(e))
+        return False
+
     console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
@@ -487,6 +502,7 @@ def plan(
         permission_mode_explicit=(
             permission_mode_explicit or permission_mode is not None or yolo is not None
         ),
+        sandbox=resolved_sandbox,
     )
     resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
     if not resolved_tool:
@@ -555,6 +571,7 @@ def plan(
                 work_skills=work_skills,
                 review_skills=review_skills,
                 refresh_skills=refresh_skills,
+                sandbox=resolved_sandbox,
             )
             # This process flushes the worktree's staged votes on the way out
             # (``_flush_planning_ratings``), so it is entitled to authorize
@@ -658,6 +675,7 @@ def plan(
             cwd=session_cwd,
             permission_mode=resolved_permission_mode,
             session_bundle=session_bundle,
+            sandbox=resolved_sandbox,
         )
     logger.info("plan.ai_exited", exit_code=exit_code)
 

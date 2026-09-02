@@ -22,7 +22,7 @@ import structlog
 from crossby.ai_tools import AbstractAITool
 from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.models.config import NETWORK_ENABLED_BY_DEFAULT_COMMANDS, AICommandConfig, ProjectConfig
+from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode
 from wade.models.permission import (
     PermissionMode,
@@ -241,32 +241,141 @@ def resolve_permission_mode(
     return PermissionMode.DEFAULT
 
 
-def resolve_network_access(
-    network_access: bool | None,
+LAUNCH_NETWORK_ACCESS = True
+"""Network access forwarded to every crossby launch — unconditionally on (#478).
+
+This is a *constant*, not a resolved setting. The retired ``ai.network_access``
+key made network a Codex-only, per-command axis (on for ``implement`` /
+``review_pr_comments``, off elsewhere), and that asymmetry is precisely what
+broke delegated tools: every WADE session needs the network for ``git
+fetch``/``push``, ``gh``, and package installs, planning sessions included.
+
+It still has to be *passed*, not omitted: crossby's ``network_access`` parameter
+defaults to ``False``, so a sandboxed launch that dropped it would pin
+``sandbox_workspace_write.network_access=false`` and take the network away again.
+Passing ``True`` explicitly also keeps the pin defensive — an ambient
+``network_access`` in the user's own Codex ``config.toml`` can never decide the
+boundary of a wade-managed session. Under ``sandbox=False`` crossby ignores the
+value entirely (there is no sandbox to pin it on).
+"""
+
+
+class SandboxCapabilityError(ValueError):
+    """A tool cannot honor an explicitly requested sandbox profile.
+
+    Raised only for the one asymmetric case wade refuses to fake: ``sandbox:
+    true`` on a runtime with no sandbox toggle. Wade cannot impose a boundary the
+    runtime does not have, and silently launching unsandboxed would be a security
+    posture the project did not choose.
+    """
+
+
+def enforce_sandbox_capability(tool: str, sandbox: bool) -> None:
+    """Fail loudly, or warn, when *tool* cannot honor the resolved profile.
+
+    Call this only on paths that actually launch a runtime. Callers whose
+    resolution immediately precedes a launch get it for free by passing ``tool``
+    to :func:`resolve_sandbox`; callers that resolve early and may still exit
+    without launching (``wade implement --cd``, or a nested AI session that only
+    prints the worktree path) resolve without a tool and call this at the launch
+    site instead. Enforcing it earlier would fail a command that was never going
+    to start the runtime it cannot satisfy.
+
+    Deliberately asymmetric, because the terminal default is *unrestricted*:
+
+    - **Toggle-capable tool** (Codex, Cursor) — nothing to check; crossby emits
+      the flag in both directions.
+    - **``sandbox=False`` on a tool that never sandboxed anything** (Claude,
+      Copilot, …) — silent no-op. Those runtimes are already unrestricted, so
+      erroring would break every default launch.
+    - **``sandbox=False`` on a tool that *does* sandbox writes but exposes no
+      toggle** — warn. The request cannot be honored and the session will run
+      confined; never silently pretend otherwise. Unreachable with crossby
+      >=0.29 (Codex has both flags) and kept as the forward-compat guard.
+    - **``sandbox=True`` on a tool with no toggle** — hard error. The profile was
+      explicitly asked for (the default is False, so a True can only come from
+      ``--sandbox`` or config) and cannot be delivered.
+
+    An unknown/absent tool is treated permissively, matching the other resolvers'
+    best-effort capability lookups.
+    """
+    try:
+        caps = AbstractAITool.get(AIToolID(tool)).capabilities()
+    except (ValueError, KeyError):
+        return
+
+    if caps.supports_sandbox_toggle:
+        return
+
+    if sandbox:
+        raise SandboxCapabilityError(
+            f"ai.sandbox: '{tool}' cannot be sandboxed — it exposes no sandbox toggle. "
+            "Remove the explicit sandbox request, or run this command with a tool "
+            "that supports one (codex, cursor)."
+        )
+
+    if caps.sandboxes_writes:
+        from wade.ui.console import console
+
+        logger.warning("sandbox.unrestricted_unsupported", tool=tool)
+        console.warn(
+            f"{tool} sandboxes writes but exposes no sandbox toggle — this session "
+            "runs sandboxed despite the unrestricted profile."
+        )
+
+
+def resolve_sandbox(
+    sandbox: bool | None,
     config: ProjectConfig,
     command: str = "plan",
+    *,
+    tool: str | None = None,
 ) -> bool:
-    """Resolve the Codex sandbox network policy from args -> config -> command default.
+    """Resolve the AI-runtime sandbox profile from args -> config -> default.
 
     Fallback chain (highest precedence first):
-      1. Explicit ``--network`` / ``--no-network`` CLI value
-      2. Command-specific config (``ai.<command>.network_access``)
-      3. Global config (``ai.network_access``)
-      4. Command default: enabled for ``implement`` and ``review_pr_comments``;
-         disabled for all other commands.
+      1. Explicit ``--sandbox`` / ``--no-sandbox`` CLI value
+      2. Command-specific config (``ai.<command>.sandbox``)
+      3. Global config (``ai.sandbox``)
+      4. :data:`~wade.models.config.DEFAULT_SANDBOX` — ``False`` (unrestricted)
 
-    Wade forwards the resolved bool as an explicit pin so an ambient Codex
-    ``config.toml`` can never silently change network access for a wade-managed
-    sandbox. Non-Codex tools ignore the value (crossby capability-gates it via
-    ``supports_network_access``), so this resolves for every tool but only Codex
-    acts on it. Non-interactive commands remain disabled even when the project
-    config enables network globally.
+    ``True`` confines the AI runtime to its own sandbox (Codex
+    ``workspace-write``, Cursor ``--sandbox enabled``); ``False`` launches it
+    unrestricted so delegated child tools keep their own host credentials.
+    Network access is on either way — it is no longer a wade-managed axis.
+
+    This profile governs the **external AI runtime boundary only**. It is
+    orthogonal to ``permission_mode``: an unrestricted sandbox is not ``yolo``
+    and never changes the resolved autonomy tier. It also never relaxes wade's
+    own guards — see ``_install_guard_hooks``, which *widens* the
+    worktree-containment guard when the sandbox is off.
+
+    Wade pins the resolved profile explicitly in both directions, so an ambient
+    tool config can never silently move the boundary of a managed session.
+
+    *tool* is a convenience for callers that launch immediately after resolving:
+    the profile is capability-checked before it is returned. Callers that resolve
+    early and may exit without launching omit it and call
+    :func:`enforce_sandbox_capability` at the launch site instead.
+
+    Raises:
+        SandboxCapabilityError: *tool* cannot honor an explicit ``sandbox=True``.
     """
-    if command not in NETWORK_ENABLED_BY_DEFAULT_COMMANDS:
-        return False
-    if network_access is not None:
-        return network_access
-    return config.get_network_access(command)
+    resolved = sandbox if sandbox is not None else config.get_sandbox(command)
+    if tool:
+        enforce_sandbox_capability(tool, resolved)
+    return resolved
+
+
+def describe_sandbox(sandbox: bool) -> str:
+    """Human-readable meaning of a resolved sandbox profile.
+
+    Spelled out at launch so the security posture of a session is never implicit
+    — the unrestricted default in particular must be visible, not inferred.
+    """
+    if sandbox:
+        return "sandboxed — AI runtime confined to its workspace sandbox"
+    return "unrestricted — AI runtime sandbox disabled; host credentials available"
 
 
 def resolve_yolo(
@@ -292,14 +401,20 @@ def _display_ai_selection(
     model: str | None,
     effort: EffortLevel | None,
     permission_mode: PermissionMode,
+    sandbox: bool | None = None,
 ) -> None:
-    """Print the resolved AI selection (tool, model, effort, permission mode).
+    """Print the resolved AI selection (tool, model, effort, permission, sandbox).
 
     The permission-mode line is **always** printed with a human-readable
     descriptor (including ``default``), so every launch states both which tier
-    is active and what it means. When no tool resolved, renders a single
-    ``AI tool: not resolved`` line rather than passing ``None`` to
-    :meth:`console.kv` (which is typed ``str`` and would print a nonsense line).
+    is active and what it means. The sandbox line follows the same rule for the
+    same reason — the profile decides whether the runtime can reach the host, so
+    it must be stated, never inferred. It is omitted only when the caller
+    resolved no profile (``sandbox=None``), which no launch path does.
+
+    When no tool resolved, renders a single ``AI tool: not resolved`` line rather
+    than passing ``None`` to :meth:`console.kv` (which is typed ``str`` and would
+    print a nonsense line).
     """
     from wade.ui.console import console
 
@@ -315,6 +430,8 @@ def _display_ai_selection(
         "Permission mode",
         f"{permission_mode.value} — {describe_permission_mode(permission_mode)}",
     )
+    if sandbox is not None:
+        console.kv("Sandbox", describe_sandbox(sandbox))
 
 
 def confirm_ai_selection(
@@ -328,12 +445,17 @@ def confirm_ai_selection(
     resolved_permission_mode: PermissionMode = PermissionMode.DEFAULT,
     permission_mode_explicit: bool = True,
     mode: DelegationMode | None = None,
+    sandbox: bool | None = None,
 ) -> tuple[str | None, str | None, EffortLevel | None, PermissionMode]:
     """Display the resolved AI selection, then interactively confirm/change it.
 
-    The resolved selection (tool, model, effort, permission mode) is **always
-    displayed exactly once** — before any skip guard — so it surfaces on every
-    launch path (TTY, non-TTY, headless, all-flags-explicit).
+    The resolved selection (tool, model, effort, permission mode, sandbox
+    profile) is **always displayed exactly once** — before any skip guard — so it
+    surfaces on every launch path (TTY, non-TTY, headless, all-flags-explicit).
+
+    *sandbox* is display-only: it is never offered in the change-loop, because
+    the profile is a launch-time OS property that cannot be renegotiated after
+    the process starts.
 
     The interactive change-loop then fires only when stdin is a TTY and at least
     one of the flags was not explicitly provided by the caller.  When all flags
@@ -349,7 +471,9 @@ def confirm_ai_selection(
     from wade.ui import prompts
 
     # Always surface the resolved selection once, before the skip guard below.
-    _display_ai_selection(resolved_tool, resolved_model, resolved_effort, resolved_permission_mode)
+    _display_ai_selection(
+        resolved_tool, resolved_model, resolved_effort, resolved_permission_mode, sandbox
+    )
 
     # Skip the change-loop when non-TTY, no tool resolved, all flags were
     # explicit, or headless. The display above has already run regardless.
@@ -373,7 +497,7 @@ def confirm_ai_selection(
         # iteration was already rendered by the hoisted call above — don't
         # double-print it.
         if not first_render:
-            _display_ai_selection(tool, model, effort, permission_mode)
+            _display_ai_selection(tool, model, effort, permission_mode, sandbox)
         first_render = False
 
         # Build menu dynamically based on which flags were NOT explicit.

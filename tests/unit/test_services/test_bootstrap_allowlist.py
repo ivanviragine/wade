@@ -353,6 +353,9 @@ class TestBootstrapPlanMode:
         ``--sandbox workspace-write`` permits ``/tmp`` and ``$TMPDIR``, so a shell
         redirect is sandbox-legal yet lands outside the worktree. The guard is
         therefore narrowed to the shell matcher rather than skipped entirely.
+
+        This narrowing is only sound *while the sandbox is on*, hence the
+        explicit ``sandbox=True`` — see the companion test below.
         """
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
@@ -360,7 +363,7 @@ class TestBootstrapPlanMode:
         repo_root.mkdir()
 
         with patch("subprocess.run"):
-            bootstrap_worktree(worktree_path, self._config(), repo_root)  # worktree mode
+            bootstrap_worktree(worktree_path, self._config(), repo_root, sandbox=True)
 
         codex = json.loads((worktree_path / ".codex" / "hooks.json").read_text("utf-8"))
         pre_entries = codex["hooks"]["PreToolUse"]
@@ -373,6 +376,49 @@ class TestBootstrapPlanMode:
             for hook in entry["hooks"]
         )
         assert "session-complete" in (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
+
+    def test_worktree_guard_full_for_unrestricted_codex(self, tmp_path: Path) -> None:
+        """Under ``sandbox=False`` nothing else covers Codex tool-call writes.
+
+        ``caps.sandboxes_writes`` is a *static* capability describing what Codex
+        can do, not what this launch will do. With ``--sandbox
+        danger-full-access`` there is no boundary at all, so narrowing the
+        matcher to ``Bash`` would leave writes outside the worktree guarded by
+        nothing. The full matcher must be installed (#478).
+        """
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root, sandbox=False)
+
+        codex = json.loads((worktree_path / ".codex" / "hooks.json").read_text("utf-8"))
+        pre_entries = codex["hooks"]["PreToolUse"]
+        assert pre_entries, "Codex must receive a worktree guard"
+        matchers = {entry.get("matcher") for entry in pre_entries}
+        assert matchers != {"Bash"}, "matcher must not be narrowed when the sandbox is off"
+        assert any(
+            "--guard worktree" in hook["command"]
+            for entry in pre_entries
+            for hook in entry["hooks"]
+        )
+
+    def test_worktree_guard_defaults_to_the_full_matcher(self, tmp_path: Path) -> None:
+        # The default profile is unrestricted, so an omitted ``sandbox`` must
+        # fail safe to the wide guard rather than the narrowed one.
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root)
+
+        codex = json.loads((worktree_path / ".codex" / "hooks.json").read_text("utf-8"))
+        matchers = {entry.get("matcher") for entry in codex["hooks"]["PreToolUse"]}
+        assert matchers != {"Bash"}
 
     def test_codex_hooks_feature_flag_enabled(self, tmp_path: Path) -> None:
         """crossby's Codex writer enables the canonical [features].hooks so hooks load.

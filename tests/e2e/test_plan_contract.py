@@ -197,3 +197,25 @@ class TestPlanSessionDoneCommand:
         assert after_calls == before_calls, "plan-session done validation should not invoke gh"
         assert after_state.get("issues", {}) == before_state.get("issues", {})
         assert after_state.get("prs", {}) == before_state.get("prs", {})
+
+
+class TestPlanSandboxProfileContract:
+    """`wade plan` accepts the profile and keeps its plan guard in both (#478).
+
+    ``plan`` had no network flag before this change; it is a launch path like any
+    other, so it must accept ``--sandbox``/``--no-sandbox``. The plan-artifact
+    guard is finer-grained than any directory sandbox and is installed in full
+    regardless of the profile.
+    """
+
+    @pytest.mark.parametrize("flag", ["--sandbox", "--no-sandbox"])
+    def test_plan_accepts_the_sandbox_flag(self, e2e_repo: Path, flag: str) -> None:
+        result = _run(["plan", flag, "--help"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_plan_help_documents_both_directions(self, e2e_repo: Path) -> None:
+        result = _run(["plan", "--help"], cwd=e2e_repo)
+        assert result.returncode == 0
+        combined = result.stdout + result.stderr
+        assert "--sandbox" in combined
+        assert "--no-sandbox" in combined

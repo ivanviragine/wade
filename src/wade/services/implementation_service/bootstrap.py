@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from wade.git import repo as git_repo
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    DEFAULT_SANDBOX,
     WADE_BASE_ALLOWLIST_PATTERN,
     ProjectConfig,
     with_wade_base_pattern,
@@ -308,6 +309,7 @@ def _install_guard_hooks(
     worktree_path: Path,
     *,
     guard_type: str,
+    sandbox: bool = DEFAULT_SANDBOX,
 ) -> None:
     """Install a wade write-guard hook for ``guard_type`` into each tool's config.
 
@@ -324,9 +326,19 @@ def _install_guard_hooks(
     worktree. The plan guard is **always** installed in full — it is finer-grained
     than any directory sandbox (it must block source writes *inside* the workspace).
 
+    That narrowing is only sound while the sandbox is actually on, so it consults
+    the resolved *sandbox* profile as well as the static capability.
+    ``caps.sandboxes_writes`` describes what a tool *can* do, not what this launch
+    *will* do: under ``sandbox=False`` the runtime launches with
+    ``--sandbox danger-full-access`` and nothing else covers tool-call writes
+    outside the worktree (#478).
+
     Args:
         worktree_path: Worktree directory.
         guard_type: ``"worktree"`` or ``"plan"``.
+        sandbox: Resolved sandbox profile for the session this worktree serves.
+            Defaults to :data:`DEFAULT_SANDBOX` — the safe direction, since an
+            unrestricted profile installs the *full* guard.
     """
     import shlex
 
@@ -338,7 +350,7 @@ def _install_guard_hooks(
     for tool_id, writer in _hook_writers():
         caps = AbstractAITool.get(tool_id).capabilities()
         tools = _GUARD_WRITE_TOOLS
-        if guard_type == "worktree" and caps.sandboxes_writes:
+        if guard_type == "worktree" and caps.sandboxes_writes and sandbox:
             # A native write sandbox (Codex `--sandbox workspace-write`) already
             # confines *tool-call* writes to the workspace, so the file-write half
             # of this guard is redundant. It is not redundant for the shell half:
@@ -1047,6 +1059,7 @@ def bootstrap_worktree(
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
     compose_session_only: bool = False,
+    sandbox: bool = DEFAULT_SANDBOX,
 ) -> None:
     """Run post-creation bootstrap: copy files, install skills, run hooks.
 
@@ -1071,6 +1084,10 @@ def bootstrap_worktree(
             bundle. This preflight mode deliberately skips hooks, copied files, and
             tool configuration so callers can reject invalid skill bindings before
             any provider-side mutation.
+        sandbox: Resolved AI-runtime sandbox profile for the session this worktree
+            serves. Only the worktree-containment guard reads it — an unrestricted
+            runtime gets the *full* matcher instead of the shell-only narrowing.
+            See :func:`_install_guard_hooks`.
     """
     if compose_session_only:
         if session_kind is None or session_kind is SessionKind.DEPS:
@@ -1229,7 +1246,9 @@ def bootstrap_worktree(
 
     # Install file-write guard hooks last so post-create scripts cannot
     # overwrite the guarded config files.
-    _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
+    _install_guard_hooks(
+        worktree_path, guard_type="plan" if plan_mode else "worktree", sandbox=sandbox
+    )
 
     # Every session gets a Stop-hook completion reminder, but the guard differs:
     # plan sessions nudge to write a valid plan; impl/review sessions nudge to run

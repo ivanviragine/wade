@@ -101,6 +101,44 @@ def strip_knowledge_from_copy_to_worktree(raw: dict[str, Any]) -> bool:
     return True
 
 
+RETIRED_NETWORK_ACCESS_KEY = "network_access"
+"""The Codex-only network pin retired by #478 in favour of ``ai.sandbox``."""
+
+
+def strip_retired_network_access(raw: dict[str, Any]) -> bool:
+    """Remove the retired ``ai.network_access`` pin, global and per-command (#478).
+
+    ``network_access`` was a Codex-only sandbox network toggle that defaulted
+    *on* for ``implement`` / ``review_pr_comments`` and *off* everywhere else.
+    That per-command asymmetry is what broke delegated tools, so the key is gone:
+    wade now pins network access on for every session and expresses the runtime
+    boundary through the cross-tool ``ai.sandbox`` profile instead.
+
+    The loader already ignores the key, so this is cleanup rather than a
+    correctness fix — but leaving it in place would keep presenting a setting
+    that no longer does anything. Idempotent.
+    """
+    ai = raw.get("ai")
+    if not isinstance(ai, dict):
+        return False
+
+    changed = ai.pop(RETIRED_NETWORK_ACCESS_KEY, None) is not None
+    for value in ai.values():
+        if isinstance(value, dict) and value.pop(RETIRED_NETWORK_ACCESS_KEY, None) is not None:
+            changed = True
+
+    if changed:
+        logger.info(
+            "migrations.network_access_retired",
+            replacement="ai.sandbox",
+            detail=(
+                "Removed the retired ai.network_access pin; network access is now "
+                "always on. Use ai.sandbox to control the AI runtime sandbox."
+            ),
+        )
+    return changed
+
+
 def run_all_migrations(config_path: Path) -> bool:
     """Run all migrations on a .wade.yml file.
 
@@ -126,6 +164,7 @@ def run_all_migrations(config_path: Path) -> bool:
         changed = ensure_version(raw)
         changed = migrate_string_tiers_to_tier_config(raw) or changed
         changed = strip_knowledge_from_copy_to_worktree(raw) or changed
+        changed = strip_retired_network_access(raw) or changed
 
         if changed:
             config_path.write_text(

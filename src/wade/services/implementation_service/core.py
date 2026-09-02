@@ -33,12 +33,15 @@ from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
+    LAUNCH_NETWORK_ACCESS,
+    SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
-    resolve_network_access,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -429,7 +432,7 @@ def start(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     base_branch: str | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
@@ -455,9 +458,9 @@ def start(
         detach: If True, launch AI in a new terminal tab.
         cd_only: If True, create worktree and print path only (no AI launch).
         plan_handoff: Internal marker for an accepted ``wade plan`` handoff.
-            A network-enabled Codex implementation must launch in a fresh
-            detached context rather than inherit the planner's network-off
-            sandbox.
+            An unrestricted Codex implementation must launch in a fresh detached
+            context rather than inherit a sandboxed planner's process, which
+            cannot drop its sandbox after start.
 
     Returns:
         ImplementResult with success/merged status.
@@ -515,7 +518,7 @@ def start(
             effort_explicit=effort_explicit,
             yolo=yolo,
             permission_mode=permission_mode,
-            network_access=network_access,
+            sandbox=sandbox,
             cd_only=cd_only,
             work_skills=work_skills,
             review_skills=review_skills,
@@ -644,11 +647,14 @@ def start(
             permission_mode, yolo, config, "implement"
         )
 
-        # Resolve the Codex sandbox network policy (enabled by default for this
-        # interactive lifecycle). Always passed explicitly at launch so ambient
-        # Codex config can never silently change this wade-managed sandbox; only
-        # Codex acts on it.
-        resolved_network_access = resolve_network_access(network_access, config, "implement")
+        # Resolve the AI-runtime sandbox profile. Always pinned explicitly at
+        # launch so ambient tool config can never silently move the boundary of a
+        # wade-managed session; only toggle-capable tools act on it. The value is
+        # resolved here (bootstrap's guard hooks need it) but the capability check
+        # is deferred to the launch site — `--cd` and the nested-AI-session guard
+        # both exit before launching, and must not fail on a runtime they were
+        # never going to start.
+        resolved_sandbox = resolve_sandbox(sandbox, config, "implement")
 
         # When resuming, override the resolved tool and skip interactive confirmation
         if resume_ai_tool:
@@ -673,6 +679,7 @@ def start(
                 permission_mode_explicit=(
                     permission_mode_explicit or permission_mode is not None or yolo is not None
                 ),
+                sandbox=resolved_sandbox,
             )
 
         # Resolve main branch and the effective base. Precedence (#376):
@@ -868,6 +875,7 @@ def start(
             repo_root,
             skills=support_skills_for_session(SessionKind.IMPLEMENTATION),
             selected_ai_tool=resolved_tool,
+            sandbox=resolved_sandbox,
             session_phase=SessionPhase.IMPLEMENT,
             session_kind=SessionKind.IMPLEMENTATION,
             task_id=task.id,
@@ -937,17 +945,27 @@ def start(
             return ImplementResult(success=True)
 
         # AI-initiated start guard: if we're inside an AI CLI session,
-        # don't launch another AI tool — just print the worktree path.  The
-        # one exception is a plan handoff from Codex to a network-enabled Codex
-        # implementation: network is a launch-time sandbox property, and the
-        # planner always ran with it disabled, so that handoff needs a fresh
-        # detached process instead of reusing this agent context.
+        # don't launch another AI tool — just print the worktree path.  The one
+        # exception is a plan handoff from a *sandboxed* Codex planner into an
+        # *unrestricted* Codex implementation. The sandbox is a launch-time OS
+        # property: a process started under `--sandbox workspace-write` cannot
+        # escape it, so honoring the implementation profile requires a fresh
+        # detached process rather than reusing this agent context.
+        #
+        # This is the restated form of the retired network-pin predicate (#478).
+        # Its old premise — "the planner always ran network-off" — died with the
+        # per-command network asymmetry, but the *profile* mismatch it guarded is
+        # real and now expressible directly: compare the plan session's resolved
+        # sandbox against this one's. Note the polarity flip: the old flag fired
+        # on the permissive value being True (network on), this one fires on the
+        # permissive value being False (sandbox off).
         detected_env = _detect_ai_cli_env()
         requires_fresh_codex_handoff = (
             plan_handoff
             and detected_env == "CODEX_CLI"
             and resolved_tool == AIToolID.CODEX.value
-            and resolved_network_access
+            and resolve_sandbox(None, config, "plan")
+            and not resolved_sandbox
         )
         if detected_env and not requires_fresh_codex_handoff:
             logger.info(
@@ -961,6 +979,16 @@ def start(
             console.detail(f"Worktree ready at: {worktree_path}")
             print(str(worktree_path))
             return ImplementResult(success=True)
+
+        # A runtime is definitely starting now, so the sandbox profile has to be
+        # deliverable. Deferred to here (rather than to resolution) so the two
+        # non-launching exits above never fail on a capability they don't use.
+        if resolved_tool:
+            try:
+                enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+            except SandboxCapabilityError as e:
+                console.error(str(e))
+                return ImplementResult(success=False)
 
         # Set terminal title
         work_title = compose_implement_title(task.id, task.title)
@@ -976,21 +1004,22 @@ def start(
         except OSError:
             logger.warning("implementation.transcript_dir_failed")
 
-        # Detach mode: launch AI tool in a new terminal, don't block.  A
-        # network-enabled Codex plan handoff is forced through this path so it
-        # cannot inherit the planner's immutable network-off sandbox.
+        # Detach mode: launch AI tool in a new terminal, don't block.  An
+        # unrestricted Codex plan handoff is forced through this path so it
+        # cannot inherit the planner's immutable sandbox.
         if (detach or requires_fresh_codex_handoff) and resolved_tool:
             cmd: list[str] | None = None
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
                 if resume_session_id:
-                    # Re-resolve the sandbox context (worktree writable roots +
-                    # network pin) fresh at resume — it is a launch-time OS
-                    # concern, not persisted session state.
+                    # Re-resolve the sandbox context (profile, worktree
+                    # writable roots, network pin) fresh at resume — it is a
+                    # launch-time OS concern, not persisted session state.
                     cmd = detach_adapter.build_resume_command(
                         resume_session_id,
                         working_dir=worktree_path,
-                        network_access=resolved_network_access,
+                        network_access=LAUNCH_NETWORK_ACCESS,
+                        sandbox=resolved_sandbox,
                     )
                     if cmd is None:
                         console.warn(
@@ -1013,12 +1042,13 @@ def start(
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
                         working_dir=worktree_path,
-                        # ``requires_fresh_codex_handoff`` already established
-                        # the resolved value is true; pin it explicitly for the
-                        # new Codex process rather than relying on ambient config.
-                        network_access=(
-                            True if requires_fresh_codex_handoff else resolved_network_access
-                        ),
+                        network_access=LAUNCH_NETWORK_ACCESS,
+                        # ``requires_fresh_codex_handoff`` already established the
+                        # resolved profile is unrestricted; state the forced value
+                        # rather than relying on that implication holding, and pin
+                        # it explicitly for the new Codex process instead of
+                        # inheriting ambient config.
+                        sandbox=(False if requires_fresh_codex_handoff else resolved_sandbox),
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
@@ -1041,10 +1071,11 @@ def start(
                     return ImplementResult(success=True)
             if requires_fresh_codex_handoff:
                 console.error(
-                    "Could not launch a fresh Codex implementation session with network access."
+                    "Could not launch a fresh Codex implementation session with the "
+                    "sandbox disabled."
                 )
                 console.hint("Open a new host terminal, then run:")
-                console.detail(f"wade implement {task.id} --network")
+                console.detail(f"wade implement {task.id} --no-sandbox")
                 stop_title_keeper()
                 return ImplementResult(success=False)
             console.warn("Could not launch in new terminal — falling back to inline")
@@ -1073,7 +1104,8 @@ def start(
                     resume_cmd = adapter.build_resume_command(
                         resume_session_id,
                         working_dir=worktree_path,
-                        network_access=resolved_network_access,
+                        network_access=LAUNCH_NETWORK_ACCESS,
+                        sandbox=resolved_sandbox,
                     )
                     if resume_cmd is None:
                         console.warn(
@@ -1109,7 +1141,8 @@ def start(
                         trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
-                        network_access=resolved_network_access,
+                        network_access=LAUNCH_NETWORK_ACCESS,
+                        sandbox=resolved_sandbox,
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
 
@@ -1174,7 +1207,7 @@ def start(
                                 or permission_mode is not None
                                 or yolo is not None
                             ),
-                            network_access=network_access,
+                            sandbox=sandbox,
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")

@@ -195,11 +195,11 @@ def review_pr_comments_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
-    network_access: bool | None = typer.Option(
+    sandbox: bool | None = typer.Option(
         None,
-        "--network/--no-network",
-        help="Allow network access inside the Codex sandbox (default: on for PR-comment "
-        "sessions). Overrides ai.network_access.",
+        "--sandbox/--no-sandbox",
+        help="Confine the AI runtime to its sandbox (default: off — the runtime runs "
+        "unrestricted so delegated tools keep host credentials). Overrides ai.sandbox.",
     ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
@@ -227,7 +227,7 @@ def review_pr_comments_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
-        network_access=network_access,
+        sandbox=sandbox,
         work_skills=skill,
         review_skills=review_skill,
         refresh_skills=refresh_skills,
