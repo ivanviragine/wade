@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.54.2] — 2026-09-02
+
+### Chores
+
+- adopt Crossby 0.28 and Opus defaults (#483) (99e32c1)
+
 ## [v0.54.1] — 2026-09-02
 
 ### Chores
