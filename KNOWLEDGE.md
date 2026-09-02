@@ -689,3 +689,21 @@ annotate_bot_expectations' marker_root is inconsistent across call sites in revi
 The three session skills are hard-capped by tests/integration/test_skill_context_budget.py (BUDGET_CHARS covers launch prompt + rendered SKILL.md with partials expanded); the review-pr-comments skill had only ~170 chars of headroom in v0.50.7, so any new skill rule must be paid for by trimming an existing one. Measure with the rendered size, not the raw template — _partials/ expansion (user-interaction, review-budget, doc-update-step) roughly doubles it.
 
 ---
+
+## cb42b47b0a78 | 2026-09-02 | implementation | tags: crossby, dependencies, testing | Issue #476
+
+Bumping the crossby pin in pyproject.toml also requires updating a hardcoded exact version in tests/unit/test_skills/test_crossby_contract.py (assert version("crossby") == "X.Y.Z") — pyproject is the range source of truth, but that test pins the exact resolved version alongside the semi-private skill-discovery API contract. Change both in the same commit or the suite fails.
+
+---
+
+## c55057c13ebb | 2026-09-02 | implementation | tags: dependencies, crossby, tooling | Issue #476
+
+uv.lock is gitignored in this repo, so a crossby pin bump needs BOTH `uv lock` and `uv pip install -e ".[dev]"` — `uv lock` only rewrites the lockfile and leaves the venv on the old version, so version("crossby") and the whole test suite still run against the previous release. Never commit uv.lock.
+
+---
+
+## caa4604d0d03 | 2026-09-02 | implementation | tags: crossby, documentation, dependencies, model-registry | Issue #476
+
+docs/dev/architecture.md's .wade.yml example hardcodes crossby's claude complexity-tier model IDs, so every crossby pin bump silently makes it stale — wade init writes whatever crossby.config.defaults.get_defaults() returns, not those literals. Update that block on every pin bump; note the crossby version RANGE is deliberately not restated in that file (architecture.md line ~171) so only the tier values need touching. Blast radius on existing projects is narrow: wade update re-resolves defaults but calls _patch_config without force, backfilling only tiers a config left unset.
+
+---

@@ -7,7 +7,7 @@ project:
   merge_strategy: PR
 ai:
   default_tool: claude
-  default_model: claude-opus-4.8
+  default_model: claude-opus-5
   effort: xhigh
   plan:
     effort: xhigh
@@ -54,7 +54,7 @@ models:
       model: claude-sonnet-5
       effort: xhigh
     very_complex:
-      model: claude-opus-4.8
+      model: claude-opus-5
       effort: xhigh
 provider:
   name: github
