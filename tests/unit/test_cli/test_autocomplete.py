@@ -28,6 +28,16 @@ _CLAUDE = AIToolID.CLAUDE.value
 _CODEX = AIToolID.CODEX.value
 
 
+def test_crossby_0_28_exposes_gemini_3_8_for_supported_tools() -> None:
+    assert "gemini-3.8-flash" in MODELS[AIToolID.ANTIGRAVITY_CLI.value]
+    assert {
+        "gemini-3.8-flash-low",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-high",
+    }.issubset(MODELS[AIToolID.CURSOR.value])
+    assert "google/gemini-3.8-flash" in MODELS[AIToolID.OPENCODE.value]
+
+
 def _ctx(ai: str | list[str] | None = None) -> typer.Context:
     """A Typer context carrying the ``--ai`` param exactly as Click would."""
     ctx = typer.Context(click.Command("wade"))
