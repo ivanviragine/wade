@@ -707,3 +707,27 @@ uv.lock is gitignored in this repo, so a crossby pin bump needs BOTH `uv lock` a
 docs/dev/architecture.md's .wade.yml example hardcodes crossby's claude complexity-tier model IDs, so every crossby pin bump silently makes it stale — wade init writes whatever crossby.config.defaults.get_defaults() returns, not those literals. Update that block on every pin bump; note the crossby version RANGE is deliberately not restated in that file (architecture.md line ~171) so only the tier values need touching. Blast radius on existing projects is narrow: wade update re-resolves defaults but calls _patch_config without force, backfilling only tiers a config left unset.
 
 ---
+
+## d7e3010043a2 | 2026-09-02 | implementation | tags: hooks, codex, gotcha, sandbox | Issue #478
+
+sandboxes_writes is a STATIC crossby capability but the write boundary became launch-dependent once ai.sandbox existed (#478): it describes what a tool can do, not what this launch will do. Any code branching on it — today only _install_guard_hooks in implementation_service/bootstrap.py — must also consult the resolved profile, or under sandbox=False (Codex --sandbox danger-full-access) the worktree-containment guard narrows to the shell token and tool-call writes outside the worktree are guarded by nothing. Extends a44493f7, which documents the narrow-don't-skip rule but predates a disableable sandbox.
+
+---
+
+## 1c79175312c9 | 2026-09-02 | implementation | tags: config, validation, gotcha | Issue #478
+
+check_service.py's AI-section key allowlists are derived reflectively from AICommandConfig/AIConfig.model_fields (#368), so DELETING a config field silently drops its key from the allowlist and the generic 'unsupported key' loop turns an un-migrated .wade.yml into a HARD ERROR — independent of any type validator, and in the opposite direction from the drift #368 fixed. Any key retirement needs an explicit tolerance entry (_DEPRECATED_AI_KEYS, added by #478) unioned into both allowlists for the transition release.
+
+---
+
+## 58e3be66cd66 | 2026-09-02 | implementation | tags: codex, yolo, sandbox | Issue #478
+
+Codex --sandbox danger-full-access is APPROVAL-NEUTRAL: it is a distinct flag from --dangerously-bypass-approvals-and-sandbox, so disabling the runtime sandbox does not imply yolo and leaves the autonomy argv byte-identical. Sandbox and permission_mode stay orthogonal axes — one moves the OS boundary, the other the approval tier. Consistent with 1c18f1d4's separation of headless autonomy from permissions.
+
+---
+
+## 9eacd93219c1 | 2026-09-02 | implementation | tags: crossby, codex, gotcha | Issue #478
+
+crossby's network_access parameter defaults to False and survived the #478 sandbox toggle, so wade must keep PASSING it (LAUNCH_NETWORK_ACCESS=True) rather than omitting it: a sandboxed launch that dropped the kwarg pins sandbox_workspace_write.network_access=false and silently takes the network away from the fetch/push/gh lifecycle that requires it. Under sandbox=False crossby short-circuits and ignores the value. This is why issue #478's 'no network_access kwarg reaches any adapter' criterion could not be met literally.
+
+---
