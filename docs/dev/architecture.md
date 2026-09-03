@@ -457,11 +457,13 @@ agree, turning silent drift into a test failure.
 | Copilot | flat `{"permissionDecision":…}` | `{"decision":"block"}` | Never nests under `hookSpecificOutput`; `tools` scope is dropped, so its guard fires on everything |
 | Antigravity CLI (`agy`) | `{"decision":…}` | `{"decision":"continue"}` | Inverted Stop polarity — blocks by saying *continue* |
 
-Codex is the one tool whose worktree guard is **narrowed** rather than skipped:
-`--sandbox workspace-write` already confines tool-call writes, but it also
-permits `/tmp` and `$TMPDIR`, so a shell redirect remains a live escape.
+Codex is the one tool whose worktree guard is **narrowed** rather than skipped,
+and only under `ai.sandbox: true`: `--sandbox workspace-write` already confines
+tool-call writes, but it also permits `/tmp` and `$TMPDIR`, so a shell redirect
+remains a live escape. Under the unrestricted default the full matcher is
+installed instead — see the sandbox-profile section below.
 
-### Codex sandboxed-worktree git writes & network policy (#423)
+### AI runtime sandbox profile & sandboxed-worktree git writes (#423, #478)
 
 A linked worktree's git metadata lives **outside** the worktree tree
 (`<main>/.git/worktrees/<wt>` private dir, `<main>/.git` common dir), so under
@@ -475,47 +477,104 @@ on and shell containment is **not** widened — only these two metadata roots ar
 added. The six threaded sites are the impl detached/inline × initial/resume and
 review detached/inline launches (`implementation_service/core.py`,
 `review_service.py`); `delegation_service`/`plan_service` thread the same
-`working_dir` with network **off** for their worktree-capable paths.
+`working_dir` for their worktree-capable paths, under the same network constant
+as everything else — there is no network-off launch path left.
 
-**Filesystem writes and network are independent axes.** The `working_dir` grant
-makes local Git metadata writes work under `network_access=False`. GitHub API
-calls — including readiness's `gh api user` and review-data fetch/resolve — and
-remote Git operations (`git fetch`/`git push`, the network legs of `sync`/`done`)
-need `network_access=True`. For `implement` and `review_pr_comments`, WADE
-resolves `network_access: bool` through `resolve_network_access()` (CLI
-`--network`/`--no-network` > command config > global `ai.network_access` >
-**enabled by default**). Planning, dependency analysis, bounded reviews, and
-every command outside `NETWORK_ENABLED_BY_DEFAULT_COMMANDS` are forcibly
-disabled regardless of CLI or configuration. WADE
-**always passes it explicitly** to the builder, so an ambient
-`network_access = true` in the user's Codex `config.toml` can never silently
-change a WADE-managed sandbox. Only Codex acts on either value — crossby
-capability-gates every other tool via `supports_network_access` — and resume
-re-resolves both fresh from current config (a launch-time OS concern, not
-persisted session state). Network access permits outbound connections inside the
-workspace-write sandbox; it neither widens the filesystem sandbox nor changes
-approval policy.
+**One axis, not two.** `ai.sandbox` is the single cross-tool boolean deciding
+whether the AI runtime launches inside its own filesystem sandbox;
+`resolve_sandbox()` reads CLI `--sandbox`/`--no-sandbox` > `ai.<command>.sandbox`
+> `ai.sandbox` > `DEFAULT_SANDBOX` (**`False` — unrestricted**). There is no
+per-command asymmetry: that asymmetry is exactly what the retired
+`ai.network_access` pin encoded, and what broke delegated multi-model sessions
+(every `wade` command is a child of the runtime, so a sandboxed outer runtime
+strips a separately authenticated reviewer of its host login).
 
-The **explicit** `--network`/`--no-network` override (the tri-state
+Network access is now a **constant**, not a setting: `LAUNCH_NETWORK_ACCESS` is
+passed `True` at all nine adapter call sites. It must be *passed*, not omitted —
+crossby's `network_access` parameter defaults to `False`, so a sandboxed launch
+that dropped it would pin `sandbox_workspace_write.network_access=false` and take
+the network away from the very lifecycle (`git fetch`/`push`, `gh`) that requires
+it. Passing it explicitly also keeps the pin defensive against an ambient
+`network_access = true` in the user's Codex `config.toml`. Under `sandbox=False`
+crossby ignores the value entirely.
+
+Only tools with `supports_sandbox_toggle` (Codex, Cursor) act on the profile:
+Codex maps it to `--sandbox danger-full-access` / `workspace-write`, Cursor to
+`--sandbox disabled` / `enabled`. Every other tool receives nothing — never an
+invented flag. Resume re-resolves the profile fresh from current config (a
+launch-time OS concern, not persisted session state).
+
+**Capability handling is asymmetric by design**, because the default is `False`.
+`enforce_sandbox_capability()` is a silent no-op for an unrestricted profile on a
+tool that never sandboxed anything, warns when a tool that *does* sandbox writes
+has no toggle (unreachable with crossby >= 0.29; the forward-compat guard against
+a silent fallback to sandboxed), and raises `SandboxCapabilityError` when
+`sandbox: true` is explicitly requested on a toggle-less tool. Because the
+terminal default is `False`, a resolved `True` is *always* an explicit request.
+
+Enforcement is deliberately **separate from resolution**. Services resolve the
+value early — `bootstrap_worktree` needs it for the guard hooks — and call
+`enforce_sandbox_capability()` at the launch site, after `confirm_ai_selection()`
+(whose menu can still change the tool) and after the non-launching exits
+(`implement --cd`, the nested-AI-session guard) have returned. Checking earlier
+would either fail a command that never starts a runtime, or bind the check to a
+tool the user then replaced. `resolve_sandbox(tool=...)` is the resolve-and-check
+shorthand for the remaining call sites where resolution immediately precedes the
+launch.
+
+**The profile changes the external runtime boundary only.** It is orthogonal to
+`permission_mode` — Codex's `--sandbox danger-full-access` is a distinct flag from
+`--dangerously-bypass-approvals-and-sandbox`, so unrestricted never implies
+`yolo` and never alters the resolved autonomy tier. It also never relaxes WADE's
+own containment: see the guard-hook note below.
+
+**`sandboxes_writes` is static but the boundary is launch-dependent.**
+`_install_guard_hooks` (`implementation_service/bootstrap.py`) narrows the
+worktree-containment matcher to the shell token only when
+`caps.sandboxes_writes and sandbox` — the capability describes what a tool *can*
+do, not what this launch *will* do. Under `sandbox=False` the runtime starts with
+`--sandbox danger-full-access` and the **full** matcher is installed, because
+nothing else covers tool-call writes outside the worktree. The plan-artifact
+guard, worktree metadata grants, lifecycle hooks, Stop hook, and pre-push
+backstop are identical in both profiles. `bootstrap_worktree(sandbox=...)`
+defaults to `DEFAULT_SANDBOX`, so an omitted argument fails safe to the wide
+guard.
+
+The **explicit** `--sandbox`/`--no-sandbox` override (the tri-state
 `bool | None`, not the resolved bool) is threaded through every session **handoff**
 so it survives instead of the next session silently re-resolving it: the
 post-implementation "Wait for reviews" path forwards it via
 `_post_implementation_lifecycle` → `review_service.start`, and the numeric
 `wade <N>` shorthand forwards it via `SmartStartContext` to whichever route it
-picks (implement / batch / review). `None` (unset) still re-resolves per the
-routed command's own config, matching how a non-explicit `permission_mode` is
-threaded.
+picks (implement / batch / review). `_build_implement_cmd` keeps the same
+explicit-only rule — an unset value emits no flag, so a child re-resolves from
+its own config rather than freezing the parent's resolved value. `None` (unset)
+matches how a non-explicit `permission_mode` is threaded.
 
-Planning itself is always network-off, including when it later offers an
-accepted single-issue implementation handoff. The internal `plan_handoff`
-intent keeps implementation-network resolution at `implementation_service.start`.
-If that handoff originates in Codex, resolves the implementation tool to Codex,
-and resolves network access to enabled, implementation must create a fresh
-detached Codex launch with an explicit `network_access=True` pin. It cannot reuse
-the planner's immutable network-off sandbox. If the detached launch cannot be
-created, the handoff fails closed and prints `wade implement <issue> --network`
-for the user to run from a new host terminal; it must not fall back to an inline
-or nested agent. All other nested-agent starts retain the ordinary launch guard.
+`requires_fresh_codex_handoff` (`implementation_service/core.py`) is the restated
+form of the retired network-pin predicate. Its old premise — "the planner always
+ran network-off" — died with the per-command asymmetry, but the mismatch it
+guarded is real and now expressible directly: the sandbox is a launch-time OS
+property, so a **sandboxed** Codex planner handing off to an **unrestricted**
+Codex implementation needs a fresh detached process rather than the planner's.
+Note the **polarity flip** — the old flag fired on the permissive value being
+`True` (network on), this one fires on the permissive value being `False`
+(sandbox off), and the detached branch states the forced value (`False`)
+explicitly. A token-level rename would have silently inverted the intent. If the
+detached launch cannot be created the handoff fails closed and prints
+`wade implement <issue> --no-sandbox`; it must not fall back to an inline or
+nested agent. Matching profiles produce no handoff, and all other nested-agent
+starts retain the ordinary launch guard.
+
+**Retirement path for `ai.network_access`.** The loader deliberately never reads
+the key (an un-migrated `.wade.yml` keeps loading), `strip_retired_network_access`
+removes it globally and per command on the next migration, and `check_service`
+carries an explicit `_DEPRECATED_AI_KEYS` tolerance. That tolerance is
+load-bearing: `_VALID_AI_COMMAND_KEYS` / `_VALID_AI_TOP_LEVEL_KEYS` are derived
+reflectively from the Pydantic models (#368), so deleting a field silently drops
+its key from the allowlists and the generic `unsupported key` loop turns an
+un-migrated config into a **hard error**, independent of any type validator. Any
+future key retirement needs the same tolerance entry.
 
 ### Phase-aware session readiness (#462)
 
@@ -591,8 +650,8 @@ denial do not. Otherwise an unavailable reviewer could exhaust the cap and let
 
 The capability remediation is intentionally tool-neutral: retain the sandbox
 and grant only the worktree Git metadata paths, GitHub credential/API route, or
-local staging path named by the failure. Codex continues to use explicit
-`network_access` and additive worktree metadata grants; Claude/Cursor use
+local staging path named by the failure. Codex uses the resolved `ai.sandbox`
+profile and, when sandboxed, additive worktree metadata grants; Claude/Cursor use
 path/domain allowlists; Copilot/VS Code need host-networked `gh` credentials;
 OpenCode has host-authority shells and must be launched only in a trusted host
 context. Wade never rewrites those external tool settings or grants the main
@@ -959,7 +1018,7 @@ exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 The tier values `wade init` writes are **not wade constants** — `init_service/config_io.py::_resolve_models()` seeds them from `crossby.config.defaults.get_defaults(tool)`, so **bumping the crossby pin changes what newly initialized projects get**. The example above shows crossby's `claude` defaults at the currently pinned version; run `get_defaults()` for the authoritative set rather than trusting a doc snapshot, and re-check this block on every crossby bump. A bump does **not** rewrite tiers an existing `.wade.yml` already sets: `wade update` re-resolves the defaults and calls `_patch_config` without `force`, which backfills only *absent* tiers. So a fresh `wade init` picks up the new defaults wholesale, while an existing project changes only where it left a tier unset.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `network_access`, and `timeout` keys as applicable. `network_access` (global `ai.network_access` or per-command) is the Codex sandbox network pin resolved by `resolve_network_access()`: it defaults to **True** for `implement` and `review_pr_comments`, whose lifecycle requires GitHub, and **False** for every other command. The CLI, per-command, and global policy levels remain higher-precedence opt-outs — see the "Codex sandboxed-worktree git writes & network policy" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for every command, with no per-command asymmetry. Network access is unconditionally on and no longer configurable — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
 
 **Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True` for native plan tools, and `plan_mode=False` for Antigravity CLI whose native plan mode sandboxes writes to an external brain store while WADE's plan-artifact guard enforces containment); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`. Every launch command (`plan`, `implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
 
@@ -1219,8 +1278,9 @@ When wade installs skills into a target project (per session, via worktree boots
 
 **`wade implement-batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
-- `--network` / `--no-network` — Pin network access for every child session;
-  when omitted, each child resolves its normal implementation default.
+- `--sandbox` / `--no-sandbox` — Pin the AI-runtime sandbox profile for every
+  child session; when omitted, no flag is emitted and each child re-resolves its
+  normal implementation default.
 - `--skill` / `--review-skill` — Repeatable ordered bindings forwarded to every
   child implementation session.
 - `--refresh-skills` — Explicitly refresh frozen bindings in resumed child

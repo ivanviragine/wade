@@ -72,17 +72,17 @@ def _post_implementation_lifecycle(
     model_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
 ) -> MergeStatus:
     """Run post-implementation lifecycle and return the merge status.
 
     PR is the only supported merge strategy (the ``direct`` strategy was
     retired in #357), so this delegates straight to the PR lifecycle.
 
-    ``network_access`` carries the caller's explicit ``--network`` /
-    ``--no-network`` (``None`` = unset) into a "wait for reviews → comments
-    found" re-launch so an explicit pin survives instead of the follow-on review
-    session silently re-resolving it from ``ai.review_pr_comments``/global config.
+    ``sandbox`` carries the caller's explicit ``--sandbox`` / ``--no-sandbox``
+    (``None`` = unset) into a "wait for reviews → comments found" re-launch so an
+    explicit profile survives instead of the follow-on review session silently
+    re-resolving it from ``ai.review_pr_comments``/global config.
     """
     return _post_implementation_lifecycle_pr(
         repo_root,
@@ -97,7 +97,7 @@ def _post_implementation_lifecycle(
         model_explicit=model_explicit,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode_explicit,
-        network_access=network_access,
+        sandbox=sandbox,
     )
 
 
@@ -341,7 +341,7 @@ def _post_implementation_lifecycle_pr(
     model_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
 ) -> MergeStatus:
     """Run the PR-based post-implementation lifecycle."""
     lookup = git_pr.get_pr_for_branch(repo_root, branch)
@@ -436,7 +436,7 @@ def _post_implementation_lifecycle_pr(
                 model_explicit=model_explicit,
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
-                network_access=network_access,
+                sandbox=sandbox,
             )
         elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             review_service._quiet_next_steps_prompt(
@@ -453,7 +453,7 @@ def _post_implementation_lifecycle_pr(
                 model_explicit=model_explicit,
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
-                network_access=network_access,
+                sandbox=sandbox,
                 config=poll_config,
             )
         return MergeStatus.NOT_MERGED

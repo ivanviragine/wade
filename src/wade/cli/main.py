@@ -214,17 +214,18 @@ _PERMISSION_MODE_OPT = typer.Option(
     autocompletion=complete_permission_modes,
 )
 
-# Shared tri-state flag for the Codex sandbox network policy. ``--network``
-# enables network access inside the sandbox (needed for git fetch/push, hence
-# the network legs of sync/done); ``--no-network`` forces it off; omitted (None)
-# defers to command/global config and then the command default. Interactive
-# implementation and PR-comment sessions default on; other commands default off.
-# Only Codex acts on it — every other tool ignores it upstream.
-_NETWORK_ACCESS_OPT = typer.Option(
+# Shared tri-state flag for the AI-runtime sandbox profile. ``--sandbox``
+# confines the runtime to its own workspace sandbox; ``--no-sandbox`` launches it
+# unrestricted so delegated child tools keep their own host credentials;
+# omitted (None) defers to ``ai.<command>.sandbox``, then ``ai.sandbox``, then
+# the unrestricted default. Orthogonal to --permission-mode: this moves the OS
+# boundary, not the approval tier. Only tools with a sandbox toggle (codex,
+# cursor) act on it; every other tool ignores it upstream.
+_SANDBOX_OPT = typer.Option(
     None,
-    "--network/--no-network",
-    help="Allow network access inside the Codex sandbox (default: on for implementation "
-    "and PR-comment sessions). Overrides ai.network_access.",
+    "--sandbox/--no-sandbox",
+    help="Confine the AI runtime to its sandbox (default: off — the runtime runs "
+    "unrestricted so delegated tools keep host credentials). Overrides ai.sandbox.",
 )
 
 
@@ -245,6 +246,7 @@ def plan_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
     ),
@@ -268,6 +270,7 @@ def plan_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        sandbox=sandbox,
         work_skills=skill,
         review_skills=review_skill,
         refresh_skills=refresh_skills,
@@ -296,7 +299,7 @@ def implement_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
-    network_access: bool | None = _NETWORK_ACCESS_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
@@ -343,7 +346,7 @@ def implement_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
-        network_access=network_access,
+        sandbox=sandbox,
         base_branch=current_base,
         work_skills=skill,
         review_skills=review_skill,
@@ -382,7 +385,7 @@ def implement_cmd(
             effort_explicit=effort is not None,
             yolo=yolo or None,
             permission_mode=permission_mode,
-            network_access=network_access,
+            sandbox=sandbox,
             base_branch=current_base,
             work_skills=skill,
             review_skills=review_skill,
@@ -412,7 +415,7 @@ def implement_batch_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
-    network_access: bool | None = _NETWORK_ACCESS_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref forwarded to every child session."
     ),
@@ -460,7 +463,7 @@ def implement_batch_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
-        network_access=network_access,
+        sandbox=sandbox,
         work_skills=skill,
         review_skills=review_skill,
         refresh_skills=refresh_skills,
@@ -480,7 +483,7 @@ def address_reviews_cmd(
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
-    network_access: bool | None = _NETWORK_ACCESS_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
     review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
     refresh_skills: bool = typer.Option(False, "--refresh-skills"),
@@ -495,7 +498,7 @@ def address_reviews_cmd(
         detach=detach,
         yolo=yolo,
         permission_mode=permission_mode,
-        network_access=network_access,
+        sandbox=sandbox,
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,
@@ -541,7 +544,7 @@ def smart_start_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
-    network_access: bool | None = _NETWORK_ACCESS_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
 ) -> None:
     """Internal dispatch for `wade <N>` — routes to implement or review pr-comments.
 
@@ -565,7 +568,7 @@ def smart_start_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
-        network_access=network_access,
+        sandbox=sandbox,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -590,6 +593,7 @@ def plan_alias(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
     review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
     refresh_skills: bool = typer.Option(False, "--refresh-skills"),
@@ -602,6 +606,7 @@ def plan_alias(
         effort=effort,
         yolo=yolo,
         permission_mode=permission_mode,
+        sandbox=sandbox,
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,
@@ -629,7 +634,7 @@ def implement_alias(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
-    network_access: bool | None = _NETWORK_ACCESS_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
@@ -654,7 +659,7 @@ def implement_alias(
         cd_only=cd_only,
         yolo=yolo,
         permission_mode=permission_mode,
-        network_access=network_access,
+        sandbox=sandbox,
         chain=chain,
         base=base,
         skill=skill,
@@ -675,7 +680,7 @@ def reviews_alias(
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
-    network_access: bool | None = _NETWORK_ACCESS_OPT,
+    sandbox: bool | None = _SANDBOX_OPT,
     skill: list[str] | None = typer.Option(None, "--skill"),  # noqa: B008
     review_skill: list[str] | None = typer.Option(None, "--review-skill"),  # noqa: B008
     refresh_skills: bool = typer.Option(False, "--refresh-skills"),
@@ -690,7 +695,7 @@ def reviews_alias(
         detach=detach,
         yolo=yolo,
         permission_mode=permission_mode,
-        network_access=network_access,
+        sandbox=sandbox,
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,

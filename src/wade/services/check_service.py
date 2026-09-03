@@ -824,15 +824,46 @@ _VALID_PROJECT_CONFIG_KEYS = frozenset(
 # validator's allowlists can't drift from the schema (issue #368). Deriving
 # these — rather than hand-maintaining literal sets — means any field later
 # added to ``AICommandConfig`` / ``AIConfig`` is accepted automatically.
-_VALID_AI_COMMAND_KEYS = frozenset(AICommandConfig.model_fields)
+#
+# Reflective derivation has one sharp edge: *deleting* a field silently drops its
+# key from the allowlist, so the generic "unsupported key" loops below turn every
+# un-migrated config into a hard error — independent of any type validator. Keys
+# retired from the schema therefore need an explicit tolerance entry here for the
+# transition release, or `wade check` breaks the upgrade it is meant to guide.
+_DEPRECATED_AI_KEYS = frozenset({"network_access"})
+"""Retired AI keys still accepted (with a warning) so un-migrated configs load.
+
+``network_access`` was retired by #478: network is now always on and the runtime
+boundary is expressed by ``ai.sandbox``. The loader ignores the key and the
+config migration strips it; this set keeps `wade check` from hard-erroring in the
+window before a project migrates.
+"""
+
+_VALID_AI_COMMAND_KEYS = frozenset(AICommandConfig.model_fields) | _DEPRECATED_AI_KEYS
 # Top-level ``ai`` scalar keys are AIConfig's fields minus the per-command
 # subsections, which are validated separately as their own sections.
 _VALID_AI_SCALAR_KEYS = frozenset(AIConfig.model_fields) - set(AI_COMMAND_NAMES)
 # Full accepted key set for the top-level ``ai`` section: scalar keys plus the
-# per-command subsections (canonical names + legacy aliases). Precomputed once
-# rather than rebuilt on every _validate_ai_section call.
+# per-command subsections (canonical names + legacy aliases) plus retired keys.
+# Precomputed once rather than rebuilt on every _validate_ai_section call.
 _VALID_AI_TOP_LEVEL_KEYS = frozenset(
-    {*_VALID_AI_SCALAR_KEYS, *AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES}
+    {
+        *_VALID_AI_SCALAR_KEYS,
+        *AI_COMMAND_NAMES,
+        *LEGACY_AI_COMMAND_ALIASES,
+        *_DEPRECATED_AI_KEYS,
+    }
+)
+
+_RETIRED_NETWORK_ACCESS_HINT = (
+    "is retired and has no effect — network access is always on. "
+    "Use 'ai.sandbox' to control the AI runtime sandbox. "
+    # `wade update` is the only command that runs the migration pipeline —
+    # `run_all_migrations` is called from `init_service.commands.update` and
+    # nowhere else. Naming `init` or a session command here would send users to
+    # something that never strips the key, so the warning they are trying to
+    # clear recurs on every `wade check`.
+    "Run 'wade update' to migrate it away."
 )
 
 # Valid keys for the ``done`` section, derived from the Pydantic model so the
@@ -869,13 +900,15 @@ def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
     if config_path is None:
         return ConfigCheckResult(exit_code=ConfigExitCode.NOT_FOUND)
 
-    errors = _validate_config_file(config_path)
+    warnings: list[str] = []
+    errors = _validate_config_file(config_path, warnings)
 
     if errors:
         return ConfigCheckResult(
             exit_code=ConfigExitCode.INVALID,
             config_path=str(config_path),
             errors=errors,
+            warnings=warnings,
         )
 
     from wade.services.skill_diagnostics_service import check_project_skills
@@ -886,23 +919,30 @@ def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
             exit_code=ConfigExitCode.INVALID,
             config_path=str(config_path),
             errors=list(skill_report.errors),
-            warnings=list(skill_report.warnings),
+            warnings=[*warnings, *skill_report.warnings],
         )
 
     return ConfigCheckResult(
         exit_code=ConfigExitCode.VALID,
         config_path=str(config_path),
-        warnings=list(skill_report.warnings),
+        warnings=[*warnings, *skill_report.warnings],
     )
 
 
-def _validate_config_file(config_path: Path) -> list[str]:
+def _validate_config_file(config_path: Path, warnings: list[str] | None = None) -> list[str]:
     """Validate a config file and return a list of error messages.
 
     Uses YAML parsing + field-level validation (not Pydantic, to give
     precise error messages rather than Pydantic's generic ones).
+
+    *warnings*, when given, collects non-fatal findings (e.g. a retired config
+    key that still parses). It is an out-parameter for the same reason *errors*
+    is threaded through every ``_validate_*_section`` helper below: the section
+    validators append as they go rather than each returning its own list.
     """
     errors: list[str] = []
+    if warnings is None:
+        warnings = []
 
     try:
         raw_text = config_path.read_text(encoding="utf-8")
@@ -944,7 +984,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
         if not isinstance(ai, dict):
             errors.append("ai: must be a mapping")
         else:
-            _validate_ai_section(ai, errors)
+            _validate_ai_section(ai, errors, warnings)
 
     # Validate models section
     models = raw.get("models")
@@ -1076,8 +1116,13 @@ def _validate_project_section(project: dict[str, Any], errors: list[str]) -> Non
             )
 
 
-def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
-    """Validate the ai section."""
+def _validate_ai_section(ai: dict[str, Any], errors: list[str], warnings: list[str]) -> None:
+    """Validate the ai section.
+
+    *warnings* collects non-fatal findings — today only the retired
+    ``network_access`` key, which must never fail a check on a config that still
+    loads correctly.
+    """
     default_tool = ai.get("default_tool")
     if default_tool is not None and str(default_tool) and str(default_tool) not in _VALID_AI_TOOLS:
         errors.append(_invalid_tool_message("ai.default_tool", str(default_tool)))
@@ -1093,9 +1138,12 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
     if yolo is not None and not isinstance(yolo, bool):
         errors.append("ai.yolo: must be true or false")
 
-    network_access = ai.get("network_access")
-    if network_access is not None and not isinstance(network_access, bool):
-        errors.append("ai.network_access: must be true or false")
+    sandbox = ai.get("sandbox")
+    if sandbox is not None and not isinstance(sandbox, bool):
+        errors.append("ai.sandbox: must be true or false")
+
+    if "network_access" in ai:
+        warnings.append(f"ai.network_access {_RETIRED_NETWORK_ACCESS_HINT}")
 
     # Validate per-command sections
     seen_sections: dict[str, str] = {}
@@ -1114,14 +1162,16 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
             if not isinstance(cmd_section, dict):
                 errors.append(f"ai.{cmd}: must be a mapping")
             else:
-                _validate_ai_command_section(cmd, cmd_section, errors)
+                _validate_ai_command_section(cmd, cmd_section, errors, warnings)
 
     for key in ai:
         if key not in _VALID_AI_TOP_LEVEL_KEYS:
             errors.append(f"ai.{key}: unsupported key")
 
 
-def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: list[str]) -> None:
+def _validate_ai_command_section(
+    cmd: str, cmd_section: dict[str, Any], errors: list[str], warnings: list[str]
+) -> None:
     """Validate one per-command AI config subsection."""
     tool = cmd_section.get("tool")
     if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
@@ -1149,9 +1199,12 @@ def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: 
     if yolo is not None and not isinstance(yolo, bool):
         errors.append(f"ai.{cmd}.yolo: must be true or false")
 
-    network_access = cmd_section.get("network_access")
-    if network_access is not None and not isinstance(network_access, bool):
-        errors.append(f"ai.{cmd}.network_access: must be true or false")
+    sandbox = cmd_section.get("sandbox")
+    if sandbox is not None and not isinstance(sandbox, bool):
+        errors.append(f"ai.{cmd}.sandbox: must be true or false")
+
+    if "network_access" in cmd_section:
+        warnings.append(f"ai.{cmd}.network_access {_RETIRED_NETWORK_ACCESS_HINT}")
 
     timeout = cmd_section.get("timeout")
     if timeout is not None and (

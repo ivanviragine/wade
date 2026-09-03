@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import pathlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import crossby.ai_tools  # noqa: F401 — registers all adapters via __init_subclass__
 import pytest
 from crossby.models.ai import EffortLevel
 
+import wade
 from wade.models.config import AICommandConfig, AIConfig, ComplexityModelMapping, ProjectConfig
 from wade.models.delegation import DelegationMode
 from wade.models.permission import PermissionMode
 from wade.services.ai_resolution import (
+    LAUNCH_NETWORK_ACCESS,
+    SandboxCapabilityError,
     confirm_ai_selection,
+    describe_sandbox,
+    display_ai_selection,
     resolve_effort,
-    resolve_network_access,
+    resolve_sandbox,
     valid_effort_levels,
 )
 
@@ -701,83 +708,276 @@ class TestConfirmAiSelectionAlwaysDisplays:
         assert sum(tool_lines) == 1
 
 
-class TestResolveNetworkAccess:
-    """Network precedence: flag > command config > global > command default."""
-
-    @pytest.mark.parametrize("command", ["implement", "review_pr_comments"])
-    def test_interactive_lifecycle_commands_default_to_network_enabled(self, command: str) -> None:
-        # Nothing configured and no flag: their mandatory GitHub lifecycle needs network.
-        assert resolve_network_access(None, ProjectConfig(), command) is True
+class TestResolveSandbox:
+    """Sandbox precedence: flag > command config > global > unrestricted default."""
 
     @pytest.mark.parametrize(
-        "command", ["plan", "deps", "review_plan", "review_implementation", "review_batch"]
+        "command",
+        [
+            "plan",
+            "deps",
+            "implement",
+            "review_plan",
+            "review_implementation",
+            "review_batch",
+            "review_pr_comments",
+        ],
     )
-    def test_headless_and_planning_commands_default_to_network_disabled(self, command: str) -> None:
-        config = ProjectConfig(ai=AIConfig(network_access=True))
-        assert resolve_network_access(None, config, command) is False
-        assert resolve_network_access(True, config, command) is False
+    def test_every_command_defaults_to_unrestricted(self, command: str) -> None:
+        # Unlike the retired network pin there is no per-command asymmetry: the
+        # terminal default is unrestricted for every command (#478).
+        assert resolve_sandbox(None, ProjectConfig(), command) is False
 
     def test_explicit_flag_true_wins_over_config_false(self) -> None:
-        config = ProjectConfig(ai=AIConfig(network_access=False))
-        # --network overrides a config that (redundantly) disables it.
-        assert resolve_network_access(True, config, "implement") is True
+        config = ProjectConfig(ai=AIConfig(sandbox=False))
+        assert resolve_sandbox(True, config, "implement") is True
 
     def test_explicit_flag_false_wins_over_config_true(self) -> None:
-        config = ProjectConfig(ai=AIConfig(network_access=True))
-        # --no-network overrides a config that enables it (never silently on).
-        assert resolve_network_access(False, config, "implement") is False
+        config = ProjectConfig(ai=AIConfig(sandbox=True))
+        assert resolve_sandbox(False, config, "implement") is False
 
     def test_command_config_wins_over_global(self) -> None:
         config = ProjectConfig(
             ai=AIConfig(
-                network_access=False,
-                implement=AICommandConfig(network_access=True),
+                sandbox=False,
+                implement=AICommandConfig(sandbox=True),
             )
         )
-        assert resolve_network_access(None, config, "implement") is True
-        # A different command falls back to the (disabled) global.
-        assert resolve_network_access(None, config, "review_pr_comments") is False
+        assert resolve_sandbox(None, config, "implement") is True
+        # A different command falls back to the (unrestricted) global.
+        assert resolve_sandbox(None, config, "review_pr_comments") is False
 
-    def test_command_config_false_disables_an_interactive_default(self) -> None:
+    def test_command_config_false_overrides_a_sandboxed_global(self) -> None:
         config = ProjectConfig(
             ai=AIConfig(
-                network_access=True,
-                implement=AICommandConfig(network_access=False),
+                sandbox=True,
+                implement=AICommandConfig(sandbox=False),
             )
         )
-        assert resolve_network_access(None, config, "implement") is False
+        assert resolve_sandbox(None, config, "implement") is False
 
     def test_global_config_used_when_no_command_override(self) -> None:
-        config = ProjectConfig(ai=AIConfig(network_access=True))
-        assert resolve_network_access(None, config, "implement") is True
+        config = ProjectConfig(ai=AIConfig(sandbox=True))
+        assert resolve_sandbox(None, config, "implement") is True
 
     def test_resume_reresolves_from_current_config(self) -> None:
         """A resumed session reflects the CURRENT config, not the original launch.
 
-        The two ``build_resume_command`` call sites re-resolve ``network_access``
-        fresh from the config loaded at resume time — network policy is a
-        launch-time OS concern, not persisted session state. Model that here:
-        the same ``(None, config, command)`` call yields the *current* config's
-        value, so flipping the policy between launch and resume flips the result.
+        The ``build_resume_command`` call sites re-resolve the profile fresh from
+        the config loaded at resume time — the sandbox is a launch-time OS
+        concern, not persisted session state. Model that here: the same
+        ``(None, config, command)`` call yields the *current* config's value.
         """
-        # Original launch: network enabled via config.
-        launch_cfg = ProjectConfig(ai=AIConfig(network_access=True))
-        assert resolve_network_access(None, launch_cfg, "implement") is True
-        # Policy changed before resume — a freshly loaded config disables it.
-        resume_cfg = ProjectConfig(ai=AIConfig(network_access=False))
-        assert resolve_network_access(None, resume_cfg, "implement") is False
+        launch_cfg = ProjectConfig(ai=AIConfig(sandbox=True))
+        assert resolve_sandbox(None, launch_cfg, "implement") is True
+        resume_cfg = ProjectConfig(ai=AIConfig(sandbox=False))
+        assert resolve_sandbox(None, resume_cfg, "implement") is False
 
-    def test_get_network_access_command_over_global_over_default(self) -> None:
-        # ProjectConfig.get_network_access is the config-level resolver the
-        # service resolver defers to; verify its fallback chain directly.
-        assert ProjectConfig().get_network_access("implement") is True
-        assert ProjectConfig().get_network_access("review_pr_comments") is True
-        assert ProjectConfig().get_network_access("plan") is False
+    def test_get_sandbox_command_over_global_over_default(self) -> None:
+        # ProjectConfig.get_sandbox is the config-level resolver the service
+        # resolver defers to; verify its fallback chain directly.
+        assert ProjectConfig().get_sandbox("implement") is False
+        assert ProjectConfig().get_sandbox("plan") is False
         cfg = ProjectConfig(
             ai=AIConfig(
-                network_access=True,
-                review_pr_comments=AICommandConfig(network_access=False),
+                sandbox=True,
+                review_pr_comments=AICommandConfig(sandbox=False),
             )
         )
-        assert cfg.get_network_access("review_pr_comments") is False
-        assert cfg.get_network_access("implement") is True
+        assert cfg.get_sandbox("review_pr_comments") is False
+        assert cfg.get_sandbox("implement") is True
+
+
+class TestSandboxCapabilityGating:
+    """Asymmetric capability handling — silent for the default, loud for a lie."""
+
+    @pytest.mark.parametrize("tool", ["codex", "cursor"])
+    def test_toggle_capable_tool_honors_both_directions(self, tool: str) -> None:
+        # codex/cursor expose --sandbox; nothing to warn or fail about.
+        assert resolve_sandbox(True, ProjectConfig(), "implement", tool=tool) is True
+        assert resolve_sandbox(False, ProjectConfig(), "implement", tool=tool) is False
+
+    def test_unrestricted_on_never_sandboxed_tool_is_a_silent_no_op(self) -> None:
+        # Claude is already unsandboxed. Erroring here would break every default
+        # launch, so the (default) unrestricted profile passes silently.
+        with patch("wade.ui.console.console.warn") as mock_warn:
+            assert resolve_sandbox(None, ProjectConfig(), "implement", tool=_CLAUDE) is False
+        mock_warn.assert_not_called()
+
+    def test_explicit_sandbox_true_on_incapable_tool_raises(self) -> None:
+        # WADE cannot impose a sandbox a runtime does not have, and must not
+        # pretend it did — a visible, deterministic error naming the tool.
+        with pytest.raises(SandboxCapabilityError) as exc:
+            resolve_sandbox(True, ProjectConfig(), "implement", tool=_CLAUDE)
+        assert _CLAUDE in str(exc.value)
+
+    def test_config_driven_sandbox_true_on_incapable_tool_also_raises(self) -> None:
+        # The default is False, so a resolved True is always an explicit request
+        # — whether it came from --sandbox or from .wade.yml.
+        config = ProjectConfig(ai=AIConfig(sandbox=True))
+        with pytest.raises(SandboxCapabilityError):
+            resolve_sandbox(None, config, "implement", tool=_CLAUDE)
+
+    def test_unrestricted_warns_when_a_sandboxing_tool_has_no_toggle(self) -> None:
+        """Never silently fall back to sandboxed.
+
+        Unreachable with crossby >=0.29 (Codex has both flags), so the capability
+        is faked here: a tool that sandboxes writes but cannot be toggled off
+        cannot honor the unrestricted profile, and must say so.
+        """
+        adapter = MagicMock()
+        adapter.capabilities.return_value = SimpleNamespace(
+            supports_sandbox_toggle=False, sandboxes_writes=True
+        )
+        with (
+            patch("wade.services.ai_resolution.AbstractAITool.get", return_value=adapter),
+            patch("wade.ui.console.console.warn") as mock_warn,
+        ):
+            assert resolve_sandbox(False, ProjectConfig(), "implement", tool="codex") is False
+        assert mock_warn.call_count == 1
+        assert "no sandbox toggle" in mock_warn.call_args.args[0]
+
+    def test_unknown_tool_is_permissive(self) -> None:
+        # Capability gating stays best-effort, matching the other resolvers.
+        assert resolve_sandbox(True, ProjectConfig(), "implement", tool="not-a-tool") is True
+
+
+class TestDescribeSandbox:
+    """The launch display must state the posture, never leave it implicit."""
+
+    def test_unrestricted_names_host_access(self) -> None:
+        text = describe_sandbox(False)
+        assert "unrestricted" in text
+        assert "host credentials" in text
+
+    def test_sandboxed_names_confinement(self) -> None:
+        assert "sandboxed" in describe_sandbox(True)
+
+    def test_display_renders_the_profile_line(self) -> None:
+        with patch("wade.ui.console.console.kv") as mock_kv:
+            display_ai_selection(_CLAUDE, _MODEL_A, None, PermissionMode.DEFAULT, False)
+        rendered = dict(_kv_pairs(mock_kv))
+        assert "Sandbox" in rendered
+        assert "unrestricted" in rendered["Sandbox"]
+
+    def test_display_omits_the_line_when_no_profile_resolved(self) -> None:
+        with patch("wade.ui.console.console.kv") as mock_kv:
+            display_ai_selection(_CLAUDE, _MODEL_A, None, PermissionMode.DEFAULT, None)
+        assert "Sandbox" not in dict(_kv_pairs(mock_kv))
+
+
+class TestNetworkAccessRetirement:
+    """No resolved ``network_access`` survives anywhere in wade (#478).
+
+    The plan's acceptance criterion was written as "no ``network_access`` kwarg
+    reaches any adapter". Crossby 0.29 kept the parameter with a ``False``
+    default, so omitting it would pin
+    ``sandbox_workspace_write.network_access=false`` on every sandboxed launch and
+    take the network away from the lifecycle that requires it. The criterion's
+    intent — that network is no longer a wade-managed, per-command axis — is
+    therefore enforced as: the only value wade ever passes is the
+    :data:`LAUNCH_NETWORK_ACCESS` constant, and no config/resolver surface for it
+    remains. This is a source scan, so it catches a missed call site that no
+    behavioural test happens to cover.
+    """
+
+    @staticmethod
+    def _wade_sources() -> list[pathlib.Path]:
+        root = pathlib.Path(wade.__file__).parent
+        files = sorted(root.rglob("*.py"))
+        assert len(files) > 50, "source scan must actually find the wade package"
+        return files
+
+    def test_launch_network_access_is_unconditionally_on(self) -> None:
+        assert LAUNCH_NETWORK_ACCESS is True
+
+    def test_every_network_access_argument_is_the_constant(self) -> None:
+        offenders: list[str] = []
+        for path in self._wade_sources():
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("network_access="):
+                    continue
+                if stripped != "network_access=LAUNCH_NETWORK_ACCESS,":
+                    offenders.append(f"{path.name}:{lineno}: {stripped}")
+        assert not offenders, (
+            "network_access must only ever be passed as the LAUNCH_NETWORK_ACCESS "
+            f"constant — found: {offenders}"
+        )
+
+    def test_no_network_access_config_or_resolver_surface_remains(self) -> None:
+        assert "network_access" not in AIConfig.model_fields
+        assert "network_access" not in AICommandConfig.model_fields
+        assert not hasattr(ProjectConfig(), "get_network_access")
+        import wade.services.ai_resolution as ai_resolution
+
+        assert not hasattr(ai_resolution, "resolve_network_access")
+        import wade.models.config as config_models
+
+        assert not hasattr(config_models, "NETWORK_ENABLED_BY_DEFAULT_COMMANDS")
+
+    def test_no_network_cli_flag_remains(self) -> None:
+        for path in self._wade_sources():
+            if path.parent.name != "cli":
+                continue
+            text = path.read_text(encoding="utf-8")
+            assert "--network" not in text, f"{path.name} still declares a --network flag"
+            assert "--no-network" not in text
+
+
+class TestCapabilityCheckFollowsTheConfirmedTool:
+    """The check must run against the tool that actually launches.
+
+    ``confirm_ai_selection`` can switch the tool interactively, so a check wired
+    to the pre-confirmation value would let a user pick a toggle-less runtime
+    under ``sandbox: true`` and launch it silently unsandboxed — the exact
+    "never silently downgraded" invariant this feature exists to hold.
+    """
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "wade.services.plan_service",
+            "wade.services.deps_service",
+            "wade.services.review_delegation_service",
+            "wade.services.review_service",
+            "wade.services.implementation_service.core",
+        ],
+    )
+    def test_enforcement_happens_after_confirmation(self, module: str) -> None:
+        import importlib
+
+        source = pathlib.Path(importlib.import_module(module).__file__).read_text(encoding="utf-8")
+        if "confirm_ai_selection(" not in source:
+            pytest.skip(f"{module} has no confirmation UI")
+
+        assert "enforce_sandbox_capability(" in source, (
+            f"{module} resolves a sandbox profile but never enforces its capability"
+        )
+        # Every service resolves the value first and enforces later, so the
+        # enforcement call must appear after the confirmation call.
+        assert source.index("enforce_sandbox_capability(", source.index("def ")) > source.index(
+            "confirm_ai_selection("
+        ), f"{module} enforces the capability before the tool is confirmed"
+
+    def test_no_service_resolves_with_a_tool_before_confirming(self) -> None:
+        """``resolve_sandbox(tool=...)`` is the resolve-and-check shorthand.
+
+        It is only safe where resolution immediately precedes the launch. No
+        service that shows a confirmation menu may use it, or the check would
+        again bind to the pre-confirmation tool.
+        """
+        import wade
+
+        root = pathlib.Path(wade.__file__).parent
+        offenders = []
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if "confirm_ai_selection(" in text and "resolve_sandbox(" in text:
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    if "resolve_sandbox(" in line and "tool=" in line:
+                        offenders.append(f"{path.name}:{lineno}")
+        assert not offenders, (
+            "a service with a confirmation menu must resolve the profile without "
+            f"a tool and enforce it after confirmation — found: {offenders}"
+        )

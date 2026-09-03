@@ -390,37 +390,50 @@ class TestParseCommandConfig:
         config = parse_config_file(config_path)
         assert config.ai.effort == "medium"
 
-    def test_global_network_access_parsed(self, tmp_path: Path) -> None:
-        # `ai.network_access: true` must reach the model — the loader used to drop
-        # it, so the documented opt-in silently resolved to False (#423).
+    def test_global_sandbox_parsed(self, tmp_path: Path) -> None:
+        # `ai.sandbox: true` must reach the model — the loader dropping a
+        # documented opt-in is exactly the #423 failure mode.
         config_path = tmp_path / ".wade.yml"
-        config_path.write_text("version: 2\nai:\n  network_access: true\n")
+        config_path.write_text("version: 2\nai:\n  sandbox: true\n")
         config = parse_config_file(config_path)
-        assert config.ai.network_access is True
-        assert config.get_network_access() is True
+        assert config.ai.sandbox is True
+        assert config.get_sandbox() is True
 
-    def test_command_network_access_parsed(self, tmp_path: Path) -> None:
-        # `ai.<command>.network_access: true` must reach the command config and
-        # win over the (unset) global default in the resolver.
+    def test_command_sandbox_parsed(self, tmp_path: Path) -> None:
+        # `ai.<command>.sandbox: true` must reach the command config and win over
+        # the (unset) global default in the resolver.
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
-            "version: 2\nai:\n  implement:\n    tool: codex\n    network_access: true\n"
+            "version: 2\nai:\n  implement:\n    tool: codex\n    sandbox: true\n"
         )
         config = parse_config_file(config_path)
-        assert config.ai.implement.network_access is True
-        assert config.get_network_access("implement") is True
+        assert config.ai.implement.sandbox is True
+        assert config.get_sandbox("implement") is True
 
-    def test_network_access_defaults_follow_the_command(self, tmp_path: Path) -> None:
+    def test_sandbox_defaults_to_unrestricted_for_every_command(self, tmp_path: Path) -> None:
         # Unset config keeps the field unset; the resolver then selects the
-        # interactive-lifecycle or offline command default.
+        # single terminal default, with no per-command asymmetry (#478).
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: codex\n")
         config = parse_config_file(config_path)
-        assert config.ai.network_access is None
-        assert config.ai.implement.network_access is None
-        assert config.get_network_access("implement") is True
-        assert config.get_network_access("review_pr_comments") is True
-        assert config.get_network_access("plan") is False
+        assert config.ai.sandbox is None
+        assert config.ai.implement.sandbox is None
+        assert config.get_sandbox("implement") is False
+        assert config.get_sandbox("review_pr_comments") is False
+        assert config.get_sandbox("plan") is False
+
+    def test_retired_network_access_key_is_tolerated_and_ignored(self, tmp_path: Path) -> None:
+        # An un-migrated .wade.yml must keep loading: #478 retired the key, and
+        # the loader deliberately never reads it rather than erroring.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  network_access: true\n  implement:\n    network_access: false\n"
+        )
+        config = parse_config_file(config_path)
+        assert not hasattr(config.ai, "network_access")
+        assert not hasattr(config.ai.implement, "network_access")
+        # The retired key never influences the replacement axis.
+        assert config.get_sandbox("implement") is False
 
     def test_enabled_false_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

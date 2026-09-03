@@ -474,7 +474,7 @@ def test_pr_strategy_attached_repo_root_skips_reattach(
     assert status == MergeStatus.MERGED
 
 
-@pytest.mark.parametrize("network_access", [True, False, None])
+@pytest.mark.parametrize("sandbox", [True, False, None])
 @patch("wade.services.review_service.start")
 @patch("wade.services.review_service.poll_for_reviews")
 @patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=1)
@@ -485,16 +485,16 @@ def test_pr_strategy_attached_repo_root_skips_reattach(
         found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
     ),
 )
-def test_wait_for_reviews_threads_network_access_into_review(
+def test_wait_for_reviews_threads_sandbox_into_review(
     _mock_get_pr: MagicMock,
     _mock_confirm: MagicMock,
     _mock_select: MagicMock,
     mock_poll: MagicMock,
     mock_review_start: MagicMock,
-    network_access: bool | None,
+    sandbox: bool | None,
     tmp_path: Path,
 ) -> None:
-    """An explicit --network/--no-network pin survives the 'Wait for reviews'
+    """An explicit --sandbox/--no-sandbox profile survives the 'Wait for reviews'
     hand-off: the follow-on review session receives the same tri-state rather
     than silently re-resolving it from config."""
     from wade.models.review import PollOutcome
@@ -508,11 +508,11 @@ def test_wait_for_reviews_threads_network_access_into_review(
             42,
             tmp_path / "wt",
             provider,
-            network_access=network_access,
+            sandbox=sandbox,
         )
 
     mock_review_start.assert_called_once()
-    assert mock_review_start.call_args.kwargs["network_access"] is network_access
+    assert mock_review_start.call_args.kwargs["sandbox"] is sandbox
 
 
 @patch("wade.services.implementation_service.core.write_plan_md")

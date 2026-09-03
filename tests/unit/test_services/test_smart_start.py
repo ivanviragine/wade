@@ -767,7 +767,7 @@ class TestRunReviewPrComments:
         tmp_path: Path,
     ) -> None:
         """COMMENTS_FOUND outcome delegates to review_service.start(), forwarding
-        the explicit --no-network pin so the review session cannot re-resolve it."""
+        the explicit --no-sandbox profile so the review session cannot re-resolve it."""
         provider = MagicMock()
         ctx = SmartStartContext(
             target="42",
@@ -781,7 +781,7 @@ class TestRunReviewPrComments:
             effort=None,
             effort_explicit=False,
             yolo=None,
-            network_access=False,
+            sandbox=False,
         )
         result = _run_review_pr_comments(
             ctx,
@@ -805,7 +805,7 @@ class TestRunReviewPrComments:
             yolo=None,
             permission_mode=None,
             permission_mode_explicit=False,
-            network_access=False,
+            sandbox=False,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")
@@ -820,7 +820,7 @@ class TestRunReviewPrComments:
         tmp_path: Path,
     ) -> None:
         """QUIET_TIMEOUT outcome calls _quiet_next_steps_prompt(), forwarding the
-        explicit --network pin so a later re-launch preserves the decision."""
+        explicit --sandbox profile so a later re-launch preserves the decision."""
         provider = MagicMock()
         ctx = SmartStartContext(
             target="42",
@@ -834,7 +834,7 @@ class TestRunReviewPrComments:
             effort=None,
             effort_explicit=False,
             yolo=None,
-            network_access=True,
+            sandbox=True,
         )
         result = _run_review_pr_comments(
             ctx,
@@ -860,7 +860,7 @@ class TestRunReviewPrComments:
             model_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
-            network_access=True,
+            sandbox=True,
         )
 
 
@@ -883,3 +883,79 @@ class TestSmartStartGitError:
 
         assert result is True
         mock_implement.assert_called_once()
+
+
+class TestSmartStartContextCarriesSandbox:
+    """The profile survives every route the numeric ``wade <N>`` shorthand takes.
+
+    ``smart-start`` fans out to implement, batch, or review pr-comments. The
+    profile lives on :class:`SmartStartContext` precisely so no route can drop
+    it; these assert the field reaches each dispatch.
+    """
+
+    @staticmethod
+    def _ctx(tmp_path: Path, sandbox: bool | None) -> SmartStartContext:
+        return SmartStartContext(
+            target="42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            cd_only=False,
+            ai_explicit=False,
+            model_explicit=False,
+            effort=None,
+            effort_explicit=False,
+            yolo=None,
+            sandbox=sandbox,
+        )
+
+    @pytest.mark.parametrize("sandbox", [True, False, None])
+    def test_run_implement_forwards_the_profile(self, tmp_path: Path, sandbox: bool | None) -> None:
+        ctx = self._ctx(tmp_path, sandbox)
+        with patch("wade.services.implementation_service.start") as mock_start:
+            mock_start.return_value = MagicMock(success=True)
+            assert ctx.run_implement() is True
+        assert mock_start.call_args.kwargs["sandbox"] is sandbox
+
+    def test_context_defaults_to_unset(self, tmp_path: Path) -> None:
+        # Unset must stay ``None`` (not ``False``) so each route re-resolves from
+        # config rather than freezing the terminal default at the shorthand.
+        ctx = SmartStartContext(
+            target="42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            cd_only=False,
+            ai_explicit=False,
+            model_explicit=False,
+            effort=None,
+            effort_explicit=False,
+            yolo=None,
+        )
+        assert ctx.sandbox is None
+
+    @pytest.mark.parametrize("sandbox", [True, False, None])
+    def test_smart_start_seeds_the_context_from_its_argument(
+        self, tmp_path: Path, sandbox: bool | None
+    ) -> None:
+        # The tracking-issue/batch route reads ``ctx.sandbox``; assert the value
+        # given to ``smart_start()`` actually lands on the context it builds.
+        captured: list[SmartStartContext] = []
+
+        def _capture(task, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs)
+            return False
+
+        with (
+            patch("wade.services.smart_start.load_config"),
+            patch("wade.services.smart_start.get_provider") as mock_provider,
+            patch("wade.services.smart_start.git_repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.smart_start.check_tracking_issue_and_batch", _capture),
+        ):
+            mock_provider.return_value.read_task.return_value = MagicMock()
+            smart_start(target="42", project_root=tmp_path, sandbox=sandbox)
+
+        assert captured, "the batch-redirect check must have been reached"
+        assert captured[0]["sandbox"] is sandbox

@@ -682,27 +682,77 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.review_plan.timeout" in e for e in result.errors)
 
-    def test_valid_network_access_global_and_command(self, tmp_path: Path) -> None:
+    def test_valid_sandbox_global_and_command(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  sandbox: true\n  implement:\n    sandbox: false\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_global_sandbox(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  sandbox: sometimes\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.sandbox: must be true or false" in e for e in result.errors)
+
+    def test_invalid_command_sandbox(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  implement:\n    sandbox: 1\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.implement.sandbox: must be true or false" in e for e in result.errors)
+
+    def test_retired_network_access_warns_but_does_not_error(self, tmp_path: Path) -> None:
+        """The direct regression test for the reflective-allowlist trap (#478).
+
+        ``_VALID_AI_*_KEYS`` are derived from the Pydantic models, so deleting the
+        ``network_access`` field silently dropped the key from both allowlists and
+        the generic "unsupported key" loop turned every un-migrated ``.wade.yml``
+        into a hard error — independent of any type validator. An explicit
+        deprecated-key tolerance keeps `wade check` passing, with a warning that
+        names the replacement.
+        """
         config = tmp_path / ".wade.yml"
         config.write_text(
             "version: 2\nai:\n  network_access: true\n  implement:\n    network_access: false\n"
         )
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
+        assert not any("unsupported key" in e for e in result.errors)
+        assert any("ai.network_access" in w for w in result.warnings)
+        assert any("ai.implement.network_access" in w for w in result.warnings)
+        assert all("ai.sandbox" in w for w in result.warnings if "network_access" in w)
 
-    def test_invalid_global_network_access(self, tmp_path: Path) -> None:
+    def test_retired_network_access_hint_names_a_command_that_migrates(
+        self, tmp_path: Path
+    ) -> None:
+        """The remediation must name the one command that runs the migration.
+
+        ``run_all_migrations`` is called from ``init_service.commands.update``
+        and nowhere else — not ``init``, not any session command. Pointing
+        elsewhere sends the user to something that never strips the key, so the
+        warning they are trying to clear survives every attempt.
+        """
+        from wade.config.migrations import run_all_migrations
+
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  network_access: true\n")
+        result = validate_config(tmp_path)
+        hints = [w for w in result.warnings if "network_access" in w]
+        assert hints
+        assert all("wade update" in w for w in hints)
+
+        # And that command's pipeline genuinely removes the key.
+        assert run_all_migrations(config) is True
+        assert "network_access" not in config.read_text(encoding="utf-8")
+
+    def test_retired_network_access_value_type_is_not_validated(self, tmp_path: Path) -> None:
+        # The key is inert, so even a nonsense value must not fail the check —
+        # it is stripped on the next migration either way.
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nai:\n  network_access: sometimes\n")
         result = validate_config(tmp_path)
-        assert result.exit_code == ConfigExitCode.INVALID
-        assert any("ai.network_access: must be true or false" in e for e in result.errors)
-
-    def test_invalid_command_network_access(self, tmp_path: Path) -> None:
-        config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nai:\n  implement:\n    network_access: 1\n")
-        result = validate_config(tmp_path)
-        assert result.exit_code == ConfigExitCode.INVALID
-        assert any("ai.implement.network_access: must be true or false" in e for e in result.errors)
+        assert result.is_valid, f"Errors: {result.errors}"
 
     def test_unsupported_top_level_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

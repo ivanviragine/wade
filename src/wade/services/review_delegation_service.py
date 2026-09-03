@@ -12,17 +12,20 @@ from rich.markup import escape
 from wade.config.loader import load_config
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
-from wade.models.config import AICommandConfig, ProjectConfig
+from wade.models.config import DEFAULT_SANDBOX, AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.models.session_manifest import ReviewOutcome
 from wade.models.workflow import DelegationKind
 from wade.services.ai_resolution import (
+    SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.services.delegation_service import (
     delegate,
@@ -189,6 +192,9 @@ def _run_review_delegation(
     resolved_model: str | None = None
     resolved_effort: EffortLevel | None = None
     effective_permission_mode = PermissionMode.DEFAULT
+    # Prompt mode never launches a runtime, so the profile stays at its default
+    # and is only meaningful on the branch below.
+    resolved_sandbox = DEFAULT_SANDBOX
 
     if delegation_mode != DelegationMode.PROMPT:
         resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
@@ -197,6 +203,9 @@ def _run_review_delegation(
         resolved_permission_mode = resolve_permission_mode(
             permission_mode, yolo, config, command=command
         )
+        # The capability check waits until after the confirmation UI below,
+        # which can still change the tool.
+        resolved_sandbox = resolve_sandbox(None, config, command)
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — this
@@ -221,8 +230,23 @@ def _run_review_delegation(
                 resolved_permission_mode=display_permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 mode=delegation_mode,
+                sandbox=resolved_sandbox,
             )
         )
+
+        # Checked against the *confirmed* tool: the menu above may have switched
+        # to a runtime that cannot honor the requested profile.
+        if resolved_tool:
+            try:
+                enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+            except SandboxCapabilityError as e:
+                console.error(str(e))
+                return DelegationResult(
+                    success=False,
+                    feedback=str(e),
+                    mode=delegation_mode,
+                    exit_code=1,
+                )
 
         # Re-apply the headless safety rule after confirm: interactive changes are
         # honored, but a headless launch always stays DEFAULT regardless.
@@ -263,6 +287,7 @@ def _run_review_delegation(
         cwd=cwd,
         trusted_dirs=trusted_dirs or [],
         permission_mode=effective_permission_mode,
+        sandbox=resolved_sandbox,
         timeout=timeout,
         explicit_timeout=explicit_timeout,
     )

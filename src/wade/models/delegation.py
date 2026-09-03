@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from wade.models.config import DEFAULT_SANDBOX
 from wade.models.permission import PermissionMode
 
 
@@ -44,6 +45,11 @@ class DelegationRequest(BaseModel):
     trusted_dirs: list[str] = Field(default_factory=list)
     allowed_commands: list[str] = Field(default_factory=list)
     permission_mode: PermissionMode = PermissionMode.DEFAULT
+    # Resolved AI-runtime sandbox profile for the delegated launch. Delegated
+    # runs used to hardcode the restrictive side; they now inherit the caller's
+    # resolved profile, so a delegated reviewer keeps its own host credentials
+    # under the unrestricted default (#478).
+    sandbox: bool = DEFAULT_SANDBOX
 
 
 class DelegationResult(BaseModel):

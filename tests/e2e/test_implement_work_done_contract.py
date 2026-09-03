@@ -927,3 +927,75 @@ class TestReviewStatusBlockContract:
         assert self._MARKER in body
         assert "Review gate disabled" in body
         assert "review_implementation.enabled: false" in body
+
+
+def _codex_pre_tool_use_entries(worktree_path: Path) -> list[dict]:
+    """Return Codex's PreToolUse hook entries from a bootstrapped worktree."""
+    hooks_file = worktree_path / ".codex" / "hooks.json"
+    assert hooks_file.is_file(), "bootstrap must write Codex hooks"
+    return json.loads(hooks_file.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+
+
+class TestImplementSandboxProfileContract:
+    """`wade implement` installs its guards under both sandbox profiles (#478).
+
+    The default flip to ``unrestricted`` removes Codex's native write sandbox, so
+    these assert end-to-end that WADE's own containment does not go with it: the
+    worktree guard is installed either way, and *widens* when the sandbox is off.
+    """
+
+    @staticmethod
+    def _bootstrap(e2e_repo: Path, mock_gh_cli: MockGhCli, *flag: str) -> Path:
+        issue_number = 42
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title="Add deterministic contract coverage",
+            body="## Tasks\n- Add E2E contract tests\n",
+        )
+        _init_origin_remote(e2e_repo)
+
+        result = _run(["implement", str(issue_number), "--cd", *flag], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
+        worktree = Path(result.stdout.strip())
+        assert worktree.is_dir()
+        return worktree
+
+    def test_unrestricted_profile_installs_the_full_worktree_guard(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        worktree = self._bootstrap(e2e_repo, mock_gh_cli, "--no-sandbox")
+
+        entries = _codex_pre_tool_use_entries(worktree)
+        assert entries, "the worktree guard must be installed"
+        commands = [hook["command"] for entry in entries for hook in entry["hooks"]]
+        assert any("--guard worktree" in c for c in commands)
+        # With no OS sandbox, the matcher must NOT be narrowed to the shell token
+        # — nothing else would cover tool-call writes outside the worktree.
+        assert {entry.get("matcher") for entry in entries} != {"Bash"}
+
+        # The Stop-hook completion reminder is unaffected by the profile.
+        assert "session-complete" in (worktree / ".codex" / "hooks.json").read_text("utf-8")
+
+    def test_sandboxed_profile_keeps_the_shell_narrowing(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        worktree = self._bootstrap(e2e_repo, mock_gh_cli, "--sandbox")
+
+        entries = _codex_pre_tool_use_entries(worktree)
+        assert entries, "the worktree guard must still be installed"
+        commands = [hook["command"] for entry in entries for hook in entry["hooks"]]
+        assert any("--guard worktree" in c for c in commands)
+        # Codex's workspace-write sandbox covers tool-call writes, so the guard
+        # narrows to the shell token it does not cover (/tmp, $TMPDIR redirects).
+        assert {entry.get("matcher") for entry in entries} == {"Bash"}
+        assert "session-complete" in (worktree / ".codex" / "hooks.json").read_text("utf-8")
+
+    def test_default_profile_matches_the_unrestricted_one(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        # No flag, no config: the terminal default is unrestricted, so the guard
+        # must come out wide rather than narrowed.
+        worktree = self._bootstrap(e2e_repo, mock_gh_cli)
+        entries = _codex_pre_tool_use_entries(worktree)
+        assert {entry.get("matcher") for entry in entries} != {"Bash"}

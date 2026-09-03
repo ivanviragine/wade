@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [Unreleased]
+
+### Breaking Changes
+
+- replace the Codex network pin with a cross-tool sandbox profile (ce1657b)
+  `ai.network_access` is retired and the AI runtime now launches **unsandboxed by default**. Set `ai.sandbox: true` to restore the previous confinement.
+
+### Features
+
+- replace the Codex network pin with a cross-tool sandbox profile (ce1657b)
+
+### Bug Fixes
+
+- point the retired-key hint at the command that actually migrates (c0a915c)
+- address PR #479 review feedback on the sandbox profile (c41688c)
+
+### Documentation
+
+- document breaking-change detection and the handoff profile source (5b2f50e)
+- document the sandbox profile and surface breaking changes in release notes (5fe6961)
+
+### Chores
+
+- capture migration and changelog gotchas from #479 review (3de23b3)
+- capture sandbox-profile gotchas from #478 (cb601c4)
+
 ## [v0.54.2] — 2026-09-02
 
 ### Chores
@@ -153,6 +179,13 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Bug Fixes
 
 - propagate Codex worktree launch context through sessions (#429) (032daa2)
+- resolve branch by issue number so retitled issues resume their PR/plan (#428) (c840b5e)
+
+## [v0.46.0] — 2026-08-16
+
+### Bug Fixes
+
+- propagate Codex worktree launch context through sessions (3967453)
 
 ## [v0.45.10] — 2026-08-16
 
@@ -243,6 +276,12 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Features
 
 - make WADE session output report-by-exception (terse on success) (#402) (9f96c94)
+
+## [v0.43.1] — 2026-08-12
+
+### Bug Fixes
+
+- surface stale base loudly and reconcile migration collisions at catchup (68150ef)
 
 ## [v0.43.0] — 2026-08-11
 
@@ -395,6 +434,16 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 - bump crossby to v0.11.0 and adopt newer models (Opus 5) (#345) (d9ac8a5)
 
+## [v0.35.2] — 2026-07-24
+
+### Bug Fixes
+
+- exclude scaffold-branch commits from generated changelog (c40a9ca)
+
+### Chores
+
+- bump crossby to v0.11.0 and adopt newer models (Opus 5) (ff0ab48)
+
 ## [v0.35.1] — 2026-07-24
 
 ### Bug Fixes
@@ -414,6 +463,11 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 - add "auto" and "accept-edits" permission modes (#338) (5b82060)
 
 ## [v0.33.0] — 2026-07-23
+
+### Breaking Changes
+
+- replace Gemini CLI support with Antigravity CLI (bump crossby to 0.10.x) (#336) (c54af6d)
+  Gemini CLI is no longer a supported AI tool. Projects with ai.default_tool: gemini (or a per-command tool: gemini) must switch to antigravity-cli or another supported tool.
 
 ### Features
 

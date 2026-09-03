@@ -72,7 +72,7 @@ def _build_implement_cmd(
     effort: EffortLevel | None,
     permission_mode: PermissionMode,
     permission_mode_explicit: bool,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     chain_ids: list[str] | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
@@ -97,11 +97,11 @@ def _build_implement_cmd(
       ``ai.review_pr_comments.permission_mode``). An implicit mode is left for each
       child to re-resolve from the same config, reaching the same result.
 
-    ``network_access`` follows the same explicit-only rule: an explicit
-    ``--network`` (``True``) / ``--no-network`` (``False``) on the parent is
-    forwarded so children honor the caller's Codex sandbox network decision
-    instead of silently re-resolving from config. ``None`` (unset) is left for
-    each child to re-resolve, matching the implicit-permission-mode path.
+    ``sandbox`` follows the same explicit-only rule: an explicit ``--sandbox``
+    (``True``) / ``--no-sandbox`` (``False``) on the parent is forwarded so
+    children honor the caller's runtime-boundary decision instead of silently
+    re-resolving from config. ``None`` (unset) emits no flag and is left for each
+    child to re-resolve, matching the implicit-permission-mode path.
     """
     cmd = ["wade", "implement", issue_id]
     if tool:
@@ -112,10 +112,10 @@ def _build_implement_cmd(
         cmd.extend(["--effort", effort.value])
     if permission_mode_explicit:
         cmd.extend(["--permission-mode", permission_mode.value])
-    if network_access is True:
-        cmd.append("--network")
-    elif network_access is False:
-        cmd.append("--no-network")
+    if sandbox is True:
+        cmd.append("--sandbox")
+    elif sandbox is False:
+        cmd.append("--no-sandbox")
     for skill in work_skills or ():
         cmd.extend(["--skill", skill])
     for skill in review_skills or ():
@@ -139,7 +139,7 @@ def check_tracking_issue_and_batch(
     effort_explicit: bool,
     yolo: bool | None,
     permission_mode: str | None = None,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     cd_only: bool = False,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
@@ -179,7 +179,7 @@ def check_tracking_issue_and_batch(
             effort_explicit=effort_explicit,
             yolo=yolo,
             permission_mode=permission_mode,
-            network_access=network_access,
+            sandbox=sandbox,
             work_skills=work_skills,
             review_skills=review_skills,
             refresh_skills=refresh_skills,
@@ -199,7 +199,7 @@ def batch(
     effort_explicit: bool = False,
     yolo: bool | None = None,
     permission_mode: str | None = None,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
@@ -296,7 +296,7 @@ def batch(
             effort=resolved_effort,
             permission_mode=resolved_permission_mode,
             permission_mode_explicit=permission_mode_explicit,
-            network_access=network_access,
+            sandbox=sandbox,
             chain_ids=chain_ids,
             work_skills=work_skills,
             review_skills=review_skills,

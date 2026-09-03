@@ -46,12 +46,16 @@ from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services import bot_trigger
 from wade.services.ai_resolution import (
+    LAUNCH_NETWORK_ACCESS,
+    SandboxCapabilityError,
     confirm_ai_selection,
+    display_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
-    resolve_network_access,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.services.implementation_service import (
     _detect_ai_cli_env,
@@ -897,7 +901,7 @@ def start(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
@@ -1096,7 +1100,7 @@ def start(
             effort_explicit=effort_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
-            network_access=network_access,
+            sandbox=sandbox,
             work_skills=work_skills,
             review_skills=review_skills,
             refresh_skills=refresh_skills,
@@ -1117,30 +1121,11 @@ def start(
         names = ", ".join(f"@{a}" for a in status.changes_requested_by)
         console.info(f"Changes requested by {names} (PR-level review) — launching review session")
 
-    # 5. Re-bootstrap support files and compose the review session bundle.
-    from wade.services.session_composition_service import SessionCompositionError
-    from wade.skills.installer import support_skills_for_session
-
-    try:
-        bootstrap_worktree(
-            worktree_path,
-            config,
-            repo_root,
-            skills=support_skills_for_session(SessionKind.REVIEW_PR_COMMENTS),
-            session_phase=SessionPhase.REVIEW,
-            session_kind=SessionKind.REVIEW_PR_COMMENTS,
-            task_id=task.id,
-            work_skills=work_skills,
-            review_skills=review_skills,
-            refresh_skills=refresh_skills,
-        )
-    except SessionCompositionError as exc:
-        console.error(f"Cannot start review session: {exc}")
-        return False
-
-    # 6. Resolve AI tool, model, effort, and autonomy under the dedicated
-    # ``review_pr_comments`` config key (#389) so this auto-launched session
-    # honors ``ai.review_pr_comments.*`` rather than inheriting ``ai.implement.*``.
+    # 5. Resolve AI tool, model, effort, autonomy, and sandbox profile under the
+    # dedicated ``review_pr_comments`` config key (#389) so this auto-launched
+    # session honors ``ai.review_pr_comments.*`` rather than inheriting
+    # ``ai.implement.*``. Resolved *before* bootstrap because the sandbox profile
+    # decides how wide the worktree-containment guard hook is installed (#478).
     #
     # Gate every inherited value on explicitness. The implementation flow
     # forwards its *already-resolved* tool / model / permission-mode (concrete
@@ -1173,12 +1158,48 @@ def start(
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
-    # Codex sandbox network policy (enabled by default for this interactive
-    # lifecycle); always pinned explicitly so ambient Codex config cannot
-    # silently change it.
-    resolved_network_access = resolve_network_access(network_access, config, "review_pr_comments")
+    # The value is resolved here (bootstrap's guard hooks need it); the
+    # capability check is deferred to the launch site below, so the nested-AI
+    # guard — which only prints the worktree path — never fails on a runtime it
+    # was never going to start.
+    resolved_sandbox = resolve_sandbox(sandbox, config, "review_pr_comments")
 
-    if not detach:
+    # 6. Re-bootstrap support files and compose the review session bundle.
+    from wade.services.session_composition_service import SessionCompositionError
+    from wade.skills.installer import support_skills_for_session
+
+    try:
+        bootstrap_worktree(
+            worktree_path,
+            config,
+            repo_root,
+            skills=support_skills_for_session(SessionKind.REVIEW_PR_COMMENTS),
+            session_phase=SessionPhase.REVIEW,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+            task_id=task.id,
+            work_skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
+            sandbox=resolved_sandbox,
+        )
+    except SessionCompositionError as exc:
+        console.error(f"Cannot start review session: {exc}")
+        return False
+
+    if detach:
+        # Detach skips the confirmation loop — there is no attached session to
+        # renegotiate the selection for — but not the *display*. A detached
+        # launch still starts a runtime under the resolved profile, and the user
+        # must be able to see whether that process is confined or holds host
+        # access, exactly as the attached path shows them.
+        display_ai_selection(
+            resolved_tool,
+            resolved_model,
+            resolved_effort,
+            resolved_permission_mode,
+            resolved_sandbox,
+        )
+    else:
         (
             resolved_tool,
             resolved_model,
@@ -1193,6 +1214,7 @@ def start(
             effort_explicit=effort_explicit,
             resolved_permission_mode=resolved_permission_mode,
             permission_mode_explicit=permission_mode_explicit or yolo is not None,
+            sandbox=resolved_sandbox,
         )
 
     # 7. Build review prompt
@@ -1221,6 +1243,15 @@ def start(
         print(str(worktree_path))
         return True
 
+    # A runtime is definitely starting now, so the sandbox profile has to be
+    # deliverable.
+    if resolved_tool:
+        try:
+            enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+        except SandboxCapabilityError as e:
+            console.error(str(e))
+            return False
+
     # Set terminal title
     review_title = compose_review_title(task.id, task.title)
     set_terminal_title(review_title)
@@ -1246,7 +1277,8 @@ def start(
                 initial_message=prompt,
                 effort=resolved_effort,
                 working_dir=worktree_path,
-                network_access=resolved_network_access,
+                network_access=LAUNCH_NETWORK_ACCESS,
+                sandbox=resolved_sandbox,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
         except (ValueError, KeyError):
@@ -1277,7 +1309,8 @@ def start(
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 effort=resolved_effort,
-                network_access=resolved_network_access,
+                network_access=LAUNCH_NETWORK_ACCESS,
+                sandbox=resolved_sandbox,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
             launch_completed = True
@@ -1340,7 +1373,7 @@ def start(
                 model_explicit=model_explicit,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
-                network_access=network_access,
+                sandbox=sandbox,
                 config=config,
             )
     else:
@@ -1365,7 +1398,7 @@ def start(
             model_explicit=model_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
-            network_access=network_access,
+            sandbox=sandbox,
             config=config,
         )
 
@@ -1444,7 +1477,7 @@ def _quiet_next_steps_prompt(
     effort_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
@@ -1530,7 +1563,7 @@ def _quiet_next_steps_prompt(
                         effort_explicit=effort_explicit,
                         permission_mode=permission_mode,
                         permission_mode_explicit=permission_mode_explicit,
-                        network_access=network_access,
+                        sandbox=sandbox,
                         work_skills=work_skills,
                         review_skills=review_skills,
                         refresh_skills=refresh_skills,
@@ -1562,7 +1595,7 @@ def _post_review_lifecycle(
     model_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
-    network_access: bool | None = None,
+    sandbox: bool | None = None,
     config: ProjectConfig | None = None,
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
@@ -1574,10 +1607,11 @@ def _post_review_lifecycle(
     from ``ai.review_pr_comments.effort`` (config governs). That matches how a
     non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
 
-    ``network_access`` *is* threaded (unlike effort): ``wade review pr-comments``
-    has a ``--network`` / ``--no-network`` flag, so an explicit pin must survive a
-    "wait for new reviews" re-launch rather than re-resolve to config. ``None``
-    (unset) still re-resolves, matching the non-explicit ``permission_mode`` path.
+    ``sandbox`` *is* threaded (unlike effort): ``wade review pr-comments``
+    has a ``--sandbox`` / ``--no-sandbox`` flag, so an explicit profile must
+    survive a "wait for new reviews" re-launch rather than re-resolve to config.
+    ``None`` (unset) still re-resolves, matching the non-explicit
+    ``permission_mode`` path.
     """
     from wade.ui import prompts
 
@@ -1635,7 +1669,7 @@ def _post_review_lifecycle(
                     model_explicit=model_explicit,
                     permission_mode=permission_mode,
                     permission_mode_explicit=permission_mode_explicit,
-                    network_access=network_access,
+                    sandbox=sandbox,
                 )
         elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             _quiet_next_steps_prompt(
@@ -1652,7 +1686,7 @@ def _post_review_lifecycle(
                 model_explicit=model_explicit,
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
-                network_access=network_access,
+                sandbox=sandbox,
                 config=config,
             )
         return

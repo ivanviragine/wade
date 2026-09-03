@@ -101,6 +101,62 @@ def strip_knowledge_from_copy_to_worktree(raw: dict[str, Any]) -> bool:
     return True
 
 
+RETIRED_NETWORK_ACCESS_KEY = "network_access"
+"""The Codex-only network pin retired by #478 in favour of ``ai.sandbox``."""
+
+
+def _pop_if_present(mapping: dict[str, Any], key: str) -> bool:
+    """Remove *key* from *mapping* and report whether it was there.
+
+    Presence-based rather than value-based so a YAML null (``key:`` with no
+    value) still counts as a removal — the case a ``pop(key, None) is not None``
+    test silently reports as "unchanged".
+    """
+    if key not in mapping:
+        return False
+    del mapping[key]
+    return True
+
+
+def strip_retired_network_access(raw: dict[str, Any]) -> bool:
+    """Remove the retired ``ai.network_access`` pin, global and per-command (#478).
+
+    ``network_access`` was a Codex-only sandbox network toggle that defaulted
+    *on* for ``implement`` / ``review_pr_comments`` and *off* everywhere else.
+    That per-command asymmetry is what broke delegated tools, so the key is gone:
+    wade now pins network access on for every session and expresses the runtime
+    boundary through the cross-tool ``ai.sandbox`` profile instead.
+
+    The loader already ignores the key, so this is cleanup rather than a
+    correctness fix — but leaving it in place would keep presenting a setting
+    that no longer does anything. Idempotent.
+    """
+    ai = raw.get("ai")
+    if not isinstance(ai, dict):
+        return False
+
+    # Test *presence*, not the popped value: `network_access:` with no value is
+    # valid YAML for ``None``, and a value-based check would drop the key in
+    # memory while reporting no change. ``run_all_migrations`` would then skip
+    # the write-back, leaving the retired key on disk and `wade check` repeating
+    # its deprecation warning on every run.
+    changed = _pop_if_present(ai, RETIRED_NETWORK_ACCESS_KEY)
+    for value in ai.values():
+        if isinstance(value, dict) and _pop_if_present(value, RETIRED_NETWORK_ACCESS_KEY):
+            changed = True
+
+    if changed:
+        logger.info(
+            "migrations.network_access_retired",
+            replacement="ai.sandbox",
+            detail=(
+                "Removed the retired ai.network_access pin; network access is now "
+                "always on. Use ai.sandbox to control the AI runtime sandbox."
+            ),
+        )
+    return changed
+
+
 def run_all_migrations(config_path: Path) -> bool:
     """Run all migrations on a .wade.yml file.
 
@@ -126,6 +182,7 @@ def run_all_migrations(config_path: Path) -> bool:
         changed = ensure_version(raw)
         changed = migrate_string_tiers_to_tier_config(raw) or changed
         changed = strip_knowledge_from_copy_to_worktree(raw) or changed
+        changed = strip_retired_network_access(raw) or changed
 
         if changed:
             config_path.write_text(
