@@ -50,6 +50,14 @@ uv run python scripts/changelog.py --stdout      # print to stdout
 uv run python scripts/changelog.py --tag v1.0.0  # label unreleased as v1.0.0
 ```
 
+Breaking changes lead each version in their own **Breaking Changes** section, and
+are *also* listed under their own type below it so a reader skimming "Features"
+still sees them. A commit qualifies either way Conventional Commits allows — a
+`!` subject marker (`feat!:`) or a `BREAKING CHANGE:` footer under an ordinary
+subject — matching what the `commit_msg` hook accepts. When a footer is present
+its text is indented under the entry, because the footer is what carries the
+migration path.
+
 ### Semver Rules
 
 - **patch** — bug fixes, documentation, refactors with no behavior change

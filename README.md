@@ -745,6 +745,10 @@ implementation session ready — open a new host terminal and run the displayed
 `wade implement <issue> --no-sandbox` command. When both sessions resolve to the
 same profile there is no mismatch and the ordinary nested-launch guard applies.
 
+The comparison uses the profile the planner **actually launched under**, so a
+`wade plan --sandbox` / `--no-sandbox` override is honored here rather than
+losing out to `ai.plan.sandbox`.
+
 #### Migrating from `ai.network_access`
 
 `ai.network_access` was a Codex-only network pin, enabled by default for
