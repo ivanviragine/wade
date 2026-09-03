@@ -1278,8 +1278,9 @@ When wade installs skills into a target project (per session, via worktree boots
 
 **`wade implement-batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
-- `--network` / `--no-network` — Pin network access for every child session;
-  when omitted, each child resolves its normal implementation default.
+- `--sandbox` / `--no-sandbox` — Pin the AI-runtime sandbox profile for every
+  child session; when omitted, no flag is emitted and each child re-resolves its
+  normal implementation default.
 - `--skill` / `--review-skill` — Repeatable ordered bindings forwarded to every
   child implementation session.
 - `--refresh-skills` — Explicitly refresh frozen bindings in resumed child

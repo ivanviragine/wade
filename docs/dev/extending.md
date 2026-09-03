@@ -56,9 +56,17 @@ still sees them. A commit qualifies either way Conventional Commits allows — a
 `!` subject marker (`feat!:`) or a `BREAKING CHANGE:` footer under an ordinary
 subject — matching what the `commit_msg` hook accepts. When a footer is present
 its text is indented under the entry, because the footer is what carries the
-migration path.
+migration path. The footer runs to the first blank line **or the next footer
+token** (`Refs:`, `Signed-off-by:`, `Closes #1`), so trailers written directly
+underneath it stay out of the release notes; wrap freely, but start a new
+paragraph before any prose that should not be published.
 
 ### Semver Rules
+
+> The bump itself does **not** come from these commits. `auto-version.yml` reads
+> only `github.event.pull_request.title`, and `done` syncs that title from the
+> **issue** title — so a breaking change needs `feat!:` on the *issue*, or the
+> release ships as a minor.
 
 - **patch** — bug fixes, documentation, refactors with no behavior change
 - **minor** — new features, new commands, new flags (backward compatible)
