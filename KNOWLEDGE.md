@@ -743,3 +743,9 @@ Config migrations in src/wade/config/migrations.py must test key PRESENCE, never
 scripts/changelog.py's format_range is re-run by generate() for EVERY tag range in history, so anything per-commit inside it multiplies by the repo's whole commit count on each regeneration — the original per-commit `git log -1` body lookup would have meant thousands of subprocesses once footer-only breaking changes forced every body to be read. Pull extra commit fields from get_commits' single batched git log instead, with \x1f/\x1e field/record separators because bodies are multi-line free text that breaks any newline- or pipe-delimited format.
 
 ---
+
+## ace2eb931e5e | 2026-09-03 | implementation | tags: release, ci, gotcha | Issue #478
+
+The release version bump is derived from the PR title ALONE — .github/workflows/auto-version.yml greps only github.event.pull_request.title, never commit history — and done.py's PR-title sync overwrites that title from the ISSUE title on every done. So a `feat!:` commit with a real BREAKING CHANGE footer still ships as a MINOR release unless issue #N's own title carries the `!`; retitle the issue (gh issue edit --title, since wade task update only edits the body), not just the PR, or done reverts it.
+
+---
