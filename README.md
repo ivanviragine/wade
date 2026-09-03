@@ -754,9 +754,9 @@ losing out to `ai.plan.sandbox`.
 `ai.network_access` was a Codex-only network pin, enabled by default for
 `implement` and `review_pr_comments` and off everywhere else. It is **retired**.
 An existing `.wade.yml` that still carries it keeps loading and passes
-`wade check` with a **warning, not an error**; the key is ignored and stripped on
-the next config migration. Replace it with `ai.sandbox` if you want the old
-confinement back:
+`wade check` with a **warning, not an error**; the key is ignored, and `wade
+update` strips it — that is the only command that runs the config migration
+pipeline. Replace it with `ai.sandbox` if you want the old confinement back:
 
 ```yaml
 ai:

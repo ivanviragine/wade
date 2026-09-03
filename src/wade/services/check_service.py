@@ -858,7 +858,12 @@ _VALID_AI_TOP_LEVEL_KEYS = frozenset(
 _RETIRED_NETWORK_ACCESS_HINT = (
     "is retired and has no effect — network access is always on. "
     "Use 'ai.sandbox' to control the AI runtime sandbox. "
-    "Run 'wade init' or any session command to migrate it away."
+    # `wade update` is the only command that runs the migration pipeline —
+    # `run_all_migrations` is called from `init_service.commands.update` and
+    # nowhere else. Naming `init` or a session command here would send users to
+    # something that never strips the key, so the warning they are trying to
+    # clear recurs on every `wade check`.
+    "Run 'wade update' to migrate it away."
 )
 
 # Valid keys for the ``done`` section, derived from the Pydantic model so the
