@@ -689,3 +689,63 @@ annotate_bot_expectations' marker_root is inconsistent across call sites in revi
 The three session skills are hard-capped by tests/integration/test_skill_context_budget.py (BUDGET_CHARS covers launch prompt + rendered SKILL.md with partials expanded); the review-pr-comments skill had only ~170 chars of headroom in v0.50.7, so any new skill rule must be paid for by trimming an existing one. Measure with the rendered size, not the raw template — _partials/ expansion (user-interaction, review-budget, doc-update-step) roughly doubles it.
 
 ---
+
+## cb42b47b0a78 | 2026-09-02 | implementation | tags: crossby, dependencies, testing | Issue #476
+
+Bumping the crossby pin in pyproject.toml also requires updating a hardcoded exact version in tests/unit/test_skills/test_crossby_contract.py (assert version("crossby") == "X.Y.Z") — pyproject is the range source of truth, but that test pins the exact resolved version alongside the semi-private skill-discovery API contract. Change both in the same commit or the suite fails.
+
+---
+
+## c55057c13ebb | 2026-09-02 | implementation | tags: dependencies, crossby, tooling | Issue #476
+
+uv.lock is gitignored in this repo, so a crossby pin bump needs BOTH `uv lock` and `uv pip install -e ".[dev]"` — `uv lock` only rewrites the lockfile and leaves the venv on the old version, so version("crossby") and the whole test suite still run against the previous release. Never commit uv.lock.
+
+---
+
+## caa4604d0d03 | 2026-09-02 | implementation | tags: crossby, documentation, dependencies, model-registry | Issue #476
+
+docs/dev/architecture.md's .wade.yml example hardcodes crossby's claude complexity-tier model IDs, so every crossby pin bump silently makes it stale — wade init writes whatever crossby.config.defaults.get_defaults() returns, not those literals. Update that block on every pin bump; note the crossby version RANGE is deliberately not restated in that file (architecture.md line ~171) so only the tier values need touching. Blast radius on existing projects is narrow: wade update re-resolves defaults but calls _patch_config without force, backfilling only tiers a config left unset.
+
+---
+
+## d7e3010043a2 | 2026-09-02 | implementation | tags: hooks, codex, gotcha, sandbox | Issue #478
+
+`sandboxes_writes` is a STATIC crossby capability but the write boundary became launch-dependent once `ai.sandbox` existed (#478): it describes what a tool can do, not what this launch will do. Any code branching on it — today only `_install_guard_hooks` in `implementation_service/bootstrap.py` — must also consult the resolved profile, or under `sandbox=False` (Codex `--sandbox danger-full-access`) the worktree-containment guard narrows to the shell token and tool-call writes outside the worktree are guarded by nothing. Extends a44493f7, which documents the narrow-don't-skip rule but predates a disableable sandbox.
+
+---
+
+## 1c79175312c9 | 2026-09-02 | implementation | tags: config, validation, gotcha | Issue #478
+
+check_service.py's AI-section key allowlists are derived reflectively from AICommandConfig/AIConfig.model_fields (#368), so DELETING a config field silently drops its key from the allowlist and the generic 'unsupported key' loop turns an un-migrated .wade.yml into a HARD ERROR — independent of any type validator, and in the opposite direction from the drift #368 fixed. Any key retirement needs an explicit tolerance entry (_DEPRECATED_AI_KEYS, added by #478) unioned into both allowlists for the transition release.
+
+---
+
+## 58e3be66cd66 | 2026-09-02 | implementation | tags: codex, yolo, sandbox | Issue #478
+
+Codex --sandbox danger-full-access is APPROVAL-NEUTRAL: it is a distinct flag from --dangerously-bypass-approvals-and-sandbox, so disabling the runtime sandbox does not imply yolo and leaves the autonomy argv byte-identical. Sandbox and permission_mode stay orthogonal axes — one moves the OS boundary, the other the approval tier. Consistent with 1c18f1d4's separation of headless autonomy from permissions.
+
+---
+
+## 9eacd93219c1 | 2026-09-02 | implementation | tags: crossby, codex, gotcha | Issue #478
+
+crossby's network_access parameter defaults to False and survived the #478 sandbox toggle, so wade must keep PASSING it (LAUNCH_NETWORK_ACCESS=True) rather than omitting it: a sandboxed launch that dropped the kwarg pins sandbox_workspace_write.network_access=false and silently takes the network away from the fetch/push/gh lifecycle that requires it. Under sandbox=False crossby short-circuits and ignores the value. This is why issue #478's 'no network_access kwarg reaches any adapter' criterion could not be met literally.
+
+---
+
+## ee8722fe7f27 | 2026-09-03 | implementation | tags: config, migration, gotcha | Issue #478
+
+Config migrations in src/wade/config/migrations.py must test key PRESENCE, never the popped value: YAML `key:` with no value parses to None, so the natural `pop(key, None) is not None` idiom drops the key in memory while reporting 'unchanged'. That boolean is the only thing driving run_all_migrations' write-back, so a false 'unchanged' leaves the retired key on disk and any deprecation warning keyed to it recurs on every run. Use the _pop_if_present helper (#479) for any future key retirement.
+
+---
+
+## 6eb12fb5eb3a | 2026-09-03 | implementation | tags: tooling, git, gotcha | Issue #478
+
+scripts/changelog.py's format_range is re-run by generate() for EVERY tag range in history, so anything per-commit inside it multiplies by the repo's whole commit count on each regeneration — the original per-commit `git log -1` body lookup would have meant thousands of subprocesses once footer-only breaking changes forced every body to be read. Pull extra commit fields from get_commits' single batched git log instead, with \x1f/\x1e field/record separators because bodies are multi-line free text that breaks any newline- or pipe-delimited format.
+
+---
+
+## ace2eb931e5e | 2026-09-03 | implementation | tags: release, ci, gotcha | Issue #478
+
+The release version bump is derived from the PR title ALONE — .github/workflows/auto-version.yml greps only github.event.pull_request.title, never commit history — and done.py's PR-title sync overwrites that title from the ISSUE title on every done. So a `feat!:` commit with a real BREAKING CHANGE footer still ships as a MINOR release unless issue #N's own title carries the `!`; retitle the issue (gh issue edit --title, since wade task update only edits the body), not just the PR, or done reverts it.
+
+---

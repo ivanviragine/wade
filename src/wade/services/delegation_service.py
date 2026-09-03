@@ -21,6 +21,7 @@ from crossby.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
+from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
 from wade.ui.console import console
@@ -267,11 +268,13 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         allowed_commands=request.allowed_commands or None,
         effort=_parse_effort(request.effort),
         # Grant a linked worktree's out-of-root git metadata so a sandboxed Codex
-        # deps/review run can do local git work; network stays off (these
-        # headless commands are read/analytical and never fetch/push). Inert for
-        # a main checkout and for every non-Codex tool.
+        # deps/review run can do local git work. Inert for a main checkout, for
+        # every non-Codex tool, and under an unrestricted profile. The profile
+        # itself comes from the caller rather than being hardcoded, so a delegated
+        # run inherits the session's runtime boundary (#478).
         working_dir=session_cwd,
-        network_access=False,
+        network_access=LAUNCH_NETWORK_ACCESS,
+        sandbox=request.sandbox,
         **permission_mode_launch_kwargs(PermissionMode.DEFAULT),
     )
 
@@ -381,8 +384,9 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             allowed_commands=request.allowed_commands or None,
             effort=_parse_effort(request.effort),
             # Same as the headless path: grant a linked worktree's git metadata
-            # for sandboxed git writes; network off (inert for non-Codex).
-            network_access=False,
+            # for sandboxed git writes, and inherit the caller's profile.
+            network_access=LAUNCH_NETWORK_ACCESS,
+            sandbox=request.sandbox,
             **permission_mode_launch_kwargs(request.permission_mode),
         )
 

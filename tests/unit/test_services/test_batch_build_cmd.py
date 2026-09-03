@@ -112,8 +112,8 @@ class TestBuildImplementCmd:
         assert cmd[cmd.index("--chain") + 1] == "4,5"
         assert cmd[cmd.index("--permission-mode") + 1] == "accept-edits"
 
-    def test_forwards_explicit_network_on(self) -> None:
-        """``--network`` on the parent reaches children so they honor the pin
+    def test_forwards_explicit_sandbox_on(self) -> None:
+        """``--sandbox`` on the parent reaches children so they honor the profile
         instead of re-resolving from config."""
         cmd = _build_implement_cmd(
             "42",
@@ -123,14 +123,14 @@ class TestBuildImplementCmd:
             effort=None,
             permission_mode=PermissionMode.DEFAULT,
             permission_mode_explicit=False,
-            network_access=True,
+            sandbox=True,
         )
-        assert "--network" in cmd
-        assert "--no-network" not in cmd
+        assert "--sandbox" in cmd
+        assert "--no-sandbox" not in cmd
 
-    def test_forwards_explicit_network_off(self) -> None:
-        """``--no-network`` is forwarded so a child cannot re-enable network via
-        a config that turns it on."""
+    def test_forwards_explicit_sandbox_off(self) -> None:
+        """``--no-sandbox`` is forwarded so a child cannot re-sandbox itself via
+        a config that turns the sandbox on."""
         cmd = _build_implement_cmd(
             "42",
             tool="codex",
@@ -139,14 +139,15 @@ class TestBuildImplementCmd:
             effort=None,
             permission_mode=PermissionMode.DEFAULT,
             permission_mode_explicit=False,
-            network_access=False,
+            sandbox=False,
         )
-        assert "--no-network" in cmd
-        assert "--network" not in cmd
+        assert "--no-sandbox" in cmd
+        assert "--sandbox" not in cmd
 
-    def test_omits_network_flag_when_unset(self) -> None:
-        """Unset (``None``) forwards no flag — each child re-resolves its
-        interactive network default and config, mirroring permission mode."""
+    def test_omits_sandbox_flag_when_unset(self) -> None:
+        """Unset (``None``) forwards no flag — each child re-resolves the profile
+        from its own config, mirroring permission mode. Freezing the parent's
+        resolved value here would shadow ``ai.<command>.sandbox`` in the child."""
         cmd = _build_implement_cmd(
             "42",
             tool="codex",
@@ -155,7 +156,7 @@ class TestBuildImplementCmd:
             effort=None,
             permission_mode=PermissionMode.DEFAULT,
             permission_mode_explicit=False,
-            network_access=None,
+            sandbox=None,
         )
-        assert "--network" not in cmd
-        assert "--no-network" not in cmd
+        assert "--sandbox" not in cmd
+        assert "--no-sandbox" not in cmd

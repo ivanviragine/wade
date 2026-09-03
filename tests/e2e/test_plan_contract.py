@@ -197,3 +197,29 @@ class TestPlanSessionDoneCommand:
         assert after_calls == before_calls, "plan-session done validation should not invoke gh"
         assert after_state.get("issues", {}) == before_state.get("issues", {})
         assert after_state.get("prs", {}) == before_state.get("prs", {})
+
+
+class TestPlanSandboxProfileContract:
+    """`wade plan` exposes the sandbox profile on its CLI surface (#478).
+
+    ``plan`` had no network flag before this change; it is a launch path like any
+    other, so it must accept and document ``--sandbox``/``--no-sandbox``. Scope
+    is deliberately the parsed surface: ``--help`` returns before resolution, and
+    driving a real plan run here would need a stubbed AI launch and provider,
+    duplicating coverage the unit suite already owns — sandbox resolution and
+    launch forwarding in ``test_ai_resolution`` /
+    ``test_implementation_launch_context``, and the profile-independent plan
+    guard in ``test_bootstrap_allowlist``.
+    """
+
+    @pytest.mark.parametrize("flag", ["--sandbox", "--no-sandbox"])
+    def test_plan_accepts_the_sandbox_flag(self, e2e_repo: Path, flag: str) -> None:
+        result = _run(["plan", flag, "--help"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_plan_help_documents_both_directions(self, e2e_repo: Path) -> None:
+        result = _run(["plan", "--help"], cwd=e2e_repo)
+        assert result.returncode == 0
+        combined = result.stdout + result.stderr
+        assert "--sandbox" in combined
+        assert "--no-sandbox" in combined

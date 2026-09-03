@@ -26,7 +26,7 @@ from crossby.ai_tools.transcript import (
 from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
 
 from wade.config.loader import load_config
-from wade.models.config import ProjectConfig
+from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.task import CloseReason, PlanFile, Task
@@ -34,11 +34,15 @@ from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
+    LAUNCH_NETWORK_ACCESS,
+    SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
@@ -298,6 +302,7 @@ def run_ai_planning_session(
     cwd: Path | None = None,
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
     session_bundle: str = ".wade/session",
+    sandbox: bool = DEFAULT_SANDBOX,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -370,10 +375,12 @@ def run_ai_planning_session(
         allowed_commands=allowed_commands,
         # A planning session may run in a linked planning worktree; grant its
         # out-of-root git metadata so a sandboxed Codex plan session can commit
-        # generated plan artefacts. Network off — planning never fetches/pushes.
-        # Inert for a main checkout and for every non-Codex tool.
+        # generated plan artefacts. Inert for a main checkout, for every tool
+        # without a sandbox, and under an unrestricted profile (where crossby
+        # skips the grants because there is no boundary to widen).
         working_dir=session_cwd,
-        network_access=False,
+        network_access=LAUNCH_NETWORK_ACCESS,
+        sandbox=sandbox,
         **permission_mode_launch_kwargs(permission_mode),
     )
     console.info(f"Plan directory: {plan_dir}")
@@ -444,6 +451,7 @@ def plan(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
@@ -473,6 +481,11 @@ def plan(
     # Resolve autonomy / permission mode (yolo is a back-compat alias)
     resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
 
+    # Resolve the AI-runtime sandbox profile. A planning session is a launch path
+    # like any other, so it carries the profile too (#478). The capability check
+    # waits until after the confirmation UI, which can still change the tool.
+    resolved_sandbox = resolve_sandbox(sandbox, config, "plan")
+
     console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
@@ -487,10 +500,19 @@ def plan(
         permission_mode_explicit=(
             permission_mode_explicit or permission_mode is not None or yolo is not None
         ),
+        sandbox=resolved_sandbox,
     )
     resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
     if not resolved_tool:
         console.error("No AI tool selected.")
+        return False
+
+    # Checked against the *confirmed* tool: the menu above may have switched to a
+    # runtime that cannot honor the requested profile.
+    try:
+        enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+    except SandboxCapabilityError as e:
+        console.error(str(e))
         return False
 
     # Pre-load existing issue context when issue_id is supplied
@@ -555,6 +577,7 @@ def plan(
                 work_skills=work_skills,
                 review_skills=review_skills,
                 refresh_skills=refresh_skills,
+                sandbox=resolved_sandbox,
             )
             # This process flushes the worktree's staged votes on the way out
             # (``_flush_planning_ratings``), so it is entitled to authorize
@@ -658,6 +681,7 @@ def plan(
             cwd=session_cwd,
             permission_mode=resolved_permission_mode,
             session_bundle=session_bundle,
+            sandbox=resolved_sandbox,
         )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
@@ -747,6 +771,7 @@ def plan(
                     planning_worktree=planning_worktree,
                     effort=resolved_effort,
                     yolo=resolved_yolo,
+                    sandbox=resolved_sandbox,
                 )
                 if not _cleanup_plan_dir_or_worktree(
                     plan_dir, repo_root, planning_worktree, config
@@ -803,6 +828,7 @@ def plan(
                     planning_worktree=planning_worktree,
                     effort=resolved_effort,
                     yolo=resolved_yolo,
+                    sandbox=resolved_sandbox,
                 )
                 if failed_files:
                     # Some plans never became draft PRs (e.g. an unresolvable declared
@@ -1374,8 +1400,12 @@ def _finalize_issues(
     planning_worktree: Path | None = None,
     effort: EffortLevel | None = None,
     yolo: bool = False,
+    sandbox: bool | None = None,
 ) -> bool | None:
     """Finalize newly created issues: token summaries, labels, hints.
+
+    *sandbox* is the planning session's resolved profile, carried only so an
+    accepted implement offer can hand it to the implementation session.
 
     Returns a bool if the user accepted the offer to implement (single issue),
     or None if no interactive offer was made.
@@ -1478,9 +1508,10 @@ def _finalize_issues(
                 before_start=lambda: _flush_planning_votes_before_implementation(
                     planning_worktree, repo_root, config
                 ),
+                plan_sandbox=sandbox,
             )
         else:
-            result = _offer_to_implement(issue_numbers[0])
+            result = _offer_to_implement(issue_numbers[0], plan_sandbox=sandbox)
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -1517,8 +1548,13 @@ def _offer_to_implement(
     issue_number: str,
     *,
     before_start: Callable[[], bool] | None = None,
+    plan_sandbox: bool | None = None,
 ) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
+
+    *plan_sandbox* is this planning session's **resolved** profile, forwarded so
+    the handoff compares against the planner that actually ran rather than
+    re-resolving config and losing a ``--sandbox`` / ``--no-sandbox`` override.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
     or None if the prompt was skipped (non-TTY) or declined.
@@ -1539,10 +1575,15 @@ def _offer_to_implement(
         return False
 
     try:
-        # Planning always launches with network disabled.  Tell implementation
-        # startup this is an accepted handoff so it can establish a fresh Codex
-        # context when its independently resolved policy needs network access.
-        result = start_implementation_session(target=issue_number, plan_handoff=True)
+        # Tell implementation startup this is an accepted handoff, and under
+        # which profile the planner is running, so it can establish a fresh Codex
+        # context when its independently resolved profile is more permissive than
+        # the process it would otherwise inherit.
+        result = start_implementation_session(
+            target=issue_number,
+            plan_handoff=True,
+            plan_sandbox=plan_sandbox,
+        )
         return result.success
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)

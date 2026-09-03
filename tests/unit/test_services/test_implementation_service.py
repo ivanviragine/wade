@@ -2999,12 +2999,12 @@ class TestPostImplementationLifecyclePr:
                 ai_explicit=True,
                 model_explicit=True,
                 permission_mode="yolo",
-                network_access=False,
+                sandbox=False,
             )
 
         assert result == MergeStatus.NOT_MERGED
-        # An explicit --no-network pin survives into the follow-on review session
-        # rather than being silently re-resolved from ai.review_pr_comments config.
+        # An explicit --no-sandbox profile survives into the follow-on review
+        # session rather than being silently re-resolved from config.
         mock_review_start.assert_called_once_with(
             "42",
             ai_tool="claude",
@@ -3015,7 +3015,7 @@ class TestPostImplementationLifecyclePr:
             model_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
-            network_access=False,
+            sandbox=False,
         )
 
     def test_wait_for_reviews_quiet_timeout_preserves_review_context(self, tmp_path: Path) -> None:
@@ -3054,12 +3054,12 @@ class TestPostImplementationLifecyclePr:
                 ai_explicit=True,
                 model_explicit=True,
                 permission_mode="yolo",
-                network_access=True,
+                sandbox=True,
             )
 
         assert result == MergeStatus.NOT_MERGED
-        # An explicit --network pin survives into the quiet-timeout re-launch path
-        # rather than being silently re-resolved from ai.review_pr_comments config.
+        # An explicit --sandbox profile survives into the quiet-timeout re-launch
+        # path rather than being silently re-resolved from config.
         mock_quiet.assert_called_once_with(
             tmp_path,
             "feat/42",
@@ -3074,7 +3074,7 @@ class TestPostImplementationLifecyclePr:
             model_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
-            network_access=True,
+            sandbox=True,
             config=config,
         )
 

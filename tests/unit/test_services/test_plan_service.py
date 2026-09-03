@@ -664,7 +664,10 @@ class TestFinalizeIssues:
         usage = TokenUsage(total_tokens=42)
 
         def offer_and_run_handoff(
-            _issue_number: str, *, before_start: Callable[[], bool] | None = None
+            _issue_number: str,
+            *,
+            before_start: Callable[[], bool] | None = None,
+            plan_sandbox: bool | None = None,
         ) -> bool:
             assert before_start is not None
             return before_start()
@@ -1170,7 +1173,28 @@ class TestOfferToImplement:
             result = _offer_to_implement("42")
 
             assert result is True
-            mock_start.assert_called_once_with(target="42", plan_handoff=True)
+            mock_start.assert_called_once_with(target="42", plan_handoff=True, plan_sandbox=None)
+
+    def test_planner_profile_is_forwarded_to_the_handoff(self) -> None:
+        """The planner's *resolved* profile crosses the handoff, not its config.
+
+        ``wade plan --sandbox`` outranks ``ai.plan.sandbox``, so the
+        implementation side must be told what the planner actually launched with
+        rather than re-deriving it and comparing against a session that never ran.
+        """
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = True
+            from wade.services.implementation_service import ImplementResult
+
+            mock_start.return_value = ImplementResult(success=True)
+
+            assert _offer_to_implement("42", plan_sandbox=True) is True
+            assert mock_start.call_args.kwargs["plan_sandbox"] is True
 
     def test_user_declines_returns_none(self) -> None:
         """Declining the prompt returns None without flushing or starting."""
@@ -1275,8 +1299,27 @@ class TestFinalizeIssuesHints:
                 issue_numbers=["1"],
             )
 
-            mock_offer.assert_called_once_with("1")
+            mock_offer.assert_called_once_with("1", plan_sandbox=None)
             assert result is True
+
+    def test_resolved_profile_reaches_the_offer(self) -> None:
+        """``_finalize_issues`` carries the planner's profile to the implement offer."""
+        with (
+            patch("wade.services.plan_service._offer_to_implement") as mock_offer,
+            patch("wade.services.plan_service.apply_plan_token_usage"),
+            patch("wade.services.plan_service.add_planned_by_labels"),
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_offer.return_value = True
+
+            _finalize_issues(
+                provider=self._make_provider(),
+                config=self._make_config(),
+                issue_numbers=["1"],
+                sandbox=True,
+            )
+
+            assert mock_offer.call_args.kwargs["plan_sandbox"] is True
 
     def test_multiple_issues_shows_batch_hint(self) -> None:
         """Multiple issues show wade implement-batch hint, not offer prompt."""

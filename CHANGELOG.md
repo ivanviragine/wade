@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.0] — 2026-09-03
+
+### Breaking Changes
+
+- replace the Codex network pin with a cross-tool sandbox profile (#479) (7fa9561)
+  `ai.network_access` is retired and the AI runtime now launches **unsandboxed by default**. Set `ai.sandbox: true` to restore the previous confinement.
+
+### Features
+
+- replace the Codex network pin with a cross-tool sandbox profile (#479) (7fa9561)
+
+## [v0.54.2] — 2026-09-02
+
+### Chores
+
+- adopt Crossby 0.28 and Opus defaults (#483) (99e32c1)
+
+## [v0.54.1] — 2026-09-02
+
+### Chores
+
+- adopt Crossby 0.27.0 model catalogs and defaults (#477) (3b3a223)
+
 ## [v0.54.0] — 2026-08-31
 
 ### Features
@@ -402,6 +425,11 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 - add "auto" and "accept-edits" permission modes (#338) (5b82060)
 
 ## [v0.33.0] — 2026-07-23
+
+### Breaking Changes
+
+- replace Gemini CLI support with Antigravity CLI (bump crossby to 0.10.x) (#336) (c54af6d)
+  Gemini CLI is no longer a supported AI tool. Projects with ai.default_tool: gemini (or a per-command tool: gemini) must switch to antigravity-cli or another supported tool.
 
 ### Features
 

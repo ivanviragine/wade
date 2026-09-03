@@ -16,7 +16,7 @@ import structlog
 from crossby.models.ai import EffortLevel
 
 from wade.config.loader import load_config
-from wade.models.config import ProjectConfig
+from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.permission import PermissionMode
@@ -24,11 +24,14 @@ from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
+    SandboxCapabilityError,
     confirm_ai_selection,
+    enforce_sandbox_capability,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.services.delegation_service import (
     delegate,
@@ -381,6 +384,7 @@ def _run_delegation(
     timeout: int | None = None,
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
     explicit_timeout: bool = False,
+    sandbox: bool = DEFAULT_SANDBOX,
 ) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -398,6 +402,7 @@ def _run_delegation(
         cwd=cwd,
         allowed_commands=allowed_commands or [],
         permission_mode=permission_mode,
+        sandbox=sandbox,
         explicit_timeout=explicit_timeout,
         **({"timeout": timeout} if timeout is not None else {}),
     )
@@ -492,6 +497,9 @@ def analyze_deps(
     resolved_model: str | None = None
     resolved_effort: EffortLevel | None = None
     effective_permission_mode = PermissionMode.DEFAULT
+    # Prompt mode never launches a runtime, so the profile stays at its default
+    # and is only meaningful on the branch below.
+    resolved_sandbox = DEFAULT_SANDBOX
 
     if delegation_mode != DelegationMode.PROMPT:
         resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
@@ -502,6 +510,9 @@ def analyze_deps(
         resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
         resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
         resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "deps")
+        # The capability check waits until after the confirmation UI below,
+        # which can still change the tool.
+        resolved_sandbox = resolve_sandbox(None, config, "deps")
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — not
@@ -530,10 +541,19 @@ def analyze_deps(
                 resolved_permission_mode=display_permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 mode=delegation_mode,
+                sandbox=resolved_sandbox,
             )
         )
         if not resolved_tool:
             console.error("No AI tool selected.")
+            return None
+
+        # Checked against the *confirmed* tool: the menu above may have switched
+        # to a runtime that cannot honor the requested profile.
+        try:
+            enforce_sandbox_capability(resolved_tool, resolved_sandbox)
+        except SandboxCapabilityError as e:
+            console.error(str(e))
             return None
 
         # Re-apply the headless safety rule after confirm: interactive changes are
@@ -586,6 +606,7 @@ def analyze_deps(
                 config,
                 repo_root,
                 skills=support_skills_for_session(SessionKind.DEPS),
+                sandbox=resolved_sandbox,
             )
             # This process flushes the worktree's staged votes before removing
             # it, so it may authorize staging there (a plain detached HEAD may
@@ -754,6 +775,7 @@ def analyze_deps(
         cwd=operation_root,
         timeout=deps_timeout,
         permission_mode=effective_permission_mode,
+        sandbox=resolved_sandbox,
         explicit_timeout=deps_explicit_timeout,
     )
     output = (

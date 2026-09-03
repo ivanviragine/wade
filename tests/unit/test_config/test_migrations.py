@@ -12,6 +12,7 @@ from wade.config.migrations import (
     migrate_string_tiers_to_tier_config,
     run_all_migrations,
     strip_knowledge_from_copy_to_worktree,
+    strip_retired_network_access,
 )
 
 # ---------------------------------------------------------------------------
@@ -246,3 +247,107 @@ class TestStripKnowledgeFromCopyToWorktree:
         assert run_all_migrations(config_path) is True
         migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert migrated["hooks"]["copy_to_worktree"] == [".env"]
+
+
+# ---------------------------------------------------------------------------
+# strip_retired_network_access (#478)
+# ---------------------------------------------------------------------------
+
+
+class TestStripRetiredNetworkAccess:
+    def test_strips_global_key(self) -> None:
+        raw: dict = {"ai": {"network_access": True, "default_tool": "codex"}}
+        assert strip_retired_network_access(raw) is True
+        assert raw["ai"] == {"default_tool": "codex"}
+
+    def test_strips_per_command_keys(self) -> None:
+        raw: dict = {
+            "ai": {
+                "implement": {"network_access": True, "yolo": True},
+                "review_pr_comments": {"network_access": False},
+            }
+        }
+        assert strip_retired_network_access(raw) is True
+        assert raw["ai"]["implement"] == {"yolo": True}
+        assert raw["ai"]["review_pr_comments"] == {}
+
+    def test_strips_global_and_per_command_together(self) -> None:
+        raw: dict = {
+            "ai": {
+                "network_access": True,
+                "plan": {"network_access": False, "effort": "high"},
+            }
+        }
+        assert strip_retired_network_access(raw) is True
+        assert "network_access" not in raw["ai"]
+        assert raw["ai"]["plan"] == {"effort": "high"}
+
+    def test_is_idempotent(self) -> None:
+        raw: dict = {"ai": {"network_access": True, "implement": {"network_access": False}}}
+        assert strip_retired_network_access(raw) is True
+        # Second run finds nothing left to strip and reports no change.
+        assert strip_retired_network_access(raw) is False
+
+    def test_leaves_the_replacement_key_alone(self) -> None:
+        # ``sandbox`` is the replacement axis, not a casualty of the cleanup.
+        raw: dict = {"ai": {"sandbox": True, "implement": {"sandbox": False}}}
+        assert strip_retired_network_access(raw) is False
+        assert raw["ai"]["sandbox"] is True
+        assert raw["ai"]["implement"]["sandbox"] is False
+
+    def test_noop_when_no_ai_section(self) -> None:
+        raw: dict = {"project": {}}
+        assert strip_retired_network_access(raw) is False
+
+    def test_noop_when_ai_section_is_not_a_mapping(self) -> None:
+        raw: dict = {"ai": "nonsense"}
+        assert strip_retired_network_access(raw) is False
+
+    def test_strips_null_valued_keys(self) -> None:
+        """``network_access:`` with no value is a removal, not a no-op.
+
+        A value-based ``pop(key, None) is not None`` test reports "unchanged"
+        here, so ``run_all_migrations`` skips its write-back and the retired key
+        survives on disk — re-warning the user on every subsequent run.
+        """
+        raw: dict = {"ai": {"network_access": None, "implement": {"network_access": None}}}
+        assert strip_retired_network_access(raw) is True
+        assert "network_access" not in raw["ai"]
+        assert "network_access" not in raw["ai"]["implement"]
+
+    def test_run_all_migrations_strips_the_retired_key(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  network_access: true\n"
+            "  default_tool: codex\n"
+            "  implement:\n"
+            "    network_access: false\n"
+            "    yolo: true\n"
+        )
+        assert run_all_migrations(config_path) is True
+        migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert "network_access" not in migrated["ai"]
+        assert "network_access" not in migrated["ai"]["implement"]
+        assert migrated["ai"]["default_tool"] == "codex"
+        assert migrated["ai"]["implement"]["yolo"] is True
+
+    def test_run_all_migrations_persists_null_valued_key_removal(self, tmp_path: Path) -> None:
+        """The write-back must fire for a valueless key, globally and per command."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  network_access:\n  implement:\n    network_access:\n"
+        )
+        assert run_all_migrations(config_path) is True
+        migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert "network_access" not in migrated["ai"]
+        assert "network_access" not in migrated["ai"]["implement"]
+        # Now genuinely clean on disk, so the deprecation warning stops recurring.
+        assert run_all_migrations(config_path) is False
+
+    def test_run_all_migrations_is_idempotent_on_a_migrated_file(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  network_access: true\n")
+        assert run_all_migrations(config_path) is True
+        assert run_all_migrations(config_path) is False

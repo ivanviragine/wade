@@ -102,11 +102,10 @@ class AICommandConfig(BaseModel):
     # back-compat alias; ``permission_mode`` wins when both are set.
     permission_mode: str | None = None
     yolo: bool | None = None
-    # Codex sandbox network policy for this command. ``None`` means "unset — fall
-    # through to the global default"; a bool pins it explicitly. Only Codex acts
-    # on it (it forwards to crossby's launch-time network pin); other tools
-    # capability-gate it upstream. See :meth:`ProjectConfig.get_network_access`.
-    network_access: bool | None = None
+    # AI-runtime sandbox profile for this command. ``None`` means "unset — fall
+    # through to ``ai.sandbox``, then the terminal default"; a bool pins it
+    # explicitly. See :meth:`ProjectConfig.get_sandbox`.
+    sandbox: bool | None = None
     enabled: bool | None = None
     timeout: int | None = None
 
@@ -115,13 +114,16 @@ AI_COMMAND_NAMES: tuple[str, ...] = tuple(command.value for command in AICommand
 """Canonical per-command AI config sections supported by WADE."""
 
 
-NETWORK_ENABLED_BY_DEFAULT_COMMANDS: frozenset[str] = frozenset(
-    {
-        AICommandKey.IMPLEMENT,
-        AICommandKey.REVIEW_PR_COMMENTS,
-    }
-)
-"""Interactive Codex session commands whose required lifecycle needs network access."""
+DEFAULT_SANDBOX: bool = False
+"""Terminal default for ``ai.sandbox`` — launch the AI runtime **unsandboxed**.
+
+WADE drives a deliberately multi-tool workflow: a session delegates to reviewers
+and dependency analysers that authenticate separately. When the outer runtime is
+sandboxed, every child inherits that sandbox and loses its own host credentials,
+so the delegation degrades into credential failures. Defaulting to unrestricted
+keeps delegated tools working; a project that wants the old confinement sets
+``ai.sandbox: true`` (see #478).
+"""
 
 
 LEGACY_AI_COMMAND_ALIASES: dict[str, str] = {"work": "implement"}
@@ -136,12 +138,11 @@ class AIConfig(BaseModel):
     effort: str | None = None
     permission_mode: str | None = None
     yolo: bool | None = None
-    # Global Codex sandbox network policy. ``None`` defers to the command's
-    # built-in default: enabled for interactive implementation and PR-comment
-    # sessions, disabled for every other command. Wade always passes an explicit
-    # pin at launch so ambient Codex ``config.toml`` can never silently change
-    # a wade-managed sandbox.
-    network_access: bool | None = None
+    # Global AI-runtime sandbox profile. ``None`` defers to
+    # :data:`DEFAULT_SANDBOX` (unrestricted). Wade pins the profile explicitly in
+    # both directions at launch, so an ambient tool config can never silently
+    # change the boundary of a wade-managed session.
+    sandbox: bool | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     implement: AICommandConfig = AICommandConfig()
@@ -603,23 +604,19 @@ class ProjectConfig(BaseModel):
         """
         return self.get_permission_mode(command) is PermissionMode.YOLO
 
-    def get_network_access(self, command: str | None = None) -> bool:
-        """Resolve the Codex sandbox network policy for a command.
+    def get_sandbox(self, command: str | None = None) -> bool:
+        """Resolve the AI-runtime sandbox profile for a command.
 
-        Fallback: command-specific ``ai.<command>.network_access`` → global
-        ``ai.network_access`` → command default. Interactive implementation and
-        PR-comment sessions default to enabled because their required lifecycle
-        reaches GitHub; all other commands are always disabled. Only Codex
-        honors this (crossby capability-gates every other tool), and wade always
-        forwards the resolved bool so ambient Codex config can never silently
-        flip it on.
+        Fallback: command-specific ``ai.<command>.sandbox`` → global
+        ``ai.sandbox`` → :data:`DEFAULT_SANDBOX`. Unlike the retired network pin
+        this has **no per-command default asymmetry** — that asymmetry is exactly
+        what broke delegated tools (#478). Only tools with a sandbox toggle act
+        on the resolved value; crossby capability-gates the rest.
         """
-        if command and command not in NETWORK_ENABLED_BY_DEFAULT_COMMANDS:
-            return False
         if command:
             cmd_config = getattr(self.ai, command, None)
-            if isinstance(cmd_config, AICommandConfig) and cmd_config.network_access is not None:
-                return cmd_config.network_access
-        if self.ai.network_access is not None:
-            return self.ai.network_access
-        return command in NETWORK_ENABLED_BY_DEFAULT_COMMANDS
+            if isinstance(cmd_config, AICommandConfig) and cmd_config.sandbox is not None:
+                return cmd_config.sandbox
+        if self.ai.sandbox is not None:
+            return self.ai.sandbox
+        return DEFAULT_SANDBOX
