@@ -55,11 +55,19 @@ BREAKING_HEADER = "Breaking Changes"
 # ("drop the legacy loader", not "feat: drop the legacy loader").
 CONVENTIONAL_SUBJECT_PATTERN: re.Pattern[str] = re.compile(r"^[a-z]+(\([^)]*\))?\!?:\s*(.+)$")
 
+# The start of a Conventional Commits footer: a token (`Refs:`, `Signed-off-by:`
+# — spaces written as `-`) or the `Closes #1` shorthand, plus `BREAKING CHANGE`,
+# the one token allowed to keep its space. Used only as a stop condition below.
+_FOOTER_TOKEN = r"(?:BREAKING[ -]CHANGE|[A-Za-z][A-Za-z0-9-]*)(?::[ \t]|:$|[ \t]#)"
+
 # The Conventional Commits `BREAKING CHANGE:` footer carries what the subject
 # cannot: what broke and how to opt back in. Captured through the end of its
-# paragraph so a multi-line footer survives.
+# paragraph so a multi-line footer survives — but stopping at the next footer
+# token too, since trailers need no blank line between them. Without that stop,
+# `BREAKING CHANGE: removed API\nRefs: #123` ships "removed API Refs: #123" as
+# the migration note, dragging every following trailer into the release notes.
 BREAKING_FOOTER_PATTERN: re.Pattern[str] = re.compile(
-    r"^BREAKING[ -]CHANGE:\s*(.+?)(?=\n\s*\n|\Z)",
+    rf"^BREAKING[ -]CHANGE:\s*(.+?)(?=\n\s*\n|\n{_FOOTER_TOKEN}|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 

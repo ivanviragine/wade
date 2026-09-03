@@ -15,12 +15,19 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 - replace the Codex network pin with a cross-tool sandbox profile (ce1657b)
 
+### Bug Fixes
+
+- point the retired-key hint at the command that actually migrates (c0a915c)
+- address PR #479 review feedback on the sandbox profile (c41688c)
+
 ### Documentation
 
+- document breaking-change detection and the handoff profile source (5b2f50e)
 - document the sandbox profile and surface breaking changes in release notes (5fe6961)
 
 ### Chores
 
+- capture migration and changelog gotchas from #479 review (3de23b3)
 - capture sandbox-profile gotchas from #478 (cb601c4)
 
 ## [v0.54.2] — 2026-09-02
