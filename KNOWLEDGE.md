@@ -731,3 +731,15 @@ Codex --sandbox danger-full-access is APPROVAL-NEUTRAL: it is a distinct flag fr
 crossby's network_access parameter defaults to False and survived the #478 sandbox toggle, so wade must keep PASSING it (LAUNCH_NETWORK_ACCESS=True) rather than omitting it: a sandboxed launch that dropped the kwarg pins sandbox_workspace_write.network_access=false and silently takes the network away from the fetch/push/gh lifecycle that requires it. Under sandbox=False crossby short-circuits and ignores the value. This is why issue #478's 'no network_access kwarg reaches any adapter' criterion could not be met literally.
 
 ---
+
+## ee8722fe7f27 | 2026-09-03 | implementation | tags: config, migration, gotcha | Issue #478
+
+Config migrations in src/wade/config/migrations.py must test key PRESENCE, never the popped value: YAML `key:` with no value parses to None, so the natural `pop(key, None) is not None` idiom drops the key in memory while reporting 'unchanged'. That boolean is the only thing driving run_all_migrations' write-back, so a false 'unchanged' leaves the retired key on disk and any deprecation warning keyed to it recurs on every run. Use the _pop_if_present helper (#479) for any future key retirement.
+
+---
+
+## 6eb12fb5eb3a | 2026-09-03 | implementation | tags: tooling, git, gotcha | Issue #478
+
+scripts/changelog.py's format_range is re-run by generate() for EVERY tag range in history, so anything per-commit inside it multiplies by the repo's whole commit count on each regeneration — the original per-commit `git log -1` body lookup would have meant thousands of subprocesses once footer-only breaking changes forced every body to be read. Pull extra commit fields from get_commits' single batched git log instead, with \x1f/\x1e field/record separators because bodies are multi-line free text that breaks any newline- or pipe-delimited format.
+
+---
