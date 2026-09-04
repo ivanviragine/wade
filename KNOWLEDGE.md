@@ -767,3 +767,15 @@ The release version bump is derived from the PR title ALONE — .github/workflow
 `tests/conftest.py` carries an autouse fixture clearing `runtime_env.SANDBOX_SIGNAL_ENV_VARS`, because `utils/runtime_env.py` reads the REAL environment — without it a suite run from inside a sandboxed Codex session sees a genuine SANDBOXED verdict and takes relaunch/diagnosis branches no test asked for. It clears only the sandbox-signal vars, never the identity markers (`CODEX_CLI`, `CLAUDE_CODE`, …) that existing tests patch directly. Any test asserting on the parent-sandbox diagnosis must also clear competing identity markers, since the probe returns the FIRST one it recognises.
 
 ---
+
+## 397994e37408 | 2026-09-04 | implementation | tags: delegation, error-handling, gotcha | Issue #480
+
+`DelegationResult.never_launched` means no process ever started, and an explicit `launched` flag set after `adapter.launch()` returns is NOT enough to decide it: `launch` blocks until the child exits for most runtimes, so an adapter that checks the exit status raises `CalledProcessError` from a session that ran and failed. Classify the interactive launch boundary by exception SHAPE — an `OSError` at the spawn started nothing, every `subprocess.SubprocessError` variant carries a child that was created — and keep the post-launch section in its own handler. `utils.process.run` maps only `FileNotFoundError` to `CommandError`, so a `PermissionError` on a binary that resolves on PATH but cannot be executed escapes `_delegate_headless` unless caught explicitly.
+
+---
+
+## 12dd26da8910 | 2026-09-04 | implementation | tags: testing, gotcha, e2e | Issue #480
+
+A non-executable file earlier on PATH does NOT make a later real binary unreachable: CPython builds an exec candidate from every PATH entry and keeps going past EACCES, so an E2E test that drops a chmod 644 stand-in into the mocked bin dir still runs the users real tool. To force a denial-shaped spawn failure, narrow PATH in the child env to the mocked bin plus only the dirs actually needed (`wade`, `git`, `/usr/bin`, `/bin`). `shutil.which` skips non-executables, so it is the right assertion that no real binary remains reachable.
+
+---
