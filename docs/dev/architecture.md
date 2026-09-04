@@ -596,11 +596,12 @@ identity, including managed `CODEX_SESSION_ID` / `CODEX_THREAD_ID` aliases), and
 a sandbox signal is actionable even when the tool cannot be named.
 
 **`UNKNOWN` is a first-class answer, never a fallback to a guess.** The
-assessment is read only from published signals: `CODEX_SANDBOX` (high confidence
-— Codex exports it only when a policy applies and names that policy; a value
-naming an explicitly unconfined mode reads `UNRESTRICTED`, any other non-empty
-value reads `SANDBOXED`, absent reads `UNKNOWN` because an older Codex may not
-export it) and `CODEX_SANDBOX_NETWORK_DISABLED` as a secondary. Every other
+assessment is read only from published signals: a present `CODEX_SANDBOX` policy
+name is high-confidence (`danger-full-access` reads `UNRESTRICTED`; another
+non-empty value reads `SANDBOXED`) and `CODEX_SANDBOX_NETWORK_DISABLED` is
+secondary. Codex currently publishes `CODEX_SANDBOX` for macOS Seatbelt, but its
+Linux Landlock sandbox with network enabled publishes neither usable marker; that
+environment deliberately reads `UNKNOWN`, not `UNRESTRICTED`. Every other
 runtime publishes nothing, so `UNKNOWN` is correct and final for them — crossby's
 static `sandboxes_writes` capability describes the *tool*, not this process's
 boundary, and inferring from tool identity is exactly the confident wrong cause
@@ -631,6 +632,7 @@ bindings.
 | Launch path | Site | Relaunch command it supplies |
 |---|---|---|
 | implementation | `implementation_service/core.py` | `wade implement <id> --no-sandbox` |
+| batch implementation | `implementation_service/batch.py` | `wade implement-batch <ids> --no-sandbox` — assessed once before terminal-broker dispatch, because broker shells may not retain the parent's markers |
 | PR-comment review | `review_service.py` | `wade review pr-comments <id> --no-sandbox` |
 | plan | `plan_service.py` | `wade plan --issue <id> --no-sandbox` (or `wade plan --no-sandbox`) — built here because it calls `build_launch_command` + `run_with_transcript` directly, bypassing `delegate()`, and has no nested-AI guard |
 | deps, standalone plan/code review, batch review | `delegation_service.delegate()` | per-operation, from `DelegationRequest.operation` / `.relaunch_command` |

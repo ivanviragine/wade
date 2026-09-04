@@ -1710,6 +1710,59 @@ class TestImplementationBatch:
             "--refresh-skills",
         ]
 
+    def test_known_parent_sandbox_is_announced_once_before_batch_dispatch(
+        self, tmp_path: Path
+    ) -> None:
+        """Terminal-broker children may lose the parent's diagnostic markers."""
+        from wade.utils.runtime_env import ParentRuntime, SandboxAssessment
+
+        parent = ParentRuntime(
+            env_var="CODEX_CLI",
+            sandbox=SandboxAssessment.SANDBOXED,
+            signal="CODEX_SANDBOX=seatbelt",
+        )
+        stack, mocks = self._batch_patches(
+            tmp_path,
+            **{
+                "wade.services.implementation_service.batch.detect_parent_runtime": parent,
+            },
+        )
+        calls: list[str] = []
+        mocks["launch_batch_in_terminals"].side_effect = lambda _items: (
+            calls.append("launch") or True
+        )
+
+        with (
+            stack,
+            patch(
+                "wade.services.implementation_service.batch.announce_inherited_sandbox",
+                side_effect=lambda *_args, **_kwargs: calls.append("announce") or True,
+            ) as announce,
+        ):
+            result = batch(
+                ["1", "2"],
+                ai_tool="codex",
+                ai_explicit=True,
+                effort="high",
+                work_skills=["project:implementation"],
+                review_skills=["builtin:code-review"],
+                refresh_skills=True,
+                project_root=tmp_path,
+            )
+
+        assert result is True
+        assert calls == ["announce", "launch"]
+        announce.assert_called_once_with(
+            parent,
+            resolved_sandbox=False,
+            operation="the batch implementation sessions",
+            relaunch_command=(
+                "wade implement-batch --no-sandbox --ai codex --effort high "
+                "--permission-mode default --skill project:implementation "
+                "--review-skill builtin:code-review --refresh-skills 1 2"
+            ),
+        )
+
     def test_dependency_cycle_returns_false(self, tmp_path: Path) -> None:
         """Dependency cycle in graph.partition() returns False with clean error."""
         mock_graph = MagicMock()

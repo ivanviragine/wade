@@ -112,6 +112,18 @@ class TestHostRelaunchCommand:
             "--skill builtin:dependency-analysis"
         )
 
+    def test_preserves_refresh_skills_for_batch_relaunch(self) -> None:
+        assert build_relaunch_command(
+            ["wade", "implement-batch"],
+            operands=["480", "481"],
+            ai_tool="codex",
+            skills=["project:implementation"],
+            refresh_skills=True,
+        ) == (
+            "wade implement-batch --no-sandbox --ai codex --skill project:implementation "
+            "--refresh-skills 480 481"
+        )
+
     def test_inherited_sandbox_command_is_printed_as_literal_text(self) -> None:
         command = "wade plan --no-sandbox --model '[draft]'"
         parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)

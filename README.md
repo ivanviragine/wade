@@ -760,7 +760,8 @@ the enclosing runtime is *known* to be sandboxed, it names that runtime when it
 can (or says **the enclosing AI runtime** when an identity marker is absent) and
 prints the exact command to re-run — on implementation, plan,
 PR-comment review, and every delegated operation (dependency analysis, plan/code
-review, batch review). That command preserves the resolved tool, model, effort,
+review, batch review), plus batch implementation before it dispatches terminal
+brokers. That command preserves the resolved tool, model, effort,
 and permission mode; only the sandbox profile changes to `--no-sandbox`.
 Implementation and PR-comment retries reuse their frozen method bindings rather
 than repeating `--skill` / `--review-skill` flags, while fresh delegated
@@ -770,14 +771,17 @@ the sandbox may still
 succeed, so refusing to try would break sessions that work today.
 
 Detection is deliberately **best-effort and conservative**. WADE reads only
-sandbox signals a runtime actually publishes (today: Codex's `CODEX_SANDBOX` and
-`CODEX_SANDBOX_NETWORK_DISABLED`) and never infers confinement from tool identity
-— a tool that *can* be sandboxed is not a tool that *is* sandboxed. When there is
-no signal the assessment is *unknown*, and WADE stays silent rather than
-asserting a cause it cannot support. A confident wrong diagnosis is worse than
-the opaque error it would replace. Managed Codex sessions are still recognised
-when they expose session/thread markers instead of the legacy `CODEX_CLI` marker;
-their displayed identity remains **Codex CLI**.
+sandbox signals a runtime actually publishes and never infers confinement from
+tool identity — a tool that *can* be sandboxed is not a tool that *is* sandboxed.
+Today Codex publishes `CODEX_SANDBOX` for macOS Seatbelt, but its Linux Landlock
+sandbox with network enabled publishes neither that marker nor a usable
+`CODEX_SANDBOX_NETWORK_DISABLED` marker. WADE must report that Linux environment
+as *unknown*, not unrestricted; if the distinction matters, relaunch from a host
+terminal rather than expecting a diagnostic. When there is no signal WADE stays
+silent rather than asserting a cause it cannot support. A confident wrong
+diagnosis is worse than the opaque error it would replace. Managed Codex sessions
+are still recognised when they expose session/thread markers instead of the
+legacy `CODEX_CLI` marker; their displayed identity remains **Codex CLI**.
 
 An explicit unrestricted signal (for example, Codex's
 `CODEX_SANDBOX=danger-full-access`) is different from an absent signal: WADE

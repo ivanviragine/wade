@@ -62,9 +62,9 @@ class TestSandboxAssessment:
         ["seatbelt", "linux-seccomp", "workspace-write", "read-only", "some-future-policy"],
     )
     def test_a_named_policy_reads_as_sandboxed(self, value: str) -> None:
-        # Codex exports the variable only when a policy is in force, so an
-        # unrecognised name is still a policy — fail toward "sandboxed", where a
-        # wrong guess costs a redundant hint rather than a restored opaque error.
+        # A published policy marker is authoritative. An unrecognised name still
+        # means a policy, so fail toward "sandboxed", where a wrong guess costs a
+        # redundant hint rather than a restored opaque error.
         assessment, signal = assess_parent_sandbox({CODEX_SANDBOX_ENV: value})
         assert assessment is SandboxAssessment.SANDBOXED
         assert signal == f"{CODEX_SANDBOX_ENV}={value}"
@@ -82,6 +82,18 @@ class TestSandboxAssessment:
     def test_a_falsey_network_flag_is_not_a_signal(self) -> None:
         assessment, _ = assess_parent_sandbox({CODEX_NETWORK_DISABLED_ENV: "0"})
         assert assessment is SandboxAssessment.UNKNOWN
+
+    def test_linux_landlock_with_network_enabled_is_unknown_without_a_marker(self) -> None:
+        """Codex's Linux sandbox publishes neither usable signal in this shape."""
+        runtime = detect_parent_runtime(
+            {
+                "CODEX_CLI": "1",
+                CODEX_NETWORK_DISABLED_ENV: "0",
+            }
+        )
+
+        assert runtime.sandbox is SandboxAssessment.UNKNOWN
+        assert requires_unsandboxed_relaunch(resolved_sandbox=False, parent=runtime) is False
 
     def test_absent_signals_are_unknown_not_unrestricted(self) -> None:
         # An older runtime that never exports the variable must not read as

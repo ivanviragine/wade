@@ -25,13 +25,13 @@ reporting none: the point of the diagnosis is to replace an opaque error with a
 
 Sandbox signals read, and their confidence:
 
-- ``CODEX_SANDBOX`` — **high confidence.** Codex exports it only when it applies
-  a sandbox policy, and names that policy (``seatbelt``, ``linux-seccomp``,
-  ``workspace-write``, …). A value naming an explicitly unconfined mode
-  (``danger-full-access``) reads as ``UNRESTRICTED``; any *other* non-empty value
-  reads as ``SANDBOXED``, because the variable exists only when a policy is in
-  force — an unrecognised policy name is still a policy. Absent means
-  ``UNKNOWN``, never ``UNRESTRICTED``: an older Codex may simply not export it.
+- ``CODEX_SANDBOX`` — **high confidence when present.** A published policy name
+  (for example ``seatbelt``) reads as ``SANDBOXED``; a value naming an explicitly
+  unconfined mode (``danger-full-access``) reads as ``UNRESTRICTED``. Codex
+  currently publishes this marker for macOS Seatbelt, but not for its Linux
+  Landlock sandbox. An absent marker is therefore ``UNKNOWN``, never
+  ``UNRESTRICTED``: the process may be an older Codex or a Linux Landlock session
+  that does not publish this signal.
 - ``CODEX_SANDBOX_NETWORK_DISABLED`` — **secondary.** Network confinement is
   confinement, so a truthy value reads as ``SANDBOXED``. Consulted only when
   ``CODEX_SANDBOX`` is absent.

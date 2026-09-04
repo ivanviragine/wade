@@ -165,14 +165,8 @@ class TestBuildImplementCmd:
         assert "--no-sandbox" not in cmd
 
 
-class TestBatchAddsNoSandboxCheckOfItsOwn:
-    """Batch implementation is not a launch path (#480).
-
-    It spawns child ``wade implement`` processes, and each child reaches the
-    parent-sandbox check in ``implementation_service.core`` on its own. A check
-    here would be a dead no-op that implies coverage it does not add — and a
-    *second* diagnosis of the same boundary, one per child, if it ever did fire.
-    """
+class TestBatchSandboxDiagnosis:
+    """Batch diagnoses once before terminal brokers dispatch child processes."""
 
     def test_the_child_command_is_a_plain_wade_implement_invocation(self) -> None:
         cmd = _build_implement_cmd(
@@ -187,15 +181,11 @@ class TestBatchAddsNoSandboxCheckOfItsOwn:
 
         assert cmd[:3] == ["wade", "implement", "42"]
 
-    def test_batch_module_holds_no_parent_runtime_probe(self) -> None:
-        """Pinned as source text: the point is the *absence* of a check.
-
-        A behavioural assertion cannot distinguish "no check" from "a check that
-        happens not to fire", which is exactly the confusion this guards against.
-        """
+    def test_batch_module_probes_the_parent_before_terminal_dispatch(self) -> None:
+        """Terminal-broker shells can lose the parent runtime's marker."""
         module = importlib.import_module("wade.services.implementation_service.batch")
         assert module.__file__ is not None
         source = Path(module.__file__).read_text(encoding="utf-8")
 
-        assert "requires_unsandboxed_relaunch" not in source
-        assert "detect_parent_runtime" not in source
+        assert "detect_parent_runtime" in source
+        assert 'operation="the batch implementation sessions"' in source

@@ -384,6 +384,7 @@ def build_relaunch_command(
     mode: DelegationMode | None = None,
     skills: list[str] | None = None,
     review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
     staged: bool = False,
 ) -> str:
     """Build a quoted host-terminal retry from a resolved AI invocation.
@@ -410,6 +411,8 @@ def build_relaunch_command(
         argv.extend(("--skill", skill))
     for skill in review_skills or ():
         argv.extend(("--review-skill", skill))
+    if refresh_skills:
+        argv.append("--refresh-skills")
     argv.extend(operands or ())
     return shlex.join(argv)
 
