@@ -784,8 +784,10 @@ the opaque error it would replace.
    that is the answer — relaunch the outer session with that command.
 2. **Check whether the reviewer actually started.** A reviewer that ran and
    exited non-zero is a different problem; "relaunch the outer session" is wrong
-   advice for it. WADE distinguishes the two and only offers the relaunch when
-   nothing started.
+   advice for it. WADE distinguishes the two and blames the sandbox only when
+   nothing started *and* the failure looks like a denial — a refusal WADE made
+   itself (an unknown tool, a tool with no headless mode) never reached the
+   sandbox, so it gets the generic remediation instead.
 3. **Check the tool's own login and PATH** in the runtime where it must run
    (`gh auth status`, the delegate's own auth command). A separately
    authenticated delegate needs its *own* credentials, not WADE's.

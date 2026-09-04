@@ -627,7 +627,13 @@ Deps (`deps_service.py`), standalone review (`review_delegation_service.py`) and
 batch review (via `review_delegation_service`) all funnel through the one
 `delegate()` dispatcher, so this cross-cutting concern lives there **once**.
 Centralising costs per-operation context, which is why the remediation fields
-ride on `DelegationRequest` — generic advice would defeat the purpose.
+ride on `DelegationRequest` — generic advice would defeat the purpose. The
+command is built by `review_delegation_service._relaunch_command()`, which
+appends the operation's own **required positional operand** (the plan path for
+`wade review plan`, the tracking issue for `wade review batch`) and withholds the
+hint entirely when it has none: those base commands are rejected by Typer, and a
+line the user cannot paste is worse than no line — the same rule already applied
+to an unmapped command.
 `batch.py` deliberately has **no** check: it spawns child `wade implement`
 processes that reach the `core.py` check themselves, so one here would be a dead
 no-op implying coverage it does not add (pinned as source text in
@@ -641,9 +647,14 @@ tool, a `supports_headless` rejection, a `CommandError` spawn failure, or an
 `CommandError`, so a `PermissionError` on a resolvable-but-unexecutable binary
 used to escape `_delegate_headless` and abort the command with a traceback). A
 **non-zero exit** keeps it `False`: that process ran, and a timeout still sets
-`timed_out` and still consumes a pass. The interactive path carries an explicit
-`launched` flag because the launch and the post-session output read share one
-exception handler. The headless path matters most — this repo configures
+`timed_out` and still consumes a pass. The interactive path splits the launch
+boundary into its own handler and classifies by **exception shape**, because
+`adapter.launch` blocks until the child exits for most runtimes: an `OSError` at
+the spawn started nothing, while every `subprocess.SubprocessError` variant
+(`CalledProcessError`, `TimeoutExpired`) carries a child that was created and so
+counts as launched even though the call never returned. Everything after the
+adapter returns — the confirm prompt, the output-file read — is post-launch by
+position, whatever it raises. The headless path matters most — this repo configures
 `mode: headless` for `deps`, `review_plan` and `review_implementation`, and the
 receipt gate excludes `PROMPT` outright.
 
@@ -664,10 +675,18 @@ protection (#462) and receipt *classification* remain separate problems: the gat
 at `review_delegation_service.py` already withheld budget, and `never_launched`
 is what now lets the remediation be trusted instead of hedged.
 `_report_failed_review()` grades it by what wade actually knows — (1) known
-sandboxed parent → state the cause and the exact relaunch command; (2)
-denial-shaped failure with no signal → offer it as a *possible* cause alongside
-`_HEDGED_REVIEW_FAILURE`; (3) anything else → that hedged wording alone, kept
-verbatim. `done` gates stay closed in every case.
+sandboxed parent **and** a denial-shaped failure → state the cause and the exact
+relaunch command; (2) denial-shaped failure with no signal → offer it as a
+*possible* cause alongside `_HEDGED_REVIEW_FAILURE`; (3) anything else → that
+hedged wording alone, kept verbatim. `done` gates stay closed in every case.
+
+The denial shape is required in (1), not implied by the sandbox: a known boundary
+says the reviewer *could* have been denied, never that it *was*. Without it every
+`never_launched` result took that branch — including a configuration refusal that
+never touched the OS (`Unknown AI tool`, `No AI tool specified`) and a genuinely
+uninstalled binary — blaming inaccessible host credentials and returning before
+the more useful generic remediation. `UNATTEMPTED` is still recorded from
+`never_launched` alone; only the *explanation* is graded.
 
 **Retirement path for `ai.network_access`.** The loader deliberately never reads
 the key (an un-migrated `.wade.yml` keeps loading), `strip_retired_network_access`
