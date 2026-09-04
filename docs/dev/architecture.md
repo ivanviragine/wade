@@ -610,8 +610,8 @@ not a substitute for an OS signal on the runtime that currently encloses wade.
 **One predicate, four call sites.** `requires_unsandboxed_relaunch()` is true
 only for *resolved profile unrestricted* **and** *parent known sandboxed* — a
 published signal remains enough to warn even if the separate identity probe has
-no match. Identity is still required only for the nested-launch guard and the
-plan-handoff fail-closed branch.
+no match. Identity is required only for the nested-launch guard; an identityless
+published sandbox signal also makes the plan-handoff path fail closed.
 `ai_resolution.announce_inherited_sandbox()` is the single user-facing emitter, so
 the paths cannot drift into four explanations of one boundary. It is **advisory,
 never a block** (wade cannot prove the delegated tool will fail) and says nothing
