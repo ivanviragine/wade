@@ -177,6 +177,16 @@ class TestRemediationWording:
         assert "cannot confirm" in text
         assert "if it is" in text
 
+    def test_an_explicitly_unrestricted_parent_does_not_get_sandbox_remediation(self) -> None:
+        text = possible_inherited_sandbox_cause(
+            ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.UNRESTRICTED)
+        )
+
+        assert "explicitly reports an unrestricted runtime" in text
+        assert "executable permissions or network configuration" in text
+        assert "no sandbox signal" not in text
+        assert "relaunch" not in text
+
 
 class TestSandboxDenialShapes:
     @pytest.mark.parametrize(

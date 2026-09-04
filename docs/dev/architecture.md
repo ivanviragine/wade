@@ -606,6 +606,11 @@ static `sandboxes_writes` capability describes the *tool*, not this process's
 boundary, and inferring from tool identity is exactly the confident wrong cause
 the module exists to avoid. A requested profile of a finished child process is
 not a substitute for an OS signal on the runtime that currently encloses wade.
+The tri-state also controls launch-failure wording: an absent signal keeps a
+denial-shaped failure conditional, while an explicit unrestricted signal (such
+as `CODEX_SANDBOX=danger-full-access`) rules out inherited confinement and sends
+the user to executable-permission or network configuration instead of suggesting
+an outer-session relaunch.
 
 **One predicate, four call sites.** `requires_unsandboxed_relaunch()` is true
 only for *resolved profile unrestricted* **and** *parent known sandboxed* — a

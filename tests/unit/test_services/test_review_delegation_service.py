@@ -13,7 +13,7 @@ from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.permission import PermissionMode
-from wade.models.session_manifest import ResolvedBinding
+from wade.models.session_manifest import ResolvedBinding, ReviewOutcome
 from wade.models.skill import ResolvedSkill
 from wade.services import review_delegation_service as rds
 from wade.services.review_delegation_service import (
@@ -1350,6 +1350,29 @@ class TestReviewPassCountUnaffectedByRetry:
         review_implementation()
 
         mock_record.assert_called_once()
+
+
+class TestBindingOutcomeWarnings:
+    @patch("wade.services.review_delegation_service.console")
+    @patch("wade.services.review_delegation_service.write_review_record", return_value=None)
+    def test_unattempted_receipt_failure_does_not_claim_completion(
+        self,
+        mock_write: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = rds._record_binding_outcome(
+            tmp_path,
+            "a" * 40,
+            _prepared_method(),
+            ReviewOutcome.UNATTEMPTED,
+        )
+
+        assert result is None
+        mock_write.assert_called_once()
+        mock_console.warn.assert_called_once_with(
+            "Could not persist the unattempted-review audit record."
+        )
 
 
 # ---------------------------------------------------------------------------

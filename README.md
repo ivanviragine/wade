@@ -779,6 +779,13 @@ the opaque error it would replace. Managed Codex sessions are still recognised
 when they expose session/thread markers instead of the legacy `CODEX_CLI` marker;
 their displayed identity remains **Codex CLI**.
 
+An explicit unrestricted signal (for example, Codex's
+`CODEX_SANDBOX=danger-full-access`) is different from an absent signal: WADE
+does **not** recommend relaunching the outer session for a permission- or
+network-shaped launch failure in that case. The parent has already confirmed it
+is unrestricted, so check executable permissions and network configuration
+instead.
+
 **Troubleshooting order** when a delegated tool fails to launch:
 
 1. **Read what WADE printed.** An explicit sandbox-policy denial plus a named

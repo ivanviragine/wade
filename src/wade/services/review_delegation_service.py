@@ -640,7 +640,10 @@ def _record_binding_outcome(
         outcome=outcome,
     )
     if record is None:
-        console.warn("Review completed, but its binding-aware receipt could not be persisted.")
+        if outcome is ReviewOutcome.UNATTEMPTED:
+            console.warn("Could not persist the unattempted-review audit record.")
+        else:
+            console.warn("Review completed, but its binding-aware receipt could not be persisted.")
         return None
     return count_binding_passes(
         repo_root,

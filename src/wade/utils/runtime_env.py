@@ -247,6 +247,13 @@ def possible_inherited_sandbox_cause(parent: ParentRuntime) -> str:
             "the failure persists, relaunch the outer session unrestricted."
         )
 
+    if parent.sandbox is SandboxAssessment.UNRESTRICTED:
+        return (
+            f"{parent.label} explicitly reports an unrestricted runtime, so this denial is "
+            "not inherited from a parent sandbox. Check executable permissions or network "
+            "configuration."
+        )
+
     subject = parent.label if parent.detected else UNNAMED_RUNTIME_LABEL
     return (
         f"This failure has the shape of a sandbox denial. wade cannot confirm whether "
