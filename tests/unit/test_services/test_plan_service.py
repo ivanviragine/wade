@@ -411,6 +411,25 @@ class TestTranscriptWiring:
 
             assert mock_rwt.call_args[0][1] == transcript
 
+    def test_spawn_permission_error_is_reported_as_a_failed_launch(self, tmp_path: Path) -> None:
+        """A sandbox denial at the exec boundary must not raise a raw traceback."""
+        with (
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch(
+                "wade.services.plan_service.run_with_transcript",
+                side_effect=PermissionError(13, "Permission denied"),
+            ),
+            patch("wade.services.plan_service.console.warn") as warn,
+        ):
+            adapter = MagicMock()
+            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
+            mock_get.return_value = adapter
+
+            result = run_ai_planning_session(ai_tool="claude", plan_dir=str(tmp_path))
+
+        assert result == 1
+        warn.assert_called_once_with("AI tool launch failed: [Errno 13] Permission denied")
+
     def test_no_transcript_path_passes_none(self, tmp_path: Path) -> None:
         """When transcript_path is None, run_with_transcript receives None."""
         with (
@@ -667,7 +686,6 @@ class TestFinalizeIssues:
             _issue_number: str,
             *,
             before_start: Callable[[], bool] | None = None,
-            plan_sandbox: bool | None = None,
         ) -> bool:
             assert before_start is not None
             return before_start()
@@ -1173,28 +1191,7 @@ class TestOfferToImplement:
             result = _offer_to_implement("42")
 
             assert result is True
-            mock_start.assert_called_once_with(target="42", plan_handoff=True, plan_sandbox=None)
-
-    def test_planner_profile_is_forwarded_to_the_handoff(self) -> None:
-        """The planner's *resolved* profile crosses the handoff, not its config.
-
-        ``wade plan --sandbox`` outranks ``ai.plan.sandbox``, so the
-        implementation side must be told what the planner actually launched with
-        rather than re-deriving it and comparing against a session that never ran.
-        """
-        with (
-            patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_implementation_session") as mock_start,
-            patch("wade.services.plan_service.console"),
-        ):
-            mock_prompts.is_tty.return_value = True
-            mock_prompts.confirm.return_value = True
-            from wade.services.implementation_service import ImplementResult
-
-            mock_start.return_value = ImplementResult(success=True)
-
-            assert _offer_to_implement("42", plan_sandbox=True) is True
-            assert mock_start.call_args.kwargs["plan_sandbox"] is True
+            mock_start.assert_called_once_with(target="42", plan_handoff=True)
 
     def test_user_declines_returns_none(self) -> None:
         """Declining the prompt returns None without flushing or starting."""
@@ -1299,11 +1296,11 @@ class TestFinalizeIssuesHints:
                 issue_numbers=["1"],
             )
 
-            mock_offer.assert_called_once_with("1", plan_sandbox=None)
+            mock_offer.assert_called_once_with("1")
             assert result is True
 
-    def test_resolved_profile_reaches_the_offer(self) -> None:
-        """``_finalize_issues`` carries the planner's profile to the implement offer."""
+    def test_planner_profile_does_not_reach_the_offer(self) -> None:
+        """The child planner profile is not the enclosing handoff runtime."""
         with (
             patch("wade.services.plan_service._offer_to_implement") as mock_offer,
             patch("wade.services.plan_service.apply_plan_token_usage"),
@@ -1319,7 +1316,7 @@ class TestFinalizeIssuesHints:
                 sandbox=True,
             )
 
-            assert mock_offer.call_args.kwargs["plan_sandbox"] is True
+            mock_offer.assert_called_once_with("1")
 
     def test_multiple_issues_shows_batch_hint(self) -> None:
         """Multiple issues show wade implement-batch hint, not offer prompt."""
@@ -1338,6 +1335,10 @@ class TestFinalizeIssuesHints:
 
             mock_offer.assert_not_called()
             mock_console.detail.assert_called_with("wade implement-batch 1 2 3")
+            assert all(
+                call.args != ("No dependencies found between issues.",)
+                for call in mock_console.info.call_args_list
+            )
             assert result is None
 
 

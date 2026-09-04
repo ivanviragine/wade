@@ -73,7 +73,7 @@ class TestReviewPlanCli:
             success=True, feedback="LGTM", mode=DelegationMode.PROMPT
         )
 
-        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        result = runner.invoke(app, ["review", "plan", str(plan_file), "--no-sandbox"])
         assert result.exit_code == 2
         assert "SELF-REVIEW" in result.output
         mock_delegate.assert_called_once()
@@ -107,6 +107,7 @@ class TestReviewPlanCli:
         request = mock_delegate.call_args[0][0]
         assert "# Test Plan" in request.prompt
         assert request.mode == DelegationMode.INTERACTIVE
+        assert request.sandbox is False
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -388,6 +389,23 @@ class TestReviewImplementationCli:
         assert mock_review.call_args.kwargs["staged"] is True
 
     @patch("wade.services.review_delegation_service.review_implementation")
+    def test_review_implementation_forwards_explicit_sandbox_opt_out(
+        self,
+        mock_review: MagicMock,
+    ) -> None:
+        mock_review.return_value = DelegationResult(
+            success=True,
+            feedback="No changes.",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+
+        result = runner.invoke(app, ["review", "implementation", "--no-sandbox"])
+
+        assert result.exit_code == 0
+        assert mock_review.call_args.kwargs["sandbox"] is False
+
+    @patch("wade.services.review_delegation_service.review_implementation")
     def test_review_implementation_skipped_omits_completion_banner(
         self,
         mock_review_implementation: MagicMock,
@@ -441,6 +459,7 @@ class TestReviewBatchCli:
                 "headless",
                 "--effort",
                 "low",
+                "--no-sandbox",
             ],
         )
 
@@ -458,6 +477,7 @@ class TestReviewBatchCli:
             yolo=None,
             permission_mode=None,
             permission_mode_explicit=False,
+            sandbox=False,
             skills=None,
         )
 
@@ -512,6 +532,7 @@ class TestReviewBatchCli:
             yolo=None,
             permission_mode=None,
             permission_mode_explicit=False,
+            sandbox=None,
             skills=None,
         )
 
@@ -522,6 +543,23 @@ class TestReviewBatchCli:
 
 
 class TestReviewCliEffortFlag:
+    @patch("wade.services.review_service.start", return_value=True)
+    def test_review_pr_comments_effort_flag(self, mock_start: MagicMock) -> None:
+        result = runner.invoke(app, ["review", "pr-comments", "42", "--effort", "high"])
+
+        assert result.exit_code == 0
+        assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
+    @patch("wade.services.review_service.start", return_value=True)
+    def test_review_pr_comments_tool_default_effort_flag(self, mock_start: MagicMock) -> None:
+        """The recovery command can represent the UI's explicit default choice."""
+        result = runner.invoke(app, ["review", "pr-comments", "42", "--effort", "none"])
+
+        assert result.exit_code == 0
+        assert mock_start.call_args.kwargs["effort"] == "none"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")

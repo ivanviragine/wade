@@ -7,9 +7,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import crossby.ai_tools  # noqa: F401 — triggers adapter auto-registration
+import pytest
 
 from wade.models.config import AICommandConfig
-from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.services.delegation_service import (
     TIMEOUT_CEILING,
@@ -25,6 +26,7 @@ from wade.services.delegation_service import (
     scaled_timeout,
 )
 from wade.utils.process import CommandError
+from wade.utils.runtime_env import CODEX_SANDBOX_ENV
 
 # ---------------------------------------------------------------------------
 # Mode resolution
@@ -620,3 +622,385 @@ class TestExtendedTimeout:
             retry = extended_timeout(t)
             assert retry > t, f"extended_timeout({t}) == {retry}, not longer than {t}"
             assert retry == round(t * 1.5)
+
+
+# ---------------------------------------------------------------------------
+# Never-launched classification + the shared parent-sandbox check (#480)
+# ---------------------------------------------------------------------------
+
+
+class TestNeverLaunchedClassification:
+    """Distinguish "never started" from "started and failed".
+
+    The headless path is covered first because it is the default for reviews —
+    this repo configures ``mode: headless`` for ``deps``, ``review_plan`` and
+    ``review_implementation``, and the receipt gate excludes ``PROMPT`` outright.
+    Fixing only the interactive path would land the change on code the reviews
+    never execute.
+    """
+
+    def test_missing_tool_never_launched(self) -> None:
+        result = _delegate_headless(
+            DelegationRequest(mode=DelegationMode.HEADLESS, prompt="p", ai_tool=None)
+        )
+        assert result.never_launched is True
+
+    def test_unknown_tool_never_launched(self) -> None:
+        result = _delegate_headless(
+            DelegationRequest(mode=DelegationMode.HEADLESS, prompt="p", ai_tool="nonexistent_tool")
+        )
+        assert result.never_launched is True
+
+    def test_capability_rejection_never_launched(self) -> None:
+        result = _delegate_headless(
+            DelegationRequest(mode=DelegationMode.HEADLESS, prompt="p", ai_tool="vscode")
+        )
+        assert result.never_launched is True
+
+    @patch("wade.services.delegation_service.run")
+    def test_spawn_failure_never_launched(self, mock_run: MagicMock) -> None:
+        """A ``CommandError`` is the spawn itself failing — nothing ran."""
+        mock_run.side_effect = CommandError(["claude"], 126, "permission denied")
+        result = _delegate_headless(
+            DelegationRequest(mode=DelegationMode.HEADLESS, prompt="p", ai_tool="claude")
+        )
+        assert result.success is False
+        assert result.never_launched is True
+
+    @patch("wade.services.delegation_service.run")
+    def test_exec_denial_never_launched(self, mock_run: MagicMock) -> None:
+        """A binary that resolves but cannot be executed must not crash the command.
+
+        ``utils.process.run`` maps only ``FileNotFoundError`` to ``CommandError``,
+        so a ``PermissionError`` on exec used to escape ``_delegate_headless``
+        entirely — aborting `wade review implementation` with a traceback on one
+        of the exact shapes an inherited sandbox produces.
+        """
+        mock_run.side_effect = PermissionError(13, "Permission denied")
+        result = _delegate_headless(
+            DelegationRequest(mode=DelegationMode.HEADLESS, prompt="p", ai_tool="claude")
+        )
+        assert result.success is False
+        assert result.never_launched is True
+        assert result.timed_out is False
+
+    @patch("wade.services.delegation_service.run")
+    def test_nonzero_exit_did_launch(self, mock_run: MagicMock) -> None:
+        """The distinction that makes the diagnosis trustworthy.
+
+        This reviewer started, ran, and exited non-zero. Telling its user to
+        relaunch the outer session would be confidently wrong advice.
+        """
+        mock_run.return_value = MagicMock(returncode=3, stdout="partial", stderr="boom")
+        result = _delegate_headless(
+            DelegationRequest(mode=DelegationMode.HEADLESS, prompt="p", ai_tool="claude")
+        )
+        assert result.success is False
+        assert result.never_launched is False
+
+    @patch("wade.services.delegation_service.run")
+    def test_timeout_did_launch_and_still_consumes_a_pass(self, mock_run: MagicMock) -> None:
+        """A real timeout is a reviewer that ran out of budget, not one that never ran."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
+        result = _delegate_headless(
+            DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="p",
+                ai_tool="claude",
+                timeout=1,
+                explicit_timeout=True,
+            )
+        )
+        assert result.timed_out is True
+        assert result.never_launched is False
+
+    @patch("wade.services.delegation_service.run")
+    def test_timeout_then_spawn_failure_remains_timed_out(self, mock_run: MagicMock) -> None:
+        """A retry failing to spawn cannot erase the first attempted timeout."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["claude"], timeout=600),
+            CommandError(["claude"], 126, "permission denied"),
+        ]
+
+        result = _delegate_headless(
+            DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="p",
+                ai_tool="claude",
+                timeout=600,
+            )
+        )
+
+        assert result.success is False
+        assert result.timed_out is True
+        assert result.never_launched is False
+
+    @patch("wade.services.delegation_service.run")
+    def test_timeout_then_nonzero_exit_remains_timed_out(self, mock_run: MagicMock) -> None:
+        """A retry that starts but exits non-zero also retains the timeout receipt."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["claude"], timeout=600),
+            MagicMock(returncode=3, stdout="", stderr="boom"),
+        ]
+
+        result = _delegate_headless(
+            DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="p",
+                ai_tool="claude",
+                timeout=600,
+            )
+        )
+
+        assert result.success is False
+        assert result.timed_out is True
+        assert result.never_launched is False
+
+    def test_interactive_launch_failure_never_launched(self) -> None:
+        adapter = MagicMock()
+        adapter.launch.side_effect = OSError("Operation not permitted")
+        with patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.never_launched is True
+
+    def test_interactive_prompt_delivery_failure_never_launched(self) -> None:
+        """Clipboard fallback runs before the spawn, so its failure started nothing."""
+        adapter = MagicMock()
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.delegation_service.deliver_prompt_if_needed",
+                side_effect=subprocess.CalledProcessError(1, ["pbcopy"]),
+            ),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.never_launched is True
+        adapter.launch.assert_not_called()
+
+    def test_interactive_temp_directory_failure_never_launched(self) -> None:
+        """Output-path setup is before the spawn and must not escape as a traceback."""
+        adapter = MagicMock()
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.delegation_service.tempfile.mkdtemp",
+                side_effect=PermissionError("read-only temp directory"),
+            ),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+
+        assert result.success is False
+        assert result.never_launched is True
+        adapter.launch.assert_not_called()
+
+    def test_interactive_output_parent_failure_never_launched(self, tmp_path: Path) -> None:
+        """A requested output directory is another pre-launch filesystem boundary."""
+        adapter = MagicMock()
+        output_file = tmp_path / "locked" / "out.txt"
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch.object(Path, "mkdir", side_effect=PermissionError("read-only directory")),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(
+                    mode=DelegationMode.INTERACTIVE,
+                    prompt="p",
+                    ai_tool="claude",
+                    output_file=output_file,
+                )
+            )
+
+        assert result.success is False
+        assert result.never_launched is True
+        adapter.launch.assert_not_called()
+
+    def test_interactive_nonzero_exit_from_a_blocking_adapter_did_launch(self) -> None:
+        """A blocking adapter raises only *after* the session ran and failed.
+
+        ``adapter.launch`` blocks until the child exits, so an adapter that
+        checks the exit status raises ``CalledProcessError`` from a reviewer that
+        very much started. Reporting that as never-launched would record an
+        ``UNATTEMPTED`` outcome and offer sandbox-relaunch advice for a session
+        the user watched run.
+        """
+        adapter = MagicMock()
+        adapter.launch.side_effect = subprocess.CalledProcessError(3, ["claude"])
+        with patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.success is False
+        assert result.never_launched is False
+        assert "after launch" in result.feedback
+
+    def test_interactive_launch_timeout_did_launch(self) -> None:
+        """``TimeoutExpired`` likewise carries a child that was created."""
+        adapter = MagicMock()
+        adapter.launch.side_effect = subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
+        with patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.never_launched is False
+
+    def test_interactive_failure_after_launch_did_launch(self, tmp_path: Path) -> None:
+        """An output file that cannot be read is not a launch failure.
+
+        The launch and the post-session read share one exception handler, so
+        without the explicit launch-boundary split a session that ran to
+        completion and then lost its output would be reported as never started.
+        """
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+        output_file = tmp_path / "out.txt"
+        output_file.write_text("findings")
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch.object(Path, "read_text", side_effect=OSError("Permission denied")),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(
+                    mode=DelegationMode.INTERACTIVE,
+                    prompt="p",
+                    ai_tool="claude",
+                    output_file=output_file,
+                )
+            )
+        assert result.success is False
+        assert result.never_launched is False
+
+
+class TestSharedParentSandboxCheck:
+    """One check in ``delegate()`` covers every operation that funnels through it."""
+
+    @staticmethod
+    def _sandboxed_request(operation: str, relaunch_command: str) -> DelegationRequest:
+        return DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="p",
+            ai_tool="claude",
+            sandbox=False,
+            operation=operation,
+            relaunch_command=relaunch_command,
+        )
+
+    @pytest.mark.parametrize(
+        ("operation", "relaunch"),
+        [
+            ("the implementation review", "wade review implementation"),
+            # The two commands with a required positional operand carry it —
+            # see review_delegation_service._relaunch_command.
+            ("the plan review", "wade review plan docs/plan.md"),
+            ("the batch review", "wade review batch 42"),
+            ("the dependency analysis", "wade task deps 12 13"),
+        ],
+    )
+    def test_each_operation_gets_its_own_relaunch_command(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        operation: str,
+        relaunch: str,
+    ) -> None:
+        """Centralising the check must not flatten the remediation into generic advice."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(
+            supports_headless=True,
+            headless_flag="--print",
+        )
+        adapter.build_launch_command.return_value = ["claude", "--print"]
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.delegation_service._run_headless_once",
+                return_value=DelegationResult(
+                    success=True,
+                    feedback="ok",
+                    mode=DelegationMode.HEADLESS,
+                ),
+            ),
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = delegate(self._sandboxed_request(operation, relaunch))
+
+        assert operation in str(mock_console.warn.call_args_list)
+        mock_console.detail.assert_any_call(relaunch, markup=False)
+        assert result.launch_attempted is True
+        assert result.inherited_sandbox_profile_mismatch is True
+
+    def test_an_unlaunchable_tool_does_not_get_sandbox_remediation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Relaunching cannot repair a tool lookup failure before any process exists."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        request = self._sandboxed_request("the implementation review", "wade review implementation")
+        request.ai_tool = "nonexistent_tool"
+        with patch("wade.ui.console.console") as mock_console:
+            result = delegate(request)
+
+        assert result.never_launched is True
+        assert result.launch_attempted is False
+        assert result.inherited_sandbox_profile_mismatch is False
+        assert mock_console.warn.call_count == 0
+        mock_console.detail.assert_not_called()
+
+    def test_an_unknown_parent_assessment_stays_silent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv(CODEX_SANDBOX_ENV, raising=False)
+        # The assertion is about the parent-runtime advisory, not whether a
+        # configured CLI is installed.  Keep this unit test hermetic: letting
+        # the normal headless path run here launches a real tool whenever the
+        # assessment is UNKNOWN.
+        with (
+            patch("wade.ui.console.console") as mock_console,
+            patch(
+                "wade.services.delegation_service._delegate_headless",
+                return_value=DelegationResult(
+                    success=True,
+                    feedback="ok",
+                    mode=DelegationMode.HEADLESS,
+                ),
+            ),
+        ):
+            delegate(
+                self._sandboxed_request("the implementation review", "wade review implementation")
+            )
+
+        assert mock_console.warn.call_count == 0
+
+    def test_a_sandboxed_request_inside_a_sandbox_is_no_mismatch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing was promised that the boundary takes away."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        request = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="p",
+            ai_tool="nonexistent_tool",
+            sandbox=True,
+            operation="the implementation review",
+            relaunch_command="wade review implementation",
+        )
+        with patch("wade.ui.console.console") as mock_console:
+            result = delegate(request)
+
+        assert mock_console.warn.call_count == 0
+        assert result.inherited_sandbox_profile_mismatch is False
+
+    def test_prompt_mode_never_reaches_the_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Prompt mode starts no runtime, so no boundary applies to it."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        with patch("wade.ui.console.console") as mock_console:
+            result = delegate(
+                DelegationRequest(mode=DelegationMode.PROMPT, prompt="p", sandbox=False)
+            )
+
+        assert result.success is True
+        assert mock_console.warn.call_count == 0

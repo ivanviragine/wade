@@ -17,6 +17,7 @@ done here to keep this PR focused.
 from __future__ import annotations
 
 import os
+import shlex
 
 import structlog
 from crossby.ai_tools import AbstractAITool
@@ -28,6 +29,12 @@ from wade.models.permission import (
     PermissionMode,
     coerce_permission_mode,
     describe_permission_mode,
+)
+from wade.utils.runtime_env import (
+    INHERITED_SANDBOX_HINT,
+    ParentRuntime,
+    inherited_sandbox_finding,
+    requires_unsandboxed_relaunch,
 )
 
 logger = structlog.get_logger()
@@ -322,6 +329,92 @@ def enforce_sandbox_capability(tool: str, sandbox: bool) -> None:
             f"{tool} sandboxes writes but exposes no sandbox toggle — this session "
             "runs sandboxed despite the unrestricted profile."
         )
+
+
+def announce_inherited_sandbox(
+    parent: ParentRuntime,
+    *,
+    resolved_sandbox: bool,
+    operation: str,
+    relaunch_command: str | None = None,
+) -> bool:
+    """Report an unrestricted profile that the parent runtime makes undeliverable.
+
+    The single user-facing emitter for the shared profile-mismatch predicate, so
+    the four launch paths that can hit it (implementation, PR-comment review,
+    plan, and the delegation dispatcher) cannot drift into four different
+    explanations of the same boundary.
+
+    Advisory, never a block: wade states what it knows and hands over the exact
+    command that delivers the requested profile. It returns whether it fired so a
+    caller with its own follow-on behaviour — the plan handoff's forced fresh
+    context — can key off the same decision.
+
+    Says nothing at all on an ``UNKNOWN`` assessment. A runtime that publishes no
+    sandbox signal cannot be *reported* as sandboxed without inventing the
+    finding, and an inherited sandbox announced on a guess is worse than the
+    opaque error it replaces.
+    """
+    if not requires_unsandboxed_relaunch(resolved_sandbox=resolved_sandbox, parent=parent):
+        return False
+
+    from wade.ui.console import console
+
+    logger.warning(
+        "sandbox.inherited_parent_boundary",
+        parent=parent.env_var,
+        signal=parent.signal,
+        operation=operation,
+    )
+    console.warn(inherited_sandbox_finding(parent, operation=operation))
+    if relaunch_command:
+        console.hint(INHERITED_SANDBOX_HINT)
+        console.detail(relaunch_command, markup=False)
+    return True
+
+
+def build_relaunch_command(
+    command: list[str],
+    *,
+    operands: list[str] | None = None,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+    permission_mode: PermissionMode | None = None,
+    mode: DelegationMode | None = None,
+    skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    refresh_skills: bool = False,
+    staged: bool = False,
+) -> str:
+    """Build a quoted host-terminal retry from a resolved AI invocation.
+
+    The enclosing runtime's sandbox is the only value intentionally changed: a
+    retry uses ``--no-sandbox``. All resolved launch values and methodology
+    bindings remain explicit, so a config change between failure and retry does
+    not silently select another runtime, model, permission tier, or method.
+    """
+    argv = [*command, "--no-sandbox"]
+    if mode is not None:
+        argv.extend(("--mode", mode.value))
+    if ai_tool is not None:
+        argv.extend(("--ai", ai_tool))
+    if model is not None:
+        argv.extend(("--model", model))
+    if effort is not None:
+        argv.extend(("--effort", effort))
+    if permission_mode is not None:
+        argv.extend(("--permission-mode", permission_mode.value))
+    if staged:
+        argv.append("--staged")
+    for skill in skills or ():
+        argv.extend(("--skill", skill))
+    for skill in review_skills or ():
+        argv.extend(("--review-skill", skill))
+    if refresh_skills:
+        argv.append("--refresh-skills")
+    argv.extend(operands or ())
+    return shlex.join(argv)
 
 
 def resolve_sandbox(

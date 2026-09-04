@@ -749,3 +749,45 @@ scripts/changelog.py's format_range is re-run by generate() for EVERY tag range 
 The release version bump is derived from the PR title ALONE — .github/workflows/auto-version.yml greps only github.event.pull_request.title, never commit history — and done.py's PR-title sync overwrites that title from the ISSUE title on every done. So a `feat!:` commit with a real BREAKING CHANGE footer still ships as a MINOR release unless issue #N's own title carries the `!`; retitle the issue (gh issue edit --title, since wade task update only edits the body), not just the PR, or done reverts it.
 
 ---
+
+## 1f23c00660aa | 2026-09-04 | implementation | tags: delegation, architecture, sandbox | Issue #480
+
+`delegation_service.delegate()` is the single dispatcher for deps, standalone plan/code review, and batch review — `deps_service` and `review_delegation_service` call it directly and `batch_review_service` reaches it through the latter — so a cross-cutting launch concern belongs there ONCE, not per service. Centralising costs per-operation context, so remediation text must ride on `DelegationRequest` fields rather than being generated inside the dispatcher. `implementation_service/batch.py` is NOT a launch path: it builds ["wade", "implement", <id>] and spawns child `wade` processes that reach the `core.py` check themselves, so a check there is a dead no-op implying coverage it does not add.
+
+---
+
+## 280ed6e410b6 | 2026-09-04 | implementation | tags: delegation, sandbox, gotcha, error-handling | Issue #480
+
+`DelegationResult.never_launched` means no process ever started (absent/unknown tool, `supports_headless` rejection, `CommandError` spawn failure, `OSError` on exec) — a non-zero exit AND a real timeout must both keep it False, because "relaunch the outer session" is wrong advice for a reviewer that actually ran. `utils.process.run` maps only `FileNotFoundError` to `CommandError`, so a `PermissionError` on a binary that resolves on PATH but cannot be executed escapes `_delegate_headless` entirely unless caught explicitly — one of the exact shapes an inherited sandbox produces. The interactive path needs an explicit `launched` flag because `adapter.launch` and the post-session output-file read share one exception handler.
+
+---
+
+## 65ee7eb64d81 | 2026-09-04 | implementation | tags: testing, sandbox, gotcha | Issue #480
+
+`tests/conftest.py` carries an autouse fixture clearing `runtime_env.SANDBOX_SIGNAL_ENV_VARS`, because `utils/runtime_env.py` reads the REAL environment — without it a suite run from inside a sandboxed Codex session sees a genuine SANDBOXED verdict and takes relaunch/diagnosis branches no test asked for. It clears only the sandbox-signal vars, never the identity markers (`CODEX_CLI`, `CLAUDE_CODE`, …) that existing tests patch directly. Any test asserting on the parent-sandbox diagnosis must also clear competing identity markers, since the probe returns the FIRST one it recognises.
+
+---
+
+## 397994e37408 | 2026-09-04 | implementation | tags: delegation, error-handling, gotcha | Issue #480
+
+`DelegationResult.never_launched` means no process ever started, and an explicit `launched` flag set after `adapter.launch()` returns is NOT enough to decide it: `launch` blocks until the child exits for most runtimes, so an adapter that checks the exit status raises `CalledProcessError` from a session that ran and failed. Classify the interactive launch boundary by exception SHAPE — an `OSError` at the spawn started nothing, every `subprocess.SubprocessError` variant carries a child that was created — and keep the post-launch section in its own handler. `utils.process.run` maps only `FileNotFoundError` to `CommandError`, so a `PermissionError` on a binary that resolves on PATH but cannot be executed escapes `_delegate_headless` unless caught explicitly.
+
+---
+
+## 12dd26da8910 | 2026-09-04 | implementation | tags: testing, gotcha, e2e | Issue #480
+
+A non-executable file earlier on PATH does NOT make a later real binary unreachable: CPython builds an exec candidate from every PATH entry and keeps going past EACCES, so an E2E test that drops a chmod 644 stand-in into the mocked bin dir still runs the users real tool. To force a denial-shaped spawn failure, narrow PATH in the child env to the mocked bin plus only the dirs actually needed (`wade`, `git`, `/usr/bin`, `/bin`). `shutil.which` skips non-executables, so it is the right assertion that no real binary remains reachable.
+
+---
+
+## 4668ee29b835 | 2026-09-04 | implementation | tags: delegation, sandbox, batch | Issue #480
+
+For issue #480, delegation_service.delegate() remains the one dispatcher for deps and standalone/batch reviews, but implement-batch crosses a different terminal-broker boundary. Diagnose a known parent sandbox once in implementation_service.batch before broker shells can lose its markers; child implementation checks remain a backstop, not the sole diagnosis.
+
+---
+
+## 54236b4243bc | 2026-09-04 | implementation | tags: testing, sandbox, gotcha | Issue #480
+
+For issue #480 sandbox tests, the autouse conftest fixture clears both SANDBOX_SIGNAL_ENV_VARS and real Codex identity markers in CODEX_IDENTITY_ENV_VARS. Tests that need another enclosing runtime still set or clear competing identity markers deliberately; do not claim the fixture never clears identity markers.
+
+---

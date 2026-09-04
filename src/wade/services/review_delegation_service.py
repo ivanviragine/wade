@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from wade.models.session_manifest import ReviewOutcome
 from wade.models.workflow import DelegationKind
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
+    build_relaunch_command,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -33,7 +35,11 @@ from wade.services.delegation_service import (
     extended_timeout,
     resolve_mode,
 )
-from wade.services.review_record_service import count_binding_passes, write_review_record
+from wade.services.review_record_service import (
+    count_binding_passes,
+    read_review_record,
+    write_review_record,
+)
 from wade.services.skill_invocation_service import (
     PreparedDelegationMethod,
     SkillInvocationError,
@@ -43,6 +49,13 @@ from wade.services.skill_invocation_service import (
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
+from wade.utils.runtime_env import (
+    INHERITED_SANDBOX_HINT,
+    detect_parent_runtime,
+    has_explicit_sandbox_denial,
+    looks_like_sandbox_denial,
+    possible_inherited_sandbox_cause,
+)
 
 logger = structlog.get_logger()
 
@@ -115,6 +128,69 @@ def _review_budget_line(mode: DelegationMode, timeout: int) -> str:
     return "No hard deadline — take the time you need."
 
 
+# Per-operation remediation for the shared sandbox check in ``delegate()``. The
+# dispatcher is one function for every delegated operation, so it cannot infer
+# which command the user should re-run — these supply it. An unmapped command
+# yields ``None`` rather than a guessed command line: a wrong command to type is
+# worse than no command, and the finding itself is still reported.
+_OPERATION_LABELS = {
+    "review_plan": "the plan review",
+    "review_implementation": "the implementation review",
+    "review_batch": "the batch review",
+}
+_RELAUNCH_COMMANDS = {
+    "review_plan": "wade review plan",
+    "review_implementation": "wade review implementation",
+    "review_batch": "wade review batch",
+}
+#: Commands whose CLI signature takes a **required** positional operand — the
+#: plan path for ``wade review plan``, the tracking issue for ``wade review
+#: batch`` (see ``cli/review.py``). The base command alone is rejected by Typer,
+#: so it is never offered as remediation: the caller must supply the operand that
+#: re-runs *this* operation, or the hint is withheld under the same rule as an
+#: unmapped command (#481 review).
+_RELAUNCH_OPERANDS_REQUIRED = frozenset({"review_plan", "review_batch"})
+
+
+def _relaunch_command(
+    command: str,
+    operand: str | None,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    mode: DelegationMode | None = None,
+    effort: str | None = None,
+    permission_mode: PermissionMode | None = None,
+    skills: list[str] | None = None,
+    staged: bool = False,
+) -> str | None:
+    """Build the exact host-terminal retry for this resolved review launch.
+
+    A retry hint must repeat the launch that failed, not merely name its review
+    operation: omitting ``--mode headless`` can turn a noninteractive operation
+    into a prompt, and omitting an explicit tool/model/skill can select a
+    different reviewer and binding. ``--no-sandbox`` intentionally supersedes
+    the original profile; every other value is the resolved value used here.
+    """
+    base = _RELAUNCH_COMMANDS.get(command)
+    if base is None:
+        return None
+    if command in _RELAUNCH_OPERANDS_REQUIRED and not operand:
+        return None
+
+    return build_relaunch_command(
+        shlex.split(base),
+        operands=[operand] if operand else None,
+        ai_tool=ai_tool,
+        model=model,
+        mode=mode,
+        effort=effort,
+        permission_mode=permission_mode,
+        skills=skills,
+        staged=staged,
+    )
+
+
 def _run_review_delegation(
     template: str,
     command: str,
@@ -133,11 +209,15 @@ def _run_review_delegation(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     delegation_kind: DelegationKind | None = None,
     method_section: str = "",
     input_label: str = "Operation input",
     cwd: Path | None = None,
     trusted_dirs: list[str] | None = None,
+    relaunch_operand: str | None = None,
+    relaunch_skills: list[str] | None = None,
+    relaunch_staged: bool = False,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
 
@@ -205,7 +285,7 @@ def _run_review_delegation(
         )
         # The capability check waits until after the confirmation UI below,
         # which can still change the tool.
-        resolved_sandbox = resolve_sandbox(None, config, command)
+        resolved_sandbox = resolve_sandbox(sandbox, config, command)
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — this
@@ -246,6 +326,7 @@ def _run_review_delegation(
                     feedback=str(e),
                     mode=delegation_mode,
                     exit_code=1,
+                    never_launched=True,
                 )
 
         # Re-apply the headless safety rule after confirm: interactive changes are
@@ -278,6 +359,21 @@ def _run_review_delegation(
     # early) rather than unsafe (runs long, gets killed).
     budget_line = _review_budget_line(delegation_mode, timeout)
     prompt = _merge_content(template, budget_line)
+    # Prompt mode never launches a child, so it cannot need sandbox recovery;
+    # retain its compact command shape for callers/tests that inspect requests.
+    relaunch_command = _relaunch_command(command, relaunch_operand)
+    if delegation_mode is not DelegationMode.PROMPT:
+        relaunch_command = _relaunch_command(
+            command,
+            relaunch_operand,
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            mode=delegation_mode,
+            effort=effort_str,
+            permission_mode=effective_permission_mode,
+            skills=relaunch_skills,
+            staged=relaunch_staged,
+        )
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
@@ -290,6 +386,8 @@ def _run_review_delegation(
         sandbox=resolved_sandbox,
         timeout=timeout,
         explicit_timeout=explicit_timeout,
+        operation=_OPERATION_LABELS.get(command),
+        relaunch_command=relaunch_command,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
@@ -363,6 +461,7 @@ def review_plan(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     skills: list[str] | None = None,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
@@ -421,6 +520,7 @@ def review_plan(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             delegation_kind=DelegationKind.PLAN_REVIEW,
             method_section=prepared.method_section,
             input_label="Plan input",
@@ -428,6 +528,10 @@ def review_plan(
             trusted_dirs=(
                 [str(binding_root)] if binding_root.resolve() != review_cwd.resolve() else None
             ),
+            # `wade review plan` takes the plan path as a required argument, so
+            # the relaunch hint has to carry the file this run was reviewing.
+            relaunch_operand=plan_file,
+            relaunch_skills=skills,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
@@ -536,13 +640,123 @@ def _record_binding_outcome(
         outcome=outcome,
     )
     if record is None:
-        console.warn("Review completed, but its binding-aware receipt could not be persisted.")
+        if outcome is ReviewOutcome.UNATTEMPTED:
+            console.warn("Could not persist the unattempted-review audit record.")
+        else:
+            console.warn("Review completed, but its binding-aware receipt could not be persisted.")
         return None
     return count_binding_passes(
         repo_root,
         delegation=DelegationKind.CODE_REVIEW,
         binding=prepared.binding,
     )
+
+
+# Today's wording for a failed review whose cause wade cannot pin down. Kept
+# verbatim and used unchanged whenever the parent assessment is ``UNKNOWN``: the
+# disjunction is not sloppiness, it is the honest statement of what is known when
+# the runtime publishes no sandbox signal (#462 review).
+_HEDGED_REVIEW_FAILURE = (
+    "Review did not complete, so no review-pass budget was consumed. "
+    "Check the reviewer output above for the cause — a launch failure "
+    "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
+    "then re-run `wade review implementation`."
+)
+
+
+def _report_failed_review(
+    repo_root: Path,
+    head: str,
+    prepared: PreparedDelegationMethod,
+    result: DelegationResult,
+) -> None:
+    """Record and explain a review that produced no usable outcome.
+
+    A reviewer that never started is an *unattempted* review: it is recorded so
+    the state is auditable, but the record neither satisfies the gate nor
+    consumes a review→fix cycle — counting an infrastructure failure would let
+    `done` skip a required review (#462), and satisfying the gate with it would
+    be worse still.
+
+    The remediation is graded by how much wade actually knows, because the value
+    of the diagnosis is that it can be trusted:
+
+    1. a known-sandboxed parent **and** an attempted unrestricted-profile mismatch
+       **and** a denial-shaped failure — state the cause and the exact relaunch
+       command;
+    2. a denial-shaped failure with no signal from the runtime — offer it as a
+       *possible* cause alongside today's hedged wording;
+    3. anything else — today's hedged wording alone.
+
+    The denial shape, profile mismatch, and structured spawn-attempt boundary are
+    all required in case 1. A known boundary says the reviewer *could* have been
+    denied, never that it *was*; likewise, a compatible ``sandbox=True`` request
+    did not ask wade to deliver an unrestricted runtime. Without all three, a
+    configuration refusal that never touched the OS (``Unknown AI tool: seatbelt``)
+    could be blamed on inaccessible host credentials and suppress the more useful
+    generic remediation — a confident wrong cause, which is worse than the hedged
+    one it replaced (#481 review).
+    """
+    current_record = None
+    if result.never_launched:
+        _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
+        # The write may have failed or a higher-precedence receipt may have won;
+        # inspect what actually remains before describing persistence or gate
+        # state to the user.
+        current_record = read_review_record(
+            repo_root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=head,
+            binding=prepared.binding,
+        )
+
+    parent = detect_parent_runtime()
+    denial_shaped = result.never_launched and looks_like_sandbox_denial(result.feedback)
+    if (
+        denial_shaped
+        and has_explicit_sandbox_denial(result.feedback)
+        and result.inherited_sandbox_profile_mismatch
+        and result.launch_attempted
+    ):
+        logger.warning(
+            "review.reviewer_never_launched",
+            parent=parent.env_var,
+            signal=parent.signal,
+        )
+        # ``delegate()`` already warned that the profile was undeliverable; this
+        # is the outcome, not a repeat of the advisory. Restating the command is
+        # deliberate — the pre-launch line has scrolled past the reviewer's own
+        # output by now.
+        if current_record is not None and current_record.outcome is ReviewOutcome.UNATTEMPTED:
+            receipt_state = (
+                "The current review record is unattempted, so it does not satisfy the review gate."
+            )
+        elif current_record is None:
+            receipt_state = (
+                "wade could not confirm an unattempted review record, so a satisfying "
+                "receipt is still required before the review gate can close."
+            )
+        else:
+            receipt_state = (
+                f"The existing {current_record.outcome.value} review record was retained; "
+                "its gate state is unchanged."
+            )
+        console.warn(
+            f"{parent.label} is sandboxed and the implementation review never started, "
+            "so the reviewer could not reach its own host credentials from inside that "
+            f"boundary. No review-pass budget was consumed; {receipt_state}"
+        )
+        console.hint(INHERITED_SANDBOX_HINT)
+        console.detail(
+            result.relaunch_command
+            or f"{_RELAUNCH_COMMANDS['review_implementation']} --no-sandbox",
+            markup=False,
+        )
+        return
+
+    console.warn(_HEDGED_REVIEW_FAILURE)
+    if denial_shaped:
+        console.hint(possible_inherited_sandbox_cause(parent))
 
 
 def review_implementation(
@@ -558,6 +772,7 @@ def review_implementation(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     skills: list[str] | None = None,
     ack_self_review: bool = False,
 ) -> DelegationResult:
@@ -573,10 +788,11 @@ def review_implementation(
         or effort_explicit
         or permission_mode_explicit
         or yolo is not None
+        or sandbox is not None
     ):
         message = (
             "--ack-self-review cannot be combined with AI launch, mode, effort, or "
-            "permission options"
+            "permission or sandbox options"
         )
         console.error(message)
         return DelegationResult(
@@ -707,10 +923,13 @@ def review_implementation(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             delegation_kind=DelegationKind.CODE_REVIEW,
             method_section=prepared.method_section,
             input_label="Diff input",
             cwd=repo_root,
+            relaunch_skills=skills,
+            relaunch_staged=staged,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
@@ -742,15 +961,5 @@ def review_implementation(
             "self-review, then acknowledge it explicitly."
         )
     else:
-        # ``DelegationResult`` cannot yet tell "never launched" from "launched
-        # and exited nonzero", so this covers both. Word both the finding and
-        # the remedy as what is actually known: prescribing "restore the
-        # reviewer runtime" would be wrong advice for a reviewer that started
-        # fine and then failed (#462 review).
-        console.warn(
-            "Review did not complete, so no review-pass budget was consumed. "
-            "Check the reviewer output above for the cause — a launch failure "
-            "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
-            "then re-run `wade review implementation`."
-        )
+        _report_failed_review(repo_root, head, prepared, result)
     return result

@@ -8,6 +8,25 @@ from pathlib import Path
 
 import pytest
 
+from wade.utils.runtime_env import CODEX_IDENTITY_ENV_VARS, SANDBOX_SIGNAL_ENV_VARS
+
+
+@pytest.fixture(autouse=True)
+def _neutral_sandbox_signals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assess the parent runtime as ``UNKNOWN`` unless a test says otherwise.
+
+    ``utils.runtime_env`` reads real environment variables, so a suite run from
+    *inside* a sandboxed Codex session would otherwise see a genuine
+    ``SANDBOXED`` verdict and take relaunch branches the test never asked for.
+    Codex's managed runtime exports session/thread identity markers even when it
+    omits the older ``CODEX_CLI`` marker, so clear that one runtime's real-process
+    markers too. Tests that need an enclosing parent set their own marker.
+    """
+    for name in SANDBOX_SIGNAL_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    for name in CODEX_IDENTITY_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 @pytest.fixture
 def tmp_git_repo(tmp_path: Path) -> Path:

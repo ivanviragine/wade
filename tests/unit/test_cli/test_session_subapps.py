@@ -433,10 +433,19 @@ class TestShortAliases:
 
     def test_r_alias_invokes_review_pr_comments(self) -> None:
         with patch("wade.services.review_service.start", return_value=True) as mock_start:
-            result = runner.invoke(app, ["r", "42"])
+            result = runner.invoke(app, ["r", "42", "--effort", "high"])
         assert result.exit_code == 0
         mock_start.assert_called_once()
         assert mock_start.call_args.kwargs.get("target") == "42"
+        assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
+    def test_address_reviews_alias_forwards_effort(self) -> None:
+        with patch("wade.services.review_service.start", return_value=True) as mock_start:
+            result = runner.invoke(app, ["address-reviews", "42", "--effort", "high"])
+        assert result.exit_code == 0
+        assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
 
     def test_aliases_hidden_in_help(self) -> None:
         """Short aliases should NOT appear in the help output."""

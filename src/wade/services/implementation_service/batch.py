@@ -29,14 +29,18 @@ from wade.models.task import (
 )
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
+    announce_inherited_sandbox,
+    build_relaunch_command,
     confirm_ai_selection,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
     resolve_permission_mode,
+    resolve_sandbox,
 )
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils.runtime_env import detect_parent_runtime
 from wade.utils.terminal import launch_batch_in_terminals
 
 logger = structlog.get_logger()
@@ -321,6 +325,30 @@ def batch(
     if not batch_items:
         console.panel("  No issues to launch", title="Batch started")
         return False
+
+    # Terminal brokers may start a shell whose environment no longer carries
+    # the parent's diagnostic markers. Assess the boundary here, while the
+    # original process still has those markers, and announce it once for the
+    # whole dispatch rather than relying on every child to rediscover it.
+    # Like implementation itself, this remains advisory: a known boundary
+    # cannot promise that a delegated tool will fail.
+    resolved_sandbox = resolve_sandbox(sandbox, config, "implement")
+    announce_inherited_sandbox(
+        detect_parent_runtime(),
+        resolved_sandbox=resolved_sandbox,
+        operation="the batch implementation sessions",
+        relaunch_command=build_relaunch_command(
+            ["wade", "implement-batch"],
+            operands=issue_numbers,
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            effort=resolved_effort.value if resolved_effort else None,
+            permission_mode=resolved_permission_mode,
+            skills=work_skills,
+            review_skills=review_skills,
+            refresh_skills=refresh_skills,
+        ),
+    )
 
     # Try to launch terminals (best-effort, non-fatal)
     console.step(f"Launching {len(batch_items)} session(s) in new terminal window")

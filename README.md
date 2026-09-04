@@ -240,7 +240,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, `review pr-comments`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `review pr-comments` additionally accepts `--effort none` to pin the tool default instead of a configured effort across a later wait/relaunch. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, standalone reviews (`review plan`, `review implementation`, `review batch`), `review pr-comments`, `task deps`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
@@ -671,7 +671,7 @@ fetch`/`push`, `gh`, package installs — cannot work without it, and the profil
 is fixed at launch.
 
 Set it globally or per command, and override it on any launch command
-(`implement`, `implement-batch`, `plan`, `review pr-comments`, `smart-start`,
+(`implement`, `implement-batch`, `plan`, `review pr-comments`, `task deps`, `smart-start`,
 and the `i`/`r`/`p` aliases) with `--sandbox` / `--no-sandbox`:
 
 ```yaml
@@ -737,17 +737,87 @@ the Stop hook, and the pre-push backstop are identical in both profiles.
 #### Plan → implement handoff
 
 The sandbox is a launch-time OS property: a process started confined cannot drop
-its sandbox later. So when an accepted plan handoff runs inside a **sandboxed**
-Codex planner and the implementation profile resolves to **unrestricted**, WADE
-starts a fresh detached Codex context rather than reusing the planner process. If
-it cannot open that context, the handoff fails rather than reporting an
-implementation session ready — open a new host terminal and run the displayed
-`wade implement <issue> --no-sandbox` command. When both sessions resolve to the
-same profile there is no mismatch and the ordinary nested-launch guard applies.
+its sandbox later. An accepted plan handoff runs after the planner child exits,
+so WADE assesses the **actual parent runtime enclosing the handoff**, not the
+former planner's requested profile. When that runtime is detected as sandboxed
+and implementation resolves to **unrestricted**, WADE fails the handoff rather
+than claiming a terminal child escaped the parent boundary. It names the runtime
+it could not escape, and you open a new host terminal and run the displayed
+`wade implement <issue> --no-sandbox` command. Without a published sandbox
+signal, the ordinary nested-launch guard applies rather than guessing.
 
-The comparison uses the profile the planner **actually launched under**, so a
-`wade plan --sandbox` / `--no-sandbox` override is honored here rather than
-losing out to `ai.plan.sandbox`.
+#### An inner `wade` process cannot escape a parent sandbox
+
+Every `wade` command you run from inside an AI CLI session is a **child** of that
+session. If the session was launched under an OS sandbox, every descendant
+inherits the boundary — no profile WADE resolves, and no flag it passes to a
+delegated runtime, can widen it. WADE will never claim otherwise, and there is no
+setting that changes it. **The fix is always to relaunch the outer session with
+the profile you want**, from a host terminal.
+
+What WADE does instead is say so. When the resolved profile is unrestricted and
+the enclosing runtime is *known* to be sandboxed, it names that runtime when it
+can (or says **the enclosing AI runtime** when an identity marker is absent) and
+prints the exact command to re-run — on implementation, plan,
+PR-comment review, and every delegated operation (dependency analysis, plan/code
+review, batch review), plus batch implementation before it dispatches terminal
+brokers. That command preserves the resolved tool, model, effort,
+and permission mode; only the sandbox profile changes to `--no-sandbox`.
+Implementation and PR-comment retries reuse their frozen method bindings rather
+than repeating `--skill` / `--review-skill` flags, while fresh delegated
+operations carry their requested bindings. It warns and proceeds rather than
+blocking: a delegated tool whose credentials happen to be reachable from inside
+the sandbox may still
+succeed, so refusing to try would break sessions that work today.
+
+Detection is deliberately **best-effort and conservative**. WADE reads only
+sandbox signals a runtime actually publishes and never infers confinement from
+tool identity — a tool that *can* be sandboxed is not a tool that *is* sandboxed.
+Today Codex publishes `CODEX_SANDBOX` for macOS Seatbelt, but its Linux Landlock
+sandbox with network enabled publishes neither that marker nor a usable
+`CODEX_SANDBOX_NETWORK_DISABLED` marker. WADE must report that Linux environment
+as *unknown*, not unrestricted; if the distinction matters, relaunch from a host
+terminal rather than expecting a diagnostic. When there is no signal WADE stays
+silent rather than asserting a cause it cannot support. A confident wrong
+diagnosis is worse than the opaque error it would replace. Managed Codex sessions
+are still recognised when they expose session/thread markers instead of the
+legacy `CODEX_CLI` marker; their displayed identity remains **Codex CLI**.
+
+An explicit unrestricted signal (for example, Codex's
+`CODEX_SANDBOX=danger-full-access`) is different from an absent signal: WADE
+does **not** recommend relaunching the outer session for a permission- or
+network-shaped launch failure in that case. The parent has already confirmed it
+is unrestricted, so check executable permissions and network configuration
+instead.
+
+**Troubleshooting order** when a delegated tool fails to launch:
+
+1. **Read what WADE printed.** An explicit sandbox-policy denial plus a named
+   runtime and command means relaunch the outer session with that command. A
+   generic permission or network denial also needs local checks below.
+2. **Check whether the reviewer actually started.** A reviewer that ran and
+   exited non-zero is a different problem; "relaunch the outer session" is wrong
+   advice for it. WADE distinguishes the two. A generic launch denial can also
+   be bad executable permissions or network configuration; a refusal WADE made
+   itself (an unknown tool, a tool with no headless mode) never reached the
+   sandbox and gets generic remediation instead.
+3. **Check executable permissions, network, and the tool's own login/PATH** in the runtime where it must run
+   (`gh auth status`, the delegate's own auth command). A separately
+   authenticated delegate needs its *own* credentials, not WADE's.
+4. **Re-run the phase readiness check** (`wade implementation-session check`,
+   `wade review-pr-comments-session check`, …) for a narrow `reason=…` and its
+   least-privilege remediation.
+5. **Only then** widen the profile — and widen the *outer* session, not the
+   child.
+
+> **Narrow, optional exception: Codex project prefix rules.** Codex can be
+> configured to run specific command prefixes outside its sandbox, which elevates
+> a single command without relaunching the session. It is a Codex-side setting
+> WADE neither writes nor reads, it applies per command rather than to the
+> session, and it does not change anything above: the session is still sandboxed
+> and every other child still inherits that. Treat it as an escape hatch for one
+> stubborn command, **not** as WADE's path for running unrestricted — that path
+> is relaunching the outer session.
 
 #### Migrating from `ai.network_access`
 
@@ -821,11 +891,27 @@ credentials, PATH, or sandbox execution access, it does not consume a
 timeout still counts as a bounded review attempt, so the review/fix loop cannot
 run forever.
 
+A reviewer that **never started** — including a sandbox-capability refusal before
+the launch — is recorded as an *unattempted* review so the state is auditable,
+and that record is deliberately inert: it satisfies no review
+requirement, spends no review pass, cannot overwrite a real receipt already
+written for the same commit, and leaves `wade implementation-session done` and
+`wade review-pr-comments-session done` closed. An infrastructure failure must
+never be able to certify a commit. A reviewer that started and exited non-zero
+stays distinguishable from one that never ran, because the two need opposite
+remediation.
+
 For Codex, WADE launches unsandboxed by default so delegated tools keep their
 own host credentials; set `ai.sandbox: true` (or pass `--sandbox`) to keep
 `--sandbox workspace-write`, where WADE/crossby add only the linked worktree's
 private/common Git metadata directories. Every session has network access in
 both profiles for its GitHub lifecycle.
+Standalone `wade review plan`, `wade review implementation`, and `wade review
+batch` runs also accept `--sandbox` / `--no-sandbox`; an inherited-sandbox
+diagnosis gives the host-terminal relaunch command with `--no-sandbox` so it
+overrides an `ai.sandbox: true` configuration. The command also preserves the
+selected review mode, tool, model, effort, permission mode, staged scope, and
+review-skill overrides so the retry reviews the same operation.
 For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
 the GitHub domains needed by the session rather than choosing unrestricted shell
 access. Copilot and VS Code need network plus usable `gh` credentials in their

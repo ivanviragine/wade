@@ -81,6 +81,12 @@ def review_plan_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Confine the AI runtime to its sandbox (default: off — the runtime runs "
+        "unrestricted so delegated tools keep host credentials). Overrides ai.sandbox.",
+    ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="Review methodology skill ref. Repeat for an ordered binding."
     ),
@@ -100,6 +106,7 @@ def review_plan_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        sandbox=sandbox,
         skills=skill,
     )
     _finalize_review_result(
@@ -134,6 +141,12 @@ def review_implementation_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Confine the AI runtime to its sandbox (default: off — the runtime runs "
+        "unrestricted so delegated tools keep host credentials). Overrides ai.sandbox.",
+    ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="Review methodology skill ref. Repeat for an ordered binding."
     ),
@@ -158,6 +171,7 @@ def review_implementation_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        sandbox=sandbox,
         skills=skill,
         ack_self_review=ack_self_review,
     )
@@ -186,6 +200,12 @@ def review_pr_comments_cmd(
     ),
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Effort level for AI, or 'none' to use the tool default.",
+        autocompletion=complete_effort_levels,
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
@@ -224,6 +244,8 @@ def review_pr_comments_cmd(
         detach=detach,
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
@@ -279,6 +301,12 @@ def review_batch_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Confine the AI runtime to its sandbox (default: off — the runtime runs "
+        "unrestricted so delegated tools keep host credentials). Overrides ai.sandbox.",
+    ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="Batch review methodology skill ref. Repeat for an ordered binding."
     ),
@@ -298,6 +326,7 @@ def review_batch_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        sandbox=sandbox,
         skills=skill,
     )
     _finalize_review_result(

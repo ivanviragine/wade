@@ -11,6 +11,7 @@ from crossby.models.ai import ModelBreakdown, TokenUsage
 
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
+from wade.models.permission import PermissionMode
 from wade.models.review import (
     PRReview,
     PRReviewStatus,
@@ -38,6 +39,7 @@ from wade.services.review_service import (
     resolve_thread,
     start,
 )
+from wade.utils.runtime_env import CODEX_SANDBOX_ENV, SANDBOX_SIGNAL_ENV_VARS
 
 # ---------------------------------------------------------------------------
 # build_review_usage_block
@@ -455,7 +457,7 @@ class TestReviewServiceStart:
             ),
             "confirm_ai_selection": patch(
                 "wade.services.review_service.confirm_ai_selection",
-                return_value=(None, None, None, False),
+                return_value=(None, None, None, PermissionMode.DEFAULT),
             ),
             "_detect_ai_cli_env": patch(
                 "wade.services.review_service._detect_ai_cli_env",
@@ -608,6 +610,70 @@ class TestReviewServiceStart:
 
         assert spy.launch.call_args.kwargs["sandbox"] is False
 
+    def test_implicit_effort_re_resolves_after_waiting_for_reviews(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """A config-derived effort must not become an explicit retry override."""
+        from crossby.models.ai import EffortLevel
+
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            EffortLevel.HIGH,
+            PermissionMode.DEFAULT,
+        )
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        adapter.capabilities.return_value.blocks_until_exit = False
+        with (
+            patch("wade.services.review_service.resolve_effort", return_value=EffortLevel.HIGH),
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.services.review_service._post_review_lifecycle") as mock_post,
+        ):
+            assert start(target="42") is True
+
+        assert mock_post.call_args.kwargs["effort"] is None
+        assert mock_post.call_args.kwargs["effort_explicit"] is False
+
+    def test_explicit_default_effort_survives_waiting_for_reviews(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """Choosing the UI's tool default must override a configured effort later."""
+        from crossby.models.ai import EffortLevel
+
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            None,
+            PermissionMode.DEFAULT,
+        )
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        adapter.capabilities.return_value.blocks_until_exit = False
+        with (
+            patch("wade.services.review_service.resolve_effort", return_value=EffortLevel.HIGH),
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.services.review_service._post_review_lifecycle") as mock_post,
+        ):
+            assert start(target="42") is True
+
+        assert mock_post.call_args.kwargs["effort"] == "none"
+        assert mock_post.call_args.kwargs["effort_explicit"] is True
+
     def test_detached_launch_receives_worktree_context(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
@@ -713,6 +779,62 @@ class TestReviewServiceStart:
             )
 
         assert mock_start.call_args.kwargs["sandbox"] is False
+
+    def test_post_lifecycle_relaunch_forwards_confirmed_effort(self, tmp_path: Path) -> None:
+        """A review re-launch keeps the effort selected in the first session."""
+        from wade.services.review_service import PollOutcome
+
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", return_value=1),
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_start,
+        ):
+            _post_review_lifecycle(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path,
+                99,
+                MagicMock(),
+                effort="high",
+                effort_explicit=True,
+            )
+
+        assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
+    def test_post_lifecycle_relaunch_forwards_explicit_tool_default_effort(
+        self, tmp_path: Path
+    ) -> None:
+        """The explicit default is distinct from an unset effort override."""
+        from wade.services.review_service import PollOutcome
+
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", return_value=1),
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_start,
+        ):
+            _post_review_lifecycle(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path,
+                99,
+                MagicMock(),
+                effort="none",
+                effort_explicit=True,
+            )
+
+        assert mock_start.call_args.kwargs["effort"] == "none"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
 
     def test_resolves_worktree_by_issue_when_title_drifted(
         self, mock_setup: dict[str, MagicMock]
@@ -891,6 +1013,125 @@ class TestReviewServiceStart:
         )
         # The guard must short-circuit before the adapter is ever resolved/launched.
         mock_get.assert_not_called()
+
+    def test_nested_session_inside_a_sandboxed_parent_is_told_it_cannot_elevate(
+        self,
+        tmp_path: Path,
+        mock_setup: dict[str, MagicMock],
+        mock_provider: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The guard hands over a worktree confined by a boundary it did not promise.
+
+        Nothing launches here, so there is no failure to diagnose — but the agent
+        is about to work under an inherited sandbox while the resolved profile
+        said "unrestricted". The other three launch paths announce it; so must
+        this one (#480).
+        """
+        from crossby.models.ai import EffortLevel
+
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "CODEX_CLI"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            EffortLevel.HIGH,
+            PermissionMode.DEFAULT,
+        )
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+
+        with (
+            # The fixture's config is a MagicMock whose ``get_sandbox`` is
+            # truthy; pin the unrestricted profile the mismatch predicate needs.
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            # The shared emitter resolves ``console`` lazily from ``wade.ui``, so
+            # patching the importing module would miss it.
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = start(
+                target="42",
+                work_skills=["project:implementation-method"],
+                review_skills=["project:closing-review"],
+            )
+
+        assert result is True
+        assert "Codex CLI" in str(mock_console.warn.call_args_list)
+        mock_console.detail.assert_any_call(
+            "wade review pr-comments 42 --no-sandbox --ai codex --effort high "
+            "--permission-mode default",
+            markup=False,
+        )
+
+    def test_an_unknown_parent_assessment_stays_silent(
+        self,
+        tmp_path: Path,
+        mock_setup: dict[str, MagicMock],
+        mock_provider: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No signal from the runtime, no claim about it."""
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "CODEX_CLI"
+        for name in SANDBOX_SIGNAL_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+
+        with (
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        assert mock_console.warn.call_count == 0
+
+    def test_identityless_sandbox_signal_still_announces_the_boundary(
+        self,
+        tmp_path: Path,
+        mock_setup: dict[str, MagicMock],
+        mock_provider: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A stripped identity marker must not hide a published sandbox signal."""
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = None
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+
+        with (
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        assert "enclosing AI runtime" in str(mock_console.warn.call_args_list)
+        mock_console.detail.assert_any_call(
+            "wade review pr-comments 42 --no-sandbox --permission-mode default",
+            markup=False,
+        )
 
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
@@ -2641,6 +2882,8 @@ class TestPostReviewLifecycle:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
+            effort=None,
+            effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
             sandbox=None,
@@ -2676,6 +2919,8 @@ class TestPostReviewLifecycle:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
+            effort=None,
+            effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
             sandbox=None,
@@ -2712,6 +2957,8 @@ class TestPostReviewLifecycle:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
+            effort="high",
+            effort_explicit=True,
             permission_mode="yolo",
         )
         mock_merge.assert_not_called()
@@ -2723,6 +2970,8 @@ class TestPostReviewLifecycle:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
+            effort="high",
+            effort_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
             sandbox=None,

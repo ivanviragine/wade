@@ -13,6 +13,9 @@ bugs bound this and both are covered here:
 
 from __future__ import annotations
 
+import importlib
+from pathlib import Path
+
 from crossby.models.ai import EffortLevel
 
 from wade.models.permission import PermissionMode
@@ -160,3 +163,29 @@ class TestBuildImplementCmd:
         )
         assert "--sandbox" not in cmd
         assert "--no-sandbox" not in cmd
+
+
+class TestBatchSandboxDiagnosis:
+    """Batch diagnoses once before terminal brokers dispatch child processes."""
+
+    def test_the_child_command_is_a_plain_wade_implement_invocation(self) -> None:
+        cmd = _build_implement_cmd(
+            "42",
+            tool="claude",
+            model=None,
+            model_explicit=False,
+            effort=None,
+            permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
+        )
+
+        assert cmd[:3] == ["wade", "implement", "42"]
+
+    def test_batch_module_probes_the_parent_before_terminal_dispatch(self) -> None:
+        """Terminal-broker shells can lose the parent runtime's marker."""
+        module = importlib.import_module("wade.services.implementation_service.batch")
+        assert module.__file__ is not None
+        source = Path(module.__file__).read_text(encoding="utf-8")
+
+        assert "detect_parent_runtime" in source
+        assert 'operation="the batch implementation sessions"' in source

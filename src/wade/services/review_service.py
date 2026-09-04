@@ -48,6 +48,8 @@ from wade.services import bot_trigger
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
+    announce_inherited_sandbox,
+    build_relaunch_command,
     confirm_ai_selection,
     display_ai_selection,
     enforce_sandbox_capability,
@@ -71,6 +73,7 @@ from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
+from wade.utils.runtime_env import parent_runtime, requires_unsandboxed_relaunch
 from wade.utils.terminal import (
     compose_review_title,
     launch_in_new_terminal,
@@ -80,6 +83,13 @@ from wade.utils.terminal import (
 )
 
 logger = structlog.get_logger()
+
+# ``None`` means no caller choice, which lets ``resolve_effort`` read config.
+# The review confirmation UI also offers a distinct "none — use tool default"
+# choice; its value must survive a wait/relaunch without being mistaken for the
+# unset case. This string is accepted by the same ``--effort`` option used in
+# the recovery command, but is private to this review-session handoff.
+_EXPLICIT_DEFAULT_EFFORT = "none"
 
 
 # ---------------------------------------------------------------------------
@@ -1148,13 +1158,18 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    resolved_effort = resolve_effort(
-        effort,
-        config,
-        "review_pr_comments",
-        tool=resolved_tool,
-        complexity=task.complexity.value if task.complexity else None,
+    resolved_effort = (
+        None
+        if effort_explicit and effort == _EXPLICIT_DEFAULT_EFFORT
+        else resolve_effort(
+            effort,
+            config,
+            "review_pr_comments",
+            tool=resolved_tool,
+            complexity=task.complexity.value if task.complexity else None,
+        )
     )
+    initial_effort = resolved_effort
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
@@ -1217,6 +1232,17 @@ def start(
             sandbox=resolved_sandbox,
         )
 
+    # Configuration-derived effort should continue to re-resolve when the user
+    # waits for a later review. Preserve a caller's explicit override, or an
+    # actual change made in the confirmation UI, without promoting an implicit
+    # default to an explicit argument.
+    retained_effort_explicit = effort_explicit or resolved_effort != initial_effort
+    retained_effort = (
+        (resolved_effort.value if resolved_effort is not None else _EXPLICIT_DEFAULT_EFFORT)
+        if retained_effort_explicit
+        else None
+    )
+
     # 7. Build review prompt
     prompt = build_review_prompt(
         task=task,
@@ -1230,6 +1256,24 @@ def start(
 
     # AI-initiated start guard
     detected_env = _detect_ai_cli_env()
+    parent = parent_runtime(detected_env)
+    # The nested-launch guard needs a recognised identity, but a published
+    # sandbox signal is sufficient to warn that an unrestricted child cannot
+    # deliver its requested profile. Emit it before either the guard or a real
+    # child launch so stripped identity markers do not hide the boundary.
+    if requires_unsandboxed_relaunch(resolved_sandbox=resolved_sandbox, parent=parent):
+        announce_inherited_sandbox(
+            parent,
+            resolved_sandbox=resolved_sandbox,
+            operation="the review session",
+            relaunch_command=build_relaunch_command(
+                ["wade", "review", "pr-comments", task.id],
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                effort=retained_effort,
+                permission_mode=resolved_permission_mode,
+            ),
+        )
     if detected_env:
         logger.info(
             "review.ai_launch_skipped",
@@ -1239,6 +1283,13 @@ def start(
         console.info(
             f"Skipping AI launch: already inside AI session (detected via {detected_env})."
         )
+        # No runtime starts here, so there is no launch failure to explain — but
+        # the worktree is about to be handed to an agent running inside a
+        # boundary the resolved profile said it would not have. Say so, with the
+        # command that actually delivers it, rather than letting the session
+        # proceed on a false premise (#480). A published sandbox signal earns
+        # the claim even when its runtime identity is unavailable; an unknown
+        # assessment stays silent.
         console.detail(f"Worktree ready at: {worktree_path}")
         print(str(worktree_path))
         return True
@@ -1371,6 +1422,8 @@ def start(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
+                effort=retained_effort,
+                effort_explicit=retained_effort_explicit,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,
@@ -1396,6 +1449,8 @@ def start(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
             sandbox=sandbox,
@@ -1593,6 +1648,8 @@ def _post_review_lifecycle(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     sandbox: bool | None = None,
@@ -1600,18 +1657,9 @@ def _post_review_lifecycle(
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
 
-    Effort is intentionally *not* threaded through here (#389). A review session
-    never carries an explicit effort — ``wade review pr-comments`` has no
-    ``--effort`` flag and the post-``done`` auto-launch never passes one — so on a
-    "wait for new reviews" re-launch the recursed ``start()`` re-resolves effort
-    from ``ai.review_pr_comments.effort`` (config governs). That matches how a
-    non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
-
-    ``sandbox`` *is* threaded (unlike effort): ``wade review pr-comments``
-    has a ``--sandbox`` / ``--no-sandbox`` flag, so an explicit profile must
-    survive a "wait for new reviews" re-launch rather than re-resolve to config.
-    ``None`` (unset) still re-resolves, matching the non-explicit
-    ``permission_mode`` path.
+    Explicit effort and sandbox selections must survive a "wait for new
+    reviews" re-launch rather than re-resolving from configuration. ``None``
+    (unset) still re-resolves, matching the non-explicit permission-mode path.
     """
     from wade.ui import prompts
 
@@ -1667,6 +1715,8 @@ def _post_review_lifecycle(
                     detach=detach,
                     ai_explicit=ai_explicit,
                     model_explicit=model_explicit,
+                    effort=effort,
+                    effort_explicit=effort_explicit,
                     permission_mode=permission_mode,
                     permission_mode_explicit=permission_mode_explicit,
                     sandbox=sandbox,
@@ -1684,6 +1734,8 @@ def _post_review_lifecycle(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
+                effort=effort,
+                effort_explicit=effort_explicit,
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,

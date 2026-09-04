@@ -616,7 +616,7 @@ class TestAnalyzeDepsMode:
         from wade.models.config import AICommandConfig, AIConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="prompt"))
+            ai=AIConfig(sandbox=True, deps=AICommandConfig(tool="claude", mode="prompt"))
         )
         provider = MagicMock()
         provider.read_task.side_effect = [
@@ -638,12 +638,16 @@ class TestAnalyzeDepsMode:
         mock_apply.return_value = 2
         mock_tracking.return_value = "10"
 
-        result = analyze_deps(["1", "2"], mode="headless", planning_worktree=tmp_path)
+        result = analyze_deps(
+            ["1", "2"], mode="headless", sandbox=False, planning_worktree=tmp_path
+        )
         assert result is not None
         # Should have parsed the edge since not in prompt mode
         assert len(result.edges) == 1
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.HEADLESS
+        assert call_args.sandbox is False
+        assert "wade task deps 1 2 --no-sandbox" in call_args.relaunch_command
 
     @patch("wade.services.deps_service.create_tracking_issue")
     @patch("wade.services.deps_service.apply_deps_to_issues")
@@ -879,6 +883,62 @@ class TestAnalyzeDepsMode:
         mock_tracking.assert_not_called()
         warn_text = " ".join(str(c.args[0]) for c in mock_console.warn.call_args_list if c.args)
         assert "timed out" in warn_text.lower()
+
+    @patch("wade.services.deps_service.console")
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_never_launched_returns_none_without_applying(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A never-started analyzer is a failed analysis, never an empty graph."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=False,
+            feedback="Headless session failed to start: permission denied",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            never_launched=True,
+        )
+
+        result = analyze_deps(["1", "2"], mode="headless", planning_worktree=tmp_path)
+
+        assert result is None
+        mock_apply.assert_not_called()
+        mock_tracking.assert_not_called()
+        error_text = " ".join(str(c.args[0]) for c in mock_console.error.call_args_list if c.args)
+        assert "delegation failed" in error_text.lower()
 
 
 # ---------------------------------------------------------------------------

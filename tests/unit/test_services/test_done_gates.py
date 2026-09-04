@@ -287,6 +287,54 @@ class TestReviewRanGate:
         _record_review(tmp_path, "a" * 40)
         assert _gate_review_ran(ProjectConfig(), tmp_path, "b" * 40, skip_review=False) is False
 
+    def test_unattempted_review_leaves_the_gate_closed(self, tmp_path: Path) -> None:
+        """A reviewer that never launched opens nothing (#480).
+
+        The record exists so the state is auditable, but it is not a review: an
+        infrastructure failure must not be able to certify a commit.
+        """
+        head = "a" * 40
+        _record_review(tmp_path, head, outcome=ReviewOutcome.UNATTEMPTED)
+
+        assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
+
+    def test_unattempted_review_leaves_the_pr_comments_gate_closed(self, tmp_path: Path) -> None:
+        """The other session type shares this gate and must refuse too (#480).
+
+        ``review-pr-comments`` keeps the unbounded fast-path-or-refuse behavior,
+        so it has no cap branch to fall through — but the branch it *does* take
+        is the same classification, and an unattempted record must not satisfy it.
+        """
+        head = "a" * 40
+        _record_review(
+            tmp_path,
+            head,
+            outcome=ReviewOutcome.UNATTEMPTED,
+            session_kind=SessionKind.REVIEW_PR_COMMENTS,
+        )
+
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                head,
+                skip_review=False,
+                session_type="review-pr-comments",
+            )
+            is False
+        )
+
+    def test_unattempted_review_does_not_advance_the_pass_cap(self, tmp_path: Path, capsys) -> None:
+        """It must not spend budget either — the cap exists to bound real review→fix
+        cycles, and letting a failed launch burn one would make ``done`` stop
+        requiring review for an infrastructure problem (#462)."""
+        _record_review(tmp_path, "1" * 40, outcome=ReviewOutcome.UNATTEMPTED)
+        _record_review(tmp_path, "2" * 40, outcome=ReviewOutcome.UNATTEMPTED)
+
+        config = ProjectConfig(done=DoneConfig(max_review_passes=2))
+        assert _gate_review_ran(config, tmp_path, "3" * 40, skip_review=False) is False
+        assert "pass 0 of 2" in _captured_text(capsys)
+
     def test_skip_review_hatch(self, tmp_path: Path) -> None:
         assert _gate_review_ran(ProjectConfig(), tmp_path, "abc", skip_review=True) is True
 

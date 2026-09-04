@@ -13,7 +13,7 @@ from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.permission import PermissionMode
-from wade.models.session_manifest import ResolvedBinding
+from wade.models.session_manifest import ResolvedBinding, ReviewOutcome
 from wade.models.skill import ResolvedSkill
 from wade.services import review_delegation_service as rds
 from wade.services.review_delegation_service import (
@@ -24,6 +24,7 @@ from wade.services.review_delegation_service import (
     review_plan,
 )
 from wade.services.skill_invocation_service import PreparedDelegationMethod
+from wade.utils.runtime_env import ParentRuntime, SandboxAssessment
 
 
 def _prepared_method() -> PreparedDelegationMethod:
@@ -1351,6 +1352,29 @@ class TestReviewPassCountUnaffectedByRetry:
         mock_record.assert_called_once()
 
 
+class TestBindingOutcomeWarnings:
+    @patch("wade.services.review_delegation_service.console")
+    @patch("wade.services.review_delegation_service.write_review_record", return_value=None)
+    def test_unattempted_receipt_failure_does_not_claim_completion(
+        self,
+        mock_write: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = rds._record_binding_outcome(
+            tmp_path,
+            "a" * 40,
+            _prepared_method(),
+            ReviewOutcome.UNATTEMPTED,
+        )
+
+        assert result is None
+        mock_write.assert_called_once()
+        mock_console.warn.assert_called_once_with(
+            "Could not persist the unattempted-review audit record."
+        )
+
+
 # ---------------------------------------------------------------------------
 # {review_budget} prompt substitution (#450)
 # ---------------------------------------------------------------------------
@@ -1558,3 +1582,193 @@ class TestReviewBudgetPlaceholder:
         assert "No hard deadline" in call_args.prompt
         # Exactly one substituted budget line, not zero and not a corrupted mix.
         assert call_args.prompt.count("No hard deadline") == 1
+
+
+# ---------------------------------------------------------------------------
+# Relaunch commands offered as sandbox remediation
+# ---------------------------------------------------------------------------
+
+
+class TestRelaunchCommand:
+    """A hint the user cannot paste is worse than no hint (#481 review).
+
+    ``wade review plan`` and ``wade review batch`` both take a required
+    positional operand, so the base command alone is rejected by Typer — the
+    remediation must carry the operand of the run that just failed.
+    """
+
+    def test_a_command_with_no_operand_is_offered_bare(self) -> None:
+        hint = rds._relaunch_command("review_implementation", None)
+        assert hint == "wade review implementation --no-sandbox"
+
+    @pytest.mark.parametrize(
+        ("command", "operand", "expected"),
+        [
+            ("review_plan", "docs/plan.md", "wade review plan --no-sandbox docs/plan.md"),
+            ("review_batch", "42", "wade review batch --no-sandbox 42"),
+        ],
+    )
+    def test_a_required_operand_is_preserved(
+        self, command: str, operand: str, expected: str
+    ) -> None:
+        assert rds._relaunch_command(command, operand) == expected
+
+    def test_an_operand_with_spaces_is_quoted(self) -> None:
+        assert (
+            rds._relaunch_command("review_plan", "my plan.md")
+            == "wade review plan --no-sandbox 'my plan.md'"
+        )
+
+    def test_resolved_launch_options_are_preserved(self) -> None:
+        assert rds._relaunch_command(
+            "review_implementation",
+            None,
+            mode=DelegationMode.HEADLESS,
+            ai_tool="claude",
+            model="sonnet",
+            effort="high",
+            permission_mode=PermissionMode.DEFAULT,
+            staged=True,
+            skills=["builtin:code-review", "project:strict"],
+        ) == (
+            "wade review implementation --no-sandbox --mode headless --ai claude "
+            "--model sonnet --effort high --permission-mode default --staged "
+            "--skill builtin:code-review --skill project:strict"
+        )
+
+    @pytest.mark.parametrize("command", ["review_plan", "review_batch"])
+    def test_a_missing_required_operand_withholds_the_hint(self, command: str) -> None:
+        """Same rule as an unmapped command: no guess is better than a broken line."""
+        assert rds._relaunch_command(command, None) is None
+
+    def test_an_unmapped_command_is_still_none(self) -> None:
+        assert rds._relaunch_command("deps", "12") is None
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_review_plan_forwards_the_plan_path(
+        self,
+        mock_config: MagicMock,
+        mock_template: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        plan = tmp_path / "plan.md"
+        plan.write_text("# Plan", encoding="utf-8")
+        mock_config.return_value = _review_config(review_plan_enabled=True)
+        mock_template.return_value = "Review this plan."
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        review_plan(str(plan))
+
+        request = mock_delegate.call_args[0][0]
+        assert request.relaunch_command == f"wade review plan --no-sandbox {plan}"
+
+
+class TestSandboxCapabilityRefusal:
+    def test_refusal_is_marked_never_launched(self) -> None:
+        config = _review_config(review_implementation_mode="headless")
+        with (
+            patch.object(
+                rds,
+                "enforce_sandbox_capability",
+                side_effect=rds.SandboxCapabilityError("sandbox unavailable"),
+            ),
+            patch.object(rds, "delegate") as mock_delegate,
+        ):
+            result = _run_review_delegation(
+                "Review this change.",
+                "review_implementation",
+                config=config,
+                cmd_config=config.ai.review_implementation,
+                ai_tool="claude",
+                mode="headless",
+                sandbox=True,
+            )
+
+        assert result.success is False
+        assert result.never_launched is True
+        mock_delegate.assert_not_called()
+
+
+class TestFailedReviewSandboxRemediation:
+    """Only an undeliverable unrestricted profile earns a sandbox diagnosis."""
+
+    def test_specific_recovery_command_is_printed_as_literal_text(self, tmp_path: Path) -> None:
+        result = DelegationResult(
+            success=False,
+            feedback="launch denied by sandbox policy",
+            mode=DelegationMode.HEADLESS,
+            never_launched=True,
+            launch_attempted=True,
+            inherited_sandbox_profile_mismatch=True,
+            relaunch_command="wade review implementation --model '[draft]' --no-sandbox",
+        )
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+        with (
+            patch("wade.services.review_delegation_service._record_binding_outcome"),
+            patch("wade.services.review_delegation_service.read_review_record", return_value=None),
+            patch(
+                "wade.services.review_delegation_service.detect_parent_runtime",
+                return_value=parent,
+            ),
+            patch("wade.services.review_delegation_service.console") as mock_console,
+        ):
+            rds._report_failed_review(tmp_path, "a" * 40, _prepared_method(), result)
+
+        mock_console.detail.assert_called_once_with(result.relaunch_command, markup=False)
+
+    def test_compatible_sandbox_profile_keeps_the_hedged_remediation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        result = DelegationResult(
+            success=False,
+            feedback="Permission denied",
+            mode=DelegationMode.HEADLESS,
+            never_launched=True,
+            inherited_sandbox_profile_mismatch=False,
+        )
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+        with (
+            patch("wade.services.review_delegation_service._record_binding_outcome"),
+            patch(
+                "wade.services.review_delegation_service.detect_parent_runtime",
+                return_value=parent,
+            ),
+            patch("wade.services.review_delegation_service.console") as mock_console,
+        ):
+            rds._report_failed_review(tmp_path, "a" * 40, _prepared_method(), result)
+
+        mock_console.warn.assert_called_once_with(rds._HEDGED_REVIEW_FAILURE)
+        mock_console.detail.assert_not_called()
+
+    def test_preflight_error_with_policy_text_keeps_hedged_remediation(
+        self, tmp_path: Path
+    ) -> None:
+        """A tool name can contain ``seatbelt`` without reaching a spawn attempt."""
+        result = DelegationResult(
+            success=False,
+            feedback="Unknown AI tool: seatbelt",
+            mode=DelegationMode.HEADLESS,
+            never_launched=True,
+            launch_attempted=False,
+            inherited_sandbox_profile_mismatch=True,
+            relaunch_command="wade review implementation --ai seatbelt --no-sandbox",
+        )
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+        with (
+            patch("wade.services.review_delegation_service._record_binding_outcome"),
+            patch(
+                "wade.services.review_delegation_service.detect_parent_runtime",
+                return_value=parent,
+            ),
+            patch("wade.services.review_delegation_service.console") as mock_console,
+        ):
+            rds._report_failed_review(tmp_path, "a" * 40, _prepared_method(), result)
+
+        mock_console.warn.assert_called_once_with(rds._HEDGED_REVIEW_FAILURE)
+        mock_console.detail.assert_not_called()

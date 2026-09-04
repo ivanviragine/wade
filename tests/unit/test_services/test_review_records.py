@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -134,6 +135,29 @@ def test_record_is_idempotent_promotable_and_never_downgraded(tmp_path: Path) ->
     assert len(list_review_records(tmp_path)) == 1
 
 
+def test_record_precedence_holds_the_tuple_lock_for_the_complete_transaction(
+    tmp_path: Path,
+) -> None:
+    """An atomic replacement alone cannot prevent a read/compare/write race."""
+    binding = _binding("review-a")
+    filename = review_record_filename(DelegationKind.CODE_REVIEW, HEAD, binding.digest)
+    with patch("wade.services.review_record_service.file_lock") as lock:
+        record = write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=HEAD,
+            binding=binding,
+            outcome=ReviewOutcome.REVIEWED,
+        )
+
+    assert record is not None
+    lock.assert_called_once_with(
+        tmp_path / ".wade" / "reviews" / filename,
+        create_parent=False,
+        resolve_path=False,
+    )
+
+
 def test_no_diff_satisfies_without_consuming_a_pass(tmp_path: Path) -> None:
     binding = _binding("review-a")
     record = write_review_record(
@@ -172,6 +196,26 @@ def test_symlinked_reviews_directory_fails_closed(tmp_path: Path) -> None:
     external.mkdir()
     (tmp_path / ".wade").mkdir()
     (tmp_path / ".wade" / "reviews").symlink_to(external, target_is_directory=True)
+    assert (
+        write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=HEAD,
+            binding=binding,
+            outcome=ReviewOutcome.REVIEWED,
+        )
+        is None
+    )
+    assert not list(external.iterdir())
+
+
+def test_symlinked_wade_directory_is_not_created_through_while_locking(tmp_path: Path) -> None:
+    """Lock acquisition must not bypass safe_state's no-follow policy."""
+    binding = _binding("review-a")
+    external = tmp_path / "external"
+    external.mkdir()
+    (tmp_path / ".wade").symlink_to(external, target_is_directory=True)
+
     assert (
         write_review_record(
             tmp_path,

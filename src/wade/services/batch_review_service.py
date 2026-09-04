@@ -431,6 +431,7 @@ def run_coherence_review(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     repo_root: Path | None = None,
     skills: list[str] | None = None,
     prepared_method: PreparedDelegationMethod | None = None,
@@ -470,10 +471,15 @@ def run_coherence_review(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             delegation_kind=DelegationKind.BATCH_REVIEW,
             method_section=prepared.method_section,
             input_label="Batch context",
             cwd=repo_root or Path.cwd(),
+            # `wade review batch` takes the tracking issue as a required
+            # argument, so the relaunch hint has to carry this batch's.
+            relaunch_operand=ctx.tracking_issue,
+            relaunch_skills=skills,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
@@ -517,6 +523,7 @@ def review_batch(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     project_root: Path | None = None,
     skills: list[str] | None = None,
 ) -> DelegationResult:
@@ -619,7 +626,9 @@ def review_batch(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             repo_root=repo_root,
+            skills=skills,
             prepared_method=prepared_method,
         )
 

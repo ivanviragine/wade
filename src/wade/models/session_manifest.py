@@ -140,6 +140,12 @@ class ReviewOutcome(StrEnum):
     NO_DIFF = "no-diff"
     TIMED_OUT = "timed-out"
     NOTHING_STAGED = "nothing-staged"
+    #: The reviewer never started — an unknown/unsupported tool, or a launch that
+    #: failed outright (an inherited parent sandbox being the motivating case).
+    #: Distinct from ``TIMED_OUT``, which is a reviewer that *ran* and overran its
+    #: budget: an unattempted review has consumed no review→fix cycle, so it
+    #: neither satisfies the gate nor spends budget (#480).
+    UNATTEMPTED = "unattempted"
 
     @property
     def consumes_pass(self) -> bool:

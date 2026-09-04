@@ -25,6 +25,7 @@ from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
+    build_relaunch_command,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -385,6 +386,8 @@ def _run_delegation(
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
     explicit_timeout: bool = False,
     sandbox: bool = DEFAULT_SANDBOX,
+    operation: str | None = None,
+    relaunch_command: str | None = None,
 ) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -404,6 +407,8 @@ def _run_delegation(
         permission_mode=permission_mode,
         sandbox=sandbox,
         explicit_timeout=explicit_timeout,
+        operation=operation,
+        relaunch_command=relaunch_command,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
@@ -453,6 +458,7 @@ def analyze_deps(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     planning_worktree: Path | None = None,
     skills: list[str] | None = None,
 ) -> DependencyGraph | None:
@@ -512,7 +518,7 @@ def analyze_deps(
         resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "deps")
         # The capability check waits until after the confirmation UI below,
         # which can still change the tool.
-        resolved_sandbox = resolve_sandbox(None, config, "deps")
+        resolved_sandbox = resolve_sandbox(sandbox, config, "deps")
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — not
@@ -777,6 +783,19 @@ def analyze_deps(
         permission_mode=effective_permission_mode,
         sandbox=resolved_sandbox,
         explicit_timeout=deps_explicit_timeout,
+        # Remediation context for the shared sandbox check in ``delegate()``:
+        # the dispatcher is common to every delegated operation, so it can only
+        # name this one if the caller hands it the exact command to re-run.
+        operation="the dependency analysis",
+        relaunch_command=build_relaunch_command(
+            ["wade", "task", "deps", *issue_numbers],
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            effort=effort_str,
+            permission_mode=effective_permission_mode,
+            mode=delegation_mode,
+            skills=skills,
+        ),
     )
     output = (
         delegation_result.feedback
@@ -863,10 +882,11 @@ def analyze_deps(
             )
             return None
 
-    # A timeout is a hard failure (not "no deps found"), so return None rather
-    # than an empty graph — callers must not treat it as an authoritative result.
+    # A failed delegation is never an authoritative "no dependencies" result.
+    # This includes a never-launched analyzer as well as a timeout: callers use
+    # ``None`` to distinguish an unavailable analysis from an empty graph.
     # Cleanup above already ran.
-    if delegation_result.timed_out:
+    if not delegation_result.success:
         return None
 
     # Parse edges

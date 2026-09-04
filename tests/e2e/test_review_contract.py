@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -472,6 +475,236 @@ class TestReviewImplementationCommand:
         assert len(records) == 1
         assert json.loads(records[0].read_text(encoding="utf-8"))["outcome"] == "reviewed"
         assert _read_fake_claude_log(log_file) == []
+
+
+class TestInheritedSandboxReviewContract:
+    """`wade review implementation` inside a sandboxed parent runtime (#480).
+
+    Two "never launched" shapes are exercised, because they must not be reported
+    the same way:
+
+    - a **denial-shaped spawn failure** — a ``claude`` on PATH that resolves but
+      cannot be executed, which is what an inherited sandbox looks like at the
+      point of failure. This is the only shape that earns the confident,
+      runtime-naming diagnosis.
+    - a **capability refusal** — ``vscode`` exposes no headless mode, so the
+      guard returns before any process exists. Nothing touched the OS, so the
+      sandbox must not be blamed even when the parent is known to be sandboxed
+      (#481 review).
+
+    Both are reproducible without depending on which binaries happen to sit on
+    the runner's PATH.
+    """
+
+    _SANDBOXED_PARENT: ClassVar[dict[str, str]] = {
+        "CODEX_CLI": "1",
+        "CODEX_SANDBOX": "seatbelt",
+    }
+
+    def _stage_a_change(self, e2e_repo: Path) -> None:
+        app_file = e2e_repo / "src" / "app.py"
+        app_file.write_text('print("inherited sandbox review")\n', encoding="utf-8")
+        _git(["add", str(app_file.relative_to(e2e_repo))], cwd=e2e_repo)
+
+    def _blocked_tool_env(self, mock_gh_cli: MockGhCli, tool: str = "claude") -> dict[str, str]:
+        """Sandboxed parent + a tool that resolves on PATH but cannot be exec'd.
+
+        Exec fails with ``EACCES``, so the failure text carries "permission
+        denied" — the denial shape wade requires before attributing a failed
+        review to the parent sandbox.
+
+        PATH is narrowed to the mocked bin plus the directories this run genuinely
+        needs (``wade`` itself and ``git``), because the exec search does *not*
+        stop at the first candidate: with the ambient PATH intact, a real
+        ``claude`` further along it would be found and actually run.
+        """
+        mock_bin = mock_gh_cli["mock_bin"]
+        blocked = mock_bin / tool
+        blocked.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        blocked.chmod(0o644)
+
+        required = [str(mock_bin)]
+        for binary in ("wade", "git"):
+            resolved = shutil.which(binary)
+            assert resolved is not None, f"{binary} must be on PATH for this contract to run"
+            required.append(str(Path(resolved).parent))
+        path = os.pathsep.join([*required, "/usr/bin", "/bin"])
+        assert shutil.which(tool, path=path) is None, (
+            f"an executable {tool} on the narrowed PATH would run for real"
+        )
+        return {**self._SANDBOXED_PARENT, "PATH": path}
+
+    def _review(
+        self,
+        e2e_repo: Path,
+        env: dict[str, str],
+        *,
+        ai: str = "vscode",
+        sandbox: bool | None = None,
+        staged: bool = True,
+    ) -> str:
+        args = [
+            "review",
+            "implementation",
+            "--mode",
+            "headless",
+            "--ai",
+            ai,
+        ]
+        if staged:
+            args.insert(2, "--staged")
+        if sandbox is True:
+            args.append("--sandbox")
+        elif sandbox is False:
+            args.append("--no-sandbox")
+        result = _run(
+            args,
+            cwd=e2e_repo,
+            env=env,
+        )
+        return result.stdout + result.stderr
+
+    def test_names_the_runtime_and_prints_a_runnable_command(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        self._stage_a_change(e2e_repo)
+        env = self._blocked_tool_env(mock_gh_cli)
+
+        output = " ".join(self._review(e2e_repo, env, ai="claude").split())
+
+        # A bare EACCES is not enough to blame the known boundary; the fixture
+        # deliberately makes the fake binary non-executable.
+        assert "Codex CLI is sandboxed" in output
+        assert "executable permissions or network configuration" in output
+        assert "could not reach its own host credentials" not in output
+        assert "no review-pass budget was consumed" in output
+
+    def test_a_capability_refusal_is_not_blamed_on_the_sandbox(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """The parent is sandboxed, but this reviewer never reached the OS.
+
+        ``vscode`` has no headless mode; wade refused before spawning anything.
+        Attributing that to inaccessible host credentials would be a confident
+        wrong cause and would hide the remediation that actually applies.
+        """
+        self._stage_a_change(e2e_repo)
+
+        output = " ".join(self._review(e2e_repo, self._SANDBOXED_PARENT).split())
+
+        assert "Codex CLI is sandboxed and the implementation review never started" not in output
+        assert "Review did not complete, so no review-pass budget was consumed." in output
+
+    def test_missing_tool_is_not_blamed_on_the_sandbox(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """A configuration error must stay on the generic remediation path."""
+        self._stage_a_change(e2e_repo)
+
+        output = " ".join(
+            self._review(e2e_repo, self._SANDBOXED_PARENT, ai="not-a-real-tool").split()
+        )
+
+        assert "Codex CLI is sandboxed and the implementation review never started" not in output
+        assert "Review did not complete, so no review-pass budget was consumed." in output
+
+    def test_compatible_sandbox_request_is_not_told_to_relaunch(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """A ``sandbox=True`` request has no unrestricted-profile mismatch."""
+        self._stage_a_change(e2e_repo)
+        env = self._blocked_tool_env(mock_gh_cli, "codex")
+
+        output = " ".join(self._review(e2e_repo, env, ai="codex", sandbox=True).split())
+
+        assert "Codex CLI is sandboxed and the implementation review never started" not in output
+        assert "Review did not complete, so no review-pass budget was consumed." in output
+
+    def test_the_gate_stays_closed_with_an_unattempted_record(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        self._stage_a_change(e2e_repo)
+
+        self._review(e2e_repo, self._SANDBOXED_PARENT)
+
+        records = list((e2e_repo / ".wade/reviews").glob("review@code-review@*.json"))
+        assert len(records) == 1
+        payload = json.loads(records[0].read_text(encoding="utf-8"))
+        assert payload["outcome"] == "unattempted"
+        # The two properties `done` reads: neither certifies the commit nor
+        # spends a review→fix cycle.
+        assert payload["consumes_pass"] is False
+
+    def test_an_unattempted_record_keeps_implementation_done_closed(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """An auditable launch failure must never certify the implementation commit."""
+        issue_number = 480
+        worktree_path, _ = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title="fix: keep unattempted reviews out of done",
+            branch_name="feat/480-fix-keep-unattempted-reviews-out-of-done",
+        )
+        (worktree_path / "PR-SUMMARY.md").write_text(
+            "Exercise the unattempted-review completion gate.\n",
+            encoding="utf-8",
+        )
+        (worktree_path / "implementation.txt").write_text("blocked review\n", encoding="utf-8")
+        _git(["add", "-A"], cwd=worktree_path)
+        _git(["commit", "-m", "fix: preserve the unattempted review gate"], cwd=worktree_path)
+        docs = _run(
+            [
+                "implementation-session",
+                "docs",
+                "--not-needed",
+                "E2E fixture has no documentation impact",
+            ],
+            cwd=worktree_path,
+        )
+        assert docs.returncode == 0, docs.stdout + docs.stderr
+
+        review_output = self._review(
+            worktree_path,
+            self._blocked_tool_env(mock_gh_cli),
+            ai="claude",
+            staged=False,
+        )
+        assert "no review-pass budget was consumed" in " ".join(review_output.split()).lower()
+        records = list((worktree_path / ".wade/reviews").glob("review@code-review@*.json"))
+        assert len(records) == 1
+        assert json.loads(records[0].read_text(encoding="utf-8"))["outcome"] == "unattempted"
+
+        done = _run(["implementation-session", "done"], cwd=worktree_path)
+        output = " ".join((done.stdout + done.stderr).split())
+        assert done.returncode != 0, output
+        assert "Review has not run for the current commit" in output
+
+    def test_an_unknown_parent_keeps_the_hedged_wording(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """Same failure, no sandbox signal — wade must not assert the cause."""
+        self._stage_a_change(e2e_repo)
+
+        output = " ".join(self._review(e2e_repo, {"CODEX_CLI": "1"}).split())
+
+        assert "is sandboxed" not in output
+        assert "Review did not complete, so no review-pass budget was consumed." in output
 
 
 class TestReviewPrCommentsCommand:

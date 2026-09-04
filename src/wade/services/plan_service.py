@@ -36,6 +36,8 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
+    announce_inherited_sandbox,
+    build_relaunch_command,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -68,6 +70,7 @@ from wade.utils.plan_validation import has_valid_plan as has_valid_plan
 from wade.utils.plan_validation import plan_done as plan_done
 from wade.utils.plan_validation import validate_plan_dir as validate_plan_dir
 from wade.utils.process import run_with_transcript
+from wade.utils.runtime_env import detect_parent_runtime, requires_unsandboxed_relaunch
 from wade.utils.terminal import (
     compose_plan_title,
     set_terminal_title,
@@ -341,6 +344,9 @@ def run_ai_planning_session(
         except FileNotFoundError:
             console.error(f"AI tool binary not found: {ai_tool}")
             return 1
+        except OSError as exc:
+            console.warn(f"AI tool launch failed: {exc}")
+            return 1
         return result.returncode
 
     # Check model compatibility — drop model if it's not valid for this tool
@@ -393,7 +399,15 @@ def run_ai_planning_session(
         cmd=" ".join(cmd),
     )
 
-    return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
+    # An ``OSError`` here means the process could not be spawned at all (for
+    # example, a parent sandbox denied executing a binary found on PATH). Keep
+    # that launch boundary narrow: exceptions after a planner has run must not
+    # be mistaken for a failed launch and cause generated plans to be discarded.
+    try:
+        return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
+    except OSError as exc:
+        console.warn(f"AI tool launch failed: {exc}")
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +683,29 @@ def plan(
     session_bundle = (
         ".wade/session" if planning_worktree is not None else str(Path(plan_dir) / ".wade/session")
     )
+    # Unlike implement and pr-comment review, planning has no nested-AI guard: it
+    # launches a runtime unconditionally, so an inherited parent sandbox reaches
+    # the planner silently. Say so before the launch rather than letting the
+    # session discover it as an opaque credential or network failure (#480). The
+    # planner still starts — wade cannot prove it will fail — it just stops being
+    # a surprise.
+    parent = detect_parent_runtime()
+    if requires_unsandboxed_relaunch(resolved_sandbox=resolved_sandbox, parent=parent):
+        announce_inherited_sandbox(
+            parent,
+            resolved_sandbox=resolved_sandbox,
+            operation="the planning session",
+            relaunch_command=build_relaunch_command(
+                ["wade", "plan"]
+                + (["--issue", existing_issue.id] if existing_issue is not None else []),
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                effort=resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None,
+                permission_mode=resolved_permission_mode,
+                skills=work_skills,
+                review_skills=review_skills,
+            ),
+        )
     with _plan_dir_fallback_env(plan_dir, planning_worktree):
         exit_code = run_ai_planning_session(
             ai_tool=resolved_tool,
@@ -1508,10 +1545,9 @@ def _finalize_issues(
                 before_start=lambda: _flush_planning_votes_before_implementation(
                     planning_worktree, repo_root, config
                 ),
-                plan_sandbox=sandbox,
             )
         else:
-            result = _offer_to_implement(issue_numbers[0], plan_sandbox=sandbox)
+            result = _offer_to_implement(issue_numbers[0])
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -1548,13 +1584,8 @@ def _offer_to_implement(
     issue_number: str,
     *,
     before_start: Callable[[], bool] | None = None,
-    plan_sandbox: bool | None = None,
 ) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
-
-    *plan_sandbox* is this planning session's **resolved** profile, forwarded so
-    the handoff compares against the planner that actually ran rather than
-    re-resolving config and losing a ``--sandbox`` / ``--no-sandbox`` override.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
     or None if the prompt was skipped (non-TTY) or declined.
@@ -1575,14 +1606,12 @@ def _offer_to_implement(
         return False
 
     try:
-        # Tell implementation startup this is an accepted handoff, and under
-        # which profile the planner is running, so it can establish a fresh Codex
-        # context when its independently resolved profile is more permissive than
-        # the process it would otherwise inherit.
+        # Tell implementation startup this is an accepted handoff. It assesses
+        # the runtime that actually encloses the handoff rather than the former
+        # planner child, which has already exited.
         result = start_implementation_session(
             target=issue_number,
             plan_handoff=True,
-            plan_sandbox=plan_sandbox,
         )
         return result.success
     except Exception:

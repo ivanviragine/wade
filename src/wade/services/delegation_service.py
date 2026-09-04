@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import structlog
@@ -21,11 +22,12 @@ from crossby.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
-from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
+from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS, announce_inherited_sandbox
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.process import CommandError, run
+from wade.utils.runtime_env import detect_parent_runtime, requires_unsandboxed_relaunch
 
 logger = structlog.get_logger()
 
@@ -115,21 +117,74 @@ def _parse_effort(raw: str | None) -> EffortLevel | None:
         return None
 
 
+def _warn_on_inherited_sandbox(request: DelegationRequest) -> bool:
+    """Warn immediately before a validated delegated runtime launches.
+
+    Deps, standalone plan/code review and batch review all funnel through
+    ``delegate()``, so this cross-cutting launch concern belongs here **once**
+    rather than in each service — three copies would drift. Batch implementation
+    is separate: it diagnoses once in ``batch.py`` before terminal brokers can
+    drop the enclosing process's runtime markers.
+
+    Warns and proceeds rather than blocking. wade cannot prove the delegated tool
+    will fail — a runtime with credentials reachable from inside the sandbox may
+    well succeed — so refusing to try would break sessions that work today. If it
+    does fail, ``never_launched`` carries the classification onward.
+    """
+    return announce_inherited_sandbox(
+        detect_parent_runtime(),
+        resolved_sandbox=request.sandbox,
+        operation=request.operation or "this delegated run",
+        relaunch_command=request.relaunch_command,
+    )
+
+
+def _has_inherited_sandbox_profile_mismatch(request: DelegationRequest) -> bool:
+    """Assess the requested profile without emitting remediation prematurely."""
+    return requires_unsandboxed_relaunch(
+        resolved_sandbox=request.sandbox,
+        parent=detect_parent_runtime(),
+    )
+
+
 def delegate(request: DelegationRequest) -> DelegationResult:
     """Dispatch a delegation request to the appropriate mode runner."""
     if request.mode == DelegationMode.PROMPT:
         return _delegate_prompt(request)
-    if request.mode == DelegationMode.HEADLESS:
-        return _delegate_headless(request)
-    if request.mode == DelegationMode.INTERACTIVE:
-        return _delegate_interactive(request)
 
-    return DelegationResult(
-        success=False,
-        feedback=f"Unknown delegation mode: {request.mode}",
-        mode=request.mode,
-        exit_code=1,
-    )
+    # Preserve the resolved mismatch for the post-launch diagnostic, but do not
+    # announce it until the mode/tool capability guards prove a runtime can
+    # actually launch. A missing tool or headless-capability refusal cannot be
+    # repaired by relaunching the enclosing session.
+    profile_mismatch = _has_inherited_sandbox_profile_mismatch(request)
+
+    # ``never_launched`` includes preflight refusals such as an unknown tool.
+    # Record the narrower spawn boundary separately, so a user-controlled error
+    # mentioning ``seatbelt`` cannot turn that configuration error into a false
+    # inherited-sandbox diagnosis downstream.
+    launch_attempted = False
+
+    def before_launch() -> bool:
+        nonlocal launch_attempted
+        launch_attempted = True
+        return _warn_on_inherited_sandbox(request)
+
+    if request.mode == DelegationMode.HEADLESS:
+        result = _delegate_headless(request, before_launch=before_launch)
+    elif request.mode == DelegationMode.INTERACTIVE:
+        result = _delegate_interactive(request, before_launch=before_launch)
+    else:
+        result = DelegationResult(
+            success=False,
+            feedback=f"Unknown delegation mode: {request.mode}",
+            mode=request.mode,
+            exit_code=1,
+            never_launched=True,
+        )
+    result.launch_attempted = launch_attempted
+    result.inherited_sandbox_profile_mismatch = profile_mismatch and launch_attempted
+    result.relaunch_command = request.relaunch_command
+    return result
 
 
 def _delegate_prompt(request: DelegationRequest) -> DelegationResult:
@@ -189,12 +244,19 @@ def _format_headless_failure(stdout: str, stderr: str) -> str:
 
 
 def _crash_result(exc: CommandError) -> DelegationResult:
-    """A non-success result for a headless crash — ``timed_out`` stays False (never retried)."""
+    """A non-success result for a headless crash — ``timed_out`` stays False (never retried).
+
+    ``CommandError`` here means the spawn itself failed (a missing or
+    non-executable binary, a denied exec), so nothing ran: ``never_launched``.
+    A process that started and exited non-zero comes back through
+    ``_run_headless_once`` instead and keeps the flag False.
+    """
     return DelegationResult(
         success=False,
         feedback=f"Headless session failed: {exc}",
         mode=DelegationMode.HEADLESS,
         exit_code=1,
+        never_launched=True,
     )
 
 
@@ -222,16 +284,23 @@ def _run_headless_once(cmd: list[str], timeout: int, session_cwd: Path) -> Deleg
     )
 
 
-def _delegate_headless(request: DelegationRequest) -> DelegationResult:
+def _delegate_headless(
+    request: DelegationRequest,
+    *,
+    before_launch: Callable[[], bool] | None = None,
+) -> DelegationResult:
     """Run AI non-interactively and capture stdout."""
     session_cwd = request.cwd or Path.cwd()
 
+    # The three guards below all return *before* a process exists, so each is
+    # unambiguously "never launched" — no interpretation required.
     if not request.ai_tool:
         return DelegationResult(
             success=False,
             feedback="No AI tool specified for headless mode",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            never_launched=True,
         )
 
     try:
@@ -242,6 +311,7 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
             feedback=f"Unknown AI tool: {request.ai_tool}",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            never_launched=True,
         )
 
     caps = adapter.capabilities()
@@ -251,6 +321,7 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
             feedback=f"AI tool {request.ai_tool} does not support headless mode",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            never_launched=True,
         )
 
     defaults = [str(session_cwd), tempfile.gettempdir()]
@@ -291,7 +362,15 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         if retry_timeout > 0:
             attempts.append(retry_timeout)
 
+    if before_launch is not None:
+        before_launch()
+
     partial = ""
+    # A retry is only eligible after a real child timed out.  Keep that fact
+    # through a later spawn/non-zero failure: the final failure is not an
+    # unattempted delegation, and review receipts must continue to account for
+    # the earlier timed-out pass.
+    timed_out_before_final_attempt = False
     for index, budget in enumerate(attempts):
         is_last = index == len(attempts) - 1
         if index > 0:
@@ -309,8 +388,12 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
                 f"{request.timeout + budget}s). Keep it in the foreground."
             )
         try:
-            return _run_headless_once(cmd, budget, session_cwd)
+            result = _run_headless_once(cmd, budget, session_cwd)
+            if timed_out_before_final_attempt and not result.success:
+                return result.model_copy(update={"timed_out": True, "never_launched": False})
+            return result
         except subprocess.TimeoutExpired as exc:
+            timed_out_before_final_attempt = True
             # Prefer this attempt's partial output; fall back to a prior attempt's.
             partial = _partial_from_timeout(exc) or partial
             if is_last:
@@ -322,12 +405,59 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
                 )
         except CommandError as e:
             logger.warning("delegation.headless_failed", tool=request.ai_tool, error=str(e))
-            return _crash_result(e)
+            result = _crash_result(e)
+            if timed_out_before_final_attempt:
+                return result.model_copy(update={"timed_out": True, "never_launched": False})
+            return result
+        except OSError as e:
+            # ``run`` maps only ``FileNotFoundError`` to ``CommandError``; a
+            # binary that resolves on PATH but cannot be *executed* raises
+            # ``PermissionError`` straight through and used to abort the whole
+            # command with a traceback. That is one of the shapes an inherited
+            # sandbox produces, so it has to arrive as a classified
+            # never-launched result instead (#480).
+            logger.warning("delegation.headless_spawn_failed", tool=request.ai_tool, error=str(e))
+            result = DelegationResult(
+                success=False,
+                feedback=f"Headless session failed to start: {e}",
+                mode=DelegationMode.HEADLESS,
+                exit_code=1,
+                never_launched=True,
+            )
+            if timed_out_before_final_attempt:
+                return result.model_copy(update={"timed_out": True, "never_launched": False})
+            return result
 
     return _timeout_result(partial)
 
 
-def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
+def _interactive_failure(exc: Exception, *, launched: bool) -> DelegationResult:
+    """A failed interactive delegation, classified by whether a child ever existed.
+
+    ``launched`` is the caller's judgement about the *launch boundary*, not about
+    whether the AI session succeeded: a session that started and then failed is
+    still an attempted one, and must never be reported as never-launched (that
+    would record an ``UNATTEMPTED`` review outcome and offer sandbox-relaunch
+    advice for a reviewer that actually ran).
+    """
+    return DelegationResult(
+        success=False,
+        feedback=(
+            f"Interactive session failed after launch: {exc}"
+            if launched
+            else f"AI tool launch failed: {exc}"
+        ),
+        mode=DelegationMode.INTERACTIVE,
+        exit_code=1,
+        never_launched=not launched,
+    )
+
+
+def _delegate_interactive(
+    request: DelegationRequest,
+    *,
+    before_launch: Callable[[], bool] | None = None,
+) -> DelegationResult:
     """Launch AI interactively; block until done; read output from file."""
     session_cwd = request.cwd or Path.cwd()
 
@@ -337,6 +467,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             feedback="No AI tool specified for interactive mode",
             mode=DelegationMode.INTERACTIVE,
             exit_code=1,
+            never_launched=True,
         )
 
     try:
@@ -347,19 +478,26 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             feedback=f"Unknown AI tool: {request.ai_tool}",
             mode=DelegationMode.INTERACTIVE,
             exit_code=1,
+            never_launched=True,
         )
 
-    # Set up output file for the AI to write results to
+    # Set up output file for the AI to write results to. These are pre-launch
+    # filesystem operations too: a read-only temp directory must not escape as a
+    # traceback or be mistaken for an error from a child that never existed.
     output_file = request.output_file
     created_tmp = output_file is None
-    if output_file is None:
-        tmp_dir = tempfile.mkdtemp(prefix="wade-delegation-")
-        output_file = Path(tmp_dir) / "delegation-output.txt"
-    else:
-        tmp_dir = None
-        if not output_file.is_absolute():
-            output_file = session_cwd / output_file
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir: str | None = None
+    try:
+        if output_file is None:
+            tmp_dir = tempfile.mkdtemp(prefix="wade-delegation-")
+            output_file = Path(tmp_dir) / "delegation-output.txt"
+        else:
+            if not output_file.is_absolute():
+                output_file = session_cwd / output_file
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _interactive_failure(exc, launched=False)
+    assert output_file is not None
 
     # Append output instruction to prompt
     output_instruction = (
@@ -374,21 +512,50 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     elif str(output_file.parent) not in trusted:
         trusted.append(str(output_file.parent))
 
+    # Only a failure *before the child process exists* is a launch failure, and
+    # the distinction decides the remediation: a reviewer that never started
+    # earns "restore the runtime", one that ran and then failed must not. Two
+    # things separate them here — where the failing call sits, and the shape of
+    # the exception:
+    #
+    # - Anything up to and including the spawn that raises ``OSError`` (missing
+    #   binary, denied exec, unwritable artefact) started nothing.
+    # - ``adapter.launch`` *blocks until the child exits* for most runtimes, so
+    #   an adapter that checks the exit status raises ``CalledProcessError`` —
+    #   and a bounded one ``TimeoutExpired`` — from a session that very much ran.
+    #   Every ``subprocess.SubprocessError`` variant carries a child that was
+    #   created, so it is classified as launched even though the call never
+    #   returned (#481 review).
+    # - Everything after the adapter returns (the confirm prompt, reading the
+    #   output file) is post-launch by position, whatever it raises.
     try:
-        deliver_prompt_if_needed(adapter, interactive_prompt)
-        adapter.launch(
-            working_dir=session_cwd,
-            model=request.model,
-            prompt=interactive_prompt,
-            trusted_dirs=trusted,
-            allowed_commands=request.allowed_commands or None,
-            effort=_parse_effort(request.effort),
-            # Same as the headless path: grant a linked worktree's git metadata
-            # for sandboxed git writes, and inherit the caller's profile.
-            network_access=LAUNCH_NETWORK_ACCESS,
-            sandbox=request.sandbox,
-            **permission_mode_launch_kwargs(request.permission_mode),
-        )
+        try:
+            deliver_prompt_if_needed(adapter, interactive_prompt)
+        except (OSError, subprocess.SubprocessError) as e:
+            # Clipboard fallback for tools without initial-message support; it
+            # runs entirely before the spawn, so nothing has started yet.
+            return _interactive_failure(e, launched=False)
+
+        try:
+            if before_launch is not None:
+                before_launch()
+            adapter.launch(
+                working_dir=session_cwd,
+                model=request.model,
+                prompt=interactive_prompt,
+                trusted_dirs=trusted,
+                allowed_commands=request.allowed_commands or None,
+                effort=_parse_effort(request.effort),
+                # Same as the headless path: grant a linked worktree's git metadata
+                # for sandboxed git writes, and inherit the caller's profile.
+                network_access=LAUNCH_NETWORK_ACCESS,
+                sandbox=request.sandbox,
+                **permission_mode_launch_kwargs(request.permission_mode),
+            )
+        except OSError as e:
+            return _interactive_failure(e, launched=False)
+        except subprocess.SubprocessError as e:
+            return _interactive_failure(e, launched=True)
 
         # Non-blocking tools return immediately — wait for user
         if not adapter.capabilities().blocks_until_exit:
@@ -419,12 +586,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             exit_code=1,
         )
     except (OSError, subprocess.SubprocessError) as e:
-        return DelegationResult(
-            success=False,
-            feedback=f"AI tool launch failed: {e}",
-            mode=DelegationMode.INTERACTIVE,
-            exit_code=1,
-        )
+        return _interactive_failure(e, launched=True)
     finally:
         if created_tmp and tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)

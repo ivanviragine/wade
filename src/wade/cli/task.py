@@ -262,6 +262,12 @@ def deps(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Confine the AI runtime to its sandbox (default: off — the runtime runs "
+        "unrestricted so delegated tools keep host credentials). Overrides ai.sandbox.",
+    ),
     check: bool = typer.Option(False, "--check", help="Validate existing dependencies."),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None,
@@ -339,6 +345,7 @@ def deps(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        sandbox=sandbox,
         skills=skill,
     )
     raise typer.Exit(0 if graph is not None else 1)
