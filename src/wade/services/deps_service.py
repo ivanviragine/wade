@@ -882,10 +882,11 @@ def analyze_deps(
             )
             return None
 
-    # A timeout is a hard failure (not "no deps found"), so return None rather
-    # than an empty graph — callers must not treat it as an authoritative result.
+    # A failed delegation is never an authoritative "no dependencies" result.
+    # This includes a never-launched analyzer as well as a timeout: callers use
+    # ``None`` to distinguish an unavailable analysis from an empty graph.
     # Cleanup above already ran.
-    if delegation_result.timed_out:
+    if not delegation_result.success:
         return None
 
     # Parse edges

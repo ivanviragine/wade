@@ -714,6 +714,48 @@ class TestNeverLaunchedClassification:
         assert result.timed_out is True
         assert result.never_launched is False
 
+    @patch("wade.services.delegation_service.run")
+    def test_timeout_then_spawn_failure_remains_timed_out(self, mock_run: MagicMock) -> None:
+        """A retry failing to spawn cannot erase the first attempted timeout."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["claude"], timeout=600),
+            CommandError(["claude"], 126, "permission denied"),
+        ]
+
+        result = _delegate_headless(
+            DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="p",
+                ai_tool="claude",
+                timeout=600,
+            )
+        )
+
+        assert result.success is False
+        assert result.timed_out is True
+        assert result.never_launched is False
+
+    @patch("wade.services.delegation_service.run")
+    def test_timeout_then_nonzero_exit_remains_timed_out(self, mock_run: MagicMock) -> None:
+        """A retry that starts but exits non-zero also retains the timeout receipt."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["claude"], timeout=600),
+            MagicMock(returncode=3, stdout="", stderr="boom"),
+        ]
+
+        result = _delegate_headless(
+            DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="p",
+                ai_tool="claude",
+                timeout=600,
+            )
+        )
+
+        assert result.success is False
+        assert result.timed_out is True
+        assert result.never_launched is False
+
     def test_interactive_launch_failure_never_launched(self) -> None:
         adapter = MagicMock()
         adapter.launch.side_effect = OSError("Operation not permitted")
@@ -909,7 +951,21 @@ class TestSharedParentSandboxCheck:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv(CODEX_SANDBOX_ENV, raising=False)
-        with patch("wade.ui.console.console") as mock_console:
+        # The assertion is about the parent-runtime advisory, not whether a
+        # configured CLI is installed.  Keep this unit test hermetic: letting
+        # the normal headless path run here launches a real tool whenever the
+        # assessment is UNKNOWN.
+        with (
+            patch("wade.ui.console.console") as mock_console,
+            patch(
+                "wade.services.delegation_service._delegate_headless",
+                return_value=DelegationResult(
+                    success=True,
+                    feedback="ok",
+                    mode=DelegationMode.HEADLESS,
+                ),
+            ),
+        ):
             delegate(
                 self._sandboxed_request("the implementation review", "wade review implementation")
             )

@@ -1335,6 +1335,10 @@ class TestFinalizeIssuesHints:
 
             mock_offer.assert_not_called()
             mock_console.detail.assert_called_with("wade implement-batch 1 2 3")
+            assert all(
+                call.args != ("No dependencies found between issues.",)
+                for call in mock_console.info.call_args_list
+            )
             assert result is None
 
 

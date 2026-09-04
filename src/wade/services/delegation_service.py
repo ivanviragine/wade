@@ -358,6 +358,11 @@ def _delegate_headless(
         before_launch()
 
     partial = ""
+    # A retry is only eligible after a real child timed out.  Keep that fact
+    # through a later spawn/non-zero failure: the final failure is not an
+    # unattempted delegation, and review receipts must continue to account for
+    # the earlier timed-out pass.
+    timed_out_before_final_attempt = False
     for index, budget in enumerate(attempts):
         is_last = index == len(attempts) - 1
         if index > 0:
@@ -375,8 +380,12 @@ def _delegate_headless(
                 f"{request.timeout + budget}s). Keep it in the foreground."
             )
         try:
-            return _run_headless_once(cmd, budget, session_cwd)
+            result = _run_headless_once(cmd, budget, session_cwd)
+            if timed_out_before_final_attempt and not result.success:
+                return result.model_copy(update={"timed_out": True, "never_launched": False})
+            return result
         except subprocess.TimeoutExpired as exc:
+            timed_out_before_final_attempt = True
             # Prefer this attempt's partial output; fall back to a prior attempt's.
             partial = _partial_from_timeout(exc) or partial
             if is_last:
@@ -388,7 +397,10 @@ def _delegate_headless(
                 )
         except CommandError as e:
             logger.warning("delegation.headless_failed", tool=request.ai_tool, error=str(e))
-            return _crash_result(e)
+            result = _crash_result(e)
+            if timed_out_before_final_attempt:
+                return result.model_copy(update={"timed_out": True, "never_launched": False})
+            return result
         except OSError as e:
             # ``run`` maps only ``FileNotFoundError`` to ``CommandError``; a
             # binary that resolves on PATH but cannot be *executed* raises
@@ -397,13 +409,16 @@ def _delegate_headless(
             # sandbox produces, so it has to arrive as a classified
             # never-launched result instead (#480).
             logger.warning("delegation.headless_spawn_failed", tool=request.ai_tool, error=str(e))
-            return DelegationResult(
+            result = DelegationResult(
                 success=False,
                 feedback=f"Headless session failed to start: {e}",
                 mode=DelegationMode.HEADLESS,
                 exit_code=1,
                 never_launched=True,
             )
+            if timed_out_before_final_attempt:
+                return result.model_copy(update={"timed_out": True, "never_launched": False})
+            return result
 
     return _timeout_result(partial)
 

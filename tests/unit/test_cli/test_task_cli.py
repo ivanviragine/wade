@@ -76,3 +76,11 @@ class TestTaskDepsCLI:
 
         assert result.exit_code == 0
         assert mock_analyze_deps.call_args.kwargs["sandbox"] is False
+
+    @patch("wade.services.deps_service.analyze_deps", return_value=None)
+    def test_deps_failed_analysis_exits_one(self, mock_analyze_deps: MagicMock) -> None:
+        """A service-level launch failure must not be reported as no dependencies."""
+        result = runner.invoke(task_app, ["deps", "1", "2"])
+
+        assert result.exit_code == 1
+        mock_analyze_deps.assert_called_once()
