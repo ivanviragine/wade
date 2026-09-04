@@ -36,6 +36,7 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
+    announce_inherited_sandbox,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -68,6 +69,7 @@ from wade.utils.plan_validation import has_valid_plan as has_valid_plan
 from wade.utils.plan_validation import plan_done as plan_done
 from wade.utils.plan_validation import validate_plan_dir as validate_plan_dir
 from wade.utils.process import run_with_transcript
+from wade.utils.runtime_env import detect_parent_runtime
 from wade.utils.terminal import (
     compose_plan_title,
     set_terminal_title,
@@ -668,6 +670,22 @@ def plan(
     session_cwd = planning_worktree or Path.cwd()
     session_bundle = (
         ".wade/session" if planning_worktree is not None else str(Path(plan_dir) / ".wade/session")
+    )
+    # Unlike implement and pr-comment review, planning has no nested-AI guard: it
+    # launches a runtime unconditionally, so an inherited parent sandbox reaches
+    # the planner silently. Say so before the launch rather than letting the
+    # session discover it as an opaque credential or network failure (#480). The
+    # planner still starts — wade cannot prove it will fail — it just stops being
+    # a surprise.
+    announce_inherited_sandbox(
+        detect_parent_runtime(),
+        resolved_sandbox=resolved_sandbox,
+        operation="the planning session",
+        relaunch_command=(
+            f"wade plan {existing_issue.id} --no-sandbox"
+            if existing_issue is not None
+            else "wade plan --no-sandbox"
+        ),
     )
     with _plan_dir_fallback_env(plan_dir, planning_worktree):
         exit_code = run_ai_planning_session(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -472,6 +473,87 @@ class TestReviewImplementationCommand:
         assert len(records) == 1
         assert json.loads(records[0].read_text(encoding="utf-8"))["outcome"] == "reviewed"
         assert _read_fake_claude_log(log_file) == []
+
+
+class TestInheritedSandboxReviewContract:
+    """`wade review implementation` inside a sandboxed parent runtime (#480).
+
+    The reviewer here cannot start at all — ``vscode`` exposes no headless mode,
+    so the capability guard returns before any process exists. That is the same
+    "never launched" class an inherited sandbox produces, and it is the one
+    failure vector reproducible without depending on which binaries happen to sit
+    on the runner's PATH.
+    """
+
+    _SANDBOXED_PARENT: ClassVar[dict[str, str]] = {
+        "CODEX_CLI": "1",
+        "CODEX_SANDBOX": "seatbelt",
+    }
+
+    def _stage_a_change(self, e2e_repo: Path) -> None:
+        app_file = e2e_repo / "src" / "app.py"
+        app_file.write_text('print("inherited sandbox review")\n', encoding="utf-8")
+        _git(["add", str(app_file.relative_to(e2e_repo))], cwd=e2e_repo)
+
+    def _review(self, e2e_repo: Path, env: dict[str, str]) -> str:
+        result = _run(
+            [
+                "review",
+                "implementation",
+                "--staged",
+                "--mode",
+                "headless",
+                "--ai",
+                "vscode",
+            ],
+            cwd=e2e_repo,
+            env=env,
+        )
+        return result.stdout + result.stderr
+
+    def test_names_the_runtime_and_prints_a_runnable_command(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        self._stage_a_change(e2e_repo)
+
+        output = " ".join(self._review(e2e_repo, self._SANDBOXED_PARENT).split())
+
+        # Not a category of problem — the runtime by name, and the line to type.
+        assert "Codex CLI is sandboxed" in output
+        assert "wade review implementation" in output
+        assert "No review-pass budget was consumed" in output
+
+    def test_the_gate_stays_closed_with_an_unattempted_record(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        self._stage_a_change(e2e_repo)
+
+        self._review(e2e_repo, self._SANDBOXED_PARENT)
+
+        records = list((e2e_repo / ".wade/reviews").glob("review@code-review@*.json"))
+        assert len(records) == 1
+        payload = json.loads(records[0].read_text(encoding="utf-8"))
+        assert payload["outcome"] == "unattempted"
+        # The two properties `done` reads: neither certifies the commit nor
+        # spends a review→fix cycle.
+        assert payload["consumes_pass"] is False
+
+    def test_an_unknown_parent_keeps_the_hedged_wording(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """Same failure, no sandbox signal — wade must not assert the cause."""
+        self._stage_a_change(e2e_repo)
+
+        output = " ".join(self._review(e2e_repo, {"CODEX_CLI": "1"}).split())
+
+        assert "is sandboxed" not in output
+        assert "Review did not complete, so no review-pass budget was consumed." in output
 
 
 class TestReviewPrCommentsCommand:

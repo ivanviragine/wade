@@ -43,6 +43,12 @@ from wade.services.skill_invocation_service import (
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
+from wade.utils.runtime_env import (
+    INHERITED_SANDBOX_HINT,
+    detect_parent_runtime,
+    looks_like_sandbox_denial,
+    possible_inherited_sandbox_cause,
+)
 
 logger = structlog.get_logger()
 
@@ -113,6 +119,23 @@ def _review_budget_line(mode: DelegationMode, timeout: int) -> str:
             "highest-severity issues."
         )
     return "No hard deadline — take the time you need."
+
+
+# Per-operation remediation for the shared sandbox check in ``delegate()``. The
+# dispatcher is one function for every delegated operation, so it cannot infer
+# which command the user should re-run — these supply it. An unmapped command
+# yields ``None`` rather than a guessed command line: a wrong command to type is
+# worse than no command, and the finding itself is still reported.
+_OPERATION_LABELS = {
+    "review_plan": "the plan review",
+    "review_implementation": "the implementation review",
+    "review_batch": "the batch review",
+}
+_RELAUNCH_COMMANDS = {
+    "review_plan": "wade review plan",
+    "review_implementation": "wade review implementation",
+    "review_batch": "wade review batch",
+}
 
 
 def _run_review_delegation(
@@ -290,6 +313,8 @@ def _run_review_delegation(
         sandbox=resolved_sandbox,
         timeout=timeout,
         explicit_timeout=explicit_timeout,
+        operation=_OPERATION_LABELS.get(command),
+        relaunch_command=_RELAUNCH_COMMANDS.get(command),
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
@@ -545,6 +570,69 @@ def _record_binding_outcome(
     )
 
 
+# Today's wording for a failed review whose cause wade cannot pin down. Kept
+# verbatim and used unchanged whenever the parent assessment is ``UNKNOWN``: the
+# disjunction is not sloppiness, it is the honest statement of what is known when
+# the runtime publishes no sandbox signal (#462 review).
+_HEDGED_REVIEW_FAILURE = (
+    "Review did not complete, so no review-pass budget was consumed. "
+    "Check the reviewer output above for the cause — a launch failure "
+    "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
+    "then re-run `wade review implementation`."
+)
+
+
+def _report_failed_review(
+    repo_root: Path,
+    head: str,
+    prepared: PreparedDelegationMethod,
+    result: DelegationResult,
+) -> None:
+    """Record and explain a review that produced no usable outcome.
+
+    A reviewer that never started is an *unattempted* review: it is recorded so
+    the state is auditable, but the record neither satisfies the gate nor
+    consumes a review→fix cycle — counting an infrastructure failure would let
+    `done` skip a required review (#462), and satisfying the gate with it would
+    be worse still.
+
+    The remediation is graded by how much wade actually knows, because the value
+    of the diagnosis is that it can be trusted:
+
+    1. a known-sandboxed parent — state the cause and the exact relaunch command;
+    2. a denial-shaped failure with no signal from the runtime — offer it as a
+       *possible* cause alongside today's hedged wording;
+    3. anything else — today's hedged wording alone.
+    """
+    if result.never_launched:
+        _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
+
+    parent = detect_parent_runtime()
+    if result.never_launched and parent.is_sandboxed:
+        logger.warning(
+            "review.reviewer_never_launched",
+            parent=parent.env_var,
+            signal=parent.signal,
+        )
+        # ``delegate()`` already warned that the profile was undeliverable; this
+        # is the outcome, not a repeat of the advisory. Restating the command is
+        # deliberate — the pre-launch line has scrolled past the reviewer's own
+        # output by now.
+        console.warn(
+            f"{parent.label} is sandboxed and the implementation review never started, "
+            "so the reviewer could not reach its own host credentials from inside that "
+            "boundary. No review-pass budget was consumed and no review receipt was "
+            "written."
+        )
+        console.hint(INHERITED_SANDBOX_HINT)
+        console.detail("wade review implementation")
+        return
+
+    console.warn(_HEDGED_REVIEW_FAILURE)
+    if result.never_launched and looks_like_sandbox_denial(result.feedback):
+        console.hint(possible_inherited_sandbox_cause(parent))
+
+
 def review_implementation(
     *,
     staged: bool = False,
@@ -742,15 +830,5 @@ def review_implementation(
             "self-review, then acknowledge it explicitly."
         )
     else:
-        # ``DelegationResult`` cannot yet tell "never launched" from "launched
-        # and exited nonzero", so this covers both. Word both the finding and
-        # the remedy as what is actually known: prescribing "restore the
-        # reviewer runtime" would be wrong advice for a reviewer that started
-        # fine and then failed (#462 review).
-        console.warn(
-            "Review did not complete, so no review-pass budget was consumed. "
-            "Check the reviewer output above for the cause — a launch failure "
-            "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
-            "then re-run `wade review implementation`."
-        )
+        _report_failed_review(repo_root, head, prepared, result)
     return result

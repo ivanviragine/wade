@@ -551,20 +551,123 @@ explicit-only rule — an unset value emits no flag, so a child re-resolves from
 its own config rather than freezing the parent's resolved value. `None` (unset)
 matches how a non-explicit `permission_mode` is threaded.
 
-`requires_fresh_codex_handoff` (`implementation_service/core.py`) is the restated
-form of the retired network-pin predicate. Its old premise — "the planner always
-ran network-off" — died with the per-command asymmetry, but the mismatch it
-guarded is real and now expressible directly: the sandbox is a launch-time OS
-property, so a **sandboxed** Codex planner handing off to an **unrestricted**
-Codex implementation needs a fresh detached process rather than the planner's.
-Note the **polarity flip** — the old flag fired on the permissive value being
-`True` (network on), this one fires on the permissive value being `False`
-(sandbox off), and the detached branch states the forced value (`False`)
-explicitly. A token-level rename would have silently inverted the intent. If the
-detached launch cannot be created the handoff fails closed and prints
+`requires_fresh_runtime` (`implementation_service/core.py`) is the restated form
+of the retired network-pin predicate. Its old premise — "the planner always ran
+network-off" — died with the per-command asymmetry, but the mismatch it guarded
+is real and now expressible directly: the sandbox is a launch-time OS property,
+so a **sandboxed** planner handing off to an **unrestricted** implementation
+needs a fresh detached process rather than the planner's. Note the **polarity
+flip** — the old flag fired on the permissive value being `True` (network on),
+this one fires on the permissive value being `False` (sandbox off), and the
+detached branch states the forced value (`False`) explicitly. A token-level
+rename would have silently inverted the intent. If the detached launch cannot be
+created the handoff fails closed, names the parent runtime, and prints
 `wade implement <issue> --no-sandbox`; it must not fall back to an inline or
 nested agent. Matching profiles produce no handoff, and all other nested-agent
 starts retain the ordinary launch guard.
+
+The two tool-identity conjuncts it used to carry — parent is Codex, target is
+Codex — were **proxies** for "this process is confined", and they under-fired on
+exactly the cases that matter (#480): a sandboxed Codex planner handing off to
+Claude inherits the sandbox just as surely, and being separately authenticated is
+where the lost host login shows first. The predicate is now the shared
+`requires_unsandboxed_relaunch()` described next.
+
+### Parent-runtime detection & conservative classification (#480)
+
+Every `wade` command started from inside an AI CLI session is a **child** of that
+session. If the parent launched under an OS sandbox, every descendant inherits
+the boundary: no profile wade resolves, and no flag it passes to a child runtime,
+widens it. **An inner wade process can never escape an existing parent sandbox** —
+the only fix is relaunching the *outer* session. Code must never imply otherwise.
+
+`utils/runtime_env.py` is the leaf module holding that knowledge, so services,
+review, and delegation paths share one probe. It answers two deliberately
+independent questions:
+
+| Question | API | Note |
+|---|---|---|
+| Which session are we inside? | `detect_ai_cli_env()` | The historical identity probe moved out of `core.py` (re-exported there as `_detect_ai_cli_env`, which `__all__` and much of the suite still patch). Drives the nested-launch guard. |
+| Is that session confined? | `assess_parent_sandbox()` → `SandboxAssessment` | Tri-state: `SANDBOXED` / `UNRESTRICTED` / `UNKNOWN`. |
+
+Keeping them independent matters in both directions: identity alone says nothing
+about confinement (Codex runs either way under the same `CODEX_CLI` marker), and
+a sandbox signal is actionable even when the tool cannot be named.
+
+**`UNKNOWN` is a first-class answer, never a fallback to a guess.** The
+assessment is read only from published signals: `CODEX_SANDBOX` (high confidence
+— Codex exports it only when a policy applies and names that policy; a value
+naming an explicitly unconfined mode reads `UNRESTRICTED`, any other non-empty
+value reads `SANDBOXED`, absent reads `UNKNOWN` because an older Codex may not
+export it) and `CODEX_SANDBOX_NETWORK_DISABLED` as a secondary. Every other
+runtime publishes nothing, so `UNKNOWN` is correct and final for them — crossby's
+static `sandboxes_writes` capability describes the *tool*, not this process's
+boundary, and inferring from tool identity is exactly the confident wrong cause
+the module exists to avoid. `ParentRuntime.with_launch_profile()` is the one
+addition: a profile forwarded through a first-party wade handoff is evidence of
+the same kind, since wade chose it for the process we are running inside — but an
+environment signal still wins on conflict, and an unrecognised parent gets
+nothing.
+
+**One predicate, four call sites.** `requires_unsandboxed_relaunch()` is true
+only for *resolved profile unrestricted* **and** *parent known sandboxed*;
+`ai_resolution.announce_inherited_sandbox()` is the single user-facing emitter, so
+the paths cannot drift into four explanations of one boundary. It is **advisory,
+never a block** (wade cannot prove the delegated tool will fail) and says nothing
+at all on `UNKNOWN`.
+
+| Launch path | Site | Relaunch command it supplies |
+|---|---|---|
+| implementation | `implementation_service/core.py` | `wade implement <id> --no-sandbox` |
+| PR-comment review | `review_service.py` | `wade review pr-comments <id> --no-sandbox` |
+| plan | `plan_service.py` | `wade plan [<id>] --no-sandbox` — built here because it calls `build_launch_command` + `run_with_transcript` directly, bypassing `delegate()`, and has no nested-AI guard |
+| deps, standalone plan/code review, batch review | `delegation_service.delegate()` | per-operation, from `DelegationRequest.operation` / `.relaunch_command` |
+
+Deps (`deps_service.py`), standalone review (`review_delegation_service.py`) and
+batch review (via `review_delegation_service`) all funnel through the one
+`delegate()` dispatcher, so this cross-cutting concern lives there **once**.
+Centralising costs per-operation context, which is why the remediation fields
+ride on `DelegationRequest` — generic advice would defeat the purpose.
+`batch.py` deliberately has **no** check: it spawns child `wade implement`
+processes that reach the `core.py` check themselves, so one here would be a dead
+no-op implying coverage it does not add (pinned as source text in
+`test_batch_build_cmd.py`, since no behavioural assertion can distinguish "no
+check" from "a check that happens not to fire").
+
+**`DelegationResult.never_launched`** closes the gap that used to force hedged
+remediation: it is `True` only when no process ever started — an absent/unknown
+tool, a `supports_headless` rejection, a `CommandError` spawn failure, or an
+`OSError` on exec (`utils.process.run` maps only `FileNotFoundError` to
+`CommandError`, so a `PermissionError` on a resolvable-but-unexecutable binary
+used to escape `_delegate_headless` and abort the command with a traceback). A
+**non-zero exit** keeps it `False`: that process ran, and a timeout still sets
+`timed_out` and still consumes a pass. The interactive path carries an explicit
+`launched` flag because the launch and the post-session output read share one
+exception handler. The headless path matters most — this repo configures
+`mode: headless` for `deps`, `review_plan` and `review_implementation`, and the
+receipt gate excludes `PROMPT` outright.
+
+Failure text is matched against sandbox-denial *shapes*
+(`looks_like_sandbox_denial`) — permission/exec denials, read-only filesystems,
+network denials. "Command not found" is deliberately **excluded**: from inside a
+sandbox the host filesystem is exactly what is not observable, so "a binary that
+exists on the host but is missing here" is unverifiable at the point of failure
+and equally the signature of a genuinely uninstalled tool.
+
+**Review-gate outcome semantics.** `ReviewOutcome.UNATTEMPTED`
+(`models/session_manifest.py`) has `satisfies_review` **and** `consumes_pass`
+both `False`, and sits at the **bottom** of `_OUTCOME_PRECEDENCE`
+(`review_record_service.py`) — a reviewer that never started carries strictly
+less information than any outcome from one that did, so recording it can never
+downgrade or overwrite a real receipt for the same commit+binding. Budget
+protection (#462) and receipt *classification* remain separate problems: the gate
+at `review_delegation_service.py` already withheld budget, and `never_launched`
+is what now lets the remediation be trusted instead of hedged.
+`_report_failed_review()` grades it by what wade actually knows — (1) known
+sandboxed parent → state the cause and the exact relaunch command; (2)
+denial-shaped failure with no signal → offer it as a *possible* cause alongside
+`_HEDGED_REVIEW_FAILURE`; (3) anything else → that hedged wording alone, kept
+verbatim. `done` gates stay closed in every case.
 
 **Retirement path for `ai.network_access`.** The loader deliberately never reads
 the key (an un-migrated `.wade.yml` keeps loading), `strip_retired_network_access`

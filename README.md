@@ -738,16 +738,71 @@ the Stop hook, and the pre-push backstop are identical in both profiles.
 
 The sandbox is a launch-time OS property: a process started confined cannot drop
 its sandbox later. So when an accepted plan handoff runs inside a **sandboxed**
-Codex planner and the implementation profile resolves to **unrestricted**, WADE
-starts a fresh detached Codex context rather than reusing the planner process. If
-it cannot open that context, the handoff fails rather than reporting an
-implementation session ready — open a new host terminal and run the displayed
-`wade implement <issue> --no-sandbox` command. When both sessions resolve to the
-same profile there is no mismatch and the ordinary nested-launch guard applies.
+planner and the implementation profile resolves to **unrestricted**, WADE starts
+a fresh detached context rather than reusing the planner process. If it cannot
+open that context, the handoff fails rather than reporting an implementation
+session ready — it names the runtime it could not escape, and you open a new host
+terminal and run the displayed `wade implement <issue> --no-sandbox` command.
+When both sessions resolve to the same profile there is no mismatch and the
+ordinary nested-launch guard applies.
 
-The comparison uses the profile the planner **actually launched under**, so a
-`wade plan --sandbox` / `--no-sandbox` override is honored here rather than
+This is about the **boundary**, not about which tools are involved: a sandboxed
+Codex planner handing off to Claude inherits the sandbox exactly as a Codex one
+would, and — being separately authenticated — is where a lost host login shows
+first. The comparison uses the profile the planner **actually launched under**,
+so a `wade plan --sandbox` / `--no-sandbox` override is honored here rather than
 losing out to `ai.plan.sandbox`.
+
+#### An inner `wade` process cannot escape a parent sandbox
+
+Every `wade` command you run from inside an AI CLI session is a **child** of that
+session. If the session was launched under an OS sandbox, every descendant
+inherits the boundary — no profile WADE resolves, and no flag it passes to a
+delegated runtime, can widen it. WADE will never claim otherwise, and there is no
+setting that changes it. **The fix is always to relaunch the outer session with
+the profile you want**, from a host terminal.
+
+What WADE does instead is say so. When the resolved profile is unrestricted and
+the runtime it is running inside is *known* to be sandboxed, it names that
+runtime and prints the exact command to re-run — on implementation, plan,
+PR-comment review, and every delegated operation (dependency analysis, plan/code
+review, batch review). It warns and proceeds rather than blocking: a delegated
+tool whose credentials happen to be reachable from inside the sandbox may still
+succeed, so refusing to try would break sessions that work today.
+
+Detection is deliberately **best-effort and conservative**. WADE reads only
+sandbox signals a runtime actually publishes (today: Codex's `CODEX_SANDBOX` and
+`CODEX_SANDBOX_NETWORK_DISABLED`) and never infers confinement from tool identity
+— a tool that *can* be sandboxed is not a tool that *is* sandboxed. When there is
+no signal the assessment is *unknown*, and WADE stays silent rather than
+asserting a cause it cannot support. A confident wrong diagnosis is worse than
+the opaque error it would replace.
+
+**Troubleshooting order** when a delegated tool fails to launch:
+
+1. **Read what WADE printed.** If it named a sandboxed runtime and a command,
+   that is the answer — relaunch the outer session with that command.
+2. **Check whether the reviewer actually started.** A reviewer that ran and
+   exited non-zero is a different problem; "relaunch the outer session" is wrong
+   advice for it. WADE distinguishes the two and only offers the relaunch when
+   nothing started.
+3. **Check the tool's own login and PATH** in the runtime where it must run
+   (`gh auth status`, the delegate's own auth command). A separately
+   authenticated delegate needs its *own* credentials, not WADE's.
+4. **Re-run the phase readiness check** (`wade implementation-session check`,
+   `wade review-pr-comments-session check`, …) for a narrow `reason=…` and its
+   least-privilege remediation.
+5. **Only then** widen the profile — and widen the *outer* session, not the
+   child.
+
+> **Narrow, optional exception: Codex project prefix rules.** Codex can be
+> configured to run specific command prefixes outside its sandbox, which elevates
+> a single command without relaunching the session. It is a Codex-side setting
+> WADE neither writes nor reads, it applies per command rather than to the
+> session, and it does not change anything above: the session is still sandboxed
+> and every other child still inherits that. Treat it as an escape hatch for one
+> stubborn command, **not** as WADE's path for running unrestricted — that path
+> is relaunching the outer session.
 
 #### Migrating from `ai.network_access`
 
@@ -820,6 +875,15 @@ credentials, PATH, or sandbox execution access, it does not consume a
 `done.max_review_passes` slot: repair the runtime and retry. A real headless
 timeout still counts as a bounded review attempt, so the review/fix loop cannot
 run forever.
+
+A reviewer that **never started** is recorded as an *unattempted* review so the
+state is auditable, and that record is deliberately inert: it satisfies no review
+requirement, spends no review pass, cannot overwrite a real receipt already
+written for the same commit, and leaves `wade implementation-session done` and
+`wade review-pr-comments-session done` closed. An infrastructure failure must
+never be able to certify a commit. A reviewer that started and exited non-zero
+stays distinguishable from one that never ran, because the two need opposite
+remediation.
 
 For Codex, WADE launches unsandboxed by default so delegated tools keep their
 own host credentials; set `ai.sandbox: true` (or pass `--sandbox`) to keep

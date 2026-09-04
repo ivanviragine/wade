@@ -21,11 +21,12 @@ from crossby.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
-from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
+from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS, announce_inherited_sandbox
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.process import CommandError, run
+from wade.utils.runtime_env import detect_parent_runtime
 
 logger = structlog.get_logger()
 
@@ -115,10 +116,38 @@ def _parse_effort(raw: str | None) -> EffortLevel | None:
         return None
 
 
+def _warn_on_inherited_sandbox(request: DelegationRequest) -> None:
+    """Say up front when the requested profile cannot survive the parent sandbox.
+
+    Deps, standalone plan/code review and batch review all funnel through
+    ``delegate()``, so this cross-cutting launch concern belongs here **once**
+    rather than in each service — three copies would drift. ``batch.py`` is
+    deliberately not covered: it spawns child ``wade implement`` processes, which
+    reach the equivalent check in ``implementation_service.core`` on their own, so
+    a check there would be a dead no-op implying coverage it does not add.
+
+    Warns and proceeds rather than blocking. wade cannot prove the delegated tool
+    will fail — a runtime with credentials reachable from inside the sandbox may
+    well succeed — so refusing to try would break sessions that work today. If it
+    does fail, ``never_launched`` carries the classification onward.
+    """
+    announce_inherited_sandbox(
+        detect_parent_runtime(),
+        resolved_sandbox=request.sandbox,
+        operation=request.operation or "this delegated run",
+        relaunch_command=request.relaunch_command,
+    )
+
+
 def delegate(request: DelegationRequest) -> DelegationResult:
     """Dispatch a delegation request to the appropriate mode runner."""
     if request.mode == DelegationMode.PROMPT:
         return _delegate_prompt(request)
+
+    # Every mode below starts an external runtime, so the parent boundary is
+    # material from here on. Prompt mode launches nothing and is exempt.
+    _warn_on_inherited_sandbox(request)
+
     if request.mode == DelegationMode.HEADLESS:
         return _delegate_headless(request)
     if request.mode == DelegationMode.INTERACTIVE:
@@ -129,6 +158,7 @@ def delegate(request: DelegationRequest) -> DelegationResult:
         feedback=f"Unknown delegation mode: {request.mode}",
         mode=request.mode,
         exit_code=1,
+        never_launched=True,
     )
 
 
@@ -189,12 +219,19 @@ def _format_headless_failure(stdout: str, stderr: str) -> str:
 
 
 def _crash_result(exc: CommandError) -> DelegationResult:
-    """A non-success result for a headless crash — ``timed_out`` stays False (never retried)."""
+    """A non-success result for a headless crash — ``timed_out`` stays False (never retried).
+
+    ``CommandError`` here means the spawn itself failed (a missing or
+    non-executable binary, a denied exec), so nothing ran: ``never_launched``.
+    A process that started and exited non-zero comes back through
+    ``_run_headless_once`` instead and keeps the flag False.
+    """
     return DelegationResult(
         success=False,
         feedback=f"Headless session failed: {exc}",
         mode=DelegationMode.HEADLESS,
         exit_code=1,
+        never_launched=True,
     )
 
 
@@ -226,12 +263,15 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
     """Run AI non-interactively and capture stdout."""
     session_cwd = request.cwd or Path.cwd()
 
+    # The three guards below all return *before* a process exists, so each is
+    # unambiguously "never launched" — no interpretation required.
     if not request.ai_tool:
         return DelegationResult(
             success=False,
             feedback="No AI tool specified for headless mode",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            never_launched=True,
         )
 
     try:
@@ -242,6 +282,7 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
             feedback=f"Unknown AI tool: {request.ai_tool}",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            never_launched=True,
         )
 
     caps = adapter.capabilities()
@@ -251,6 +292,7 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
             feedback=f"AI tool {request.ai_tool} does not support headless mode",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            never_launched=True,
         )
 
     defaults = [str(session_cwd), tempfile.gettempdir()]
@@ -323,6 +365,21 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         except CommandError as e:
             logger.warning("delegation.headless_failed", tool=request.ai_tool, error=str(e))
             return _crash_result(e)
+        except OSError as e:
+            # ``run`` maps only ``FileNotFoundError`` to ``CommandError``; a
+            # binary that resolves on PATH but cannot be *executed* raises
+            # ``PermissionError`` straight through and used to abort the whole
+            # command with a traceback. That is one of the shapes an inherited
+            # sandbox produces, so it has to arrive as a classified
+            # never-launched result instead (#480).
+            logger.warning("delegation.headless_spawn_failed", tool=request.ai_tool, error=str(e))
+            return DelegationResult(
+                success=False,
+                feedback=f"Headless session failed to start: {e}",
+                mode=DelegationMode.HEADLESS,
+                exit_code=1,
+                never_launched=True,
+            )
 
     return _timeout_result(partial)
 
@@ -337,6 +394,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             feedback="No AI tool specified for interactive mode",
             mode=DelegationMode.INTERACTIVE,
             exit_code=1,
+            never_launched=True,
         )
 
     try:
@@ -347,6 +405,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             feedback=f"Unknown AI tool: {request.ai_tool}",
             mode=DelegationMode.INTERACTIVE,
             exit_code=1,
+            never_launched=True,
         )
 
     # Set up output file for the AI to write results to
@@ -374,6 +433,12 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     elif str(output_file.parent) not in trusted:
         trusted.append(str(output_file.parent))
 
+    # Everything below shares one exception handler, but only the part before the
+    # adapter returns is a *launch* failure. Reading the output file can raise
+    # ``OSError`` too, and a session that ran and then lost its output has very
+    # much been attempted — classifying it as never-launched would spend the
+    # user's trust on wrong remediation.
+    launched = False
     try:
         deliver_prompt_if_needed(adapter, interactive_prompt)
         adapter.launch(
@@ -389,6 +454,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             sandbox=request.sandbox,
             **permission_mode_launch_kwargs(request.permission_mode),
         )
+        launched = True
 
         # Non-blocking tools return immediately — wait for user
         if not adapter.capabilities().blocks_until_exit:
@@ -421,9 +487,14 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     except (OSError, subprocess.SubprocessError) as e:
         return DelegationResult(
             success=False,
-            feedback=f"AI tool launch failed: {e}",
+            feedback=(
+                f"AI tool launch failed: {e}"
+                if not launched
+                else f"Interactive session failed after launch: {e}"
+            ),
             mode=DelegationMode.INTERACTIVE,
             exit_code=1,
+            never_launched=not launched,
         )
     finally:
         if created_tmp and tmp_dir:

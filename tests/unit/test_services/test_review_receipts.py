@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from wade.models.delegation import DelegationMode, DelegationResult
-from wade.models.session_manifest import ResolvedBinding, ReviewOutcome
+from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, ReviewRecord
 from wade.models.skill import ResolvedSkill
+from wade.models.workflow import DelegationKind
+from wade.services.review_record_service import (
+    count_binding_passes,
+    read_review_record,
+    write_review_record,
+)
 from wade.services.skill_invocation_service import PreparedDelegationMethod
+from wade.utils.runtime_env import CODEX_SANDBOX_ENV
 
 rds = importlib.import_module("wade.services.review_delegation_service")
 
@@ -221,3 +228,168 @@ class TestAnnounceReviewPassBudget:
             rds.review_implementation()
 
         announce.assert_not_called()
+
+
+class TestUnattemptedReviewGate:
+    """A reviewer that never started must leave every gate exactly as it was (#480)."""
+
+    @staticmethod
+    def _never_launched(feedback: str = "Unknown AI tool: claude") -> DelegationResult:
+        return DelegationResult(
+            success=False,
+            feedback=feedback,
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            never_launched=True,
+        )
+
+    def _run(
+        self,
+        tmp_path: Path,
+        result: DelegationResult,
+    ) -> tuple[MagicMock, MagicMock]:
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation", return_value=result),
+            patch.object(rds, "_record_binding_outcome", return_value=0) as record,
+            patch.object(rds, "_announce_review_pass_budget") as announce,
+        ):
+            rds.review_implementation()
+        return record, announce
+
+    def test_records_unattempted_without_spending_budget(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        record, announce = self._run(tmp_path, self._never_launched())
+
+        assert record.call_args.args[3] is ReviewOutcome.UNATTEMPTED
+        announce.assert_not_called()
+
+    def test_the_outcome_neither_satisfies_nor_consumes(self) -> None:
+        assert ReviewOutcome.UNATTEMPTED.satisfies_review is False
+        assert ReviewOutcome.UNATTEMPTED.consumes_pass is False
+
+    def test_a_nonzero_exit_is_still_not_recorded(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        """Only "never started" is unattempted; a reviewer that ran is not."""
+        ran_and_failed = DelegationResult(
+            success=False,
+            feedback="exited 3",
+            mode=DelegationMode.HEADLESS,
+            exit_code=3,
+        )
+        record, _ = self._run(tmp_path, ran_and_failed)
+
+        record.assert_not_called()
+
+    def test_a_known_sandboxed_parent_gets_the_specific_cause(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The probe reports the *first* marker it recognises, so a suite run from
+        # inside another AI session would otherwise name that one instead.
+        for name in ("CLAUDE_CODE", "CLAUDE_CODE_ENTRYPOINT", "COPILOT_CLI"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        monkeypatch.setenv("CODEX_CLI", "1")
+        self._run(tmp_path, self._never_launched("permission denied"))
+
+        text = _cap(capsys)
+        assert "Codex CLI is sandboxed" in text
+        assert "wade review implementation" in text
+        assert "No review-pass budget was consumed" in text
+
+    def test_an_unknown_parent_keeps_the_hedged_wording_verbatim(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """No signal from the runtime means no claim about it — today's text stands."""
+        self._run(tmp_path, self._never_launched("some unrelated failure"))
+
+        text = _cap(capsys)
+        assert " ".join(rds._HEDGED_REVIEW_FAILURE.split()) in text
+        assert "is sandboxed" not in text
+
+    def test_a_denial_shape_with_no_signal_is_offered_as_a_possibility(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._run(tmp_path, self._never_launched("open /home/me/.claude: permission denied"))
+
+        text = _cap(capsys)
+        assert " ".join(rds._HEDGED_REVIEW_FAILURE.split()) in text
+        assert "cannot confirm" in text
+
+
+class TestUnattemptedReviewRecordPrecedence:
+    """An unattempted record can never overwrite or downgrade a real one."""
+
+    @staticmethod
+    def _binding() -> ResolvedBinding:
+        skill = ResolvedSkill(
+            canonical_ref="builtin:code-review",
+            source_path="templates/skills/code-review",
+            materialized_path=".wade/operations/code-review/test/skills/builtin/code-review",
+            content_digest=f"sha256:{'1' * 64}",
+            files=("SKILL.md",),
+        )
+        return ResolvedBinding.from_skills((skill,))
+
+    def _write(self, root: Path, commit: str, outcome: ReviewOutcome) -> None:
+        write_review_record(
+            root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=commit,
+            binding=self._binding(),
+            outcome=outcome,
+        )
+
+    def _read(self, root: Path, commit: str) -> ReviewRecord | None:
+        return read_review_record(
+            root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=commit,
+            binding=self._binding(),
+        )
+
+    def test_unattempted_does_not_replace_an_existing_reviewed_receipt(
+        self, tmp_path: Path
+    ) -> None:
+        commit = "a" * 40
+        self._write(tmp_path, commit, ReviewOutcome.REVIEWED)
+        self._write(tmp_path, commit, ReviewOutcome.UNATTEMPTED)
+
+        record = self._read(tmp_path, commit)
+        assert record is not None
+        assert record.outcome is ReviewOutcome.REVIEWED
+
+    def test_unattempted_adds_no_pass_to_the_binding_count(self, tmp_path: Path) -> None:
+        self._write(tmp_path, "b" * 40, ReviewOutcome.UNATTEMPTED)
+
+        assert (
+            count_binding_passes(
+                tmp_path,
+                delegation=DelegationKind.CODE_REVIEW,
+                binding=self._binding(),
+            )
+            == 0
+        )
+
+    def test_a_real_receipt_still_promotes_over_an_unattempted_one(self, tmp_path: Path) -> None:
+        commit = "c" * 40
+        self._write(tmp_path, commit, ReviewOutcome.UNATTEMPTED)
+        self._write(tmp_path, commit, ReviewOutcome.REVIEWED)
+
+        record = self._read(tmp_path, commit)
+        assert record is not None
+        assert record.outcome is ReviewOutcome.REVIEWED
+        assert record.consumes_pass is True

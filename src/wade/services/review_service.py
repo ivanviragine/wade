@@ -48,6 +48,7 @@ from wade.services import bot_trigger
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
+    announce_inherited_sandbox,
     confirm_ai_selection,
     display_ai_selection,
     enforce_sandbox_capability,
@@ -71,6 +72,7 @@ from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
+from wade.utils.runtime_env import parent_runtime
 from wade.utils.terminal import (
     compose_review_title,
     launch_in_new_terminal,
@@ -1238,6 +1240,18 @@ def start(
         )
         console.info(
             f"Skipping AI launch: already inside AI session (detected via {detected_env})."
+        )
+        # No runtime starts here, so there is no launch failure to explain — but
+        # the worktree is about to be handed to an agent running inside a
+        # boundary the resolved profile said it would not have. Say so, with the
+        # command that actually delivers it, rather than letting the session
+        # proceed on a false premise (#480). Only a *known* sandboxed parent
+        # earns the claim; an unknown assessment stays silent.
+        announce_inherited_sandbox(
+            parent_runtime(detected_env),
+            resolved_sandbox=resolved_sandbox,
+            operation="the review session",
+            relaunch_command=f"wade review pr-comments {task.id} --no-sandbox",
         )
         console.detail(f"Worktree ready at: {worktree_path}")
         print(str(worktree_path))

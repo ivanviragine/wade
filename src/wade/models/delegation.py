@@ -50,6 +50,17 @@ class DelegationRequest(BaseModel):
     # resolved profile, so a delegated reviewer keeps its own host credentials
     # under the unrestricted default (#478).
     sandbox: bool = DEFAULT_SANDBOX
+    # Per-operation remediation context for the shared sandbox check in
+    # ``delegate()`` (#480). Deps, standalone review and batch review all funnel
+    # through one dispatcher, which therefore cannot know on its own whether to
+    # tell the user to re-run `wade review implementation`, `wade task deps`, or a
+    # batch command. Generic advice would defeat the point of the diagnosis, so
+    # the caller supplies both: ``operation`` names what cannot run unrestricted,
+    # ``relaunch_command`` is the exact line to type in a host terminal. Left
+    # ``None`` by direct constructions that have no meaningful command to offer —
+    # the finding is still reported, just without a copyable command.
+    operation: str | None = None
+    relaunch_command: str | None = None
 
 
 class DelegationResult(BaseModel):
@@ -65,3 +76,11 @@ class DelegationResult(BaseModel):
     # a timeout — which may carry partial output and is worth retrying longer —
     # apart from a crash. A crash (CommandError / non-zero exit) keeps this False.
     timed_out: bool = False
+    # True when no delegated process was ever started: an unknown/unsupported
+    # tool, or a spawn that failed outright. A *non-zero exit* keeps this False —
+    # that process ran, and telling a user to "restore the reviewer runtime" when
+    # their reviewer started fine and then failed is wrong advice (#462). The
+    # distinction is what lets a caller give trusted remediation instead of a
+    # disjunction of possible causes, and is why an unattempted review consumes
+    # no review-pass budget and opens no gate (#480).
+    never_launched: bool = False

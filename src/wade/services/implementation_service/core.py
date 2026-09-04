@@ -9,7 +9,6 @@ concerns live in sibling modules: ``draft_pr``, ``sync``, ``lifecycle``,
 from __future__ import annotations
 
 import contextlib
-import os
 import re
 import tempfile
 from pathlib import Path
@@ -35,6 +34,7 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
+    announce_inherited_sandbox,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -79,6 +79,12 @@ from wade.ui.console import console
 from wade.utils import stale_base
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.gitref import is_valid_git_ref
+from wade.utils.runtime_env import (
+    INHERITED_SANDBOX_HINT,
+    detect_ai_cli_env,
+    parent_runtime,
+    requires_unsandboxed_relaunch,
+)
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -130,31 +136,11 @@ def _resume_autonomy_args(adapter: AbstractAITool, permission_mode: PermissionMo
     )
 
 
-def _detect_ai_cli_env() -> str | None:
-    """Detect which AI CLI session we are running inside, if any.
-
-    Returns the env-var name that triggered detection, or ``None``.
-
-    When an AI agent calls ``wade implement`` from within its own
-    session, we must not launch another AI instance (infinite nesting).
-    Instead, create the worktree and print the path.
-    """
-    # Claude Code sets CLAUDE_CODE=1 or CLAUDE_CODE_ENTRYPOINT
-    if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
-        return "CLAUDE_CODE"
-    # Copilot CLI
-    if os.environ.get("COPILOT_CLI"):
-        return "COPILOT_CLI"
-    # Codex CLI
-    if os.environ.get("CODEX_CLI"):
-        return "CODEX_CLI"
-    # Cursor CLI
-    if os.environ.get("CURSOR_CLI"):
-        return "CURSOR_CLI"
-    # Antigravity CLI (agy) sets ANTIGRAVITY_AGENT=1 in its session env
-    if os.environ.get("ANTIGRAVITY_AGENT"):
-        return "ANTIGRAVITY_AGENT"
-    return None
+# The probe itself now lives in the leaf ``utils.runtime_env`` module so the
+# review and delegation paths share one implementation (#480). Re-exported under
+# its original private name because this module lists it in ``__all__`` and both
+# the call site below and a good deal of the test suite patch it here.
+_detect_ai_cli_env = detect_ai_cli_env
 
 
 def _capture_post_session_usage(
@@ -953,19 +939,20 @@ def start(
 
         # AI-initiated start guard: if we're inside an AI CLI session,
         # don't launch another AI tool — just print the worktree path.  The one
-        # exception is a plan handoff from a *sandboxed* Codex planner into an
-        # *unrestricted* Codex implementation. The sandbox is a launch-time OS
+        # exception is a plan handoff out of a *sandboxed* parent runtime into an
+        # *unrestricted* implementation. The sandbox is a launch-time OS
         # property: a process started under `--sandbox workspace-write` cannot
         # escape it, so honoring the implementation profile requires a fresh
         # detached process rather than reusing this agent context.
         #
-        # This is the restated form of the retired network-pin predicate (#478).
-        # Its old premise — "the planner always ran network-off" — died with the
-        # per-command network asymmetry, but the *profile* mismatch it guarded is
-        # real and now expressible directly: compare the plan session's resolved
-        # sandbox against this one's. Note the polarity flip: the old flag fired
-        # on the permissive value being True (network on), this one fires on the
-        # permissive value being False (sandbox off).
+        # This is the restated network-pin predicate (#478) generalised from
+        # Codex to any *known* sandboxed parent (#480). The tool-identity
+        # conjuncts it used to carry — parent is Codex, target is Codex — were
+        # proxies for "this process is confined", and they under-fire on exactly
+        # the cases that matter: a sandboxed Codex handing off to Claude inherits
+        # the sandbox just as surely, and used to get the silent nested-launch
+        # guard instead of the fresh context it needs. The profile mismatch is
+        # now stated directly, once, in ``requires_unsandboxed_relaunch``.
         #
         # The planner's profile is the one it *launched* with, forwarded through
         # the handoff — not a fresh resolution. ``wade plan --sandbox`` /
@@ -973,19 +960,24 @@ def start(
         # this session against a planner that never ran: an explicitly sandboxed
         # planner would read as unrestricted and hit the ordinary nested-launch
         # guard instead of opening the fresh context it needs, and the inverse
-        # override would force a detached launch nothing asked for.
+        # override would force a detached launch nothing asked for. That
+        # forwarded value is first-party evidence about the process we are
+        # *inside*, so it fills an assessment the environment leaves unknown —
+        # and only that: a runtime that publishes a real sandbox signal keeps it,
+        # because that describes what the OS actually applied here.
         detected_env = _detect_ai_cli_env()
         planner_sandbox = (
             plan_sandbox if plan_sandbox is not None else resolve_sandbox(None, config, "plan")
         )
-        requires_fresh_codex_handoff = (
-            plan_handoff
-            and detected_env == "CODEX_CLI"
-            and resolved_tool == AIToolID.CODEX.value
-            and planner_sandbox
-            and not resolved_sandbox
+        parent = parent_runtime(detected_env)
+        if plan_handoff:
+            parent = parent.with_launch_profile(planner_sandbox)
+        profile_mismatch = requires_unsandboxed_relaunch(
+            resolved_sandbox=resolved_sandbox,
+            parent=parent,
         )
-        if detected_env and not requires_fresh_codex_handoff:
+        requires_fresh_runtime = plan_handoff and profile_mismatch
+        if detected_env and not requires_fresh_runtime:
             logger.info(
                 "implementation.ai_launch_skipped",
                 reason="inside_ai_cli",
@@ -993,6 +985,17 @@ def start(
             )
             console.info(
                 f"Skipping AI launch: already inside AI session (detected via {detected_env})."
+            )
+            # Nothing is launched here, so there is no failure to diagnose — but
+            # the requested profile is still undeliverable, and staying silent is
+            # what let a user believe this worktree had host access it cannot
+            # have. Only a *known* sandboxed parent earns the claim; an unknown
+            # assessment says nothing.
+            announce_inherited_sandbox(
+                parent,
+                resolved_sandbox=resolved_sandbox,
+                operation="the implementation session",
+                relaunch_command=f"wade implement {task.id} --no-sandbox",
             )
             console.detail(f"Worktree ready at: {worktree_path}")
             print(str(worktree_path))
@@ -1023,9 +1026,9 @@ def start(
             logger.warning("implementation.transcript_dir_failed")
 
         # Detach mode: launch AI tool in a new terminal, don't block.  An
-        # unrestricted Codex plan handoff is forced through this path so it
-        # cannot inherit the planner's immutable sandbox.
-        if (detach or requires_fresh_codex_handoff) and resolved_tool:
+        # unrestricted plan handoff is forced through this path so it cannot
+        # inherit the planner's immutable sandbox.
+        if (detach or requires_fresh_runtime) and resolved_tool:
             cmd: list[str] | None = None
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
@@ -1061,19 +1064,19 @@ def start(
                         allowed_commands=config.permissions.allowed_commands,
                         working_dir=worktree_path,
                         network_access=LAUNCH_NETWORK_ACCESS,
-                        # ``requires_fresh_codex_handoff`` already established the
+                        # ``requires_fresh_runtime`` already established the
                         # resolved profile is unrestricted; state the forced value
                         # rather than relying on that implication holding, and pin
-                        # it explicitly for the new Codex process instead of
-                        # inheriting ambient config.
-                        sandbox=(False if requires_fresh_codex_handoff else resolved_sandbox),
+                        # it explicitly for the new process instead of inheriting
+                        # ambient config.
+                        sandbox=(False if requires_fresh_runtime else resolved_sandbox),
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
-                # A fresh Codex handoff must retain its explicit sandbox,
-                # network, permission, and prompt arguments.  Do not replace a
-                # failed build with bare ``codex``, which would bypass them.
-                if not requires_fresh_codex_handoff:
+                # A fresh handoff must retain its explicit sandbox, network,
+                # permission, and prompt arguments.  Do not replace a failed
+                # build with the bare tool name, which would bypass them.
+                if not requires_fresh_runtime:
                     cmd = [resolved_tool]
 
             if cmd is not None:
@@ -1082,17 +1085,23 @@ def start(
                     cmd,
                     cwd=str(worktree_path),
                     title=work_title,
-                    wait_for_ready=requires_fresh_codex_handoff,
+                    wait_for_ready=requires_fresh_runtime,
                 ):
                     console.success(f"Detached AI session for #{task.id}")
                     stop_title_keeper()
                     return ImplementResult(success=True)
-            if requires_fresh_codex_handoff:
+            if requires_fresh_runtime:
+                # Fail closed with the exact command to type, naming the boundary
+                # that made the fresh context necessary. Falling through to an
+                # inline launch would silently strand the implementation inside
+                # the very sandbox this branch exists to escape — and spawning a
+                # new terminal is itself something a sandboxed parent may deny,
+                # so this path is reached in practice, not just in theory.
                 console.error(
-                    "Could not launch a fresh Codex implementation session with the "
-                    "sandbox disabled."
+                    f"Could not launch a fresh, unrestricted implementation session "
+                    f"outside {parent.label}."
                 )
-                console.hint("Open a new host terminal, then run:")
+                console.hint(INHERITED_SANDBOX_HINT)
                 console.detail(f"wade implement {task.id} --no-sandbox")
                 stop_title_keeper()
                 return ImplementResult(success=False)

@@ -28,8 +28,10 @@ from wade.models.permission import PermissionMode
 from wade.models.task import Task, TaskState
 from wade.models.worktree import Worktree
 from wade.services.implementation_service import start
+from wade.utils.runtime_env import CODEX_SANDBOX_ENV
 
 _CORE = "wade.services.implementation_service.core"
+_UI_CONSOLE = "wade.ui.console.console"
 
 
 @contextlib.contextmanager
@@ -397,29 +399,83 @@ class TestImplementationLaunchContext:
         spy.build_launch_command.assert_not_called()
         spy.launch.assert_not_called()
 
-    def test_non_codex_plan_handoff_keeps_nested_launch_guard(self, worktree: Path) -> None:
-        """A plan handoff to another implementation tool cannot escape the guard."""
+    def test_handoff_to_another_tool_still_escapes_the_sandbox(self, worktree: Path) -> None:
+        """The target tool is not what makes the sandbox inheritable (#480).
+
+        This case previously took the nested-launch guard, because the predicate
+        required the *implementation* tool to be Codex. A Claude session started
+        from inside a sandboxed Codex planner inherits that sandbox exactly as a
+        Codex one would — and, being separately authenticated, is the case that
+        loses its host login most visibly. It needs the fresh context more, not
+        less.
+        """
         with _driven_start(
             worktree,
             plan_sandbox_config=True,
             detected_env="CODEX_CLI",
             resolved_tool="claude",
         ) as spy:
+            spy.build_launch_command.return_value = ["claude"]
             result = start(target="42", plan_handoff=True)
 
         assert result.success is True
-        spy.build_launch_command.assert_not_called()
+        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
+        assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
         spy.launch.assert_not_called()
 
-    def test_other_ai_session_marker_keeps_nested_launch_guard(self, worktree: Path) -> None:
-        """Only a Codex-originated handoff gets the fresh-context exception."""
+    def test_a_sandboxed_non_codex_parent_also_gets_the_fresh_context(self, worktree: Path) -> None:
+        """Generalised from "parent is Codex" to "parent is known sandboxed" (#480).
+
+        The old predicate used the ``CODEX_CLI`` marker as a proxy for "this
+        process is confined". The forwarded planner profile is the direct
+        evidence, and it holds for whichever runtime wade launched the planner in.
+        """
         with _driven_start(
             worktree,
             plan_sandbox_config=True,
             detected_env="CLAUDE_CODE",
         ) as spy:
+            spy.build_launch_command.return_value = ["codex"]
             result = start(target="42", plan_handoff=True)
+
+        assert result.success is True
+        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
+        spy.launch.assert_not_called()
+
+    def test_nested_session_without_a_handoff_is_told_it_cannot_elevate(
+        self, worktree: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The guard prints the worktree path — and now says what it cannot deliver.
+
+        Nothing launches here, so there is no failure to diagnose. But the agent
+        is about to work in a worktree under a boundary the resolved profile said
+        it would not have, and silence is what let that pass unnoticed (#480).
+        """
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        with (
+            _driven_start(worktree, detected_env="CODEX_CLI") as spy,
+            # The shared emitter resolves ``console`` lazily from ``wade.ui``, so
+            # patching the importing module would miss it.
+            patch(_UI_CONSOLE) as mock_console,
+        ):
+            result = start(target="42")
 
         assert result.success is True
         spy.build_launch_command.assert_not_called()
         spy.launch.assert_not_called()
+        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
+        assert "Codex CLI" in str(mock_console.warn.call_args_list)
+
+    def test_an_unknown_parent_assessment_says_nothing(self, worktree: Path) -> None:
+        """No signal, no claim — wade does not assert a boundary it cannot see."""
+        with (
+            _driven_start(worktree, detected_env="CODEX_CLI") as spy,
+            patch(_UI_CONSOLE) as mock_console,
+        ):
+            result = start(target="42")
+
+        assert result.success is True
+        spy.launch.assert_not_called()
+        assert mock_console.warn.call_count == 0
+        for call in mock_console.detail.call_args_list:
+            assert "--no-sandbox" not in str(call)

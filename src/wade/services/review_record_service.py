@@ -58,11 +58,16 @@ def read_review_record(
     return record
 
 
+# Ranked lowest-first. ``UNATTEMPTED`` sits at the bottom on purpose: a reviewer
+# that never started carries strictly less information than any outcome produced
+# by one that did, so recording it can never downgrade or overwrite a real
+# receipt for the same commit+binding (#480).
 _OUTCOME_PRECEDENCE = {
-    ReviewOutcome.NOTHING_STAGED: 0,
-    ReviewOutcome.TIMED_OUT: 1,
-    ReviewOutcome.NO_DIFF: 2,
-    ReviewOutcome.REVIEWED: 3,
+    ReviewOutcome.UNATTEMPTED: 0,
+    ReviewOutcome.NOTHING_STAGED: 1,
+    ReviewOutcome.TIMED_OUT: 2,
+    ReviewOutcome.NO_DIFF: 3,
+    ReviewOutcome.REVIEWED: 4,
 }
 
 

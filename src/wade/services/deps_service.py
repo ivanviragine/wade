@@ -385,6 +385,8 @@ def _run_delegation(
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
     explicit_timeout: bool = False,
     sandbox: bool = DEFAULT_SANDBOX,
+    operation: str | None = None,
+    relaunch_command: str | None = None,
 ) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -404,6 +406,8 @@ def _run_delegation(
         permission_mode=permission_mode,
         sandbox=sandbox,
         explicit_timeout=explicit_timeout,
+        operation=operation,
+        relaunch_command=relaunch_command,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
@@ -777,6 +781,11 @@ def analyze_deps(
         permission_mode=effective_permission_mode,
         sandbox=resolved_sandbox,
         explicit_timeout=deps_explicit_timeout,
+        # Remediation context for the shared sandbox check in ``delegate()``:
+        # the dispatcher is common to every delegated operation, so it can only
+        # name this one if the caller hands it the exact command to re-run.
+        operation="the dependency analysis",
+        relaunch_command=f"wade task deps {' '.join(issue_numbers)}",
     )
     output = (
         delegation_result.feedback
