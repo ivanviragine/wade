@@ -38,6 +38,7 @@ from wade.services.review_service import (
     resolve_thread,
     start,
 )
+from wade.utils.runtime_env import CODEX_SANDBOX_ENV, SANDBOX_SIGNAL_ENV_VARS
 
 # ---------------------------------------------------------------------------
 # build_review_usage_block
@@ -891,6 +892,76 @@ class TestReviewServiceStart:
         )
         # The guard must short-circuit before the adapter is ever resolved/launched.
         mock_get.assert_not_called()
+
+    def test_nested_session_inside_a_sandboxed_parent_is_told_it_cannot_elevate(
+        self,
+        tmp_path: Path,
+        mock_setup: dict[str, MagicMock],
+        mock_provider: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The guard hands over a worktree confined by a boundary it did not promise.
+
+        Nothing launches here, so there is no failure to diagnose — but the agent
+        is about to work under an inherited sandbox while the resolved profile
+        said "unrestricted". The other three launch paths announce it; so must
+        this one (#480).
+        """
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "CODEX_CLI"
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+
+        with (
+            # The fixture's config is a MagicMock whose ``get_sandbox`` is
+            # truthy; pin the unrestricted profile the mismatch predicate needs.
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            # The shared emitter resolves ``console`` lazily from ``wade.ui``, so
+            # patching the importing module would miss it.
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        assert "Codex CLI" in str(mock_console.warn.call_args_list)
+        mock_console.detail.assert_any_call("wade review pr-comments 42 --no-sandbox")
+
+    def test_an_unknown_parent_assessment_stays_silent(
+        self,
+        tmp_path: Path,
+        mock_setup: dict[str, MagicMock],
+        mock_provider: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No signal from the runtime, no claim about it."""
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "CODEX_CLI"
+        for name in SANDBOX_SIGNAL_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+
+        with (
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        assert mock_console.warn.call_count == 0
 
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
