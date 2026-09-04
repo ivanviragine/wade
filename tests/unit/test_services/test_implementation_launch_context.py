@@ -342,6 +342,21 @@ class TestImplementationLaunchContext:
         spy.build_launch_command.assert_not_called()
         spy.launch.assert_not_called()
 
+    def test_sandbox_signal_without_an_ai_session_does_not_force_a_fresh_handoff(
+        self, worktree: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stale sandbox variable in a host shell must not require a new terminal."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        with _driven_start(worktree, plan_sandbox_config=True) as spy:
+            spy.launch.side_effect = RuntimeError("stop-after-capture")
+
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is False
+        spy.build_launch_command.assert_not_called()
+        spy.terminal_launch.assert_not_called()
+        spy.launch.assert_called_once()
+
     def test_failed_fresh_codex_plan_handoff_fails_closed_with_restart_command(
         self, worktree: Path
     ) -> None:

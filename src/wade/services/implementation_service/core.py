@@ -976,7 +976,12 @@ def start(
             resolved_sandbox=resolved_sandbox,
             parent=parent,
         )
-        requires_fresh_runtime = plan_handoff and profile_mismatch
+        # A sandbox signal is useful diagnostic evidence even when no runtime
+        # identity is available, but a detached plan handoff is meaningful only
+        # while we know this process is inside an AI CLI session. Otherwise a
+        # stray inherited ``CODEX_SANDBOX`` variable in an ordinary host shell
+        # would incorrectly force a fresh-terminal escape path.
+        requires_fresh_runtime = plan_handoff and bool(detected_env) and profile_mismatch
         if detected_env and not requires_fresh_runtime:
             logger.info(
                 "implementation.ai_launch_skipped",
