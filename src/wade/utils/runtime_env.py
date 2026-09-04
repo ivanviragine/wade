@@ -126,30 +126,6 @@ class ParentRuntime(BaseModel, frozen=True):
             return UNNAMED_RUNTIME_LABEL
         return _RUNTIME_LABELS.get(self.env_var, self.env_var)
 
-    def with_launch_profile(self, sandbox: bool) -> ParentRuntime:
-        """Fill an ``UNKNOWN`` assessment from a first-party launch record.
-
-        A profile forwarded through a wade handoff (``wade plan`` telling
-        ``wade implement`` what the planner launched with) is evidence of the same
-        kind as an environment signal, not an inference from tool identity: wade
-        chose that profile for the very process we are running inside.
-
-        An environment signal still wins on conflict — it describes what the OS
-        actually applied to *this* process — and an unrecognised parent gets
-        nothing, because there is no established "inside" for the record to
-        describe.
-        """
-        if not self.detected or self.sandbox is not SandboxAssessment.UNKNOWN:
-            return self
-        return self.model_copy(
-            update={
-                "sandbox": (
-                    SandboxAssessment.SANDBOXED if sandbox else SandboxAssessment.UNRESTRICTED
-                ),
-                "signal": "the profile this runtime was launched with",
-            }
-        )
-
 
 def _environ(env: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ if env is None else env
@@ -247,12 +223,18 @@ def inherited_sandbox_finding(parent: ParentRuntime, *, operation: str) -> str:
 
 
 def possible_inherited_sandbox_cause(parent: ParentRuntime) -> str:
-    """Hedged wording for a denial-shaped failure with an ``UNKNOWN`` parent.
+    """Hedged wording for a generic denial-shaped launch failure.
 
-    Named as a possibility, never a finding: with no signal from the runtime wade
-    cannot tell an inherited sandbox from an unrelated launch failure, and saying
-    otherwise would be exactly the confident wrong cause this module avoids.
+    Generic OS denials never prove their cause: even a known parent boundary can
+    coexist with a non-executable binary or broken local network configuration.
     """
+    if parent.is_sandboxed:
+        return (
+            f"{parent.label} is sandboxed, but this generic denial can also come from "
+            "executable permissions or network configuration. Check those first; if "
+            "the failure persists, relaunch the outer session unrestricted."
+        )
+
     subject = parent.label if parent.detected else UNNAMED_RUNTIME_LABEL
     return (
         f"This failure has the shape of a sandbox denial. wade cannot confirm whether "
@@ -288,6 +270,16 @@ _SANDBOX_DENIAL_MARKERS: tuple[str, ...] = (
     "not executable",
 )
 
+# Generic OS failures are compatible with an inherited boundary but do not prove
+# it: a non-executable binary, local firewall, or malformed executable can emit
+# the same text. Only these policy/runtime markers support a confident cause.
+_EXPLICIT_SANDBOX_DENIAL_MARKERS: tuple[str, ...] = (
+    "sandbox denied",
+    "sandbox policy",
+    "seatbelt",
+    "landlock",
+)
+
 
 def looks_like_sandbox_denial(text: str) -> bool:
     """Whether a launch failure's text matches a known sandbox-denial shape.
@@ -297,3 +289,9 @@ def looks_like_sandbox_denial(text: str) -> bool:
     """
     lowered = text.casefold()
     return any(marker in lowered for marker in _SANDBOX_DENIAL_MARKERS)
+
+
+def has_explicit_sandbox_denial(text: str) -> bool:
+    """Whether a failed launch names an OS sandbox policy explicitly."""
+    lowered = text.casefold()
+    return any(marker in lowered for marker in _EXPLICIT_SANDBOX_DENIAL_MARKERS)

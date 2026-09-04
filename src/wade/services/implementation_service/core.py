@@ -424,7 +424,6 @@ def start(
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
     plan_handoff: bool = False,
-    plan_sandbox: bool | None = None,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
 
@@ -445,15 +444,9 @@ def start(
         detach: If True, launch AI in a new terminal tab.
         cd_only: If True, create worktree and print path only (no AI launch).
         plan_handoff: Internal marker for an accepted ``wade plan`` handoff.
-            An unrestricted Codex implementation must launch in a fresh detached
-            context rather than inherit a sandboxed planner's process, which
+            An unrestricted implementation may need a fresh detached context
+            rather than inherit a sandboxed parent runtime, which
             cannot drop its sandbox after start.
-        plan_sandbox: The profile the handing-off planner actually launched
-            under. Passed rather than re-resolved because ``wade plan --sandbox``
-            / ``--no-sandbox`` can override config, and a re-resolution would
-            compare this session against a planner that never existed. ``None``
-            (no handoff, or a caller that predates the parameter) falls back to
-            re-resolving ``ai.plan.sandbox``.
 
     Returns:
         ImplementResult with success/merged status.
@@ -954,24 +947,13 @@ def start(
         # guard instead of the fresh context it needs. The profile mismatch is
         # now stated directly, once, in ``requires_unsandboxed_relaunch``.
         #
-        # The planner's profile is the one it *launched* with, forwarded through
-        # the handoff — not a fresh resolution. ``wade plan --sandbox`` /
-        # ``--no-sandbox`` outranks config, so re-resolving here would compare
-        # this session against a planner that never ran: an explicitly sandboxed
-        # planner would read as unrestricted and hit the ordinary nested-launch
-        # guard instead of opening the fresh context it needs, and the inverse
-        # override would force a detached launch nothing asked for. That
-        # forwarded value is first-party evidence about the process we are
-        # *inside*, so it fills an assessment the environment leaves unknown —
-        # and only that: a runtime that publishes a real sandbox signal keeps it,
-        # because that describes what the OS actually applied here.
+        # The accepted handoff runs in the original ``wade plan`` process *after*
+        # the planner child has exited. Its requested profile therefore describes
+        # a former child, not the runtime enclosing this implementation command;
+        # it cannot establish that this process inherited a boundary. Assess only
+        # the enclosing runtime's actual signal.
         detected_env = _detect_ai_cli_env()
-        planner_sandbox = (
-            plan_sandbox if plan_sandbox is not None else resolve_sandbox(None, config, "plan")
-        )
         parent = parent_runtime(detected_env)
-        if plan_handoff:
-            parent = parent.with_launch_profile(planner_sandbox)
         profile_mismatch = requires_unsandboxed_relaunch(
             resolved_sandbox=resolved_sandbox,
             parent=parent,

@@ -693,7 +693,7 @@ def plan(
         resolved_sandbox=resolved_sandbox,
         operation="the planning session",
         relaunch_command=(
-            f"wade plan {existing_issue.id} --no-sandbox"
+            f"wade plan --issue {existing_issue.id} --no-sandbox"
             if existing_issue is not None
             else "wade plan --no-sandbox"
         ),
@@ -1537,10 +1537,9 @@ def _finalize_issues(
                 before_start=lambda: _flush_planning_votes_before_implementation(
                     planning_worktree, repo_root, config
                 ),
-                plan_sandbox=sandbox,
             )
         else:
-            result = _offer_to_implement(issue_numbers[0], plan_sandbox=sandbox)
+            result = _offer_to_implement(issue_numbers[0])
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -1577,13 +1576,8 @@ def _offer_to_implement(
     issue_number: str,
     *,
     before_start: Callable[[], bool] | None = None,
-    plan_sandbox: bool | None = None,
 ) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
-
-    *plan_sandbox* is this planning session's **resolved** profile, forwarded so
-    the handoff compares against the planner that actually ran rather than
-    re-resolving config and losing a ``--sandbox`` / ``--no-sandbox`` override.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
     or None if the prompt was skipped (non-TTY) or declined.
@@ -1604,14 +1598,12 @@ def _offer_to_implement(
         return False
 
     try:
-        # Tell implementation startup this is an accepted handoff, and under
-        # which profile the planner is running, so it can establish a fresh Codex
-        # context when its independently resolved profile is more permissive than
-        # the process it would otherwise inherit.
+        # Tell implementation startup this is an accepted handoff. It assesses
+        # the runtime that actually encloses the handoff rather than the former
+        # planner child, which has already exited.
         result = start_implementation_session(
             target=issue_number,
             plan_handoff=True,
-            plan_sandbox=plan_sandbox,
         )
         return result.success
     except Exception:

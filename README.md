@@ -737,21 +737,15 @@ the Stop hook, and the pre-push backstop are identical in both profiles.
 #### Plan → implement handoff
 
 The sandbox is a launch-time OS property: a process started confined cannot drop
-its sandbox later. So when an accepted plan handoff runs inside a **sandboxed**
-planner and the implementation profile resolves to **unrestricted**, WADE starts
-a fresh detached context rather than reusing the planner process. If it cannot
-open that context, the handoff fails rather than reporting an implementation
-session ready — it names the runtime it could not escape, and you open a new host
-terminal and run the displayed `wade implement <issue> --no-sandbox` command.
-When both sessions resolve to the same profile there is no mismatch and the
-ordinary nested-launch guard applies.
-
-This is about the **boundary**, not about which tools are involved: a sandboxed
-Codex planner handing off to Claude inherits the sandbox exactly as a Codex one
-would, and — being separately authenticated — is where a lost host login shows
-first. The comparison uses the profile the planner **actually launched under**,
-so a `wade plan --sandbox` / `--no-sandbox` override is honored here rather than
-losing out to `ai.plan.sandbox`.
+its sandbox later. An accepted plan handoff runs after the planner child exits,
+so WADE assesses the **actual parent runtime enclosing the handoff**, not the
+former planner's requested profile. When that runtime is detected as sandboxed
+and implementation resolves to **unrestricted**, WADE starts a fresh detached
+context. If it cannot open that context, the handoff fails rather than reporting
+an implementation session ready — it names the runtime it could not escape, and
+you open a new host terminal and run the displayed `wade implement <issue>
+--no-sandbox` command. Without a published sandbox signal, the ordinary
+nested-launch guard applies rather than guessing.
 
 #### An inner `wade` process cannot escape a parent sandbox
 
@@ -780,15 +774,16 @@ the opaque error it would replace.
 
 **Troubleshooting order** when a delegated tool fails to launch:
 
-1. **Read what WADE printed.** If it named a sandboxed runtime and a command,
-   that is the answer — relaunch the outer session with that command.
+1. **Read what WADE printed.** An explicit sandbox-policy denial plus a named
+   runtime and command means relaunch the outer session with that command. A
+   generic permission or network denial also needs local checks below.
 2. **Check whether the reviewer actually started.** A reviewer that ran and
    exited non-zero is a different problem; "relaunch the outer session" is wrong
-   advice for it. WADE distinguishes the two and blames the sandbox only when
-   nothing started *and* the failure looks like a denial — a refusal WADE made
+   advice for it. WADE distinguishes the two. A generic launch denial can also
+   be bad executable permissions or network configuration; a refusal WADE made
    itself (an unknown tool, a tool with no headless mode) never reached the
-   sandbox, so it gets the generic remediation instead.
-3. **Check the tool's own login and PATH** in the runtime where it must run
+   sandbox and gets generic remediation instead.
+3. **Check executable permissions, network, and the tool's own login/PATH** in the runtime where it must run
    (`gh auth status`, the delegate's own auth command). A separately
    authenticated delegate needs its *own* credentials, not WADE's.
 4. **Re-run the phase readiness check** (`wade implementation-session check`,

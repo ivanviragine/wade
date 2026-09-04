@@ -10,7 +10,7 @@ import crossby.ai_tools  # noqa: F401 — triggers adapter auto-registration
 import pytest
 
 from wade.models.config import AICommandConfig
-from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.services.delegation_service import (
     TIMEOUT_CEILING,
@@ -800,12 +800,10 @@ class TestSharedParentSandboxCheck:
 
     @staticmethod
     def _sandboxed_request(operation: str, relaunch_command: str) -> DelegationRequest:
-        # An unknown tool short-circuits before any process starts, so these
-        # exercise the pre-launch check without spawning anything.
         return DelegationRequest(
             mode=DelegationMode.HEADLESS,
             prompt="p",
-            ai_tool="nonexistent_tool",
+            ai_tool="claude",
             sandbox=False,
             operation=operation,
             relaunch_command=relaunch_command,
@@ -830,12 +828,43 @@ class TestSharedParentSandboxCheck:
     ) -> None:
         """Centralising the check must not flatten the remediation into generic advice."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
-        with patch("wade.ui.console.console") as mock_console:
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(
+            supports_headless=True,
+            headless_flag="--print",
+        )
+        adapter.build_launch_command.return_value = ["claude", "--print"]
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.delegation_service._run_headless_once",
+                return_value=DelegationResult(
+                    success=True,
+                    feedback="ok",
+                    mode=DelegationMode.HEADLESS,
+                ),
+            ),
+            patch("wade.ui.console.console") as mock_console,
+        ):
             result = delegate(self._sandboxed_request(operation, relaunch))
 
         assert operation in str(mock_console.warn.call_args_list)
         mock_console.detail.assert_any_call(relaunch)
         assert result.inherited_sandbox_profile_mismatch is True
+
+    def test_an_unlaunchable_tool_does_not_get_sandbox_remediation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Relaunching cannot repair a tool lookup failure before any process exists."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        request = self._sandboxed_request("the implementation review", "wade review implementation")
+        request.ai_tool = "nonexistent_tool"
+        with patch("wade.ui.console.console") as mock_console:
+            result = delegate(request)
+
+        assert result.never_launched is True
+        assert mock_console.warn.call_count == 0
+        mock_console.detail.assert_not_called()
 
     def test_an_unknown_parent_assessment_stays_silent(
         self, monkeypatch: pytest.MonkeyPatch

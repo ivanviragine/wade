@@ -574,10 +574,12 @@ class TestInheritedSandboxReviewContract:
 
         output = " ".join(self._review(e2e_repo, env, ai="claude").split())
 
-        # Not a category of problem — the runtime by name, and the line to type.
+        # A bare EACCES is not enough to blame the known boundary; the fixture
+        # deliberately makes the fake binary non-executable.
         assert "Codex CLI is sandboxed" in output
-        assert "wade review implementation --no-sandbox" in output
-        assert "No review-pass budget was consumed" in output
+        assert "executable permissions or network configuration" in output
+        assert "could not reach its own host credentials" not in output
+        assert "no review-pass budget was consumed" in output
 
     def test_a_capability_refusal_is_not_blamed_on_the_sandbox(
         self,

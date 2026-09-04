@@ -20,6 +20,7 @@ from wade.utils.runtime_env import (
     assess_parent_sandbox,
     detect_ai_cli_env,
     detect_parent_runtime,
+    has_explicit_sandbox_denial,
     inherited_sandbox_finding,
     looks_like_sandbox_denial,
     possible_inherited_sandbox_cause,
@@ -116,25 +117,6 @@ class TestParentRuntime:
         assert detect_parent_runtime({"CODEX_CLI": "1"}).label == "Codex CLI"
         assert detect_parent_runtime({"CLAUDE_CODE": "1"}).label == "Claude Code"
 
-    def test_launch_profile_fills_an_unknown_assessment(self) -> None:
-        runtime = detect_parent_runtime({"CODEX_CLI": "1"})
-        assert runtime.with_launch_profile(True).sandbox is SandboxAssessment.SANDBOXED
-        assert runtime.with_launch_profile(False).sandbox is SandboxAssessment.UNRESTRICTED
-
-    def test_an_environment_signal_outranks_a_forwarded_profile(self) -> None:
-        """The OS-applied boundary describes *this* process; the record does not.
-
-        A handoff can only report what wade asked for at launch. When the runtime
-        itself reports what was actually applied, that wins.
-        """
-        runtime = detect_parent_runtime({"CODEX_CLI": "1", CODEX_SANDBOX_ENV: "danger-full-access"})
-        assert runtime.with_launch_profile(True).sandbox is SandboxAssessment.UNRESTRICTED
-
-    def test_an_unrecognised_parent_takes_no_launch_profile(self) -> None:
-        """With no established "inside", there is nothing for the record to describe."""
-        runtime = detect_parent_runtime({})
-        assert runtime.with_launch_profile(True).sandbox is SandboxAssessment.UNKNOWN
-
 
 class TestProfileMismatchPredicate:
     """True for exactly one combination, and never on a guess."""
@@ -210,6 +192,21 @@ class TestSandboxDenialShapes:
     )
     def test_denial_shapes_match(self, text: str) -> None:
         assert looks_like_sandbox_denial(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        ["denied by sandbox policy", "seatbelt: deny file-read", "landlock blocked launch"],
+    )
+    def test_explicit_policy_markers_support_a_confident_cause(self, text: str) -> None:
+        assert has_explicit_sandbox_denial(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        ["permission denied", "connection refused", "exec format error"],
+    )
+    def test_generic_os_denials_remain_ambiguous(self, text: str) -> None:
+        assert looks_like_sandbox_denial(text) is True
+        assert has_explicit_sandbox_denial(text) is False
 
     @pytest.mark.parametrize(
         "text",

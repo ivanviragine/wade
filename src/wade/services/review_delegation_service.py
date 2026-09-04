@@ -47,6 +47,7 @@ from wade.ui.console import console
 from wade.utils.runtime_env import (
     INHERITED_SANDBOX_HINT,
     detect_parent_runtime,
+    has_explicit_sandbox_denial,
     looks_like_sandbox_denial,
     possible_inherited_sandbox_cause,
 )
@@ -644,7 +645,11 @@ def _report_failed_review(
 
     parent = detect_parent_runtime()
     denial_shaped = result.never_launched and looks_like_sandbox_denial(result.feedback)
-    if denial_shaped and result.inherited_sandbox_profile_mismatch:
+    if (
+        denial_shaped
+        and has_explicit_sandbox_denial(result.feedback)
+        and result.inherited_sandbox_profile_mismatch
+    ):
         logger.warning(
             "review.reviewer_never_launched",
             parent=parent.env_var,

@@ -289,7 +289,7 @@ class TestUnattemptedReviewGate:
 
         record.assert_not_called()
 
-    def test_a_known_sandboxed_parent_gets_the_specific_cause(
+    def test_a_known_sandboxed_parent_keeps_a_generic_denial_hedged(
         self,
         tmp_path: Path,
         review_preflight: PreparedDelegationMethod,
@@ -305,6 +305,29 @@ class TestUnattemptedReviewGate:
         self._run(
             tmp_path,
             self._never_launched("permission denied", inherited_sandbox_profile_mismatch=True),
+        )
+
+        text = _cap(capsys)
+        assert " ".join(rds._HEDGED_REVIEW_FAILURE.split()) in text
+        assert "executable permissions or network configuration" in text
+        assert "could not reach its own host credentials" not in text
+
+    def test_an_explicit_sandbox_policy_gets_the_specific_cause(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        for name in ("CLAUDE_CODE", "CLAUDE_CODE_ENTRYPOINT", "COPILOT_CLI"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        monkeypatch.setenv("CODEX_CLI", "1")
+        self._run(
+            tmp_path,
+            self._never_launched(
+                "launch denied by sandbox policy", inherited_sandbox_profile_mismatch=True
+            ),
         )
 
         text = _cap(capsys)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import structlog
@@ -26,7 +27,7 @@ from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.process import CommandError, run
-from wade.utils.runtime_env import detect_parent_runtime
+from wade.utils.runtime_env import detect_parent_runtime, requires_unsandboxed_relaunch
 
 logger = structlog.get_logger()
 
@@ -117,7 +118,7 @@ def _parse_effort(raw: str | None) -> EffortLevel | None:
 
 
 def _warn_on_inherited_sandbox(request: DelegationRequest) -> bool:
-    """Say up front when the requested profile cannot survive the parent sandbox.
+    """Warn immediately before a validated delegated runtime launches.
 
     Deps, standalone plan/code review and batch review all funnel through
     ``delegate()``, so this cross-cutting launch concern belongs here **once**
@@ -139,19 +140,32 @@ def _warn_on_inherited_sandbox(request: DelegationRequest) -> bool:
     )
 
 
+def _has_inherited_sandbox_profile_mismatch(request: DelegationRequest) -> bool:
+    """Assess the requested profile without emitting remediation prematurely."""
+    return requires_unsandboxed_relaunch(
+        resolved_sandbox=request.sandbox,
+        parent=detect_parent_runtime(),
+    )
+
+
 def delegate(request: DelegationRequest) -> DelegationResult:
     """Dispatch a delegation request to the appropriate mode runner."""
     if request.mode == DelegationMode.PROMPT:
         return _delegate_prompt(request)
 
-    # Every mode below starts an external runtime, so the parent boundary is
-    # material from here on. Prompt mode launches nothing and is exempt.
-    profile_mismatch = _warn_on_inherited_sandbox(request)
+    # Preserve the resolved mismatch for the post-launch diagnostic, but do not
+    # announce it until the mode/tool capability guards prove a runtime can
+    # actually launch. A missing tool or headless-capability refusal cannot be
+    # repaired by relaunching the enclosing session.
+    profile_mismatch = _has_inherited_sandbox_profile_mismatch(request)
+
+    def before_launch() -> bool:
+        return _warn_on_inherited_sandbox(request)
 
     if request.mode == DelegationMode.HEADLESS:
-        result = _delegate_headless(request)
+        result = _delegate_headless(request, before_launch=before_launch)
     elif request.mode == DelegationMode.INTERACTIVE:
-        result = _delegate_interactive(request)
+        result = _delegate_interactive(request, before_launch=before_launch)
     else:
         result = DelegationResult(
             success=False,
@@ -261,7 +275,11 @@ def _run_headless_once(cmd: list[str], timeout: int, session_cwd: Path) -> Deleg
     )
 
 
-def _delegate_headless(request: DelegationRequest) -> DelegationResult:
+def _delegate_headless(
+    request: DelegationRequest,
+    *,
+    before_launch: Callable[[], bool] | None = None,
+) -> DelegationResult:
     """Run AI non-interactively and capture stdout."""
     session_cwd = request.cwd or Path.cwd()
 
@@ -334,6 +352,9 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         retry_timeout = extended_timeout(request.timeout)
         if retry_timeout > 0:
             attempts.append(retry_timeout)
+
+    if before_launch is not None:
+        before_launch()
 
     partial = ""
     for index, budget in enumerate(attempts):
@@ -408,7 +429,11 @@ def _interactive_failure(exc: Exception, *, launched: bool) -> DelegationResult:
     )
 
 
-def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
+def _delegate_interactive(
+    request: DelegationRequest,
+    *,
+    before_launch: Callable[[], bool] | None = None,
+) -> DelegationResult:
     """Launch AI interactively; block until done; read output from file."""
     session_cwd = request.cwd or Path.cwd()
 
@@ -482,6 +507,8 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             return _interactive_failure(e, launched=False)
 
         try:
+            if before_launch is not None:
+                before_launch()
             adapter.launch(
                 working_dir=session_cwd,
                 model=request.model,

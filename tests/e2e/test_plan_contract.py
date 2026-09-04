@@ -217,6 +217,11 @@ class TestPlanSandboxProfileContract:
         result = _run(["plan", flag, "--help"], cwd=e2e_repo)
         assert result.returncode == 0, result.stdout + result.stderr
 
+    def test_issue_scoped_sandbox_recovery_argv_is_valid(self, e2e_repo: Path) -> None:
+        """The recovery hint must use plan's ``--issue`` option, not an operand."""
+        result = _run(["plan", "--issue", "42", "--no-sandbox", "--help"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def test_plan_help_documents_both_directions(self, e2e_repo: Path) -> None:
         result = _run(["plan", "--help"], cwd=e2e_repo)
         assert result.returncode == 0
