@@ -687,20 +687,30 @@ def plan(
             else "wade plan --no-sandbox"
         ),
     )
-    with _plan_dir_fallback_env(plan_dir, planning_worktree):
-        exit_code = run_ai_planning_session(
-            ai_tool=resolved_tool,
-            plan_dir=plan_dir,
-            model=resolved_model,
-            transcript_path=transcript_path,
-            issue_context=issue_context,
-            effort=resolved_effort,
-            allowed_commands=config.permissions.allowed_commands,
-            cwd=session_cwd,
-            permission_mode=resolved_permission_mode,
-            session_bundle=session_bundle,
-            sandbox=resolved_sandbox,
-        )
+    try:
+        with _plan_dir_fallback_env(plan_dir, planning_worktree):
+            exit_code = run_ai_planning_session(
+                ai_tool=resolved_tool,
+                plan_dir=plan_dir,
+                model=resolved_model,
+                transcript_path=transcript_path,
+                issue_context=issue_context,
+                effort=resolved_effort,
+                allowed_commands=config.permissions.allowed_commands,
+                cwd=session_cwd,
+                permission_mode=resolved_permission_mode,
+                session_bundle=session_bundle,
+                sandbox=resolved_sandbox,
+            )
+    except Exception as exc:
+        # Command construction and exec failures happen before the planner can
+        # produce output. Report the concrete error and clean the throwaway
+        # workspace instead of turning an inherited-sandbox denial into a
+        # traceback (#481 review).
+        console.warn(f"AI tool launch failed: {exc}")
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+        stop_title_keeper()
+        return False
     logger.info("plan.ai_exited", exit_code=exit_code)
 
     # Non-blocking tools (VS Code, Antigravity) return immediately.

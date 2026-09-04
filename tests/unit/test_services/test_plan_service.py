@@ -923,6 +923,43 @@ class TestPlanOrchestrator:
         launch.assert_not_called()
         stop_keeper.assert_called_once()
 
+    def test_launch_failure_warns_and_cleans_up_fallback_temp_dir(self, tmp_path: Path) -> None:
+        """A denied planner launch must not surface as a raw traceback (#481 review)."""
+        provider = MagicMock()
+        fallback_dir = tmp_path / "wade-plan-fallback"
+        fallback_dir.mkdir()
+
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, PermissionMode.DEFAULT),
+            ),
+            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("not a repo")),
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(fallback_dir)),
+            patch("wade.services.session_composition_service.compose_session"),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch(
+                "wade.services.plan_service.run_ai_planning_session",
+                side_effect=PermissionError(13, "Permission denied"),
+            ),
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert plan(project_root=tmp_path) is False
+
+        assert not fallback_dir.exists()
+        stop_keeper.assert_called_once()
+        mock_console.warn.assert_any_call("AI tool launch failed: [Errno 13] Permission denied")
+
     def test_provider_setup_failure_removes_detached_planning_worktree(
         self, tmp_path: Path
     ) -> None:
