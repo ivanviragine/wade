@@ -616,7 +616,7 @@ class TestAnalyzeDepsMode:
         from wade.models.config import AICommandConfig, AIConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="prompt"))
+            ai=AIConfig(sandbox=True, deps=AICommandConfig(tool="claude", mode="prompt"))
         )
         provider = MagicMock()
         provider.read_task.side_effect = [
@@ -638,12 +638,16 @@ class TestAnalyzeDepsMode:
         mock_apply.return_value = 2
         mock_tracking.return_value = "10"
 
-        result = analyze_deps(["1", "2"], mode="headless", planning_worktree=tmp_path)
+        result = analyze_deps(
+            ["1", "2"], mode="headless", sandbox=False, planning_worktree=tmp_path
+        )
         assert result is not None
         # Should have parsed the edge since not in prompt mode
         assert len(result.edges) == 1
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.HEADLESS
+        assert call_args.sandbox is False
+        assert "wade task deps 1 2 --no-sandbox" in call_args.relaunch_command
 
     @patch("wade.services.deps_service.create_tracking_issue")
     @patch("wade.services.deps_service.apply_deps_to_issues")

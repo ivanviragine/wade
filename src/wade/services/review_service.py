@@ -1247,6 +1247,7 @@ def start(
                 ["wade", "review", "pr-comments", task.id],
                 ai_tool=resolved_tool,
                 model=resolved_model,
+                effort=resolved_effort.value if resolved_effort else None,
                 permission_mode=resolved_permission_mode,
                 skills=work_skills,
                 review_skills=review_skills,

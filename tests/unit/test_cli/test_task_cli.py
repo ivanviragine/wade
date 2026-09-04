@@ -64,3 +64,15 @@ class TestTaskDepsCLI:
 
         assert result.exit_code == 1
         assert "not in analyzed set" in result.output
+
+    @patch("wade.services.deps_service.analyze_deps")
+    def test_deps_no_sandbox_forwards_the_relaunch_profile(
+        self, mock_analyze_deps: MagicMock
+    ) -> None:
+        """The host-terminal recovery command must be accepted by this CLI."""
+        mock_analyze_deps.return_value = MagicMock()
+
+        result = runner.invoke(task_app, ["deps", "1", "2", "--no-sandbox"])
+
+        assert result.exit_code == 0
+        assert mock_analyze_deps.call_args.kwargs["sandbox"] is False

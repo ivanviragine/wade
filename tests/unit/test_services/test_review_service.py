@@ -908,6 +908,8 @@ class TestReviewServiceStart:
         said "unrestricted". The other three launch paths announce it; so must
         this one (#480).
         """
+        from crossby.models.ai import EffortLevel
+
         from wade.models.review import PRReviewStatus
 
         thread = ReviewThread(
@@ -918,6 +920,12 @@ class TestReviewServiceStart:
             all_unresolved_threads=[thread],
         )
         mock_setup["_detect_ai_cli_env"].return_value = "CODEX_CLI"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            EffortLevel.HIGH,
+            PermissionMode.DEFAULT,
+        )
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
 
         with (
@@ -933,7 +941,8 @@ class TestReviewServiceStart:
         assert result is True
         assert "Codex CLI" in str(mock_console.warn.call_args_list)
         mock_console.detail.assert_any_call(
-            "wade review pr-comments 42 --no-sandbox --permission-mode default",
+            "wade review pr-comments 42 --no-sandbox --ai codex --effort high "
+            "--permission-mode default",
             markup=False,
         )
 

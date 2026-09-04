@@ -458,6 +458,7 @@ def analyze_deps(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     planning_worktree: Path | None = None,
     skills: list[str] | None = None,
 ) -> DependencyGraph | None:
@@ -517,7 +518,7 @@ def analyze_deps(
         resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "deps")
         # The capability check waits until after the confirmation UI below,
         # which can still change the tool.
-        resolved_sandbox = resolve_sandbox(None, config, "deps")
+        resolved_sandbox = resolve_sandbox(sandbox, config, "deps")
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — not

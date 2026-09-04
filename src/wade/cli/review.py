@@ -201,6 +201,9 @@ def review_pr_comments_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
+    ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = typer.Option(
@@ -238,6 +241,8 @@ def review_pr_comments_cmd(
         detach=detach,
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,

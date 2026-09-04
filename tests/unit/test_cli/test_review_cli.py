@@ -543,6 +543,14 @@ class TestReviewBatchCli:
 
 
 class TestReviewCliEffortFlag:
+    @patch("wade.services.review_service.start", return_value=True)
+    def test_review_pr_comments_effort_flag(self, mock_start: MagicMock) -> None:
+        result = runner.invoke(app, ["review", "pr-comments", "42", "--effort", "high"])
+
+        assert result.exit_code == 0
+        assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")

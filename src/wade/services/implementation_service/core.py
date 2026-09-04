@@ -958,12 +958,12 @@ def start(
             resolved_sandbox=resolved_sandbox,
             parent=parent,
         )
-        # A sandbox signal is useful diagnostic evidence even when no runtime
-        # identity is available, but a detached plan handoff is meaningful only
-        # while we know this process is inside an AI CLI session. Otherwise a
-        # stray inherited ``CODEX_SANDBOX`` variable in an ordinary host shell
-        # would incorrectly force a host-terminal remediation.
-        requires_fresh_runtime = plan_handoff and bool(detected_env) and profile_mismatch
+        # The published sandbox signal is the boundary evidence. Its tool
+        # identity may have been stripped from the handoff environment, but a
+        # trusted signal still proves that an inline child cannot become
+        # unrestricted. A plan handoff must therefore fail closed on the
+        # profile mismatch without requiring an identity marker.
+        requires_fresh_runtime = plan_handoff and profile_mismatch
         if requires_fresh_runtime:
             relaunch_command = build_relaunch_command(
                 ["wade", "implement", task.id, "--base", effective_base],

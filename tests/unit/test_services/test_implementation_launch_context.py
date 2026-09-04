@@ -303,37 +303,32 @@ class TestImplementationLaunchContext:
         spy.build_launch_command.assert_not_called()
         spy.launch.assert_not_called()
 
-    def test_sandbox_signal_without_an_ai_session_does_not_force_a_fresh_handoff(
+    def test_identityless_sandbox_signal_forces_a_fresh_handoff(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A stale sandbox variable in a host shell must not require a new terminal."""
+        """A published boundary remains trustworthy when identity is stripped."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with _driven_start(worktree) as spy:
-            spy.launch.side_effect = RuntimeError("stop-after-capture")
-
             result = start(target="42", plan_handoff=True)
 
         assert result.success is False
         spy.build_launch_command.assert_not_called()
         spy.terminal_launch.assert_not_called()
-        spy.launch.assert_called_once()
+        spy.launch.assert_not_called()
 
-    def test_identityless_sandbox_signal_warns_before_an_inline_launch(
+    def test_identityless_sandbox_signal_prints_the_host_recovery_command(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A sandbox signal remains actionable when the identity marker is absent."""
+        """An identityless boundary fails closed instead of launching inline."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with (
             _driven_start(worktree) as spy,
-            patch(_UI_CONSOLE) as mock_console,
+            patch(f"{_CORE}.console") as mock_console,
         ):
-            spy.launch.side_effect = RuntimeError("stop-after-capture")
-
             result = start(target="42", plan_handoff=True)
 
         assert result.success is False
-        spy.launch.assert_called_once()
-        assert "enclosing AI runtime" in str(mock_console.warn.call_args_list)
+        spy.launch.assert_not_called()
         mock_console.detail.assert_any_call(
             "wade implement 42 --base main --no-sandbox --ai codex --permission-mode default",
             markup=False,
