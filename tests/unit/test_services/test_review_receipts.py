@@ -238,6 +238,7 @@ class TestUnattemptedReviewGate:
         feedback: str = "Unknown AI tool: claude",
         *,
         inherited_sandbox_profile_mismatch: bool = False,
+        launch_attempted: bool = False,
     ) -> DelegationResult:
         return DelegationResult(
             success=False,
@@ -245,6 +246,7 @@ class TestUnattemptedReviewGate:
             mode=DelegationMode.HEADLESS,
             exit_code=1,
             never_launched=True,
+            launch_attempted=launch_attempted,
             inherited_sandbox_profile_mismatch=inherited_sandbox_profile_mismatch,
         )
 
@@ -336,7 +338,9 @@ class TestUnattemptedReviewGate:
         self._run(
             tmp_path,
             self._never_launched(
-                "launch denied by sandbox policy", inherited_sandbox_profile_mismatch=True
+                "launch denied by sandbox policy",
+                inherited_sandbox_profile_mismatch=True,
+                launch_attempted=True,
             ),
         )
 
@@ -369,7 +373,9 @@ class TestUnattemptedReviewGate:
             "a" * 40,
             review_preflight,
             self._never_launched(
-                "launch denied by sandbox policy", inherited_sandbox_profile_mismatch=True
+                "launch denied by sandbox policy",
+                inherited_sandbox_profile_mismatch=True,
+                launch_attempted=True,
             ),
         )
 

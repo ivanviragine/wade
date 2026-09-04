@@ -1703,6 +1703,7 @@ class TestFailedReviewSandboxRemediation:
             feedback="launch denied by sandbox policy",
             mode=DelegationMode.HEADLESS,
             never_launched=True,
+            launch_attempted=True,
             inherited_sandbox_profile_mismatch=True,
             relaunch_command="wade review implementation --model '[draft]' --no-sandbox",
         )
@@ -1730,6 +1731,33 @@ class TestFailedReviewSandboxRemediation:
             mode=DelegationMode.HEADLESS,
             never_launched=True,
             inherited_sandbox_profile_mismatch=False,
+        )
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+        with (
+            patch("wade.services.review_delegation_service._record_binding_outcome"),
+            patch(
+                "wade.services.review_delegation_service.detect_parent_runtime",
+                return_value=parent,
+            ),
+            patch("wade.services.review_delegation_service.console") as mock_console,
+        ):
+            rds._report_failed_review(tmp_path, "a" * 40, _prepared_method(), result)
+
+        mock_console.warn.assert_called_once_with(rds._HEDGED_REVIEW_FAILURE)
+        mock_console.detail.assert_not_called()
+
+    def test_preflight_error_with_policy_text_keeps_hedged_remediation(
+        self, tmp_path: Path
+    ) -> None:
+        """A tool name can contain ``seatbelt`` without reaching a spawn attempt."""
+        result = DelegationResult(
+            success=False,
+            feedback="Unknown AI tool: seatbelt",
+            mode=DelegationMode.HEADLESS,
+            never_launched=True,
+            launch_attempted=False,
+            inherited_sandbox_profile_mismatch=True,
+            relaunch_command="wade review implementation --ai seatbelt --no-sandbox",
         )
         parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
         with (

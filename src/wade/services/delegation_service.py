@@ -122,10 +122,9 @@ def _warn_on_inherited_sandbox(request: DelegationRequest) -> bool:
 
     Deps, standalone plan/code review and batch review all funnel through
     ``delegate()``, so this cross-cutting launch concern belongs here **once**
-    rather than in each service — three copies would drift. ``batch.py`` is
-    deliberately not covered: it spawns child ``wade implement`` processes, which
-    reach the equivalent check in ``implementation_service.core`` on their own, so
-    a check there would be a dead no-op implying coverage it does not add.
+    rather than in each service — three copies would drift. Batch implementation
+    is separate: it diagnoses once in ``batch.py`` before terminal brokers can
+    drop the enclosing process's runtime markers.
 
     Warns and proceeds rather than blocking. wade cannot prove the delegated tool
     will fail — a runtime with credentials reachable from inside the sandbox may
@@ -159,7 +158,15 @@ def delegate(request: DelegationRequest) -> DelegationResult:
     # repaired by relaunching the enclosing session.
     profile_mismatch = _has_inherited_sandbox_profile_mismatch(request)
 
+    # ``never_launched`` includes preflight refusals such as an unknown tool.
+    # Record the narrower spawn boundary separately, so a user-controlled error
+    # mentioning ``seatbelt`` cannot turn that configuration error into a false
+    # inherited-sandbox diagnosis downstream.
+    launch_attempted = False
+
     def before_launch() -> bool:
+        nonlocal launch_attempted
+        launch_attempted = True
         return _warn_on_inherited_sandbox(request)
 
     if request.mode == DelegationMode.HEADLESS:
@@ -174,7 +181,8 @@ def delegate(request: DelegationRequest) -> DelegationResult:
             exit_code=1,
             never_launched=True,
         )
-    result.inherited_sandbox_profile_mismatch = profile_mismatch
+    result.launch_attempted = launch_attempted
+    result.inherited_sandbox_profile_mismatch = profile_mismatch and launch_attempted
     result.relaunch_command = request.relaunch_command
     return result
 

@@ -779,3 +779,15 @@ The release version bump is derived from the PR title ALONE — .github/workflow
 A non-executable file earlier on PATH does NOT make a later real binary unreachable: CPython builds an exec candidate from every PATH entry and keeps going past EACCES, so an E2E test that drops a chmod 644 stand-in into the mocked bin dir still runs the users real tool. To force a denial-shaped spawn failure, narrow PATH in the child env to the mocked bin plus only the dirs actually needed (`wade`, `git`, `/usr/bin`, `/bin`). `shutil.which` skips non-executables, so it is the right assertion that no real binary remains reachable.
 
 ---
+
+## 4668ee29b835 | 2026-09-04 | implementation | tags: delegation, sandbox, batch | Issue #480
+
+For issue #480, delegation_service.delegate() remains the one dispatcher for deps and standalone/batch reviews, but implement-batch crosses a different terminal-broker boundary. Diagnose a known parent sandbox once in implementation_service.batch before broker shells can lose its markers; child implementation checks remain a backstop, not the sole diagnosis.
+
+---
+
+## 54236b4243bc | 2026-09-04 | implementation | tags: testing, sandbox, gotcha | Issue #480
+
+For issue #480 sandbox tests, the autouse conftest fixture clears both SANDBOX_SIGNAL_ENV_VARS and real Codex identity markers in CODEX_IDENTITY_ENV_VARS. Tests that need another enclosing runtime still set or clear competing identity markers deliberately; do not claim the fixture never clears identity markers.
+
+---

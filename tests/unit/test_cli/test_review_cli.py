@@ -551,6 +551,15 @@ class TestReviewCliEffortFlag:
         assert mock_start.call_args.kwargs["effort"] == "high"
         assert mock_start.call_args.kwargs["effort_explicit"] is True
 
+    @patch("wade.services.review_service.start", return_value=True)
+    def test_review_pr_comments_tool_default_effort_flag(self, mock_start: MagicMock) -> None:
+        """The recovery command can represent the UI's explicit default choice."""
+        result = runner.invoke(app, ["review", "pr-comments", "42", "--effort", "none"])
+
+        assert result.exit_code == 0
+        assert mock_start.call_args.kwargs["effort"] == "none"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")

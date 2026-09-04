@@ -84,10 +84,16 @@ class DelegationResult(BaseModel):
     # disjunction of possible causes, and is why an unattempted review consumes
     # no review-pass budget and opens no gate (#480).
     never_launched: bool = False
-    # True only when an external runtime was requested with the unrestricted
-    # profile but is known to inherit a sandbox from its parent.  This records
-    # the resolved launch context alongside the result so callers can avoid
-    # attributing an unrelated never-started failure to the parent sandbox.
+    # True only after dispatch has crossed the spawn boundary.  This is narrower
+    # than ``never_launched``: an unknown tool or an unsupported mode starts no
+    # process *and* never attempts one, while a missing binary can fail at the
+    # spawn itself.  Failure reporters need that distinction before attributing
+    # denial-shaped free-form text to an inherited sandbox.
+    launch_attempted: bool = False
+    # True only when an attempted external runtime was requested with the
+    # unrestricted profile but is known to inherit a sandbox from its parent.
+    # Preflight refusals keep this false, so callers cannot attribute unrelated
+    # user-controlled error text to the parent sandbox.
     inherited_sandbox_profile_mismatch: bool = False
     # Copy the runnable remediation onto the result so a caller that reports a
     # later launch failure can repeat the same fully-resolved command instead of

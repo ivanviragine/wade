@@ -931,6 +931,7 @@ class TestSharedParentSandboxCheck:
 
         assert operation in str(mock_console.warn.call_args_list)
         mock_console.detail.assert_any_call(relaunch, markup=False)
+        assert result.launch_attempted is True
         assert result.inherited_sandbox_profile_mismatch is True
 
     def test_an_unlaunchable_tool_does_not_get_sandbox_remediation(
@@ -944,6 +945,8 @@ class TestSharedParentSandboxCheck:
             result = delegate(request)
 
         assert result.never_launched is True
+        assert result.launch_attempted is False
+        assert result.inherited_sandbox_profile_mismatch is False
         assert mock_console.warn.call_count == 0
         mock_console.detail.assert_not_called()
 

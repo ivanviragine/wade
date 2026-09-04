@@ -642,6 +642,38 @@ class TestReviewServiceStart:
         assert mock_post.call_args.kwargs["effort"] is None
         assert mock_post.call_args.kwargs["effort_explicit"] is False
 
+    def test_explicit_default_effort_survives_waiting_for_reviews(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """Choosing the UI's tool default must override a configured effort later."""
+        from crossby.models.ai import EffortLevel
+
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            None,
+            PermissionMode.DEFAULT,
+        )
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        adapter.capabilities.return_value.blocks_until_exit = False
+        with (
+            patch("wade.services.review_service.resolve_effort", return_value=EffortLevel.HIGH),
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.services.review_service._post_review_lifecycle") as mock_post,
+        ):
+            assert start(target="42") is True
+
+        assert mock_post.call_args.kwargs["effort"] == "none"
+        assert mock_post.call_args.kwargs["effort_explicit"] is True
+
     def test_detached_launch_receives_worktree_context(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
@@ -773,6 +805,35 @@ class TestReviewServiceStart:
             )
 
         assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
+    def test_post_lifecycle_relaunch_forwards_explicit_tool_default_effort(
+        self, tmp_path: Path
+    ) -> None:
+        """The explicit default is distinct from an unset effort override."""
+        from wade.services.review_service import PollOutcome
+
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", return_value=1),
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_start,
+        ):
+            _post_review_lifecycle(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path,
+                99,
+                MagicMock(),
+                effort="none",
+                effort_explicit=True,
+            )
+
+        assert mock_start.call_args.kwargs["effort"] == "none"
         assert mock_start.call_args.kwargs["effort_explicit"] is True
 
     def test_resolves_worktree_by_issue_when_title_drifted(

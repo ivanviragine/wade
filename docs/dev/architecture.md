@@ -627,7 +627,10 @@ model, effort, and permission mode (plus review mode and staged scope where
 applicable); only the sandbox profile changes to `--no-sandbox`.
 Session-based implementation and PR-comment retries omit method overrides and
 reuse the existing frozen bundle; fresh delegated operations preserve their
-bindings.
+bindings. In a PR-comment session, the confirmation UI's "none — use tool
+default" effort choice is distinct from an unset value: retry and host-terminal
+recovery argv carry `--effort none` so a configured effort cannot return on the
+next launch.
 
 | Launch path | Site | Relaunch command it supplies |
 |---|---|---|
@@ -652,11 +655,10 @@ for `wade review plan`, the tracking issue for `wade review batch`). It withhold
 the hint entirely when it has no required operand: those base commands are
 rejected by Typer, and a line the user cannot paste is worse than no line — the
 same rule already applied to an unmapped command.
-`batch.py` deliberately has **no** check: it spawns child `wade implement`
-processes that reach the `core.py` check themselves, so one here would be a dead
-no-op implying coverage it does not add (pinned as source text in
-`test_batch_build_cmd.py`, since no behavioural assertion can distinguish "no
-check" from "a check that happens not to fire").
+Batch implementation diagnoses once in `implementation_service/batch.py` before
+it dispatches terminal brokers. Those brokers can start child shells without the
+enclosing process's diagnostic markers, so deferring solely to child `wade
+implement` processes can lose a known boundary and produce no remediation.
 
 **`DelegationResult.never_launched`** closes the gap that used to force hedged
 remediation: it is `True` only when no process ever started — an absent/unknown
@@ -675,6 +677,13 @@ adapter returns — the confirm prompt, the output-file read — is post-launch 
 position, whatever it raises. The headless path matters most — this repo configures
 `mode: headless` for `deps`, `review_plan` and `review_implementation`, and the
 receipt gate excludes `PROMPT` outright.
+
+`launch_attempted` is a separate structured boundary: it becomes true only after
+dispatch has passed validation and is about to call the process launcher. A
+preflight error can be `never_launched` without being a spawn attempt (for
+example, `Unknown AI tool: seatbelt`). Specific inherited-sandbox remediation
+therefore requires both that boundary and an actual denial-shaped spawn failure;
+user-controlled error text alone cannot choose the diagnosis.
 
 Failure text is matched against sandbox-denial *shapes*
 (`looks_like_sandbox_denial`) — permission/exec denials, read-only filesystems,

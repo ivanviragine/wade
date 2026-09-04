@@ -84,6 +84,13 @@ from wade.utils.terminal import (
 
 logger = structlog.get_logger()
 
+# ``None`` means no caller choice, which lets ``resolve_effort`` read config.
+# The review confirmation UI also offers a distinct "none — use tool default"
+# choice; its value must survive a wait/relaunch without being mistaken for the
+# unset case. This string is accepted by the same ``--effort`` option used in
+# the recovery command, but is private to this review-session handoff.
+_EXPLICIT_DEFAULT_EFFORT = "none"
+
 
 # ---------------------------------------------------------------------------
 # Simple subcommands — used by AI agents during review sessions
@@ -1151,12 +1158,16 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    resolved_effort = resolve_effort(
-        effort,
-        config,
-        "review_pr_comments",
-        tool=resolved_tool,
-        complexity=task.complexity.value if task.complexity else None,
+    resolved_effort = (
+        None
+        if effort_explicit and effort == _EXPLICIT_DEFAULT_EFFORT
+        else resolve_effort(
+            effort,
+            config,
+            "review_pr_comments",
+            tool=resolved_tool,
+            complexity=task.complexity.value if task.complexity else None,
+        )
     )
     initial_effort = resolved_effort
     resolved_permission_mode = resolve_permission_mode(
@@ -1225,9 +1236,10 @@ def start(
     # waits for a later review. Preserve a caller's explicit override, or an
     # actual change made in the confirmation UI, without promoting an implicit
     # default to an explicit argument.
+    retained_effort_explicit = effort_explicit or resolved_effort != initial_effort
     retained_effort = (
-        resolved_effort.value
-        if resolved_effort is not None and (effort_explicit or resolved_effort != initial_effort)
+        (resolved_effort.value if resolved_effort is not None else _EXPLICIT_DEFAULT_EFFORT)
+        if retained_effort_explicit
         else None
     )
 
@@ -1258,7 +1270,7 @@ def start(
                 ["wade", "review", "pr-comments", task.id],
                 ai_tool=resolved_tool,
                 model=resolved_model,
-                effort=resolved_effort.value if resolved_effort else None,
+                effort=retained_effort,
                 permission_mode=resolved_permission_mode,
             ),
         )
@@ -1411,7 +1423,7 @@ def start(
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 effort=retained_effort,
-                effort_explicit=retained_effort is not None,
+                effort_explicit=retained_effort_explicit,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,

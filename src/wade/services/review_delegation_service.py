@@ -681,20 +681,21 @@ def _report_failed_review(
     The remediation is graded by how much wade actually knows, because the value
     of the diagnosis is that it can be trusted:
 
-    1. a known-sandboxed parent **and** an unrestricted-profile mismatch **and**
-       a denial-shaped failure — state the cause and the exact relaunch command;
+    1. a known-sandboxed parent **and** an attempted unrestricted-profile mismatch
+       **and** a denial-shaped failure — state the cause and the exact relaunch
+       command;
     2. a denial-shaped failure with no signal from the runtime — offer it as a
        *possible* cause alongside today's hedged wording;
     3. anything else — today's hedged wording alone.
 
-    The denial shape and profile mismatch are both required in case 1. A known
-    boundary says the reviewer *could* have been denied, never that it *was*;
-    likewise, a compatible ``sandbox=True`` request did not ask wade to deliver
-    an unrestricted runtime. Without both, a configuration refusal that never
-    touched the OS (``Unknown AI tool``, ``No AI tool specified``) or a genuinely
-    uninstalled binary would be blamed on inaccessible host credentials and
-    would suppress the more useful generic remediation — a confident wrong
-    cause, which is worse than the hedged one it replaced (#481 review).
+    The denial shape, profile mismatch, and structured spawn-attempt boundary are
+    all required in case 1. A known boundary says the reviewer *could* have been
+    denied, never that it *was*; likewise, a compatible ``sandbox=True`` request
+    did not ask wade to deliver an unrestricted runtime. Without all three, a
+    configuration refusal that never touched the OS (``Unknown AI tool: seatbelt``)
+    could be blamed on inaccessible host credentials and suppress the more useful
+    generic remediation — a confident wrong cause, which is worse than the hedged
+    one it replaced (#481 review).
     """
     current_record = None
     if result.never_launched:
@@ -715,6 +716,7 @@ def _report_failed_review(
         denial_shaped
         and has_explicit_sandbox_denial(result.feedback)
         and result.inherited_sandbox_profile_mismatch
+        and result.launch_attempted
     ):
         logger.warning(
             "review.reviewer_never_launched",
