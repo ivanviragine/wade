@@ -14,6 +14,7 @@ from wade.models.session_manifest import (
     ReviewRecord,
 )
 from wade.models.workflow import DelegationKind
+from wade.utils.filelock import file_lock
 from wade.utils.safe_state import atomic_write_state_file, list_state_files, read_state_file
 
 _DIRECTORIES = ("reviews",)
@@ -95,20 +96,31 @@ def write_review_record(
         )
     except ValidationError:
         return None
-    existing = read_review_record(
-        root,
-        delegation=delegation,
-        commit=commit,
-        binding=binding,
-    )
-    if (
-        existing is not None
-        and _OUTCOME_PRECEDENCE[existing.outcome] >= _OUTCOME_PRECEDENCE[outcome]
-    ):
-        return existing
     filename = review_record_filename(delegation, commit, binding.digest)
     data = (json.dumps(candidate.model_dump(mode="json"), indent=2, sort_keys=True) + "\n").encode()
-    return candidate if atomic_write_state_file(root, _DIRECTORIES, filename, data) else None
+    # Atomic replacement prevents torn records, but not a lost update: two
+    # writers can each observe no record and the later UNATTEMPTED replacement
+    # can otherwise erase a REVIEWED receipt. Lock the entire read/compare/write
+    # transaction on this exact tuple so precedence is true across processes.
+    record_path = root / ".wade" / _DIRECTORIES[0] / filename
+    try:
+        with file_lock(record_path):
+            existing = read_review_record(
+                root,
+                delegation=delegation,
+                commit=commit,
+                binding=binding,
+            )
+            if (
+                existing is not None
+                and _OUTCOME_PRECEDENCE[existing.outcome] >= _OUTCOME_PRECEDENCE[outcome]
+            ):
+                return existing
+            return (
+                candidate if atomic_write_state_file(root, _DIRECTORIES, filename, data) else None
+            )
+    except OSError:
+        return None
 
 
 def list_review_records(root: Path) -> tuple[ReviewRecord, ...]:

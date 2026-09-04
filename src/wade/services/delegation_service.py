@@ -175,6 +175,7 @@ def delegate(request: DelegationRequest) -> DelegationResult:
             never_launched=True,
         )
     result.inherited_sandbox_profile_mismatch = profile_mismatch
+    result.relaunch_command = request.relaunch_command
     return result
 
 
@@ -457,17 +458,23 @@ def _delegate_interactive(
             never_launched=True,
         )
 
-    # Set up output file for the AI to write results to
+    # Set up output file for the AI to write results to. These are pre-launch
+    # filesystem operations too: a read-only temp directory must not escape as a
+    # traceback or be mistaken for an error from a child that never existed.
     output_file = request.output_file
     created_tmp = output_file is None
-    if output_file is None:
-        tmp_dir = tempfile.mkdtemp(prefix="wade-delegation-")
-        output_file = Path(tmp_dir) / "delegation-output.txt"
-    else:
-        tmp_dir = None
-        if not output_file.is_absolute():
-            output_file = session_cwd / output_file
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir: str | None = None
+    try:
+        if output_file is None:
+            tmp_dir = tempfile.mkdtemp(prefix="wade-delegation-")
+            output_file = Path(tmp_dir) / "delegation-output.txt"
+        else:
+            if not output_file.is_absolute():
+                output_file = session_cwd / output_file
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _interactive_failure(exc, launched=False)
+    assert output_file is not None
 
     # Append output instruction to prompt
     output_instruction = (

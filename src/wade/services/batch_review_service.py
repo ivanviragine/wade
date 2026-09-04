@@ -479,6 +479,7 @@ def run_coherence_review(
             # `wade review batch` takes the tracking issue as a required
             # argument, so the relaunch hint has to carry this batch's.
             relaunch_operand=ctx.tracking_issue,
+            relaunch_skills=skills,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))

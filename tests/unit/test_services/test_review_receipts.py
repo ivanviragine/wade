@@ -334,7 +334,38 @@ class TestUnattemptedReviewGate:
         assert "Codex CLI is sandboxed" in text
         assert "wade review implementation --no-sandbox" in text
         assert "No review-pass budget was consumed" in text
-        assert "unattempted audit record was written" in text
+        assert "could not confirm an unattempted review record" in text
+
+    def test_specific_failure_does_not_overstate_a_retained_reviewed_receipt(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A failed attempt cannot claim it wrote an unattempted record over success."""
+        write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit="a" * 40,
+            binding=review_preflight.binding,
+            outcome=ReviewOutcome.REVIEWED,
+        )
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        monkeypatch.setenv("CODEX_CLI", "1")
+
+        rds._report_failed_review(
+            tmp_path,
+            "a" * 40,
+            review_preflight,
+            self._never_launched(
+                "launch denied by sandbox policy", inherited_sandbox_profile_mismatch=True
+            ),
+        )
+
+        text = _cap(capsys)
+        assert "existing reviewed review record was retained" in text
+        assert "unattempted audit record was written" not in text
 
     def test_a_sandboxed_parent_still_needs_a_denial_shaped_failure(
         self,

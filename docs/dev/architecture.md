@@ -590,7 +590,8 @@ independent questions:
 | Is that session confined? | `assess_parent_sandbox()` → `SandboxAssessment` | Tri-state: `SANDBOXED` / `UNRESTRICTED` / `UNKNOWN`. |
 
 Keeping them independent matters in both directions: identity alone says nothing
-about confinement (Codex runs either way under the same `CODEX_CLI` marker), and
+about confinement (Codex runs either way under the canonical `CODEX_CLI`
+identity, including managed `CODEX_SESSION_ID` / `CODEX_THREAD_ID` aliases), and
 a sandbox signal is actionable even when the tool cannot be named.
 
 **`UNKNOWN` is a first-class answer, never a fallback to a guess.** The
@@ -610,7 +611,9 @@ only for *resolved profile unrestricted* **and** *parent known sandboxed*;
 `ai_resolution.announce_inherited_sandbox()` is the single user-facing emitter, so
 the paths cannot drift into four explanations of one boundary. It is **advisory,
 never a block** (wade cannot prove the delegated tool will fail) and says nothing
-at all on `UNKNOWN`.
+at all on `UNKNOWN`. A standalone-review recovery command preserves the resolved
+mode, tool, model, effort, permission mode, staged scope, and review-skill list;
+only its sandbox profile changes to `--no-sandbox`.
 
 | Launch path | Site | Relaunch command it supplies |
 |---|---|---|

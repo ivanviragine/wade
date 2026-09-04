@@ -34,7 +34,11 @@ from wade.services.delegation_service import (
     extended_timeout,
     resolve_mode,
 )
-from wade.services.review_record_service import count_binding_passes, write_review_record
+from wade.services.review_record_service import (
+    count_binding_passes,
+    read_review_record,
+    write_review_record,
+)
 from wade.services.skill_invocation_service import (
     PreparedDelegationMethod,
     SkillInvocationError,
@@ -147,14 +151,50 @@ _RELAUNCH_COMMANDS = {
 _RELAUNCH_OPERANDS_REQUIRED = frozenset({"review_plan", "review_batch"})
 
 
-def _relaunch_command(command: str, operand: str | None) -> str | None:
-    """The exact line that re-runs *command*, or ``None`` when it cannot be built."""
+def _relaunch_command(
+    command: str,
+    operand: str | None,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    mode: DelegationMode | None = None,
+    effort: str | None = None,
+    permission_mode: PermissionMode | None = None,
+    skills: list[str] | None = None,
+    staged: bool = False,
+) -> str | None:
+    """Build the exact host-terminal retry for this resolved review launch.
+
+    A retry hint must repeat the launch that failed, not merely name its review
+    operation: omitting ``--mode headless`` can turn a noninteractive operation
+    into a prompt, and omitting an explicit tool/model/skill can select a
+    different reviewer and binding. ``--no-sandbox`` intentionally supersedes
+    the original profile; every other value is the resolved value used here.
+    """
     base = _RELAUNCH_COMMANDS.get(command)
     if base is None:
         return None
+    if command in _RELAUNCH_OPERANDS_REQUIRED and not operand:
+        return None
+
+    argv = shlex.split(base)
+    if mode is not None:
+        argv.extend(("--mode", mode.value))
+    if ai_tool is not None:
+        argv.extend(("--ai", ai_tool))
+    if model is not None:
+        argv.extend(("--model", model))
+    if effort is not None:
+        argv.extend(("--effort", effort))
+    if permission_mode is not None:
+        argv.extend(("--permission-mode", permission_mode.value))
+    if staged:
+        argv.append("--staged")
+    for skill in skills or ():
+        argv.extend(("--skill", skill))
     if operand:
-        return f"{base} {shlex.quote(operand)}"
-    return None if command in _RELAUNCH_OPERANDS_REQUIRED else base
+        argv.append(operand)
+    return shlex.join(argv)
 
 
 def _run_review_delegation(
@@ -182,6 +222,8 @@ def _run_review_delegation(
     cwd: Path | None = None,
     trusted_dirs: list[str] | None = None,
     relaunch_operand: str | None = None,
+    relaunch_skills: list[str] | None = None,
+    relaunch_staged: bool = False,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
 
@@ -322,6 +364,21 @@ def _run_review_delegation(
     # early) rather than unsafe (runs long, gets killed).
     budget_line = _review_budget_line(delegation_mode, timeout)
     prompt = _merge_content(template, budget_line)
+    # Prompt mode never launches a child, so it cannot need sandbox recovery;
+    # retain its compact command shape for callers/tests that inspect requests.
+    relaunch_command = _relaunch_command(command, relaunch_operand)
+    if delegation_mode is not DelegationMode.PROMPT:
+        relaunch_command = _relaunch_command(
+            command,
+            relaunch_operand,
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            mode=delegation_mode,
+            effort=effort_str,
+            permission_mode=effective_permission_mode,
+            skills=relaunch_skills,
+            staged=relaunch_staged,
+        )
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
@@ -335,7 +392,7 @@ def _run_review_delegation(
         timeout=timeout,
         explicit_timeout=explicit_timeout,
         operation=_OPERATION_LABELS.get(command),
-        relaunch_command=_relaunch_command(command, relaunch_operand),
+        relaunch_command=relaunch_command,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
@@ -479,6 +536,7 @@ def review_plan(
             # `wade review plan` takes the plan path as a required argument, so
             # the relaunch hint has to carry the file this run was reviewing.
             relaunch_operand=plan_file,
+            relaunch_skills=skills,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
@@ -640,8 +698,18 @@ def _report_failed_review(
     would suppress the more useful generic remediation — a confident wrong
     cause, which is worse than the hedged one it replaced (#481 review).
     """
+    current_record = None
     if result.never_launched:
         _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
+        # The write may have failed or a higher-precedence receipt may have won;
+        # inspect what actually remains before describing persistence or gate
+        # state to the user.
+        current_record = read_review_record(
+            repo_root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=head,
+            binding=prepared.binding,
+        )
 
     parent = detect_parent_runtime()
     denial_shaped = result.never_launched and looks_like_sandbox_denial(result.feedback)
@@ -659,14 +727,27 @@ def _report_failed_review(
         # is the outcome, not a repeat of the advisory. Restating the command is
         # deliberate — the pre-launch line has scrolled past the reviewer's own
         # output by now.
+        if current_record is not None and current_record.outcome is ReviewOutcome.UNATTEMPTED:
+            receipt_state = (
+                "The current review record is unattempted, so it does not satisfy the review gate."
+            )
+        elif current_record is None:
+            receipt_state = (
+                "wade could not confirm an unattempted review record, so a satisfying "
+                "receipt is still required before the review gate can close."
+            )
+        else:
+            receipt_state = (
+                f"The existing {current_record.outcome.value} review record was retained; "
+                "its gate state is unchanged."
+            )
         console.warn(
             f"{parent.label} is sandboxed and the implementation review never started, "
             "so the reviewer could not reach its own host credentials from inside that "
-            "boundary. No review-pass budget was consumed; an unattempted audit record "
-            "was written, but it does not satisfy the review gate."
+            f"boundary. No review-pass budget was consumed; {receipt_state}"
         )
         console.hint(INHERITED_SANDBOX_HINT)
-        console.detail(_RELAUNCH_COMMANDS["review_implementation"])
+        console.detail(result.relaunch_command or _RELAUNCH_COMMANDS["review_implementation"])
         return
 
     console.warn(_HEDGED_REVIEW_FAILURE)
@@ -843,6 +924,8 @@ def review_implementation(
             method_section=prepared.method_section,
             input_label="Diff input",
             cwd=repo_root,
+            relaunch_skills=skills,
+            relaunch_staged=staged,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))

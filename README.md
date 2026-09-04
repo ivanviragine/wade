@@ -770,7 +770,9 @@ sandbox signals a runtime actually publishes (today: Codex's `CODEX_SANDBOX` and
 — a tool that *can* be sandboxed is not a tool that *is* sandboxed. When there is
 no signal the assessment is *unknown*, and WADE stays silent rather than
 asserting a cause it cannot support. A confident wrong diagnosis is worse than
-the opaque error it would replace.
+the opaque error it would replace. Managed Codex sessions are still recognised
+when they expose session/thread markers instead of the legacy `CODEX_CLI` marker;
+their displayed identity remains **Codex CLI**.
 
 **Troubleshooting order** when a delegated tool fails to launch:
 
@@ -890,7 +892,9 @@ both profiles for its GitHub lifecycle.
 Standalone `wade review plan`, `wade review implementation`, and `wade review
 batch` runs also accept `--sandbox` / `--no-sandbox`; an inherited-sandbox
 diagnosis gives the host-terminal relaunch command with `--no-sandbox` so it
-overrides an `ai.sandbox: true` configuration.
+overrides an `ai.sandbox: true` configuration. The command also preserves the
+selected review mode, tool, model, effort, permission mode, staged scope, and
+review-skill overrides so the retry reviews the same operation.
 For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
 the GitHub domains needed by the session rather than choosing unrestricted shell
 access. Copilot and VS Code need network plus usable `gh` credentials in their

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -132,6 +133,25 @@ def test_record_is_idempotent_promotable_and_never_downgraded(tmp_path: Path) ->
     )
     assert retained is not None and retained.outcome is ReviewOutcome.REVIEWED
     assert len(list_review_records(tmp_path)) == 1
+
+
+def test_record_precedence_holds_the_tuple_lock_for_the_complete_transaction(
+    tmp_path: Path,
+) -> None:
+    """An atomic replacement alone cannot prevent a read/compare/write race."""
+    binding = _binding("review-a")
+    filename = review_record_filename(DelegationKind.CODE_REVIEW, HEAD, binding.digest)
+    with patch("wade.services.review_record_service.file_lock") as lock:
+        record = write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=HEAD,
+            binding=binding,
+            outcome=ReviewOutcome.REVIEWED,
+        )
+
+    assert record is not None
+    lock.assert_called_once_with(tmp_path / ".wade" / "reviews" / filename)
 
 
 def test_no_diff_satisfies_without_consuming_a_pass(tmp_path: Path) -> None:

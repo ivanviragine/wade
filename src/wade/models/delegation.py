@@ -89,3 +89,7 @@ class DelegationResult(BaseModel):
     # the resolved launch context alongside the result so callers can avoid
     # attributing an unrelated never-started failure to the parent sandbox.
     inherited_sandbox_profile_mismatch: bool = False
+    # Copy the runnable remediation onto the result so a caller that reports a
+    # later launch failure can repeat the same fully-resolved command instead of
+    # falling back to a lossy operation-level default.
+    relaunch_command: str | None = None

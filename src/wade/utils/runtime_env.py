@@ -60,7 +60,10 @@ from pydantic import BaseModel
 _IDENTITY_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("CLAUDE_CODE", ("CLAUDE_CODE", "CLAUDE_CODE_ENTRYPOINT")),
     ("COPILOT_CLI", ("COPILOT_CLI",)),
-    ("CODEX_CLI", ("CODEX_CLI",)),
+    # Codex's managed runtime exports the session/thread markers rather than
+    # ``CODEX_CLI``. Keep the historical canonical key so all existing callers
+    # and messages still identify it as Codex CLI.
+    ("CODEX_CLI", ("CODEX_CLI", "CODEX_SESSION_ID", "CODEX_THREAD_ID")),
     ("CURSOR_CLI", ("CURSOR_CLI",)),
     ("ANTIGRAVITY_AGENT", ("ANTIGRAVITY_AGENT",)),
 )
@@ -82,6 +85,15 @@ CODEX_NETWORK_DISABLED_ENV = "CODEX_SANDBOX_NETWORK_DISABLED"
 #: Every variable this module reads for a *sandbox* verdict. Tests clear these so
 #: a suite run from inside a sandboxed runtime still assesses deterministically.
 SANDBOX_SIGNAL_ENV_VARS: tuple[str, ...] = (CODEX_SANDBOX_ENV, CODEX_NETWORK_DISABLED_ENV)
+
+#: Codex markers that identify an enclosing Codex runtime. Test setup clears
+#: these real-process markers so nested-launch tests stay deterministic when the
+#: suite itself runs in Codex.
+CODEX_IDENTITY_ENV_VARS: tuple[str, ...] = (
+    "CODEX_CLI",
+    "CODEX_SESSION_ID",
+    "CODEX_THREAD_ID",
+)
 
 # Values of ``CODEX_SANDBOX`` that name an explicitly *unconfined* mode. Anything
 # else non-empty is treated as confinement — the fail-safe direction, since a

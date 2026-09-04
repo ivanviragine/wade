@@ -739,6 +739,45 @@ class TestNeverLaunchedClassification:
         assert result.never_launched is True
         adapter.launch.assert_not_called()
 
+    def test_interactive_temp_directory_failure_never_launched(self) -> None:
+        """Output-path setup is before the spawn and must not escape as a traceback."""
+        adapter = MagicMock()
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.delegation_service.tempfile.mkdtemp",
+                side_effect=PermissionError("read-only temp directory"),
+            ),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+
+        assert result.success is False
+        assert result.never_launched is True
+        adapter.launch.assert_not_called()
+
+    def test_interactive_output_parent_failure_never_launched(self, tmp_path: Path) -> None:
+        """A requested output directory is another pre-launch filesystem boundary."""
+        adapter = MagicMock()
+        output_file = tmp_path / "locked" / "out.txt"
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch.object(Path, "mkdir", side_effect=PermissionError("read-only directory")),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(
+                    mode=DelegationMode.INTERACTIVE,
+                    prompt="p",
+                    ai_tool="claude",
+                    output_file=output_file,
+                )
+            )
+
+        assert result.success is False
+        assert result.never_launched is True
+        adapter.launch.assert_not_called()
+
     def test_interactive_nonzero_exit_from_a_blocking_adapter_did_launch(self) -> None:
         """A blocking adapter raises only *after* the session ran and failed.
 

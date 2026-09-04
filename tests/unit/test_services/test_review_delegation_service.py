@@ -1596,6 +1596,23 @@ class TestRelaunchCommand:
             == "wade review plan --no-sandbox 'my plan.md'"
         )
 
+    def test_resolved_launch_options_are_preserved(self) -> None:
+        assert rds._relaunch_command(
+            "review_implementation",
+            None,
+            mode=DelegationMode.HEADLESS,
+            ai_tool="claude",
+            model="sonnet",
+            effort="high",
+            permission_mode=PermissionMode.DEFAULT,
+            staged=True,
+            skills=["builtin:code-review", "project:strict"],
+        ) == (
+            "wade review implementation --no-sandbox --mode headless --ai claude "
+            "--model sonnet --effort high --permission-mode default --staged "
+            "--skill builtin:code-review --skill project:strict"
+        )
+
     @pytest.mark.parametrize("command", ["review_plan", "review_batch"])
     def test_a_missing_required_operand_withholds_the_hint(self, command: str) -> None:
         """Same rule as an unmapped command: no guess is better than a broken line."""

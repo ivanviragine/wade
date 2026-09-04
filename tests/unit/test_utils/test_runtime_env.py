@@ -38,6 +38,8 @@ class TestIdentityProbe:
             ("CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE"),
             ("COPILOT_CLI", "COPILOT_CLI"),
             ("CODEX_CLI", "CODEX_CLI"),
+            ("CODEX_SESSION_ID", "CODEX_CLI"),
+            ("CODEX_THREAD_ID", "CODEX_CLI"),
             ("CURSOR_CLI", "CURSOR_CLI"),
             ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_AGENT"),
         ],
