@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.0] — 2026-09-04
+
+### Features
+
+- diagnose sandboxed parent runtimes and keep review gates closed (#481) (4440220)
+
 ## [v1.0.0] — 2026-09-03
 
 ### Breaking Changes
