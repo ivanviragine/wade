@@ -657,8 +657,8 @@ def _report_failed_review(
         console.warn(
             f"{parent.label} is sandboxed and the implementation review never started, "
             "so the reviewer could not reach its own host credentials from inside that "
-            "boundary. No review-pass budget was consumed and no review receipt was "
-            "written."
+            "boundary. No review-pass budget was consumed; an unattempted audit record "
+            "was written, but it does not satisfy the review gate."
         )
         console.hint(INHERITED_SANDBOX_HINT)
         console.detail(_RELAUNCH_COMMANDS["review_implementation"])

@@ -311,6 +311,7 @@ class TestUnattemptedReviewGate:
         assert "Codex CLI is sandboxed" in text
         assert "wade review implementation --no-sandbox" in text
         assert "No review-pass budget was consumed" in text
+        assert "unattempted audit record was written" in text
 
     def test_a_sandboxed_parent_still_needs_a_denial_shaped_failure(
         self,

@@ -411,6 +411,25 @@ class TestTranscriptWiring:
 
             assert mock_rwt.call_args[0][1] == transcript
 
+    def test_spawn_permission_error_is_reported_as_a_failed_launch(self, tmp_path: Path) -> None:
+        """A sandbox denial at the exec boundary must not raise a raw traceback."""
+        with (
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch(
+                "wade.services.plan_service.run_with_transcript",
+                side_effect=PermissionError(13, "Permission denied"),
+            ),
+            patch("wade.services.plan_service.console.warn") as warn,
+        ):
+            adapter = MagicMock()
+            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
+            mock_get.return_value = adapter
+
+            result = run_ai_planning_session(ai_tool="claude", plan_dir=str(tmp_path))
+
+        assert result == 1
+        warn.assert_called_once_with("AI tool launch failed: [Errno 13] Permission denied")
+
     def test_no_transcript_path_passes_none(self, tmp_path: Path) -> None:
         """When transcript_path is None, run_with_transcript receives None."""
         with (
@@ -922,43 +941,6 @@ class TestPlanOrchestrator:
         assert not fallback_dir.exists()
         launch.assert_not_called()
         stop_keeper.assert_called_once()
-
-    def test_launch_failure_warns_and_cleans_up_fallback_temp_dir(self, tmp_path: Path) -> None:
-        """A denied planner launch must not surface as a raw traceback (#481 review)."""
-        provider = MagicMock()
-        fallback_dir = tmp_path / "wade-plan-fallback"
-        fallback_dir.mkdir()
-
-        with (
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, PermissionMode.DEFAULT),
-            ),
-            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("not a repo")),
-            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(fallback_dir)),
-            patch("wade.services.session_composition_service.compose_session"),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch(
-                "wade.services.plan_service.run_ai_planning_session",
-                side_effect=PermissionError(13, "Permission denied"),
-            ),
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
-            patch("wade.services.plan_service.console") as mock_console,
-        ):
-            assert plan(project_root=tmp_path) is False
-
-        assert not fallback_dir.exists()
-        stop_keeper.assert_called_once()
-        mock_console.warn.assert_any_call("AI tool launch failed: [Errno 13] Permission denied")
 
     def test_provider_setup_failure_removes_detached_planning_worktree(
         self, tmp_path: Path

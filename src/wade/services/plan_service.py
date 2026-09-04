@@ -343,6 +343,9 @@ def run_ai_planning_session(
         except FileNotFoundError:
             console.error(f"AI tool binary not found: {ai_tool}")
             return 1
+        except OSError as exc:
+            console.warn(f"AI tool launch failed: {exc}")
+            return 1
         return result.returncode
 
     # Check model compatibility — drop model if it's not valid for this tool
@@ -395,7 +398,15 @@ def run_ai_planning_session(
         cmd=" ".join(cmd),
     )
 
-    return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
+    # An ``OSError`` here means the process could not be spawned at all (for
+    # example, a parent sandbox denied executing a binary found on PATH). Keep
+    # that launch boundary narrow: exceptions after a planner has run must not
+    # be mistaken for a failed launch and cause generated plans to be discarded.
+    try:
+        return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
+    except OSError as exc:
+        console.warn(f"AI tool launch failed: {exc}")
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -687,30 +698,20 @@ def plan(
             else "wade plan --no-sandbox"
         ),
     )
-    try:
-        with _plan_dir_fallback_env(plan_dir, planning_worktree):
-            exit_code = run_ai_planning_session(
-                ai_tool=resolved_tool,
-                plan_dir=plan_dir,
-                model=resolved_model,
-                transcript_path=transcript_path,
-                issue_context=issue_context,
-                effort=resolved_effort,
-                allowed_commands=config.permissions.allowed_commands,
-                cwd=session_cwd,
-                permission_mode=resolved_permission_mode,
-                session_bundle=session_bundle,
-                sandbox=resolved_sandbox,
-            )
-    except Exception as exc:
-        # Command construction and exec failures happen before the planner can
-        # produce output. Report the concrete error and clean the throwaway
-        # workspace instead of turning an inherited-sandbox denial into a
-        # traceback (#481 review).
-        console.warn(f"AI tool launch failed: {exc}")
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
-        stop_title_keeper()
-        return False
+    with _plan_dir_fallback_env(plan_dir, planning_worktree):
+        exit_code = run_ai_planning_session(
+            ai_tool=resolved_tool,
+            plan_dir=plan_dir,
+            model=resolved_model,
+            transcript_path=transcript_path,
+            issue_context=issue_context,
+            effort=resolved_effort,
+            allowed_commands=config.permissions.allowed_commands,
+            cwd=session_cwd,
+            permission_mode=resolved_permission_mode,
+            session_bundle=session_bundle,
+            sandbox=resolved_sandbox,
+        )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
     # Non-blocking tools (VS Code, Antigravity) return immediately.
