@@ -431,6 +431,7 @@ def run_coherence_review(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     repo_root: Path | None = None,
     skills: list[str] | None = None,
     prepared_method: PreparedDelegationMethod | None = None,
@@ -470,6 +471,7 @@ def run_coherence_review(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             delegation_kind=DelegationKind.BATCH_REVIEW,
             method_section=prepared.method_section,
             input_label="Batch context",
@@ -520,6 +522,7 @@ def review_batch(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     project_root: Path | None = None,
     skills: list[str] | None = None,
 ) -> DelegationResult:
@@ -622,6 +625,7 @@ def review_batch(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             repo_root=repo_root,
             prepared_method=prepared_method,
         )

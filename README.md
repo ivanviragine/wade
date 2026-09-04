@@ -892,6 +892,10 @@ own host credentials; set `ai.sandbox: true` (or pass `--sandbox`) to keep
 `--sandbox workspace-write`, where WADE/crossby add only the linked worktree's
 private/common Git metadata directories. Every session has network access in
 both profiles for its GitHub lifecycle.
+Standalone `wade review plan`, `wade review implementation`, and `wade review
+batch` runs also accept `--sandbox` / `--no-sandbox`; an inherited-sandbox
+diagnosis gives the host-terminal relaunch command with `--no-sandbox` so it
+overrides an `ai.sandbox: true` configuration.
 For Claude Code and Cursor, allowlist the worktree/Git metadata paths and only
 the GitHub domains needed by the session rather than choosing unrestricted shell
 access. Copilot and VS Code need network plus usable `gh` credentials in their

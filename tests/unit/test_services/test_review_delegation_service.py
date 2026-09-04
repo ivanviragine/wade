@@ -24,6 +24,7 @@ from wade.services.review_delegation_service import (
     review_plan,
 )
 from wade.services.skill_invocation_service import PreparedDelegationMethod
+from wade.utils.runtime_env import ParentRuntime, SandboxAssessment
 
 
 def _prepared_method() -> PreparedDelegationMethod:
@@ -1575,13 +1576,13 @@ class TestRelaunchCommand:
 
     def test_a_command_with_no_operand_is_offered_bare(self) -> None:
         hint = rds._relaunch_command("review_implementation", None)
-        assert hint == "wade review implementation"
+        assert hint == "wade review implementation --no-sandbox"
 
     @pytest.mark.parametrize(
         ("command", "operand", "expected"),
         [
-            ("review_plan", "docs/plan.md", "wade review plan docs/plan.md"),
-            ("review_batch", "42", "wade review batch 42"),
+            ("review_plan", "docs/plan.md", "wade review plan --no-sandbox docs/plan.md"),
+            ("review_batch", "42", "wade review batch --no-sandbox 42"),
         ],
     )
     def test_a_required_operand_is_preserved(
@@ -1590,7 +1591,10 @@ class TestRelaunchCommand:
         assert rds._relaunch_command(command, operand) == expected
 
     def test_an_operand_with_spaces_is_quoted(self) -> None:
-        assert rds._relaunch_command("review_plan", "my plan.md") == "wade review plan 'my plan.md'"
+        assert (
+            rds._relaunch_command("review_plan", "my plan.md")
+            == "wade review plan --no-sandbox 'my plan.md'"
+        )
 
     @pytest.mark.parametrize("command", ["review_plan", "review_batch"])
     def test_a_missing_required_operand_withholds_the_hint(self, command: str) -> None:
@@ -1621,4 +1625,33 @@ class TestRelaunchCommand:
         review_plan(str(plan))
 
         request = mock_delegate.call_args[0][0]
-        assert request.relaunch_command == f"wade review plan {plan}"
+        assert request.relaunch_command == f"wade review plan --no-sandbox {plan}"
+
+
+class TestFailedReviewSandboxRemediation:
+    """Only an undeliverable unrestricted profile earns a sandbox diagnosis."""
+
+    def test_compatible_sandbox_profile_keeps_the_hedged_remediation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        result = DelegationResult(
+            success=False,
+            feedback="Permission denied",
+            mode=DelegationMode.HEADLESS,
+            never_launched=True,
+            inherited_sandbox_profile_mismatch=False,
+        )
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+        with (
+            patch("wade.services.review_delegation_service._record_binding_outcome"),
+            patch(
+                "wade.services.review_delegation_service.detect_parent_runtime",
+                return_value=parent,
+            ),
+            patch("wade.services.review_delegation_service.console") as mock_console,
+        ):
+            rds._report_failed_review(tmp_path, "a" * 40, _prepared_method(), result)
+
+        mock_console.warn.assert_called_once_with(rds._HEDGED_REVIEW_FAILURE)
+        mock_console.detail.assert_not_called()

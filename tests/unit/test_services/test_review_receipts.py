@@ -234,13 +234,18 @@ class TestUnattemptedReviewGate:
     """A reviewer that never started must leave every gate exactly as it was (#480)."""
 
     @staticmethod
-    def _never_launched(feedback: str = "Unknown AI tool: claude") -> DelegationResult:
+    def _never_launched(
+        feedback: str = "Unknown AI tool: claude",
+        *,
+        inherited_sandbox_profile_mismatch: bool = False,
+    ) -> DelegationResult:
         return DelegationResult(
             success=False,
             feedback=feedback,
             mode=DelegationMode.HEADLESS,
             exit_code=1,
             never_launched=True,
+            inherited_sandbox_profile_mismatch=inherited_sandbox_profile_mismatch,
         )
 
     def _run(
@@ -297,11 +302,14 @@ class TestUnattemptedReviewGate:
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         monkeypatch.setenv("CODEX_CLI", "1")
-        self._run(tmp_path, self._never_launched("permission denied"))
+        self._run(
+            tmp_path,
+            self._never_launched("permission denied", inherited_sandbox_profile_mismatch=True),
+        )
 
         text = _cap(capsys)
         assert "Codex CLI is sandboxed" in text
-        assert "wade review implementation" in text
+        assert "wade review implementation --no-sandbox" in text
         assert "No review-pass budget was consumed" in text
 
     def test_a_sandboxed_parent_still_needs_a_denial_shaped_failure(

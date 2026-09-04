@@ -133,9 +133,9 @@ _OPERATION_LABELS = {
     "review_batch": "the batch review",
 }
 _RELAUNCH_COMMANDS = {
-    "review_plan": "wade review plan",
-    "review_implementation": "wade review implementation",
-    "review_batch": "wade review batch",
+    "review_plan": "wade review plan --no-sandbox",
+    "review_implementation": "wade review implementation --no-sandbox",
+    "review_batch": "wade review batch --no-sandbox",
 }
 #: Commands whose CLI signature takes a **required** positional operand — the
 #: plan path for ``wade review plan``, the tracking issue for ``wade review
@@ -174,6 +174,7 @@ def _run_review_delegation(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     delegation_kind: DelegationKind | None = None,
     method_section: str = "",
     input_label: str = "Operation input",
@@ -247,7 +248,7 @@ def _run_review_delegation(
         )
         # The capability check waits until after the confirmation UI below,
         # which can still change the tool.
-        resolved_sandbox = resolve_sandbox(None, config, command)
+        resolved_sandbox = resolve_sandbox(sandbox, config, command)
 
         # Effective mode enforces the read-only headless *safety* rule
         # (delegation_service.py:126 forces DEFAULT for headless launches) — this
@@ -407,6 +408,7 @@ def review_plan(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     skills: list[str] | None = None,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
@@ -465,6 +467,7 @@ def review_plan(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             delegation_kind=DelegationKind.PLAN_REVIEW,
             method_section=prepared.method_section,
             input_label="Plan input",
@@ -621,26 +624,27 @@ def _report_failed_review(
     The remediation is graded by how much wade actually knows, because the value
     of the diagnosis is that it can be trusted:
 
-    1. a known-sandboxed parent **and** a denial-shaped failure — state the cause
-       and the exact relaunch command;
+    1. a known-sandboxed parent **and** an unrestricted-profile mismatch **and**
+       a denial-shaped failure — state the cause and the exact relaunch command;
     2. a denial-shaped failure with no signal from the runtime — offer it as a
        *possible* cause alongside today's hedged wording;
     3. anything else — today's hedged wording alone.
 
-    The denial shape is required in case 1, not implied by the sandbox: a known
-    boundary says the reviewer *could* have been denied, never that it *was*.
-    Without it, a configuration refusal that never touched the OS (``Unknown AI
-    tool``, ``No AI tool specified``) or a genuinely uninstalled binary would be
-    blamed on inaccessible host credentials and would suppress the more useful
-    generic remediation — a confident wrong cause, which is worse than the
-    hedged one it replaced (#481 review).
+    The denial shape and profile mismatch are both required in case 1. A known
+    boundary says the reviewer *could* have been denied, never that it *was*;
+    likewise, a compatible ``sandbox=True`` request did not ask wade to deliver
+    an unrestricted runtime. Without both, a configuration refusal that never
+    touched the OS (``Unknown AI tool``, ``No AI tool specified``) or a genuinely
+    uninstalled binary would be blamed on inaccessible host credentials and
+    would suppress the more useful generic remediation — a confident wrong
+    cause, which is worse than the hedged one it replaced (#481 review).
     """
     if result.never_launched:
         _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
 
     parent = detect_parent_runtime()
     denial_shaped = result.never_launched and looks_like_sandbox_denial(result.feedback)
-    if denial_shaped and parent.is_sandboxed:
+    if denial_shaped and result.inherited_sandbox_profile_mismatch:
         logger.warning(
             "review.reviewer_never_launched",
             parent=parent.env_var,
@@ -657,7 +661,7 @@ def _report_failed_review(
             "written."
         )
         console.hint(INHERITED_SANDBOX_HINT)
-        console.detail("wade review implementation")
+        console.detail(_RELAUNCH_COMMANDS["review_implementation"])
         return
 
     console.warn(_HEDGED_REVIEW_FAILURE)
@@ -678,6 +682,7 @@ def review_implementation(
     permission_mode: str | None = None,
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
+    sandbox: bool | None = None,
     skills: list[str] | None = None,
     ack_self_review: bool = False,
 ) -> DelegationResult:
@@ -693,10 +698,11 @@ def review_implementation(
         or effort_explicit
         or permission_mode_explicit
         or yolo is not None
+        or sandbox is not None
     ):
         message = (
             "--ack-self-review cannot be combined with AI launch, mode, effort, or "
-            "permission options"
+            "permission or sandbox options"
         )
         console.error(message)
         return DelegationResult(
@@ -827,6 +833,7 @@ def review_implementation(
             permission_mode=permission_mode,
             yolo=yolo,
             permission_mode_explicit=permission_mode_explicit,
+            sandbox=sandbox,
             delegation_kind=DelegationKind.CODE_REVIEW,
             method_section=prepared.method_section,
             input_label="Diff input",

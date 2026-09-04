@@ -831,10 +831,11 @@ class TestSharedParentSandboxCheck:
         """Centralising the check must not flatten the remediation into generic advice."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with patch("wade.ui.console.console") as mock_console:
-            delegate(self._sandboxed_request(operation, relaunch))
+            result = delegate(self._sandboxed_request(operation, relaunch))
 
         assert operation in str(mock_console.warn.call_args_list)
         mock_console.detail.assert_any_call(relaunch)
+        assert result.inherited_sandbox_profile_mismatch is True
 
     def test_an_unknown_parent_assessment_stays_silent(
         self, monkeypatch: pytest.MonkeyPatch
@@ -861,9 +862,10 @@ class TestSharedParentSandboxCheck:
             relaunch_command="wade review implementation",
         )
         with patch("wade.ui.console.console") as mock_console:
-            delegate(request)
+            result = delegate(request)
 
         assert mock_console.warn.call_count == 0
+        assert result.inherited_sandbox_profile_mismatch is False
 
     def test_prompt_mode_never_reaches_the_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Prompt mode starts no runtime, so no boundary applies to it."""

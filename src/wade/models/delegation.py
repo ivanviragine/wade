@@ -84,3 +84,8 @@ class DelegationResult(BaseModel):
     # disjunction of possible causes, and is why an unattempted review consumes
     # no review-pass budget and opens no gate (#480).
     never_launched: bool = False
+    # True only when an external runtime was requested with the unrestricted
+    # profile but is known to inherit a sandbox from its parent.  This records
+    # the resolved launch context alongside the result so callers can avoid
+    # attributing an unrelated never-started failure to the parent sandbox.
+    inherited_sandbox_profile_mismatch: bool = False

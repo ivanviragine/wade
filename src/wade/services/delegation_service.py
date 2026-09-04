@@ -116,7 +116,7 @@ def _parse_effort(raw: str | None) -> EffortLevel | None:
         return None
 
 
-def _warn_on_inherited_sandbox(request: DelegationRequest) -> None:
+def _warn_on_inherited_sandbox(request: DelegationRequest) -> bool:
     """Say up front when the requested profile cannot survive the parent sandbox.
 
     Deps, standalone plan/code review and batch review all funnel through
@@ -131,7 +131,7 @@ def _warn_on_inherited_sandbox(request: DelegationRequest) -> None:
     well succeed — so refusing to try would break sessions that work today. If it
     does fail, ``never_launched`` carries the classification onward.
     """
-    announce_inherited_sandbox(
+    return announce_inherited_sandbox(
         detect_parent_runtime(),
         resolved_sandbox=request.sandbox,
         operation=request.operation or "this delegated run",
@@ -146,20 +146,22 @@ def delegate(request: DelegationRequest) -> DelegationResult:
 
     # Every mode below starts an external runtime, so the parent boundary is
     # material from here on. Prompt mode launches nothing and is exempt.
-    _warn_on_inherited_sandbox(request)
+    profile_mismatch = _warn_on_inherited_sandbox(request)
 
     if request.mode == DelegationMode.HEADLESS:
-        return _delegate_headless(request)
-    if request.mode == DelegationMode.INTERACTIVE:
-        return _delegate_interactive(request)
-
-    return DelegationResult(
-        success=False,
-        feedback=f"Unknown delegation mode: {request.mode}",
-        mode=request.mode,
-        exit_code=1,
-        never_launched=True,
-    )
+        result = _delegate_headless(request)
+    elif request.mode == DelegationMode.INTERACTIVE:
+        result = _delegate_interactive(request)
+    else:
+        result = DelegationResult(
+            success=False,
+            feedback=f"Unknown delegation mode: {request.mode}",
+            mode=request.mode,
+            exit_code=1,
+            never_launched=True,
+        )
+    result.inherited_sandbox_profile_mismatch = profile_mismatch
+    return result
 
 
 def _delegate_prompt(request: DelegationRequest) -> DelegationResult:

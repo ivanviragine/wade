@@ -629,11 +629,12 @@ batch review (via `review_delegation_service`) all funnel through the one
 Centralising costs per-operation context, which is why the remediation fields
 ride on `DelegationRequest` — generic advice would defeat the purpose. The
 command is built by `review_delegation_service._relaunch_command()`, which
-appends the operation's own **required positional operand** (the plan path for
-`wade review plan`, the tracking issue for `wade review batch`) and withholds the
-hint entirely when it has none: those base commands are rejected by Typer, and a
-line the user cannot paste is worse than no line — the same rule already applied
-to an unmapped command.
+forces `--no-sandbox` (so the host-terminal retry overrides any sandboxed config)
+and appends the operation's own **required positional operand** (the plan path
+for `wade review plan`, the tracking issue for `wade review batch`). It withholds
+the hint entirely when it has no required operand: those base commands are
+rejected by Typer, and a line the user cannot paste is worse than no line — the
+same rule already applied to an unmapped command.
 `batch.py` deliberately has **no** check: it spawns child `wade implement`
 processes that reach the `core.py` check themselves, so one here would be a dead
 no-op implying coverage it does not add (pinned as source text in
