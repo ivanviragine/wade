@@ -480,6 +480,12 @@ def address_reviews_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
@@ -495,6 +501,7 @@ def address_reviews_cmd(
         target=target,
         ai=ai,
         model=model,
+        effort=effort,
         detach=detach,
         yolo=yolo,
         permission_mode=permission_mode,
@@ -677,6 +684,12 @@ def reviews_alias(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
@@ -692,6 +705,7 @@ def reviews_alias(
         target=target,
         ai=ai,
         model=model,
+        effort=effort,
         detach=detach,
         yolo=yolo,
         permission_mode=permission_mode,

@@ -1249,8 +1249,6 @@ def start(
                 model=resolved_model,
                 effort=resolved_effort.value if resolved_effort else None,
                 permission_mode=resolved_permission_mode,
-                skills=work_skills,
-                review_skills=review_skills,
             ),
         )
     if detected_env:
@@ -1401,6 +1399,8 @@ def start(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
+                effort=resolved_effort.value if resolved_effort else None,
+                effort_explicit=resolved_effort is not None,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,
@@ -1426,6 +1426,8 @@ def start(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
             sandbox=sandbox,
@@ -1623,6 +1625,8 @@ def _post_review_lifecycle(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     sandbox: bool | None = None,
@@ -1630,18 +1634,9 @@ def _post_review_lifecycle(
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
 
-    Effort is intentionally *not* threaded through here (#389). A review session
-    never carries an explicit effort — ``wade review pr-comments`` has no
-    ``--effort`` flag and the post-``done`` auto-launch never passes one — so on a
-    "wait for new reviews" re-launch the recursed ``start()`` re-resolves effort
-    from ``ai.review_pr_comments.effort`` (config governs). That matches how a
-    non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
-
-    ``sandbox`` *is* threaded (unlike effort): ``wade review pr-comments``
-    has a ``--sandbox`` / ``--no-sandbox`` flag, so an explicit profile must
-    survive a "wait for new reviews" re-launch rather than re-resolve to config.
-    ``None`` (unset) still re-resolves, matching the non-explicit
-    ``permission_mode`` path.
+    Explicit effort and sandbox selections must survive a "wait for new
+    reviews" re-launch rather than re-resolving from configuration. ``None``
+    (unset) still re-resolves, matching the non-explicit permission-mode path.
     """
     from wade.ui import prompts
 
@@ -1697,6 +1692,8 @@ def _post_review_lifecycle(
                     detach=detach,
                     ai_explicit=ai_explicit,
                     model_explicit=model_explicit,
+                    effort=effort,
+                    effort_explicit=effort_explicit,
                     permission_mode=permission_mode,
                     permission_mode_explicit=permission_mode_explicit,
                     sandbox=sandbox,
@@ -1714,6 +1711,8 @@ def _post_review_lifecycle(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
+                effort=effort,
+                effort_explicit=effort_explicit,
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,

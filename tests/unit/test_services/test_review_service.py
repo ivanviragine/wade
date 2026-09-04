@@ -716,6 +716,33 @@ class TestReviewServiceStart:
 
         assert mock_start.call_args.kwargs["sandbox"] is False
 
+    def test_post_lifecycle_relaunch_forwards_confirmed_effort(self, tmp_path: Path) -> None:
+        """A review re-launch keeps the effort selected in the first session."""
+        from wade.services.review_service import PollOutcome
+
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", return_value=1),
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_start,
+        ):
+            _post_review_lifecycle(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path,
+                99,
+                MagicMock(),
+                effort="high",
+                effort_explicit=True,
+            )
+
+        assert mock_start.call_args.kwargs["effort"] == "high"
+        assert mock_start.call_args.kwargs["effort_explicit"] is True
+
     def test_resolves_worktree_by_issue_when_title_drifted(
         self, mock_setup: dict[str, MagicMock]
     ) -> None:
@@ -936,7 +963,11 @@ class TestReviewServiceStart:
             # patching the importing module would miss it.
             patch("wade.ui.console.console") as mock_console,
         ):
-            result = start(target="42")
+            result = start(
+                target="42",
+                work_skills=["project:implementation-method"],
+                review_skills=["project:closing-review"],
+            )
 
         assert result is True
         assert "Codex CLI" in str(mock_console.warn.call_args_list)
@@ -2758,6 +2789,8 @@ class TestPostReviewLifecycle:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
+            effort=None,
+            effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
             sandbox=None,
@@ -2793,6 +2826,8 @@ class TestPostReviewLifecycle:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
+            effort=None,
+            effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
             sandbox=None,
@@ -2829,6 +2864,8 @@ class TestPostReviewLifecycle:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
+            effort="high",
+            effort_explicit=True,
             permission_mode="yolo",
         )
         mock_merge.assert_not_called()
@@ -2840,6 +2877,8 @@ class TestPostReviewLifecycle:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
+            effort="high",
+            effort_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
             sandbox=None,

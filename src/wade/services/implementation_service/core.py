@@ -971,8 +971,6 @@ def start(
                 model=resolved_model,
                 effort=resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None,
                 permission_mode=resolved_permission_mode,
-                skills=work_skills,
-                review_skills=review_skills,
             )
             logger.warning(
                 "implementation.unrestricted_handoff_requires_host_terminal",

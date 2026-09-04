@@ -617,9 +617,11 @@ the paths cannot drift into four explanations of one boundary. It is **advisory,
 never a block** (wade cannot prove the delegated tool will fail) and says nothing
 at all on `UNKNOWN`. Host-terminal recovery commands are built as quoted argv,
 then displayed literally, preserving each operation's supported resolved tool,
-model, effort, permission mode, and methodology bindings (plus review mode and
-staged scope where applicable); only the sandbox profile changes to
-`--no-sandbox`.
+model, effort, and permission mode (plus review mode and staged scope where
+applicable); only the sandbox profile changes to `--no-sandbox`.
+Session-based implementation and PR-comment retries omit method overrides and
+reuse the existing frozen bundle; fresh delegated operations preserve their
+bindings.
 
 | Launch path | Site | Relaunch command it supplies |
 |---|---|---|

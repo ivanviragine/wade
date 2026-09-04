@@ -761,9 +761,12 @@ can (or says **the enclosing AI runtime** when an identity marker is absent) and
 prints the exact command to re-run — on implementation, plan,
 PR-comment review, and every delegated operation (dependency analysis, plan/code
 review, batch review). That command preserves the resolved tool, model, effort,
-permission mode, and relevant method bindings; only the sandbox profile changes
-to `--no-sandbox`. It warns and proceeds rather than blocking: a delegated tool
-whose credentials happen to be reachable from inside the sandbox may still
+and permission mode; only the sandbox profile changes to `--no-sandbox`.
+Implementation and PR-comment retries reuse their frozen method bindings rather
+than repeating `--skill` / `--review-skill` flags, while fresh delegated
+operations carry their requested bindings. It warns and proceeds rather than
+blocking: a delegated tool whose credentials happen to be reachable from inside
+the sandbox may still
 succeed, so refusing to try would break sessions that work today.
 
 Detection is deliberately **best-effort and conservative**. WADE reads only

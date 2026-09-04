@@ -247,13 +247,18 @@ class TestImplementationLaunchContext:
     def test_sandboxed_handoff_does_not_claim_a_child_can_become_permissive(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The host command, not a child flag, is the only permissive remedy."""
+        """The host command relies on the already-frozen session bindings."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with (
             _driven_start(worktree, detected_env="CODEX_CLI") as spy,
             patch(f"{_CORE}.console") as mock_console,
         ):
-            result = start(target="42", plan_handoff=True)
+            result = start(
+                target="42",
+                plan_handoff=True,
+                work_skills=["project:implementation-method"],
+                review_skills=["project:closing-review"],
+            )
 
         assert result.success is False
         spy.build_launch_command.assert_not_called()
