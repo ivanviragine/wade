@@ -1558,3 +1558,67 @@ class TestReviewBudgetPlaceholder:
         assert "No hard deadline" in call_args.prompt
         # Exactly one substituted budget line, not zero and not a corrupted mix.
         assert call_args.prompt.count("No hard deadline") == 1
+
+
+# ---------------------------------------------------------------------------
+# Relaunch commands offered as sandbox remediation
+# ---------------------------------------------------------------------------
+
+
+class TestRelaunchCommand:
+    """A hint the user cannot paste is worse than no hint (#481 review).
+
+    ``wade review plan`` and ``wade review batch`` both take a required
+    positional operand, so the base command alone is rejected by Typer — the
+    remediation must carry the operand of the run that just failed.
+    """
+
+    def test_a_command_with_no_operand_is_offered_bare(self) -> None:
+        hint = rds._relaunch_command("review_implementation", None)
+        assert hint == "wade review implementation"
+
+    @pytest.mark.parametrize(
+        ("command", "operand", "expected"),
+        [
+            ("review_plan", "docs/plan.md", "wade review plan docs/plan.md"),
+            ("review_batch", "42", "wade review batch 42"),
+        ],
+    )
+    def test_a_required_operand_is_preserved(
+        self, command: str, operand: str, expected: str
+    ) -> None:
+        assert rds._relaunch_command(command, operand) == expected
+
+    def test_an_operand_with_spaces_is_quoted(self) -> None:
+        assert rds._relaunch_command("review_plan", "my plan.md") == "wade review plan 'my plan.md'"
+
+    @pytest.mark.parametrize("command", ["review_plan", "review_batch"])
+    def test_a_missing_required_operand_withholds_the_hint(self, command: str) -> None:
+        """Same rule as an unmapped command: no guess is better than a broken line."""
+        assert rds._relaunch_command(command, None) is None
+
+    def test_an_unmapped_command_is_still_none(self) -> None:
+        assert rds._relaunch_command("deps", "12") is None
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_review_plan_forwards_the_plan_path(
+        self,
+        mock_config: MagicMock,
+        mock_template: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        plan = tmp_path / "plan.md"
+        plan.write_text("# Plan", encoding="utf-8")
+        mock_config.return_value = _review_config(review_plan_enabled=True)
+        mock_template.return_value = "Review this plan."
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        review_plan(str(plan))
+
+        request = mock_delegate.call_args[0][0]
+        assert request.relaunch_command == f"wade review plan {plan}"

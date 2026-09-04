@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import ClassVar
 
@@ -478,11 +480,20 @@ class TestReviewImplementationCommand:
 class TestInheritedSandboxReviewContract:
     """`wade review implementation` inside a sandboxed parent runtime (#480).
 
-    The reviewer here cannot start at all — ``vscode`` exposes no headless mode,
-    so the capability guard returns before any process exists. That is the same
-    "never launched" class an inherited sandbox produces, and it is the one
-    failure vector reproducible without depending on which binaries happen to sit
-    on the runner's PATH.
+    Two "never launched" shapes are exercised, because they must not be reported
+    the same way:
+
+    - a **denial-shaped spawn failure** — a ``claude`` on PATH that resolves but
+      cannot be executed, which is what an inherited sandbox looks like at the
+      point of failure. This is the only shape that earns the confident,
+      runtime-naming diagnosis.
+    - a **capability refusal** — ``vscode`` exposes no headless mode, so the
+      guard returns before any process exists. Nothing touched the OS, so the
+      sandbox must not be blamed even when the parent is known to be sandboxed
+      (#481 review).
+
+    Both are reproducible without depending on which binaries happen to sit on
+    the runner's PATH.
     """
 
     _SANDBOXED_PARENT: ClassVar[dict[str, str]] = {
@@ -495,7 +506,35 @@ class TestInheritedSandboxReviewContract:
         app_file.write_text('print("inherited sandbox review")\n', encoding="utf-8")
         _git(["add", str(app_file.relative_to(e2e_repo))], cwd=e2e_repo)
 
-    def _review(self, e2e_repo: Path, env: dict[str, str]) -> str:
+    def _blocked_claude_env(self, mock_gh_cli: MockGhCli) -> dict[str, str]:
+        """Sandboxed parent + a ``claude`` that resolves on PATH but cannot be exec'd.
+
+        Exec fails with ``EACCES``, so the failure text carries "permission
+        denied" — the denial shape wade requires before attributing a failed
+        review to the parent sandbox.
+
+        PATH is narrowed to the mocked bin plus the directories this run genuinely
+        needs (``wade`` itself and ``git``), because the exec search does *not*
+        stop at the first candidate: with the ambient PATH intact, a real
+        ``claude`` further along it would be found and actually run.
+        """
+        mock_bin = mock_gh_cli["mock_bin"]
+        blocked = mock_bin / "claude"
+        blocked.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        blocked.chmod(0o644)
+
+        required = [str(mock_bin)]
+        for binary in ("wade", "git"):
+            resolved = shutil.which(binary)
+            assert resolved is not None, f"{binary} must be on PATH for this contract to run"
+            required.append(str(Path(resolved).parent))
+        path = os.pathsep.join([*required, "/usr/bin", "/bin"])
+        assert shutil.which("claude", path=path) is None, (
+            "an executable claude on the narrowed PATH would run for real"
+        )
+        return {**self._SANDBOXED_PARENT, "PATH": path}
+
+    def _review(self, e2e_repo: Path, env: dict[str, str], ai: str = "vscode") -> str:
         result = _run(
             [
                 "review",
@@ -504,7 +543,7 @@ class TestInheritedSandboxReviewContract:
                 "--mode",
                 "headless",
                 "--ai",
-                "vscode",
+                ai,
             ],
             cwd=e2e_repo,
             env=env,
@@ -517,13 +556,32 @@ class TestInheritedSandboxReviewContract:
         mock_gh_cli: MockGhCli,
     ) -> None:
         self._stage_a_change(e2e_repo)
+        env = self._blocked_claude_env(mock_gh_cli)
 
-        output = " ".join(self._review(e2e_repo, self._SANDBOXED_PARENT).split())
+        output = " ".join(self._review(e2e_repo, env, ai="claude").split())
 
         # Not a category of problem — the runtime by name, and the line to type.
         assert "Codex CLI is sandboxed" in output
         assert "wade review implementation" in output
         assert "No review-pass budget was consumed" in output
+
+    def test_a_capability_refusal_is_not_blamed_on_the_sandbox(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """The parent is sandboxed, but this reviewer never reached the OS.
+
+        ``vscode`` has no headless mode; wade refused before spawning anything.
+        Attributing that to inaccessible host credentials would be a confident
+        wrong cause and would hide the remediation that actually applies.
+        """
+        self._stage_a_change(e2e_repo)
+
+        output = " ".join(self._review(e2e_repo, self._SANDBOXED_PARENT).split())
+
+        assert "Codex CLI is sandboxed and the implementation review never started" not in output
+        assert "Review did not complete, so no review-pass budget was consumed." in output
 
     def test_the_gate_stays_closed_with_an_unattempted_record(
         self,

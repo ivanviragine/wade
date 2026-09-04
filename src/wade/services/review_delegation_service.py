@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -136,6 +137,23 @@ _RELAUNCH_COMMANDS = {
     "review_implementation": "wade review implementation",
     "review_batch": "wade review batch",
 }
+#: Commands whose CLI signature takes a **required** positional operand — the
+#: plan path for ``wade review plan``, the tracking issue for ``wade review
+#: batch`` (see ``cli/review.py``). The base command alone is rejected by Typer,
+#: so it is never offered as remediation: the caller must supply the operand that
+#: re-runs *this* operation, or the hint is withheld under the same rule as an
+#: unmapped command (#481 review).
+_RELAUNCH_OPERANDS_REQUIRED = frozenset({"review_plan", "review_batch"})
+
+
+def _relaunch_command(command: str, operand: str | None) -> str | None:
+    """The exact line that re-runs *command*, or ``None`` when it cannot be built."""
+    base = _RELAUNCH_COMMANDS.get(command)
+    if base is None:
+        return None
+    if operand:
+        return f"{base} {shlex.quote(operand)}"
+    return None if command in _RELAUNCH_OPERANDS_REQUIRED else base
 
 
 def _run_review_delegation(
@@ -161,6 +179,7 @@ def _run_review_delegation(
     input_label: str = "Operation input",
     cwd: Path | None = None,
     trusted_dirs: list[str] | None = None,
+    relaunch_operand: str | None = None,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
 
@@ -314,7 +333,7 @@ def _run_review_delegation(
         timeout=timeout,
         explicit_timeout=explicit_timeout,
         operation=_OPERATION_LABELS.get(command),
-        relaunch_command=_RELAUNCH_COMMANDS.get(command),
+        relaunch_command=_relaunch_command(command, relaunch_operand),
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
@@ -453,6 +472,9 @@ def review_plan(
             trusted_dirs=(
                 [str(binding_root)] if binding_root.resolve() != review_cwd.resolve() else None
             ),
+            # `wade review plan` takes the plan path as a required argument, so
+            # the relaunch hint has to carry the file this run was reviewing.
+            relaunch_operand=plan_file,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
@@ -599,16 +621,26 @@ def _report_failed_review(
     The remediation is graded by how much wade actually knows, because the value
     of the diagnosis is that it can be trusted:
 
-    1. a known-sandboxed parent — state the cause and the exact relaunch command;
+    1. a known-sandboxed parent **and** a denial-shaped failure — state the cause
+       and the exact relaunch command;
     2. a denial-shaped failure with no signal from the runtime — offer it as a
        *possible* cause alongside today's hedged wording;
     3. anything else — today's hedged wording alone.
+
+    The denial shape is required in case 1, not implied by the sandbox: a known
+    boundary says the reviewer *could* have been denied, never that it *was*.
+    Without it, a configuration refusal that never touched the OS (``Unknown AI
+    tool``, ``No AI tool specified``) or a genuinely uninstalled binary would be
+    blamed on inaccessible host credentials and would suppress the more useful
+    generic remediation — a confident wrong cause, which is worse than the
+    hedged one it replaced (#481 review).
     """
     if result.never_launched:
         _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
 
     parent = detect_parent_runtime()
-    if result.never_launched and parent.is_sandboxed:
+    denial_shaped = result.never_launched and looks_like_sandbox_denial(result.feedback)
+    if denial_shaped and parent.is_sandboxed:
         logger.warning(
             "review.reviewer_never_launched",
             parent=parent.env_var,
@@ -629,7 +661,7 @@ def _report_failed_review(
         return
 
     console.warn(_HEDGED_REVIEW_FAILURE)
-    if result.never_launched and looks_like_sandbox_denial(result.feedback):
+    if denial_shaped:
         console.hint(possible_inherited_sandbox_cause(parent))
 
 

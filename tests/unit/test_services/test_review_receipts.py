@@ -304,6 +304,29 @@ class TestUnattemptedReviewGate:
         assert "wade review implementation" in text
         assert "No review-pass budget was consumed" in text
 
+    def test_a_sandboxed_parent_still_needs_a_denial_shaped_failure(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A known boundary says the reviewer *could* be denied, never that it was.
+
+        ``Unknown AI tool`` is a configuration refusal that never touched the OS.
+        Blaming it on inaccessible host credentials would be a confident wrong
+        cause, and would suppress the generic remediation that actually helps.
+        """
+        for name in ("CLAUDE_CODE", "CLAUDE_CODE_ENTRYPOINT", "COPILOT_CLI"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        monkeypatch.setenv("CODEX_CLI", "1")
+        self._run(tmp_path, self._never_launched("Unknown AI tool: claude"))
+
+        text = _cap(capsys)
+        assert "is sandboxed" not in text
+        assert " ".join(rds._HEDGED_REVIEW_FAILURE.split()) in text
+
     def test_an_unknown_parent_keeps_the_hedged_wording_verbatim(
         self,
         tmp_path: Path,

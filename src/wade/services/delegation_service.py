@@ -384,6 +384,28 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
     return _timeout_result(partial)
 
 
+def _interactive_failure(exc: Exception, *, launched: bool) -> DelegationResult:
+    """A failed interactive delegation, classified by whether a child ever existed.
+
+    ``launched`` is the caller's judgement about the *launch boundary*, not about
+    whether the AI session succeeded: a session that started and then failed is
+    still an attempted one, and must never be reported as never-launched (that
+    would record an ``UNATTEMPTED`` review outcome and offer sandbox-relaunch
+    advice for a reviewer that actually ran).
+    """
+    return DelegationResult(
+        success=False,
+        feedback=(
+            f"Interactive session failed after launch: {exc}"
+            if launched
+            else f"AI tool launch failed: {exc}"
+        ),
+        mode=DelegationMode.INTERACTIVE,
+        exit_code=1,
+        never_launched=not launched,
+    )
+
+
 def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     """Launch AI interactively; block until done; read output from file."""
     session_cwd = request.cwd or Path.cwd()
@@ -433,28 +455,48 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     elif str(output_file.parent) not in trusted:
         trusted.append(str(output_file.parent))
 
-    # Everything below shares one exception handler, but only the part before the
-    # adapter returns is a *launch* failure. Reading the output file can raise
-    # ``OSError`` too, and a session that ran and then lost its output has very
-    # much been attempted — classifying it as never-launched would spend the
-    # user's trust on wrong remediation.
-    launched = False
+    # Only a failure *before the child process exists* is a launch failure, and
+    # the distinction decides the remediation: a reviewer that never started
+    # earns "restore the runtime", one that ran and then failed must not. Two
+    # things separate them here — where the failing call sits, and the shape of
+    # the exception:
+    #
+    # - Anything up to and including the spawn that raises ``OSError`` (missing
+    #   binary, denied exec, unwritable artefact) started nothing.
+    # - ``adapter.launch`` *blocks until the child exits* for most runtimes, so
+    #   an adapter that checks the exit status raises ``CalledProcessError`` —
+    #   and a bounded one ``TimeoutExpired`` — from a session that very much ran.
+    #   Every ``subprocess.SubprocessError`` variant carries a child that was
+    #   created, so it is classified as launched even though the call never
+    #   returned (#481 review).
+    # - Everything after the adapter returns (the confirm prompt, reading the
+    #   output file) is post-launch by position, whatever it raises.
     try:
-        deliver_prompt_if_needed(adapter, interactive_prompt)
-        adapter.launch(
-            working_dir=session_cwd,
-            model=request.model,
-            prompt=interactive_prompt,
-            trusted_dirs=trusted,
-            allowed_commands=request.allowed_commands or None,
-            effort=_parse_effort(request.effort),
-            # Same as the headless path: grant a linked worktree's git metadata
-            # for sandboxed git writes, and inherit the caller's profile.
-            network_access=LAUNCH_NETWORK_ACCESS,
-            sandbox=request.sandbox,
-            **permission_mode_launch_kwargs(request.permission_mode),
-        )
-        launched = True
+        try:
+            deliver_prompt_if_needed(adapter, interactive_prompt)
+        except (OSError, subprocess.SubprocessError) as e:
+            # Clipboard fallback for tools without initial-message support; it
+            # runs entirely before the spawn, so nothing has started yet.
+            return _interactive_failure(e, launched=False)
+
+        try:
+            adapter.launch(
+                working_dir=session_cwd,
+                model=request.model,
+                prompt=interactive_prompt,
+                trusted_dirs=trusted,
+                allowed_commands=request.allowed_commands or None,
+                effort=_parse_effort(request.effort),
+                # Same as the headless path: grant a linked worktree's git metadata
+                # for sandboxed git writes, and inherit the caller's profile.
+                network_access=LAUNCH_NETWORK_ACCESS,
+                sandbox=request.sandbox,
+                **permission_mode_launch_kwargs(request.permission_mode),
+            )
+        except OSError as e:
+            return _interactive_failure(e, launched=False)
+        except subprocess.SubprocessError as e:
+            return _interactive_failure(e, launched=True)
 
         # Non-blocking tools return immediately — wait for user
         if not adapter.capabilities().blocks_until_exit:
@@ -485,17 +527,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             exit_code=1,
         )
     except (OSError, subprocess.SubprocessError) as e:
-        return DelegationResult(
-            success=False,
-            feedback=(
-                f"AI tool launch failed: {e}"
-                if not launched
-                else f"Interactive session failed after launch: {e}"
-            ),
-            mode=DelegationMode.INTERACTIVE,
-            exit_code=1,
-            never_launched=not launched,
-        )
+        return _interactive_failure(e, launched=True)
     finally:
         if created_tmp and tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)

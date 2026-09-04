@@ -723,12 +723,57 @@ class TestNeverLaunchedClassification:
             )
         assert result.never_launched is True
 
+    def test_interactive_prompt_delivery_failure_never_launched(self) -> None:
+        """Clipboard fallback runs before the spawn, so its failure started nothing."""
+        adapter = MagicMock()
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.delegation_service.deliver_prompt_if_needed",
+                side_effect=subprocess.CalledProcessError(1, ["pbcopy"]),
+            ),
+        ):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.never_launched is True
+        adapter.launch.assert_not_called()
+
+    def test_interactive_nonzero_exit_from_a_blocking_adapter_did_launch(self) -> None:
+        """A blocking adapter raises only *after* the session ran and failed.
+
+        ``adapter.launch`` blocks until the child exits, so an adapter that
+        checks the exit status raises ``CalledProcessError`` from a reviewer that
+        very much started. Reporting that as never-launched would record an
+        ``UNATTEMPTED`` outcome and offer sandbox-relaunch advice for a session
+        the user watched run.
+        """
+        adapter = MagicMock()
+        adapter.launch.side_effect = subprocess.CalledProcessError(3, ["claude"])
+        with patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.success is False
+        assert result.never_launched is False
+        assert "after launch" in result.feedback
+
+    def test_interactive_launch_timeout_did_launch(self) -> None:
+        """``TimeoutExpired`` likewise carries a child that was created."""
+        adapter = MagicMock()
+        adapter.launch.side_effect = subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
+        with patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter):
+            result = _delegate_interactive(
+                DelegationRequest(mode=DelegationMode.INTERACTIVE, prompt="p", ai_tool="claude")
+            )
+        assert result.never_launched is False
+
     def test_interactive_failure_after_launch_did_launch(self, tmp_path: Path) -> None:
         """An output file that cannot be read is not a launch failure.
 
         The launch and the post-session read share one exception handler, so
-        without the explicit ``launched`` flag a session that ran to completion
-        and then lost its output would be reported as never having started.
+        without the explicit launch-boundary split a session that ran to
+        completion and then lost its output would be reported as never started.
         """
         adapter = MagicMock()
         adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
@@ -770,8 +815,10 @@ class TestSharedParentSandboxCheck:
         ("operation", "relaunch"),
         [
             ("the implementation review", "wade review implementation"),
-            ("the plan review", "wade review plan"),
-            ("the batch review", "wade review batch"),
+            # The two commands with a required positional operand carry it —
+            # see review_delegation_service._relaunch_command.
+            ("the plan review", "wade review plan docs/plan.md"),
+            ("the batch review", "wade review batch 42"),
             ("the dependency analysis", "wade task deps 12 13"),
         ],
     )

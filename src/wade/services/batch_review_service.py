@@ -474,6 +474,9 @@ def run_coherence_review(
             method_section=prepared.method_section,
             input_label="Batch context",
             cwd=repo_root or Path.cwd(),
+            # `wade review batch` takes the tracking issue as a required
+            # argument, so the relaunch hint has to carry this batch's.
+            relaunch_operand=ctx.tracking_issue,
         )
     except SkillInvocationError as exc:
         console.error(str(exc))
