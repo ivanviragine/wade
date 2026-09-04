@@ -756,11 +756,14 @@ setting that changes it. **The fix is always to relaunch the outer session with
 the profile you want**, from a host terminal.
 
 What WADE does instead is say so. When the resolved profile is unrestricted and
-the runtime it is running inside is *known* to be sandboxed, it names that
-runtime and prints the exact command to re-run — on implementation, plan,
+the enclosing runtime is *known* to be sandboxed, it names that runtime when it
+can (or says **the enclosing AI runtime** when an identity marker is absent) and
+prints the exact command to re-run — on implementation, plan,
 PR-comment review, and every delegated operation (dependency analysis, plan/code
-review, batch review). It warns and proceeds rather than blocking: a delegated
-tool whose credentials happen to be reachable from inside the sandbox may still
+review, batch review). That command preserves the resolved tool, model, effort,
+permission mode, and relevant method bindings; only the sandbox profile changes
+to `--no-sandbox`. It warns and proceeds rather than blocking: a delegated tool
+whose credentials happen to be reachable from inside the sandbox may still
 succeed, so refusing to try would break sessions that work today.
 
 Detection is deliberately **best-effort and conservative**. WADE reads only
@@ -874,8 +877,9 @@ credentials, PATH, or sandbox execution access, it does not consume a
 timeout still counts as a bounded review attempt, so the review/fix loop cannot
 run forever.
 
-A reviewer that **never started** is recorded as an *unattempted* review so the
-state is auditable, and that record is deliberately inert: it satisfies no review
+A reviewer that **never started** — including a sandbox-capability refusal before
+the launch — is recorded as an *unattempted* review so the state is auditable,
+and that record is deliberately inert: it satisfies no review
 requirement, spends no review pass, cannot overwrite a real receipt already
 written for the same commit, and leaves `wade implementation-session done` and
 `wade review-pr-comments-session done` closed. An infrastructure failure must

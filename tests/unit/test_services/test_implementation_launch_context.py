@@ -257,7 +257,10 @@ class TestImplementationLaunchContext:
 
         assert result.success is False
         spy.build_launch_command.assert_not_called()
-        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
+        mock_console.detail.assert_any_call(
+            "wade implement 42 --base main --no-sandbox --ai codex --permission-mode default",
+            markup=False,
+        )
 
     def test_a_planner_profile_does_not_describe_the_enclosing_runtime(
         self, worktree: Path
@@ -315,6 +318,27 @@ class TestImplementationLaunchContext:
         spy.terminal_launch.assert_not_called()
         spy.launch.assert_called_once()
 
+    def test_identityless_sandbox_signal_warns_before_an_inline_launch(
+        self, worktree: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sandbox signal remains actionable when the identity marker is absent."""
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+        with (
+            _driven_start(worktree) as spy,
+            patch(_UI_CONSOLE) as mock_console,
+        ):
+            spy.launch.side_effect = RuntimeError("stop-after-capture")
+
+            result = start(target="42", plan_handoff=True)
+
+        assert result.success is False
+        spy.launch.assert_called_once()
+        assert "enclosing AI runtime" in str(mock_console.warn.call_args_list)
+        mock_console.detail.assert_any_call(
+            "wade implement 42 --base main --no-sandbox --ai codex --permission-mode default",
+            markup=False,
+        )
+
     def test_sandboxed_plan_handoff_never_uses_terminal_readiness_as_proof(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -329,7 +353,10 @@ class TestImplementationLaunchContext:
         assert result.success is False
         spy.terminal_launch.assert_not_called()
         spy.launch.assert_not_called()
-        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
+        mock_console.detail.assert_any_call(
+            "wade implement 42 --base main --no-sandbox --ai codex --permission-mode default",
+            markup=False,
+        )
 
     def test_sandboxed_plan_handoff_does_not_build_an_inheriting_command(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
@@ -349,7 +376,10 @@ class TestImplementationLaunchContext:
         assert result.success is False
         mock_launch.assert_not_called()
         spy.launch.assert_not_called()
-        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
+        mock_console.detail.assert_any_call(
+            "wade implement 42 --base main --no-sandbox --ai codex --permission-mode default",
+            markup=False,
+        )
 
     def test_non_handoff_codex_session_keeps_nested_launch_guard(self, worktree: Path) -> None:
         """Ordinary ``wade implement`` calls still do not recursively launch Codex."""
@@ -418,7 +448,10 @@ class TestImplementationLaunchContext:
         assert result.success is True
         spy.build_launch_command.assert_not_called()
         spy.launch.assert_not_called()
-        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
+        mock_console.detail.assert_any_call(
+            "wade implement 42 --base main --no-sandbox --ai codex --permission-mode default",
+            markup=False,
+        )
         assert "Codex CLI" in str(mock_console.warn.call_args_list)
 
     def test_an_unknown_parent_assessment_says_nothing(self, worktree: Path) -> None:

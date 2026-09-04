@@ -608,13 +608,18 @@ the module exists to avoid. A requested profile of a finished child process is
 not a substitute for an OS signal on the runtime that currently encloses wade.
 
 **One predicate, four call sites.** `requires_unsandboxed_relaunch()` is true
-only for *resolved profile unrestricted* **and** *parent known sandboxed*;
+only for *resolved profile unrestricted* **and** *parent known sandboxed* — a
+published signal remains enough to warn even if the separate identity probe has
+no match. Identity is still required only for the nested-launch guard and the
+plan-handoff fail-closed branch.
 `ai_resolution.announce_inherited_sandbox()` is the single user-facing emitter, so
 the paths cannot drift into four explanations of one boundary. It is **advisory,
 never a block** (wade cannot prove the delegated tool will fail) and says nothing
-at all on `UNKNOWN`. A standalone-review recovery command preserves the resolved
-mode, tool, model, effort, permission mode, staged scope, and review-skill list;
-only its sandbox profile changes to `--no-sandbox`.
+at all on `UNKNOWN`. Host-terminal recovery commands are built as quoted argv,
+then displayed literally, preserving each operation's supported resolved tool,
+model, effort, permission mode, and methodology bindings (plus review mode and
+staged scope where applicable); only the sandbox profile changes to
+`--no-sandbox`.
 
 | Launch path | Site | Relaunch command it supplies |
 |---|---|---|

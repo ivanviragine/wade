@@ -25,6 +25,7 @@ from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
+    build_relaunch_command,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -785,7 +786,15 @@ def analyze_deps(
         # the dispatcher is common to every delegated operation, so it can only
         # name this one if the caller hands it the exact command to re-run.
         operation="the dependency analysis",
-        relaunch_command=f"wade task deps {' '.join(issue_numbers)}",
+        relaunch_command=build_relaunch_command(
+            ["wade", "task", "deps", *issue_numbers],
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            effort=effort_str,
+            permission_mode=effective_permission_mode,
+            mode=delegation_mode,
+            skills=skills,
+        ),
     )
     output = (
         delegation_result.feedback

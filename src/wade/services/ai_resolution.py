@@ -17,6 +17,7 @@ done here to keep this PR focused.
 from __future__ import annotations
 
 import os
+import shlex
 
 import structlog
 from crossby.ai_tools import AbstractAITool
@@ -368,8 +369,49 @@ def announce_inherited_sandbox(
     console.warn(inherited_sandbox_finding(parent, operation=operation))
     if relaunch_command:
         console.hint(INHERITED_SANDBOX_HINT)
-        console.detail(relaunch_command)
+        console.detail(relaunch_command, markup=False)
     return True
+
+
+def build_relaunch_command(
+    command: list[str],
+    *,
+    operands: list[str] | None = None,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+    permission_mode: PermissionMode | None = None,
+    mode: DelegationMode | None = None,
+    skills: list[str] | None = None,
+    review_skills: list[str] | None = None,
+    staged: bool = False,
+) -> str:
+    """Build a quoted host-terminal retry from a resolved AI invocation.
+
+    The enclosing runtime's sandbox is the only value intentionally changed: a
+    retry uses ``--no-sandbox``. All resolved launch values and methodology
+    bindings remain explicit, so a config change between failure and retry does
+    not silently select another runtime, model, permission tier, or method.
+    """
+    argv = [*command, "--no-sandbox"]
+    if mode is not None:
+        argv.extend(("--mode", mode.value))
+    if ai_tool is not None:
+        argv.extend(("--ai", ai_tool))
+    if model is not None:
+        argv.extend(("--model", model))
+    if effort is not None:
+        argv.extend(("--effort", effort))
+    if permission_mode is not None:
+        argv.extend(("--permission-mode", permission_mode.value))
+    if staged:
+        argv.append("--staged")
+    for skill in skills or ():
+        argv.extend(("--skill", skill))
+    for skill in review_skills or ():
+        argv.extend(("--review-skill", skill))
+    argv.extend(operands or ())
+    return shlex.join(argv)
 
 
 def resolve_sandbox(

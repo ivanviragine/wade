@@ -15,7 +15,7 @@ from pathlib import Path
 
 import structlog
 from crossby.ai_tools import AbstractAITool
-from crossby.models.ai import AIToolID
+from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
@@ -35,6 +35,7 @@ from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
     announce_inherited_sandbox,
+    build_relaunch_command,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -964,6 +965,15 @@ def start(
         # would incorrectly force a host-terminal remediation.
         requires_fresh_runtime = plan_handoff and bool(detected_env) and profile_mismatch
         if requires_fresh_runtime:
+            relaunch_command = build_relaunch_command(
+                ["wade", "implement", task.id, "--base", effective_base],
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                effort=resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None,
+                permission_mode=resolved_permission_mode,
+                skills=work_skills,
+                review_skills=review_skills,
+            )
             logger.warning(
                 "implementation.unrestricted_handoff_requires_host_terminal",
                 parent=parent.env_var,
@@ -974,8 +984,27 @@ def start(
                 "opened from inside it runs unrestricted."
             )
             console.hint(INHERITED_SANDBOX_HINT)
-            console.detail(f"wade implement {task.id} --no-sandbox")
+            console.detail(relaunch_command, markup=False)
             return ImplementResult(success=False)
+        # Identity controls the nested-launch guard, but a published sandbox
+        # signal is sufficient diagnostic evidence on its own. Warn before an
+        # actual launch even if the runtime's identity marker was stripped.
+        if profile_mismatch:
+            relaunch_command = build_relaunch_command(
+                ["wade", "implement", task.id, "--base", effective_base],
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                effort=resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None,
+                permission_mode=resolved_permission_mode,
+                skills=work_skills,
+                review_skills=review_skills,
+            )
+            announce_inherited_sandbox(
+                parent,
+                resolved_sandbox=resolved_sandbox,
+                operation="the implementation session",
+                relaunch_command=relaunch_command,
+            )
         if detected_env:
             logger.info(
                 "implementation.ai_launch_skipped",
@@ -988,14 +1017,8 @@ def start(
             # Nothing is launched here, so there is no failure to diagnose — but
             # the requested profile is still undeliverable, and staying silent is
             # what let a user believe this worktree had host access it cannot
-            # have. Only a *known* sandboxed parent earns the claim; an unknown
-            # assessment says nothing.
-            announce_inherited_sandbox(
-                parent,
-                resolved_sandbox=resolved_sandbox,
-                operation="the implementation session",
-                relaunch_command=f"wade implement {task.id} --no-sandbox",
-            )
+            # have. A published sandbox signal earns the claim even when its
+            # runtime identity is unavailable; an unknown assessment says nothing.
             console.detail(f"Worktree ready at: {worktree_path}")
             print(str(worktree_path))
             return ImplementResult(success=True)

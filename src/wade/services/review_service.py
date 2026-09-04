@@ -49,6 +49,7 @@ from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
     announce_inherited_sandbox,
+    build_relaunch_command,
     confirm_ai_selection,
     display_ai_selection,
     enforce_sandbox_capability,
@@ -72,7 +73,7 @@ from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
-from wade.utils.runtime_env import parent_runtime
+from wade.utils.runtime_env import parent_runtime, requires_unsandboxed_relaunch
 from wade.utils.terminal import (
     compose_review_title,
     launch_in_new_terminal,
@@ -1232,6 +1233,25 @@ def start(
 
     # AI-initiated start guard
     detected_env = _detect_ai_cli_env()
+    parent = parent_runtime(detected_env)
+    # The nested-launch guard needs a recognised identity, but a published
+    # sandbox signal is sufficient to warn that an unrestricted child cannot
+    # deliver its requested profile. Emit it before either the guard or a real
+    # child launch so stripped identity markers do not hide the boundary.
+    if requires_unsandboxed_relaunch(resolved_sandbox=resolved_sandbox, parent=parent):
+        announce_inherited_sandbox(
+            parent,
+            resolved_sandbox=resolved_sandbox,
+            operation="the review session",
+            relaunch_command=build_relaunch_command(
+                ["wade", "review", "pr-comments", task.id],
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                permission_mode=resolved_permission_mode,
+                skills=work_skills,
+                review_skills=review_skills,
+            ),
+        )
     if detected_env:
         logger.info(
             "review.ai_launch_skipped",
@@ -1245,14 +1265,9 @@ def start(
         # the worktree is about to be handed to an agent running inside a
         # boundary the resolved profile said it would not have. Say so, with the
         # command that actually delivers it, rather than letting the session
-        # proceed on a false premise (#480). Only a *known* sandboxed parent
-        # earns the claim; an unknown assessment stays silent.
-        announce_inherited_sandbox(
-            parent_runtime(detected_env),
-            resolved_sandbox=resolved_sandbox,
-            operation="the review session",
-            relaunch_command=f"wade review pr-comments {task.id} --no-sandbox",
-        )
+        # proceed on a false premise (#480). A published sandbox signal earns
+        # the claim even when its runtime identity is unavailable; an unknown
+        # assessment stays silent.
         console.detail(f"Worktree ready at: {worktree_path}")
         print(str(worktree_path))
         return True

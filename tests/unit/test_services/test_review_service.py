@@ -11,6 +11,7 @@ from crossby.models.ai import ModelBreakdown, TokenUsage
 
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
+from wade.models.permission import PermissionMode
 from wade.models.review import (
     PRReview,
     PRReviewStatus,
@@ -456,7 +457,7 @@ class TestReviewServiceStart:
             ),
             "confirm_ai_selection": patch(
                 "wade.services.review_service.confirm_ai_selection",
-                return_value=(None, None, None, False),
+                return_value=(None, None, None, PermissionMode.DEFAULT),
             ),
             "_detect_ai_cli_env": patch(
                 "wade.services.review_service._detect_ai_cli_env",
@@ -931,7 +932,10 @@ class TestReviewServiceStart:
 
         assert result is True
         assert "Codex CLI" in str(mock_console.warn.call_args_list)
-        mock_console.detail.assert_any_call("wade review pr-comments 42 --no-sandbox")
+        mock_console.detail.assert_any_call(
+            "wade review pr-comments 42 --no-sandbox --permission-mode default",
+            markup=False,
+        )
 
     def test_an_unknown_parent_assessment_stays_silent(
         self,
@@ -962,6 +966,39 @@ class TestReviewServiceStart:
 
         assert result is True
         assert mock_console.warn.call_count == 0
+
+    def test_identityless_sandbox_signal_still_announces_the_boundary(
+        self,
+        tmp_path: Path,
+        mock_setup: dict[str, MagicMock],
+        mock_provider: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A stripped identity marker must not hide a published sandbox signal."""
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = None
+        monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
+
+        with (
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("wade.ui.console.console") as mock_console,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        assert "enclosing AI runtime" in str(mock_console.warn.call_args_list)
+        mock_console.detail.assert_any_call(
+            "wade review pr-comments 42 --no-sandbox --permission-mode default",
+            markup=False,
+        )
 
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock

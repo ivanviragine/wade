@@ -888,7 +888,7 @@ class TestSharedParentSandboxCheck:
             result = delegate(self._sandboxed_request(operation, relaunch))
 
         assert operation in str(mock_console.warn.call_args_list)
-        mock_console.detail.assert_any_call(relaunch)
+        mock_console.detail.assert_any_call(relaunch, markup=False)
         assert result.inherited_sandbox_profile_mismatch is True
 
     def test_an_unlaunchable_tool_does_not_get_sandbox_remediation(

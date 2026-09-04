@@ -1645,8 +1645,57 @@ class TestRelaunchCommand:
         assert request.relaunch_command == f"wade review plan --no-sandbox {plan}"
 
 
+class TestSandboxCapabilityRefusal:
+    def test_refusal_is_marked_never_launched(self) -> None:
+        config = _review_config(review_implementation_mode="headless")
+        with (
+            patch.object(
+                rds,
+                "enforce_sandbox_capability",
+                side_effect=rds.SandboxCapabilityError("sandbox unavailable"),
+            ),
+            patch.object(rds, "delegate") as mock_delegate,
+        ):
+            result = _run_review_delegation(
+                "Review this change.",
+                "review_implementation",
+                config=config,
+                cmd_config=config.ai.review_implementation,
+                ai_tool="claude",
+                mode="headless",
+                sandbox=True,
+            )
+
+        assert result.success is False
+        assert result.never_launched is True
+        mock_delegate.assert_not_called()
+
+
 class TestFailedReviewSandboxRemediation:
     """Only an undeliverable unrestricted profile earns a sandbox diagnosis."""
+
+    def test_specific_recovery_command_is_printed_as_literal_text(self, tmp_path: Path) -> None:
+        result = DelegationResult(
+            success=False,
+            feedback="launch denied by sandbox policy",
+            mode=DelegationMode.HEADLESS,
+            never_launched=True,
+            inherited_sandbox_profile_mismatch=True,
+            relaunch_command="wade review implementation --model '[draft]' --no-sandbox",
+        )
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+        with (
+            patch("wade.services.review_delegation_service._record_binding_outcome"),
+            patch("wade.services.review_delegation_service.read_review_record", return_value=None),
+            patch(
+                "wade.services.review_delegation_service.detect_parent_runtime",
+                return_value=parent,
+            ),
+            patch("wade.services.review_delegation_service.console") as mock_console,
+        ):
+            rds._report_failed_review(tmp_path, "a" * 40, _prepared_method(), result)
+
+        mock_console.detail.assert_called_once_with(result.relaunch_command, markup=False)
 
     def test_compatible_sandbox_profile_keeps_the_hedged_remediation(
         self,

@@ -271,6 +271,16 @@ class TestUnattemptedReviewGate:
         assert record.call_args.args[3] is ReviewOutcome.UNATTEMPTED
         announce.assert_not_called()
 
+    def test_capability_refusal_records_unattempted_without_spending_budget(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        result = self._never_launched("sandbox unavailable")
+
+        record, announce = self._run(tmp_path, result)
+
+        assert record.call_args.args[3] is ReviewOutcome.UNATTEMPTED
+        announce.assert_not_called()
+
     def test_the_outcome_neither_satisfies_nor_consumes(self) -> None:
         assert ReviewOutcome.UNATTEMPTED.satisfies_review is False
         assert ReviewOutcome.UNATTEMPTED.consumes_pass is False

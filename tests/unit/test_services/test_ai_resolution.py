@@ -17,6 +17,8 @@ from wade.models.permission import PermissionMode
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
+    announce_inherited_sandbox,
+    build_relaunch_command,
     confirm_ai_selection,
     describe_sandbox,
     display_ai_selection,
@@ -24,6 +26,7 @@ from wade.services.ai_resolution import (
     resolve_sandbox,
     valid_effort_levels,
 )
+from wade.utils.runtime_env import ParentRuntime, SandboxAssessment
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -54,6 +57,75 @@ _INPUT_PROMPT = "wade.ui.prompts.input_prompt"
 _DETECT = "wade.services.ai_resolution.AbstractAITool.detect_installed"
 _MODELS_FOR_TOOL = "crossby.data.get_models_for_tool"
 _CONSOLE_KV = "wade.ui.console.console.kv"
+
+
+class TestHostRelaunchCommand:
+    def test_preserves_resolved_launch_values_and_quotes_user_values(self) -> None:
+        command = build_relaunch_command(
+            ["wade", "plan", "--issue", "480"],
+            ai_tool="claude",
+            model="sonnet [draft]",
+            effort="high",
+            permission_mode=PermissionMode.AUTO,
+            skills=["project:strict review"],
+            review_skills=["builtin:code-review"],
+        )
+
+        assert command == (
+            "wade plan --issue 480 --no-sandbox --ai claude --model 'sonnet [draft]' "
+            "--effort high --permission-mode auto --skill 'project:strict review' "
+            "--review-skill builtin:code-review"
+        )
+
+    def test_supports_implementation_review_and_deps_command_shapes(self) -> None:
+        assert build_relaunch_command(
+            ["wade", "implement", "480", "--base", "release branch"],
+            ai_tool="codex",
+            permission_mode=PermissionMode.DEFAULT,
+        ) == (
+            "wade implement 480 --base 'release branch' --no-sandbox --ai codex "
+            "--permission-mode default"
+        )
+        assert build_relaunch_command(
+            ["wade", "review", "pr-comments", "480"],
+            ai_tool="claude",
+            model="sonnet",
+            permission_mode=PermissionMode.ACCEPT_EDITS,
+            skills=["project:review"],
+            review_skills=["builtin:code-review"],
+        ) == (
+            "wade review pr-comments 480 --no-sandbox --ai claude --model sonnet "
+            "--permission-mode accept-edits --skill project:review "
+            "--review-skill builtin:code-review"
+        )
+        assert build_relaunch_command(
+            ["wade", "task", "deps", "480", "481"],
+            ai_tool="claude",
+            model="sonnet",
+            effort="high",
+            permission_mode=PermissionMode.DEFAULT,
+            mode=DelegationMode.HEADLESS,
+            skills=["builtin:dependency-analysis"],
+        ) == (
+            "wade task deps 480 481 --no-sandbox --mode headless --ai claude "
+            "--model sonnet --effort high --permission-mode default "
+            "--skill builtin:dependency-analysis"
+        )
+
+    def test_inherited_sandbox_command_is_printed_as_literal_text(self) -> None:
+        command = "wade plan --no-sandbox --model '[draft]'"
+        parent = ParentRuntime(env_var="CODEX_CLI", sandbox=SandboxAssessment.SANDBOXED)
+
+        with patch("wade.ui.console.console") as mock_console:
+            emitted = announce_inherited_sandbox(
+                parent,
+                resolved_sandbox=False,
+                operation="the planning session",
+                relaunch_command=command,
+            )
+
+        assert emitted is True
+        mock_console.detail.assert_called_once_with(command, markup=False)
 
 
 # ---------------------------------------------------------------------------

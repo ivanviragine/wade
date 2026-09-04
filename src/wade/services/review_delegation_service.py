@@ -20,6 +20,7 @@ from wade.models.session_manifest import ReviewOutcome
 from wade.models.workflow import DelegationKind
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
+    build_relaunch_command,
     confirm_ai_selection,
     enforce_sandbox_capability,
     resolve_ai_tool,
@@ -138,9 +139,9 @@ _OPERATION_LABELS = {
     "review_batch": "the batch review",
 }
 _RELAUNCH_COMMANDS = {
-    "review_plan": "wade review plan --no-sandbox",
-    "review_implementation": "wade review implementation --no-sandbox",
-    "review_batch": "wade review batch --no-sandbox",
+    "review_plan": "wade review plan",
+    "review_implementation": "wade review implementation",
+    "review_batch": "wade review batch",
 }
 #: Commands whose CLI signature takes a **required** positional operand — the
 #: plan path for ``wade review plan``, the tracking issue for ``wade review
@@ -177,24 +178,17 @@ def _relaunch_command(
     if command in _RELAUNCH_OPERANDS_REQUIRED and not operand:
         return None
 
-    argv = shlex.split(base)
-    if mode is not None:
-        argv.extend(("--mode", mode.value))
-    if ai_tool is not None:
-        argv.extend(("--ai", ai_tool))
-    if model is not None:
-        argv.extend(("--model", model))
-    if effort is not None:
-        argv.extend(("--effort", effort))
-    if permission_mode is not None:
-        argv.extend(("--permission-mode", permission_mode.value))
-    if staged:
-        argv.append("--staged")
-    for skill in skills or ():
-        argv.extend(("--skill", skill))
-    if operand:
-        argv.append(operand)
-    return shlex.join(argv)
+    return build_relaunch_command(
+        shlex.split(base),
+        operands=[operand] if operand else None,
+        ai_tool=ai_tool,
+        model=model,
+        mode=mode,
+        effort=effort,
+        permission_mode=permission_mode,
+        skills=skills,
+        staged=staged,
+    )
 
 
 def _run_review_delegation(
@@ -332,6 +326,7 @@ def _run_review_delegation(
                     feedback=str(e),
                     mode=delegation_mode,
                     exit_code=1,
+                    never_launched=True,
                 )
 
         # Re-apply the headless safety rule after confirm: interactive changes are
@@ -747,7 +742,11 @@ def _report_failed_review(
             f"boundary. No review-pass budget was consumed; {receipt_state}"
         )
         console.hint(INHERITED_SANDBOX_HINT)
-        console.detail(result.relaunch_command or _RELAUNCH_COMMANDS["review_implementation"])
+        console.detail(
+            result.relaunch_command
+            or f"{_RELAUNCH_COMMANDS['review_implementation']} --no-sandbox",
+            markup=False,
+        )
         return
 
     console.warn(_HEDGED_REVIEW_FAILURE)
