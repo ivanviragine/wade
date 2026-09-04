@@ -443,7 +443,11 @@ class TestImplementationLaunchContext:
             # patching the importing module would miss it.
             patch(_UI_CONSOLE) as mock_console,
         ):
-            result = start(target="42")
+            result = start(
+                target="42",
+                work_skills=["project:implementation-method"],
+                review_skills=["project:closing-review"],
+            )
 
         assert result.success is True
         spy.build_launch_command.assert_not_called()

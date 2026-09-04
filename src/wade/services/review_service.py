@@ -1158,6 +1158,7 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
+    initial_effort = resolved_effort
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
@@ -1219,6 +1220,16 @@ def start(
             permission_mode_explicit=permission_mode_explicit or yolo is not None,
             sandbox=resolved_sandbox,
         )
+
+    # Configuration-derived effort should continue to re-resolve when the user
+    # waits for a later review. Preserve a caller's explicit override, or an
+    # actual change made in the confirmation UI, without promoting an implicit
+    # default to an explicit argument.
+    retained_effort = (
+        resolved_effort.value
+        if resolved_effort is not None and (effort_explicit or resolved_effort != initial_effort)
+        else None
+    )
 
     # 7. Build review prompt
     prompt = build_review_prompt(
@@ -1399,8 +1410,8 @@ def start(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
-                effort=resolved_effort.value if resolved_effort else None,
-                effort_explicit=resolved_effort is not None,
+                effort=retained_effort,
+                effort_explicit=retained_effort is not None,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,

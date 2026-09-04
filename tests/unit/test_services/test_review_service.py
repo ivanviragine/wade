@@ -610,6 +610,38 @@ class TestReviewServiceStart:
 
         assert spy.launch.call_args.kwargs["sandbox"] is False
 
+    def test_implicit_effort_re_resolves_after_waiting_for_reviews(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """A config-derived effort must not become an explicit retry override."""
+        from crossby.models.ai import EffortLevel
+
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            EffortLevel.HIGH,
+            PermissionMode.DEFAULT,
+        )
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        adapter.capabilities.return_value.blocks_until_exit = False
+        with (
+            patch("wade.services.review_service.resolve_effort", return_value=EffortLevel.HIGH),
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.services.review_service._post_review_lifecycle") as mock_post,
+        ):
+            assert start(target="42") is True
+
+        assert mock_post.call_args.kwargs["effort"] is None
+        assert mock_post.call_args.kwargs["effort_explicit"] is False
+
     def test_detached_launch_receives_worktree_context(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
