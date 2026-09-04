@@ -558,11 +558,12 @@ resolves **unrestricted**. The planner child has already exited when the accepte
 handoff runs, so its requested `--sandbox`/`--no-sandbox` profile is not evidence
 about the process now enclosing implementation. Note the **polarity flip** — the
 old flag fired on the permissive value being `True` (network on), this one fires
-on the permissive value being `False` (sandbox off), and the detached branch
-states the forced value (`False`) explicitly. A token-level rename would have
-silently inverted the intent. If the detached launch cannot be created the
-handoff fails closed, names the actual parent runtime, and prints `wade implement
-<issue> --no-sandbox`; it must not fall back to an inline or nested agent. An
+on the permissive value being `False` (sandbox off). A token-level rename would
+have silently inverted the intent. A new terminal launched by the confined
+process is still only its child — neither terminal-broker acceptance nor a live
+readiness probe proves it escaped the OS sandbox — so the handoff fails closed,
+names the actual parent runtime, and prints `wade implement <issue>
+--no-sandbox`; it must not launch an inline, nested, or detached child. An
 unknown parent keeps the ordinary nested-agent guard rather than guessing.
 
 The two tool-identity conjuncts it used to carry — parent is Codex, target is

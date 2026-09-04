@@ -699,13 +699,14 @@ class TestReviewBatch:
         assert result.skipped is True
         mock_integration.assert_not_called()
 
+    @patch("wade.services.batch_review_service.prepare_delegation_method")
     @patch("wade.services.batch_review_service.run_coherence_review")
     @patch("wade.services.batch_review_service.create_review_pr")
     @patch("wade.services.batch_review_service.create_integration_branch")
     @patch("wade.services.batch_review_service.gather_batch_context")
     @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.git_repo")
-    def test_passes_repo_root_to_coherence_review(
+    def test_passes_repo_root_and_skill_overrides_to_coherence_review(
         self,
         mock_repo: MagicMock,
         mock_load_review_config: MagicMock,
@@ -713,6 +714,7 @@ class TestReviewBatch:
         mock_integration: MagicMock,
         mock_pr_create: MagicMock,
         mock_review: MagicMock,
+        mock_prepare: MagicMock,
         tmp_path: Path,
     ) -> None:
         from wade.services.batch_review_service import review_batch
@@ -736,19 +738,22 @@ class TestReviewBatch:
         mock_gather.return_value = ctx
         mock_integration.return_value = ctx
         mock_pr_create.return_value = ctx
+        mock_prepare.return_value = MagicMock()
         mock_review.return_value = DelegationResult(
             success=True,
             feedback="Looks good!",
             mode=DelegationMode.HEADLESS,
         )
 
-        result = review_batch("99", project_root=tmp_path / "subdir")
+        skills = ["builtin:code-review", "project:strict"]
+        result = review_batch("99", project_root=tmp_path / "subdir", skills=skills)
 
         assert result.success is True
         mock_review.assert_called_once()
         assert mock_review.call_args.kwargs["repo_root"] == repo_root
         assert mock_review.call_args.kwargs["config"] == config
         assert mock_review.call_args.kwargs["cmd_config"] == config.ai.review_batch
+        assert mock_review.call_args.kwargs["skills"] == skills
 
 
 # ---------------------------------------------------------------------------

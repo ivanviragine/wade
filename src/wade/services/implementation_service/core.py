@@ -444,9 +444,9 @@ def start(
         detach: If True, launch AI in a new terminal tab.
         cd_only: If True, create worktree and print path only (no AI launch).
         plan_handoff: Internal marker for an accepted ``wade plan`` handoff.
-            An unrestricted implementation may need a fresh detached context
-            rather than inherit a sandboxed parent runtime, which
-            cannot drop its sandbox after start.
+            An unrestricted implementation from a known sandboxed parent fails
+            closed with a host-terminal command, because any child it launches
+            still inherits that runtime's OS sandbox.
 
     Returns:
         ImplementResult with success/merged status.
@@ -930,13 +930,12 @@ def start(
             print(str(worktree_path))
             return ImplementResult(success=True)
 
-        # AI-initiated start guard: if we're inside an AI CLI session,
-        # don't launch another AI tool — just print the worktree path.  The one
-        # exception is a plan handoff out of a *sandboxed* parent runtime into an
-        # *unrestricted* implementation. The sandbox is a launch-time OS
-        # property: a process started under `--sandbox workspace-write` cannot
-        # escape it, so honoring the implementation profile requires a fresh
-        # detached process rather than reusing this agent context.
+        # AI-initiated start guard: if we're inside an AI CLI session, don't
+        # launch another AI tool — just print the worktree path. An accepted plan
+        # handoff out of a *sandboxed* parent into an *unrestricted*
+        # implementation is stricter: an inner process cannot prove a terminal
+        # it opens escaped the parent's OS sandbox, so it must fail closed and
+        # tell the user to relaunch from a real host terminal.
         #
         # This is the restated network-pin predicate (#478) generalised from
         # Codex to any *known* sandboxed parent (#480). The tool-identity
@@ -944,8 +943,8 @@ def start(
         # proxies for "this process is confined", and they under-fire on exactly
         # the cases that matter: a sandboxed Codex handing off to Claude inherits
         # the sandbox just as surely, and used to get the silent nested-launch
-        # guard instead of the fresh context it needs. The profile mismatch is
-        # now stated directly, once, in ``requires_unsandboxed_relaunch``.
+        # guard instead of the host-terminal remediation it needs. The profile
+        # mismatch is now stated directly, once, in ``requires_unsandboxed_relaunch``.
         #
         # The accepted handoff runs in the original ``wade plan`` process *after*
         # the planner child has exited. Its requested profile therefore describes
@@ -962,9 +961,22 @@ def start(
         # identity is available, but a detached plan handoff is meaningful only
         # while we know this process is inside an AI CLI session. Otherwise a
         # stray inherited ``CODEX_SANDBOX`` variable in an ordinary host shell
-        # would incorrectly force a fresh-terminal escape path.
+        # would incorrectly force a host-terminal remediation.
         requires_fresh_runtime = plan_handoff and bool(detected_env) and profile_mismatch
-        if detected_env and not requires_fresh_runtime:
+        if requires_fresh_runtime:
+            logger.warning(
+                "implementation.unrestricted_handoff_requires_host_terminal",
+                parent=parent.env_var,
+                signal=parent.signal,
+            )
+            console.error(
+                f"{parent.label} is sandboxed, and wade cannot verify that a terminal "
+                "opened from inside it runs unrestricted."
+            )
+            console.hint(INHERITED_SANDBOX_HINT)
+            console.detail(f"wade implement {task.id} --no-sandbox")
+            return ImplementResult(success=False)
+        if detected_env:
             logger.info(
                 "implementation.ai_launch_skipped",
                 reason="inside_ai_cli",
@@ -1012,10 +1024,10 @@ def start(
         except OSError:
             logger.warning("implementation.transcript_dir_failed")
 
-        # Detach mode: launch AI tool in a new terminal, don't block.  An
-        # unrestricted plan handoff is forced through this path so it cannot
-        # inherit the planner's immutable sandbox.
-        if (detach or requires_fresh_runtime) and resolved_tool:
+        # Detach mode: launch AI tool in a new terminal, don't block. This is a
+        # convenience mode only; it is not evidence that a child escaped an OS
+        # sandbox (that case returned above with a host-terminal command).
+        if detach and resolved_tool:
             cmd: list[str] | None = None
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
@@ -1051,20 +1063,11 @@ def start(
                         allowed_commands=config.permissions.allowed_commands,
                         working_dir=worktree_path,
                         network_access=LAUNCH_NETWORK_ACCESS,
-                        # ``requires_fresh_runtime`` already established the
-                        # resolved profile is unrestricted; state the forced value
-                        # rather than relying on that implication holding, and pin
-                        # it explicitly for the new process instead of inheriting
-                        # ambient config.
-                        sandbox=(False if requires_fresh_runtime else resolved_sandbox),
+                        sandbox=resolved_sandbox,
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
-                # A fresh handoff must retain its explicit sandbox, network,
-                # permission, and prompt arguments.  Do not replace a failed
-                # build with the bare tool name, which would bypass them.
-                if not requires_fresh_runtime:
-                    cmd = [resolved_tool]
+                cmd = [resolved_tool]
 
             if cmd is not None:
                 console.step(f"Launching {resolved_tool} in new terminal...")
@@ -1072,26 +1075,10 @@ def start(
                     cmd,
                     cwd=str(worktree_path),
                     title=work_title,
-                    wait_for_ready=requires_fresh_runtime,
                 ):
                     console.success(f"Detached AI session for #{task.id}")
                     stop_title_keeper()
                     return ImplementResult(success=True)
-            if requires_fresh_runtime:
-                # Fail closed with the exact command to type, naming the boundary
-                # that made the fresh context necessary. Falling through to an
-                # inline launch would silently strand the implementation inside
-                # the very sandbox this branch exists to escape — and spawning a
-                # new terminal is itself something a sandboxed parent may deny,
-                # so this path is reached in practice, not just in theory.
-                console.error(
-                    f"Could not launch a fresh, unrestricted implementation session "
-                    f"outside {parent.label}."
-                )
-                console.hint(INHERITED_SANDBOX_HINT)
-                console.detail(f"wade implement {task.id} --no-sandbox")
-                stop_title_keeper()
-                return ImplementResult(success=False)
             console.warn("Could not launch in new terminal — falling back to inline")
             detach = False
             # Fall through to inline launch below

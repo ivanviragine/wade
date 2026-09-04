@@ -215,7 +215,7 @@ class TestImplementationLaunchContext:
         [(None, None), (True, False), (None, False)],
         ids=["default-policy", "global-policy", "implement-policy"],
     )
-    def test_sandboxed_parent_handoff_launches_fresh_unrestricted_context(
+    def test_sandboxed_parent_handoff_fails_closed_without_spawning_a_terminal(
         self,
         worktree: Path,
         global_sandbox: bool | None,
@@ -225,8 +225,10 @@ class TestImplementationLaunchContext:
         """A sandboxed parent cannot become unrestricted in-process.
 
         The sandbox is a launch-time OS property, so honoring an unrestricted
-        implementation profile requires a fresh detached process. Each case
-        reaches ``implement`` unrestricted by a different route.
+        implementation profile requires a host-terminal relaunch. A terminal
+        launched by this process is still its descendant and cannot prove it
+        escaped the OS boundary. Each case reaches ``implement`` unrestricted by
+        a different route.
         """
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with _driven_start(
@@ -235,37 +237,27 @@ class TestImplementationLaunchContext:
             implement_sandbox_config=implement_sandbox,
             detected_env="CODEX_CLI",
         ) as spy:
-            spy.build_launch_command.return_value = ["codex"]
-
             result = start(target="42", plan_handoff=True)
 
-        assert result.success is True
-        assert spy.build_launch_command.call_args.kwargs["working_dir"] == worktree
-        # Assert the profile in *every* route, not just the unset-implement one
-        # the polarity test below covers: a precedence regression in the global
-        # or command override case would otherwise spawn the fresh context and
-        # then confine it anyway — the exact confinement the handoff escapes.
-        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
-        assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
+        assert result.success is False
+        spy.build_launch_command.assert_not_called()
+        spy.terminal_launch.assert_not_called()
         spy.launch.assert_not_called()
 
-    def test_forced_handoff_branch_resolves_to_the_permissive_profile(
+    def test_sandboxed_handoff_does_not_claim_a_child_can_become_permissive(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Guards the polarity flip between the retired pin and this profile.
-
-        The old predicate forced ``network_access=True`` — *permissive*. A
-        token-level rename to ``sandbox=True`` would force *restrictive* and
-        silently invert the intent, re-creating exactly the confinement the
-        handoff exists to escape. The forced value must be ``False``.
-        """
+        """The host command, not a child flag, is the only permissive remedy."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
-        with _driven_start(worktree, detected_env="CODEX_CLI") as spy:
-            spy.build_launch_command.return_value = ["codex"]
+        with (
+            _driven_start(worktree, detected_env="CODEX_CLI") as spy,
+            patch(f"{_CORE}.console") as mock_console,
+        ):
             result = start(target="42", plan_handoff=True)
 
-        assert result.success is True
-        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
+        assert result.success is False
+        spy.build_launch_command.assert_not_called()
+        mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
 
     def test_a_planner_profile_does_not_describe_the_enclosing_runtime(
         self, worktree: Path
@@ -323,32 +315,26 @@ class TestImplementationLaunchContext:
         spy.terminal_launch.assert_not_called()
         spy.launch.assert_called_once()
 
-    def test_failed_fresh_codex_plan_handoff_fails_closed_with_restart_command(
+    def test_sandboxed_plan_handoff_never_uses_terminal_readiness_as_proof(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The handoff must never fall through to an inline planner context."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with (
-            _driven_start(
-                worktree,
-                detected_env="CODEX_CLI",
-                terminal_launch_succeeds=False,
-            ) as spy,
+            _driven_start(worktree, detected_env="CODEX_CLI") as spy,
             patch(f"{_CORE}.console") as mock_console,
         ):
-            spy.build_launch_command.return_value = ["codex"]
-
             result = start(target="42", plan_handoff=True)
 
         assert result.success is False
+        spy.terminal_launch.assert_not_called()
         spy.launch.assert_not_called()
         mock_console.detail.assert_any_call("wade implement 42 --no-sandbox")
 
-    @pytest.mark.parametrize("command_error", [ValueError, KeyError])
-    def test_fresh_codex_plan_handoff_fails_closed_when_command_build_fails(
-        self, worktree: Path, command_error: type[Exception], monkeypatch: pytest.MonkeyPatch
+    def test_sandboxed_plan_handoff_does_not_build_an_inheriting_command(
+        self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A builder failure must not degrade to an unconfigured ``codex`` command."""
+        """No child command can provide the host boundary the handoff needs."""
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with (
             _driven_start(
@@ -358,8 +344,6 @@ class TestImplementationLaunchContext:
             patch(f"{_CORE}.console") as mock_console,
             patch(f"{_CORE}.launch_in_new_terminal") as mock_launch,
         ):
-            spy.build_launch_command.side_effect = command_error("build failed")
-
             result = start(target="42", plan_handoff=True)
 
         assert result.success is False
@@ -379,7 +363,7 @@ class TestImplementationLaunchContext:
         spy.build_launch_command.assert_not_called()
         spy.launch.assert_not_called()
 
-    def test_handoff_to_another_tool_still_escapes_the_sandbox(
+    def test_handoff_to_another_tool_also_requires_a_host_terminal(
         self, worktree: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The target tool is not what makes the sandbox inheritable (#480).
@@ -387,9 +371,9 @@ class TestImplementationLaunchContext:
         This case previously took the nested-launch guard, because the predicate
         required the *implementation* tool to be Codex. A Claude session started
         from a sandboxed Codex runtime inherits that sandbox exactly as a Codex
-        one would — and, being separately authenticated, is the case that
-        loses its host login most visibly. It needs the fresh context more, not
-        less.
+        one would — and, being separately authenticated, is the case that loses
+        its host login most visibly. It must not pretend a child terminal fixes
+        that boundary.
         """
         monkeypatch.setenv(CODEX_SANDBOX_ENV, "seatbelt")
         with _driven_start(
@@ -397,12 +381,11 @@ class TestImplementationLaunchContext:
             detected_env="CODEX_CLI",
             resolved_tool="claude",
         ) as spy:
-            spy.build_launch_command.return_value = ["claude"]
             result = start(target="42", plan_handoff=True)
 
-        assert result.success is True
-        assert spy.build_launch_command.call_args.kwargs["sandbox"] is False
-        assert spy.terminal_launch.call_args.kwargs["wait_for_ready"] is True
+        assert result.success is False
+        spy.build_launch_command.assert_not_called()
+        spy.terminal_launch.assert_not_called()
         spy.launch.assert_not_called()
 
     def test_an_unidentified_parent_does_not_force_a_fresh_context(self, worktree: Path) -> None:

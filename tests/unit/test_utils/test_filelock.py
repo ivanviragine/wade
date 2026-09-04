@@ -42,6 +42,16 @@ def test_creates_parent_directory(tmp_path: Path) -> None:
     assert target.parent.is_dir()
 
 
+def test_can_lock_a_lexical_path_without_creating_its_parent(tmp_path: Path) -> None:
+    """Safe-state callers validate/create directories themselves after locking."""
+    target = tmp_path / "missing" / "state.json"
+
+    with file_lock(target, create_parent=False, resolve_path=False):
+        pass
+
+    assert not target.parent.exists()
+
+
 def test_lock_is_reentrant_across_sequential_calls(tmp_path: Path) -> None:
     target = tmp_path / "F.md"
     for i in range(3):

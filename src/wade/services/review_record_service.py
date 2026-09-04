@@ -104,7 +104,7 @@ def write_review_record(
     # transaction on this exact tuple so precedence is true across processes.
     record_path = root / ".wade" / _DIRECTORIES[0] / filename
     try:
-        with file_lock(record_path):
+        with file_lock(record_path, create_parent=False, resolve_path=False):
             existing = read_review_record(
                 root,
                 delegation=delegation,

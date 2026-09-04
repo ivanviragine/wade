@@ -29,7 +29,12 @@ else:  # pragma: no cover -- exercised only on Windows
 
 
 @contextlib.contextmanager
-def file_lock(path: Path) -> Iterator[None]:
+def file_lock(
+    path: Path,
+    *,
+    create_parent: bool = True,
+    resolve_path: bool = True,
+) -> Iterator[None]:
     """Hold an exclusive cross-process lock for a read-modify-write cycle on *path*.
 
     Blocks on a sibling ``.<name>.lock`` file so the whole load+mutate+persist is
@@ -49,9 +54,17 @@ def file_lock(path: Path) -> Iterator[None]:
             the lock is held) and never as a sibling of it (so it can't dirty a
             tracked file's directory). All processes locking the same absolute path
             still rendezvous on the same lock file.
+        create_parent: Create the guarded path's parent first. Callers whose own
+            state layer enforces no-follow directory creation set this false so
+            taking a lock cannot create directories through a symlink.
+        resolve_path: Resolve symlinks before deriving the temp-lock key. Set
+            this false with ``create_parent=False`` when a caller must preserve
+            a lexical, no-follow path until its state layer validates it.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
+    if create_parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    lock_key = str(path.resolve()) if resolve_path else os.path.abspath(os.fspath(path))
+    digest = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()[:16]
     lock_path = Path(tempfile.gettempdir()) / f"wade-filelock-{digest}.lock"
     # O_RDWR | O_CREAT so we can both create and lock the file.
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)

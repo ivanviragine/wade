@@ -628,6 +628,7 @@ def review_batch(
             permission_mode_explicit=permission_mode_explicit,
             sandbox=sandbox,
             repo_root=repo_root,
+            skills=skills,
             prepared_method=prepared_method,
         )
 

@@ -740,12 +740,11 @@ The sandbox is a launch-time OS property: a process started confined cannot drop
 its sandbox later. An accepted plan handoff runs after the planner child exits,
 so WADE assesses the **actual parent runtime enclosing the handoff**, not the
 former planner's requested profile. When that runtime is detected as sandboxed
-and implementation resolves to **unrestricted**, WADE starts a fresh detached
-context. If it cannot open that context, the handoff fails rather than reporting
-an implementation session ready — it names the runtime it could not escape, and
-you open a new host terminal and run the displayed `wade implement <issue>
---no-sandbox` command. Without a published sandbox signal, the ordinary
-nested-launch guard applies rather than guessing.
+and implementation resolves to **unrestricted**, WADE fails the handoff rather
+than claiming a terminal child escaped the parent boundary. It names the runtime
+it could not escape, and you open a new host terminal and run the displayed
+`wade implement <issue> --no-sandbox` command. Without a published sandbox
+signal, the ordinary nested-launch guard applies rather than guessing.
 
 #### An inner `wade` process cannot escape a parent sandbox
 
