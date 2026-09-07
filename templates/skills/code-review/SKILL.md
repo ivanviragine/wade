@@ -11,6 +11,9 @@ bugs, security failures, data loss, broken compatibility, race or state errors,
 and missing tests. Verify error paths and edge conditions as carefully as the
 happy path.
 
+If a bounded review exits non-timeout status 1, treat it as an execution error:
+diagnose the failure before retrying, and never treat it as a successful review.
+
 Check whether the implementation satisfies its stated goal without unrelated
 scope, duplicate abstractions, or stale legacy behavior. Reference exact files
 and lines, explain the observable failure, and suggest the smallest robust fix.

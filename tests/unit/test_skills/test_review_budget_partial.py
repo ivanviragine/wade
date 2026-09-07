@@ -25,6 +25,17 @@ class TestReviewBudgetWorkflowPartial:
         assert "may be skipped only" in partial
         assert "WADE" not in partial
 
+    def test_execution_failure_guidance_is_loaded_only_for_code_review(self) -> None:
+        partial = (get_workflows_templates_dir() / "_partials" / "review-budget.md").read_text(
+            encoding="utf-8"
+        )
+        code_review = (get_skills_templates_dir() / "code-review" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+
+        assert "exit 1 is an execution error" not in partial
+        assert "non-timeout status 1" in code_review
+
 
 class TestNoStaleBudgetLiterals:
     """The old hardcoded 600s timeout and 'at most 2 times' pass count must be gone."""

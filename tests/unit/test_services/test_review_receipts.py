@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -297,6 +298,54 @@ class TestImplementationReviewPreflightCap:
         assert result is prompted
         delegate.assert_called_once()
 
+    def test_exhausted_binding_repairs_a_receipt_from_another_reviewer(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        config = self._config(limit=2)
+        prepared = self._prepared_for(review_preflight, SessionKind.IMPLEMENTATION, tmp_path)
+        self._write_passes(tmp_path, prepared.binding, passes=2)
+        other_skill = ResolvedSkill(
+            canonical_ref="builtin:alternate-code-review",
+            source_path="templates/skills/alternate-code-review",
+            materialized_path=".wade/operations/code-review/test/skills/builtin/alternate-code-review",
+            content_digest=f"sha256:{'2' * 64}",
+            files=("SKILL.md",),
+        )
+        other_binding = ResolvedBinding.from_skills((other_skill,))
+        other_receipt = write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit="a" * 40,
+            binding=other_binding,
+            outcome=ReviewOutcome.REVIEWED,
+        )
+        assert other_receipt is not None
+        prompted = DelegationResult(
+            success=True,
+            feedback="Review the diff.",
+            mode=DelegationMode.PROMPT,
+        )
+
+        with (
+            patch.object(rds, "prepare_delegation_method", return_value=prepared),
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(
+                rds,
+                "_collect_review_diffs",
+                return_value=rds._ReviewDiffs(committed="diff --git a b", staged="", unstaged=""),
+            ),
+            patch.object(
+                rds,
+                "_load_review_config",
+                return_value=(config, config.ai.review_implementation),
+            ),
+            patch.object(rds, "_run_review_delegation", return_value=prompted) as delegate,
+        ):
+            result = rds.review_implementation()
+
+        assert result is prompted
+        delegate.assert_called_once()
+
     def test_historical_passes_for_another_binding_do_not_suppress_review(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
     ) -> None:
@@ -406,6 +455,79 @@ class TestImplementationReviewPreflightCap:
         assert result.exit_code == 1
         record.assert_called_once()
         assert record.call_args.args[3] is ReviewOutcome.NOTHING_STAGED
+
+    def test_concurrent_reviews_cannot_dispatch_beyond_the_binding_cap(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        config = self._config(limit=1)
+        prepared = self._prepared_for(review_preflight, SessionKind.IMPLEMENTATION, tmp_path)
+        completed = DelegationResult(success=True, feedback="ok", mode=DelegationMode.HEADLESS)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        second_finished = threading.Event()
+        calls = 0
+        results: list[DelegationResult] = []
+        errors: list[BaseException] = []
+
+        def delegate(*args: object, **kwargs: object) -> DelegationResult:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                release_first.wait(timeout=5)
+            return completed
+
+        def invoke(*, second: bool) -> None:
+            try:
+                results.append(rds.review_implementation())
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                if second:
+                    second_finished.set()
+
+        with (
+            patch.object(rds, "prepare_delegation_method", return_value=prepared),
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(
+                rds,
+                "_collect_review_diffs",
+                return_value=rds._ReviewDiffs(committed="diff --git a b", staged="", unstaged=""),
+            ),
+            patch.object(
+                rds,
+                "_load_review_config",
+                return_value=(config, config.ai.review_implementation),
+            ),
+            patch.object(rds, "_run_review_delegation", side_effect=delegate),
+            patch.object(rds, "cleanup_delegation_bundle"),
+        ):
+            first = threading.Thread(target=invoke, kwargs={"second": False})
+            second = threading.Thread(target=invoke, kwargs={"second": True})
+            first.start()
+            try:
+                assert first_started.wait(timeout=1)
+                second.start()
+                assert not second_finished.wait(timeout=0.1)
+            finally:
+                release_first.set()
+                first.join(timeout=2)
+                second.join(timeout=2)
+
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert errors == []
+        assert calls == 1
+        assert len(results) == 2
+        assert sum(result.skipped for result in results) == 1
+        assert (
+            count_binding_passes(
+                tmp_path,
+                delegation=DelegationKind.CODE_REVIEW,
+                binding=prepared.binding,
+            )
+            == 1
+        )
 
 
 class TestAnnounceReviewPassBudget:

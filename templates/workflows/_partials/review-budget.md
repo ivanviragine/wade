@@ -4,8 +4,7 @@ Trust the exact budget and pass count printed by the review command. Do not
 kill, background, or early-exit a bounded review before that budget elapses.
 
 A headless timeout is a budget overrun, not a successful review. Use any
-salvaged findings, retry once, and do not loop on the same commit. A non-timeout
-exit 1 is an execution error to diagnose. In an implementation session,
+salvaged findings, retry once, and do not loop on the same commit. In an implementation session,
 `wade review implementation` stops before dispatching another reviewer once
 `done.max_review_passes` is reached; proceed to `wade implementation-session done`,
 which remains authoritative for completion and PR review status. Plan review has
