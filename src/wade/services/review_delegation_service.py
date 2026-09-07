@@ -1029,7 +1029,10 @@ def review_implementation(
             _report_failed_review(repo_root, head, prepared, result)
         return result
 
-    if prepared.host_session is not SessionKind.IMPLEMENTATION:
+    # An acknowledgement records a review the user has already performed; it
+    # cannot dispatch or emit another review. Its receipt write is separately
+    # atomic and idempotent, so do not make it contend for the dispatch cap.
+    if ack_self_review or prepared.host_session is not SessionKind.IMPLEMENTATION:
         return _execute_review()
 
     # No-diff and empty-index outcomes above are non-delegating state checks

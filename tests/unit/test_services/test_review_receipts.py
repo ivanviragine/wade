@@ -266,6 +266,43 @@ class TestImplementationReviewPreflightCap:
             == 3
         )
 
+    def test_exhausted_binding_allows_self_review_acknowledgement(
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+    ) -> None:
+        config = self._config(limit=1)
+        prepared = self._prepared_for(review_preflight, SessionKind.IMPLEMENTATION, tmp_path)
+        self._write_passes(tmp_path, prepared.binding, passes=1)
+
+        with (
+            patch.object(rds, "prepare_delegation_method", return_value=prepared),
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(
+                rds,
+                "_collect_review_diffs",
+                return_value=rds._ReviewDiffs(committed="diff --git a b", staged="", unstaged=""),
+            ),
+            patch.object(
+                rds,
+                "_load_review_config",
+                return_value=(config, config.ai.review_implementation),
+            ),
+            patch.object(rds, "_run_review_delegation") as delegate,
+        ):
+            result = rds.review_implementation(ack_self_review=True)
+
+        assert result.success is True
+        assert result.skipped is False
+        assert "Self-review acknowledged" in result.feedback
+        delegate.assert_not_called()
+        receipt = read_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit="a" * 40,
+            binding=prepared.binding,
+        )
+        assert receipt is not None
+        assert receipt.satisfies_review
+
     def test_below_limit_still_delegates(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
     ) -> None:
