@@ -99,8 +99,9 @@ def _skip_exhausted_implementation_review(
     The completion gate owns the final decision for an unreviewed HEAD, but
     launching another reviewer cannot change that decision once this binding has
     consumed all of its available review→fix passes. The exception is a HEAD
-    satisfied only by another binding: ``done`` requires the active reviewer to
-    repair that state, even when it has already exhausted its ordinary budget.
+    satisfied only by another binding while the active binding lacks a
+    satisfying receipt: ``done`` requires the active reviewer to repair that
+    state, even when it has already exhausted its ordinary budget.
     Counting through the validated record service is deliberately fail-safe:
     unreadable or malformed state counts as zero, never as an exhausted budget.
     """
@@ -116,12 +117,18 @@ def _skip_exhausted_implementation_review(
     limit = config.done.max_review_passes
     if passes < limit:
         return None
+    active_receipt = read_review_record(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        commit=head,
+        binding=prepared.binding,
+    )
     if has_other_satisfying_binding(
         repo_root,
         delegation=DelegationKind.CODE_REVIEW,
         commit=head,
         binding=prepared.binding,
-    ):
+    ) and (active_receipt is None or not active_receipt.satisfies_review):
         return None
 
     message = (
@@ -1030,17 +1037,21 @@ def review_implementation(
     # binding-scoped in-flight pass before checking the cap, then keep it until
     # the result receipt (if any) is written. This makes admission, dispatch,
     # and pass consumption one cross-process transaction.
+    reservation_acquired = False
     try:
         with binding_pass_reservation(
             repo_root,
             delegation=DelegationKind.CODE_REVIEW,
             binding=prepared.binding,
         ):
+            reservation_acquired = True
             cap_skip = _skip_exhausted_implementation_review(repo_root, head, prepared, config)
             if cap_skip is not None:
                 return cap_skip
             return _execute_review()
     except OSError as exc:
+        if reservation_acquired:
+            raise
         cleanup_delegation_bundle(prepared, preserve=True)
         message = f"Could not reserve an implementation review pass: {exc}"
         console.error(message)
