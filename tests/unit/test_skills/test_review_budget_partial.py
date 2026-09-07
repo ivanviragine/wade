@@ -20,6 +20,8 @@ class TestReviewBudgetWorkflowPartial:
             encoding="utf-8"
         )
         assert "done.max_review_passes" in partial
+        assert "stops before dispatching another reviewer" in partial
+        assert "wade implementation-session done" in partial
         assert "may be skipped only" in partial
         assert "WADE" not in partial
 

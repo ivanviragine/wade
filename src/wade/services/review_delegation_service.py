@@ -17,7 +17,7 @@ from wade.models.config import DEFAULT_SANDBOX, AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.models.session_manifest import ReviewOutcome
-from wade.models.workflow import DelegationKind
+from wade.models.workflow import DelegationKind, SessionKind
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
     build_relaunch_command,
@@ -66,8 +66,9 @@ def _announce_review_pass_budget(passes: int, limit: int) -> None:
     The ``done`` cap stops requiring re-review of new commits after
     ``done.max_review_passes`` passes. Printing the running count here means an
     agent sees its remaining budget directly from ``wade review implementation``
-    rather than from buried skill/prompt prose. Informational only — the cap is
-    enforced (and scoped to implementation sessions) at ``done`` time.
+    rather than from buried skill/prompt prose. ``done`` remains the
+    authoritative completion classifier, while the review command prevents an
+    implementation session from dispatching a review beyond the same cap.
     """
     remaining = max(0, limit - passes)
     if remaining > 0:
@@ -83,6 +84,48 @@ def _announce_review_pass_budget(passes: int, limit: int) -> None:
             "review-pass cap is now reached. `done` will complete without requiring "
             "re-review of further commits. Configure with `done.max_review_passes`."
         )
+
+
+def _skip_exhausted_implementation_review(
+    repo_root: Path,
+    prepared: PreparedDelegationMethod,
+    config: ProjectConfig,
+) -> DelegationResult | None:
+    """Skip an implementation review that has exhausted its frozen binding budget.
+
+    The completion gate owns the final decision for an unreviewed HEAD, but
+    launching another reviewer cannot change that decision once this binding has
+    consumed all of its available review→fix passes. Counting through the
+    validated record service is deliberately fail-safe: unreadable or malformed
+    state counts as zero, never as an exhausted budget.
+    """
+
+    if prepared.host_session is not SessionKind.IMPLEMENTATION:
+        return None
+
+    passes = count_binding_passes(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        binding=prepared.binding,
+    )
+    limit = config.done.max_review_passes
+    if passes < limit:
+        return None
+
+    message = (
+        f"Review-pass safety limit reached ({passes} of {limit}) for the active frozen "
+        "review binding. No additional implementation review was launched. Run "
+        "`wade implementation-session done`; its completion classifier remains "
+        "authoritative and projects the PR review status."
+    )
+    console.info(message)
+    cleanup_delegation_bundle(prepared, preserve=False)
+    return DelegationResult(
+        success=True,
+        feedback=message,
+        mode=DelegationMode.PROMPT,
+        skipped=True,
+    )
 
 
 def _load_review_config(
@@ -881,6 +924,15 @@ def review_implementation(
             skipped=True,
             exit_code=1 if ack_self_review else 0,
         )
+
+    # No-diff and empty-index outcomes above are non-delegating state checks
+    # with their own receipt semantics. They must win before the cap guard so a
+    # stale count cannot manufacture a success for ``--staged --ack-self-review``.
+    # The guard then precedes both prompt acknowledgement and every AI mode, so
+    # no cap-exhausted command mutates a receipt or starts another review.
+    cap_skip = _skip_exhausted_implementation_review(repo_root, prepared, config)
+    if cap_skip is not None:
+        return cap_skip
 
     if ack_self_review:
         passes = _record_binding_outcome(
