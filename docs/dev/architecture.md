@@ -804,7 +804,9 @@ denial do not. Otherwise an unavailable reviewer could exhaust the cap and let
 session, `wade review implementation` consults that same active frozen-binding
 count before dispatch and skips an excess launch; `implementation-session done`
 remains the authoritative classifier for accepting an unreviewed later commit
-and projecting its cap-reached PR review status. Plan and PR-comment reviews are
+and projecting its cap-reached PR review status. A valid `--ack-self-review`
+still records the current binding receipt because it acknowledges work already
+performed rather than dispatching a reviewer. Plan and PR-comment reviews are
 uncapped.
 
 The capability remediation is intentionally tool-neutral: retain the sandbox
