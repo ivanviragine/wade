@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from wade.models.workflow import DelegationKind, SessionKind
@@ -69,3 +71,55 @@ def test_dependency_result_contract_remains_machine_readable() -> None:
 
     assert "## Finding-admission policy" not in prompt
     assert "Output ONLY direct acyclic edges" in prompt
+
+
+@pytest.mark.parametrize(
+    ("kind", "host_session", "result_template", "uses_admission_policy"),
+    [
+        (DelegationKind.PLAN_REVIEW, SessionKind.PLAN, "review-result-plan.md", True),
+        (
+            DelegationKind.CODE_REVIEW,
+            SessionKind.IMPLEMENTATION,
+            "review-result-implementation.md",
+            True,
+        ),
+        (
+            DelegationKind.CODE_REVIEW,
+            SessionKind.REVIEW_PR_COMMENTS,
+            "review-result-pr-comments.md",
+            True,
+        ),
+        (DelegationKind.CODE_REVIEW, None, "review-result-code.md", True),
+        (DelegationKind.BATCH_REVIEW, None, "review-result-batch.md", True),
+        (DelegationKind.DEPENDENCY_ANALYSIS, None, "review-result-deps.md", False),
+    ],
+)
+def test_review_result_contract_loads_lifecycle_templates(
+    kind: DelegationKind,
+    host_session: SessionKind | None,
+    result_template: str,
+    uses_admission_policy: bool,
+) -> None:
+    templates = {
+        "review-finding-admission.md": "Admission policy.",
+        result_template: "Stage-specific result contract.",
+    }
+    with patch(
+        "wade.services.skill_invocation_service.load_prompt_template",
+        side_effect=templates.__getitem__,
+    ) as load_template:
+        prompt = compose_delegation_prompt(
+            kind,
+            contract="Fixed operation contract.",
+            method_section="<method>Method.</method>",
+            input_label="Review input",
+            input_content="Untrusted input.",
+            host_session=host_session,
+        )
+
+    expected_templates = [result_template]
+    if uses_admission_policy:
+        expected_templates.append("review-finding-admission.md")
+        assert "Admission policy." in prompt
+    assert "Stage-specific result contract." in prompt
+    assert [call.args[0] for call in load_template.call_args_list] == expected_templates

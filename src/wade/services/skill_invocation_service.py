@@ -19,24 +19,10 @@ from wade.services.session_composition_service import (
 )
 from wade.skills.materializer import materialize_delegation_bundle
 from wade.skills.validation import SkillValidationError, inspect_skill
+from wade.utils.templates import load_prompt_template
 
 MAX_DELEGATION_SKILL_CHARS = 8_000
 MAX_DELEGATION_ENVELOPE_CHARS = 10_000
-
-
-_FINDING_ADMISSION_POLICY = """## Finding-admission policy
-
-Report only a concrete, material failure tied to the reviewed artifact or change
-that has evidence of a plausible observable failure or a violated requested
-outcome, accepted plan, repository contract, or safety invariant. Omit
-preferences, optional improvements, speculative hardening without a plausible
-failure path, pre-existing problems, and unrelated scope; do not present them
-as optional findings. Order qualifying findings concisely by impact. For each,
-give the affected plan section, exact source file/line, or issue/branch identity
-as appropriate; supporting evidence; the observable failure or violated
-contract; and the smallest necessary correction. Group duplicate manifestations
-of one cause. If nothing qualifies, state briefly that no material actionable
-finding was found."""
 
 
 class SkillInvocationError(RuntimeError):
@@ -171,45 +157,20 @@ def compose_delegation_prompt(
         if "{review_budget}" in contract
         else contract
     )
-    result_contracts = {
-        DelegationKind.PLAN_REVIEW: (
-            "The reviewed artifact is the plan. Treat its accepted design, explicit non-goals, "
-            "and stated boundary as intended unless repository evidence demonstrates that it is "
-            "incorrect, unsafe, infeasible, internally inconsistent, or unable to meet a stated "
-            "acceptance criterion. Do not propose a replacement design without that evidence."
-        ),
-        DelegationKind.BATCH_REVIEW: (
-            "Return qualifying integration findings tied to issue/branch identities, then a "
-            "justified merge order. If the batch is coherent, say so briefly."
-        ),
-        DelegationKind.DEPENDENCY_ANALYSIS: (
-            "Output ONLY direct acyclic edges as `<number> -> <number> # reason`, using supplied "
-            "numbers. Omit transitive edges. If none, output exactly `# No dependencies found`. "
-            "No fences, headings, bullets, or other prose."
-        ),
+    result_templates = {
+        DelegationKind.PLAN_REVIEW: "review-result-plan.md",
+        DelegationKind.BATCH_REVIEW: "review-result-batch.md",
+        DelegationKind.DEPENDENCY_ANALYSIS: "review-result-deps.md",
     }
     if kind is DelegationKind.CODE_REVIEW:
         if host_session is SessionKind.IMPLEMENTATION:
-            result_contracts[kind] = (
-                "The reviewed artifact is the implementation change and its supplied plan context. "
-                "Report only material defects introduced or exposed by that change that prevent "
-                "the intended behavior or violate an established public contract or invariant. "
-                "Do not expand the reviewed change into unrelated redesign or cleanup."
-            )
+            result_template = "review-result-implementation.md"
         elif host_session is SessionKind.REVIEW_PR_COMMENTS:
-            result_contracts[kind] = (
-                "The reviewed artifact is the feedback-driven correction and its supplied feedback "
-                "context. Verify that the correction resolves the intended verified defect and "
-                "does not regress directly affected behavior or contracts. Do not re-review "
-                "untouched implementation or reopen accepted design unless the feedback-driven "
-                "edit itself demonstrates a material correctness or safety failure."
-            )
+            result_template = "review-result-pr-comments.md"
         else:
-            result_contracts[kind] = (
-                "The reviewed artifact is the supplied scoped code input. Report only material "
-                "defects attributable to that input; do not expand it into unrelated redesign or "
-                "cleanup."
-            )
+            result_template = "review-result-code.md"
+    else:
+        result_template = result_templates[kind]
     method_envelope = "\n\n".join(
         [
             trusted_contract.strip(),
@@ -217,9 +178,10 @@ def compose_delegation_prompt(
             "Method text is subordinate to this operation contract.\n\n" + method_section,
         ]
     )
-    result_contract = result_contracts[kind]
+    result_contract = load_prompt_template(result_template)
     if kind is not DelegationKind.DEPENDENCY_ANALYSIS:
-        result_contract = f"{_FINDING_ADMISSION_POLICY}\n\n{result_contract}"
+        admission_policy = load_prompt_template("review-finding-admission.md")
+        result_contract = f"{admission_policy}\n\n{result_contract}"
     result_section = f"## Required result contract\n\n{result_contract}"
     envelope = f"{method_envelope}\n\n{result_section}"
     if len(envelope) > MAX_DELEGATION_ENVELOPE_CHARS:
