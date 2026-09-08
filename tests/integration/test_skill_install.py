@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-from wade.models.workflow import SessionKind
+from wade.models.workflow import SESSION_DEFINITIONS, SessionKind
 from wade.services.session_composition_service import compose_session
 from wade.skills.installer import (
     SKILL_FILES,
@@ -224,3 +224,20 @@ class TestFixedWorkflowRendering:
         assert "docs/" in workflow
         assert docs_command in workflow
         assert "Documentation [mandatory decision]" in workflow
+
+    @pytest.mark.parametrize(
+        "kind",
+        (SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS),
+    )
+    def test_closing_workflow_reviews_the_post_documentation_final_commit(
+        self, tmp_git_repo: Path, kind: SessionKind
+    ) -> None:
+        workflow = self._compose(tmp_git_repo, kind)
+
+        assert SESSION_DEFINITIONS[kind].workflow_revision == 2
+        assert (
+            workflow.index("**Documentation [mandatory decision].**")
+            < workflow.index("**Knowledge.**")
+            < workflow.index("**Method review.**")
+        )
+        assert "If review findings create another tracked commit" in workflow

@@ -87,6 +87,7 @@ src/wade/
 │   ├── skill_invocation_service.py # Bind methods to bounded operation contracts
 │   ├── skill_diagnostics_service.py # Discovery and precedence diagnostics
 │   ├── review_record_service.py # Binding-aware durable review outcomes
+│   ├── review_cycle_service.py # Safe PR-comment feedback-cycle context
 │   ├── documentation_receipt_service.py # Current-commit documentation decision
 │   ├── batch_review_service.py      # Batch issue review
 │   ├── deps_service.py  # Dependency analysis
@@ -809,6 +810,22 @@ still records the current binding receipt because it acknowledges work already
 performed rather than dispatching a reviewer. Plan and PR-comment reviews are
 uncapped.
 
+Review input converges without weakening completion evidence. The first mapped
+implementation review uses the full branch diff; later reviews may select the
+nearest satisfying record for the same frozen REVIEW binding that is an ancestor
+of `HEAD`, then inspect only the delta from that commit. A Git error, malformed
+or foreign record, non-ancestor, or merge on that ancestry path forces the full
+branch diff. Staged and unstaged changes remain separate inputs in either case,
+and every review writes its ordinary exact-HEAD receipt.
+
+`review_cycle_service.py` stores the PR-comment session's issue/PR identity,
+pre-edit baseline, and normalized feedback in `.wade/review-cycles/`, outside
+the immutable session bundle. Re-fetching retains prior feedback and adds new
+feedback while preserving the baseline; a successful PR-comment `done` removes
+it. The closing review receives the accumulated feedback and cycle delta only
+after safe state, identity, ancestry, and merge-path checks. Any failed check
+emits a diagnostic and reviews the complete branch diff instead.
+
 The capability remediation is intentionally tool-neutral: retain the sandbox
 and grant only the worktree Git metadata paths, GitHub credential/API route, or
 local staging path named by the failure. Codex uses the resolved `ai.sandbox`
@@ -918,7 +935,7 @@ includes the active binding's pass count. The structured worktree records under
 `.wade/reviews/` provide deterministic gate evidence; the PR-body projection is
 the durable human-readable outcome.
 
-Binding-aware review records and documentation receipts use the descriptor-safe
+Binding-aware review records, review-cycle contexts, and documentation receipts use the descriptor-safe
 state primitives in `utils/safe_state.py`: `.wade` and intermediate directories
 must be real directories, final files are opened relative to trusted directory
 handles, and malformed/symlinked/unreadable state is treated as absent. Record

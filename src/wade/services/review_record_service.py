@@ -9,6 +9,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from wade.git import branch as git_branch
+from wade.git import repo as git_repo
+from wade.git.repo import GitError
 from wade.models.session_manifest import (
     ResolvedBinding,
     ReviewBinding,
@@ -155,6 +158,48 @@ def count_binding_passes(
         for record in list_review_records(root)
         if record.delegation is delegation and record.binding == expected and record.consumes_pass
     )
+
+
+def nearest_satisfying_review_baseline(
+    root: Path,
+    *,
+    delegation: DelegationKind,
+    head: str,
+    binding: ResolvedBinding,
+) -> str | None:
+    """Find the nearest safe same-binding satisfying ancestor of ``head``.
+
+    Review records intentionally carry no timestamp, so selection uses Git
+    ancestry distance. Every failure in ancestry or merge-lineage inspection
+    returns ``None``: the caller must review the complete branch diff rather
+    than accidentally narrowing coverage.
+    """
+
+    expected = ReviewBinding.from_resolved(binding)
+    nearest: str | None = None
+    nearest_distance: int | None = None
+    try:
+        for record in list_review_records(root):
+            if (
+                record.delegation is not delegation
+                or record.binding != expected
+                or not record.satisfies_review
+            ):
+                continue
+            ancestor = git_branch.is_merged_into(root, record.commit, head)
+            if ancestor is None:
+                return None
+            if not ancestor:
+                continue
+            distance = git_branch.commits_ahead(root, head, record.commit)
+            if nearest_distance is None or distance < nearest_distance:
+                nearest = record.commit
+                nearest_distance = distance
+        if nearest is None or git_repo.has_merge_commit_between(root, nearest, head):
+            return None
+    except GitError:
+        return None
+    return nearest
 
 
 @contextmanager
