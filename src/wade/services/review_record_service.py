@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -153,6 +155,29 @@ def count_binding_passes(
         for record in list_review_records(root)
         if record.delegation is delegation and record.binding == expected and record.consumes_pass
     )
+
+
+@contextmanager
+def binding_pass_reservation(
+    root: Path,
+    *,
+    delegation: DelegationKind,
+    binding: ResolvedBinding,
+) -> Iterator[None]:
+    """Serialize review-pass admission and receipt recording for one binding.
+
+    Holding the cross-process lock from the preflight count through delegation
+    and its resulting receipt is the in-flight reservation. A process that
+    produces a non-consuming outcome leaves no pass record, while a completed
+    review writes its receipt before releasing the lock. Because the lock is
+    advisory OS state rather than a durable marker, it is released if the
+    process exits unexpectedly instead of permanently exhausting the budget.
+    """
+
+    lock_name = f"review-pass@{delegation.value}@{binding.digest.removeprefix('sha256:')}"
+    lock_path = root / ".wade" / _DIRECTORIES[0] / lock_name
+    with file_lock(lock_path, create_parent=False, resolve_path=False):
+        yield
 
 
 def has_other_satisfying_binding(

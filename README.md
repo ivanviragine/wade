@@ -299,7 +299,11 @@ printing it does not certify that a review happened. After performing that
 self-review and addressing its findings, run
 `wade review implementation --ack-self-review` to write the current commit and
 frozen-review-binding receipt. Successful headless or interactive reviews write
-the same receipt directly.
+the same receipt directly. In an implementation session, once the active frozen
+review binding has consumed `done.max_review_passes` (default 2), `wade review
+implementation` exits successfully without launching another reviewer and directs
+you to `wade implementation-session done`. The dispatch cap does not block a
+valid `--ack-self-review`, which still writes its active-binding receipt.
 
 To fetch the unresolved comments themselves during a review session, the agent
 runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads with
@@ -509,7 +513,7 @@ Decision and integrity gates deliberately require an explicit valid outcome:
 | PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (both change-producing session types) | `done.require_pr_summary: false` |
 | Documentation decision | neither an `--updated` nor reasoned `--not-needed` receipt exists for current HEAD | *no disable toggle; `docs --not-needed "<reason>"` records the explicit no-change outcome* |
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (both change-producing session types) | `done.require_sync: false` |
-| Review ran | `wade review implementation` has no successful external-review or explicitly acknowledged self-review record for the current commit **and frozen REVIEW binding**, or the frozen workflow/skill bundle no longer matches its manifest. Bundle validation happens before receipts or pass counts are trusted. Prompt emission alone never satisfies this gate. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles for the active reviewer, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| Review ran | `wade review implementation` has no successful external-review or explicitly acknowledged self-review record for the current commit **and frozen REVIEW binding**, or the frozen workflow/skill bundle no longer matches its manifest. Bundle validation happens before receipts or pass counts are trusted. Prompt emission alone never satisfies this gate. **Implementation sessions bound this loop:** at `done.max_review_passes` (default 2), `wade review implementation` stops before launching an excess reviewer, while a valid `--ack-self-review` may still record its receipt; `done` remains authoritative and completes an unreviewed later commit with a cap-reached status instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |

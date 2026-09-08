@@ -17,7 +17,7 @@ from wade.models.config import DEFAULT_SANDBOX, AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.models.session_manifest import ReviewOutcome
-from wade.models.workflow import DelegationKind
+from wade.models.workflow import DelegationKind, SessionKind
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
     build_relaunch_command,
@@ -36,7 +36,9 @@ from wade.services.delegation_service import (
     resolve_mode,
 )
 from wade.services.review_record_service import (
+    binding_pass_reservation,
     count_binding_passes,
+    has_other_satisfying_binding,
     read_review_record,
     write_review_record,
 )
@@ -66,8 +68,9 @@ def _announce_review_pass_budget(passes: int, limit: int) -> None:
     The ``done`` cap stops requiring re-review of new commits after
     ``done.max_review_passes`` passes. Printing the running count here means an
     agent sees its remaining budget directly from ``wade review implementation``
-    rather than from buried skill/prompt prose. Informational only — the cap is
-    enforced (and scoped to implementation sessions) at ``done`` time.
+    rather than from buried skill/prompt prose. ``done`` remains the
+    authoritative completion classifier, while the review command prevents an
+    implementation session from dispatching a review beyond the same cap.
     """
     remaining = max(0, limit - passes)
     if remaining > 0:
@@ -83,6 +86,65 @@ def _announce_review_pass_budget(passes: int, limit: int) -> None:
             "review-pass cap is now reached. `done` will complete without requiring "
             "re-review of further commits. Configure with `done.max_review_passes`."
         )
+
+
+def _skip_exhausted_implementation_review(
+    repo_root: Path,
+    head: str,
+    prepared: PreparedDelegationMethod,
+    config: ProjectConfig,
+) -> DelegationResult | None:
+    """Skip an implementation review that has exhausted its frozen binding budget.
+
+    The completion gate owns the final decision for an unreviewed HEAD, but
+    launching another reviewer cannot change that decision once this binding has
+    consumed all of its available review→fix passes. The exception is a HEAD
+    satisfied only by another binding while the active binding lacks a
+    satisfying receipt: ``done`` requires the active reviewer to repair that
+    state, even when it has already exhausted its ordinary budget.
+    Counting through the validated record service is deliberately fail-safe:
+    unreadable or malformed state counts as zero, never as an exhausted budget.
+    """
+
+    if prepared.host_session is not SessionKind.IMPLEMENTATION:
+        return None
+
+    passes = count_binding_passes(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        binding=prepared.binding,
+    )
+    limit = config.done.max_review_passes
+    if passes < limit:
+        return None
+    active_receipt = read_review_record(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        commit=head,
+        binding=prepared.binding,
+    )
+    if has_other_satisfying_binding(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        commit=head,
+        binding=prepared.binding,
+    ) and (active_receipt is None or not active_receipt.satisfies_review):
+        return None
+
+    message = (
+        f"Review-pass safety limit reached ({passes} of {limit}) for the active frozen "
+        "review binding. No additional implementation review was launched. Run "
+        "`wade implementation-session done`; its completion classifier remains "
+        "authoritative and projects the PR review status."
+    )
+    console.info(message)
+    cleanup_delegation_bundle(prepared, preserve=False)
+    return DelegationResult(
+        success=True,
+        feedback=message,
+        mode=DelegationMode.PROMPT,
+        skipped=True,
+    )
 
 
 def _load_review_config(
@@ -882,84 +944,123 @@ def review_implementation(
             exit_code=1 if ack_self_review else 0,
         )
 
-    if ack_self_review:
-        passes = _record_binding_outcome(
-            repo_root,
-            head,
-            prepared,
-            ReviewOutcome.REVIEWED,
-        )
-        cleanup_delegation_bundle(prepared, preserve=passes is None)
-        if passes is None:
+    def _execute_review() -> DelegationResult:
+        if ack_self_review:
+            passes = _record_binding_outcome(
+                repo_root,
+                head,
+                prepared,
+                ReviewOutcome.REVIEWED,
+            )
+            cleanup_delegation_bundle(prepared, preserve=passes is None)
+            if passes is None:
+                return DelegationResult(
+                    success=False,
+                    feedback="Self-review acknowledgement could not be persisted.",
+                    mode=DelegationMode.PROMPT,
+                    exit_code=1,
+                )
+            _announce_review_pass_budget(passes, config.done.max_review_passes)
+            return DelegationResult(
+                success=True,
+                feedback=(
+                    "Self-review acknowledged for the current commit and frozen review binding."
+                ),
+                mode=DelegationMode.PROMPT,
+            )
+
+        diff_content = diffs.review_input(staged_only=staged)
+        template = load_prompt_template("review-code.md")
+        try:
+            result = _run_review_delegation(
+                template,
+                "review_implementation",
+                content=diff_content,
+                config=config,
+                cmd_config=cmd_config,
+                ai_tool=ai_tool,
+                model=model,
+                mode=mode,
+                effort=effort,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                effort_explicit=effort_explicit,
+                permission_mode=permission_mode,
+                yolo=yolo,
+                permission_mode_explicit=permission_mode_explicit,
+                sandbox=sandbox,
+                delegation_kind=DelegationKind.CODE_REVIEW,
+                method_section=prepared.method_section,
+                input_label="Diff input",
+                cwd=repo_root,
+                relaunch_skills=skills,
+                relaunch_staged=staged,
+            )
+        except SkillInvocationError as exc:
+            console.error(str(exc))
+            cleanup_delegation_bundle(prepared, preserve=True)
             return DelegationResult(
                 success=False,
-                feedback="Self-review acknowledgement could not be persisted.",
+                feedback=str(exc),
                 mode=DelegationMode.PROMPT,
                 exit_code=1,
             )
-        _announce_review_pass_budget(passes, config.done.max_review_passes)
-        return DelegationResult(
-            success=True,
-            feedback=("Self-review acknowledged for the current commit and frozen review binding."),
-            mode=DelegationMode.PROMPT,
-        )
+        cleanup_delegation_bundle(prepared, preserve=not result.success)
+        # Count completed reviews and real headless timeouts toward the cap. A
+        # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
+        # has not consumed a review→fix cycle; counting it would make `done` skip a
+        # required review for an infrastructure failure (#462).
+        if (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
+            outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
+            passes = _record_binding_outcome(repo_root, head, prepared, outcome)
+            # Surface the running budget from the command itself so the caller sees
+            # how many passes remain before `done` stops requiring re-review — no
+            # need to rely on the "run at most N times" rule buried in the
+            # skill/prompt. Guarded by an int check so a mocked
+            # a failed receipt write never triggers it.
+            if isinstance(passes, int):
+                _announce_review_pass_budget(passes, config.done.max_review_passes)
+        elif result.success:
+            console.info(
+                "Prompt emitted; no satisfying review receipt was written. Perform the "
+                "self-review, then acknowledge it explicitly."
+            )
+        else:
+            _report_failed_review(repo_root, head, prepared, result)
+        return result
 
-    diff_content = diffs.review_input(staged_only=staged)
-    template = load_prompt_template("review-code.md")
+    # An acknowledgement records a review the user has already performed; it
+    # cannot dispatch or emit another review. Its receipt write is separately
+    # atomic and idempotent, so do not make it contend for the dispatch cap.
+    if ack_self_review or prepared.host_session is not SessionKind.IMPLEMENTATION:
+        return _execute_review()
+
+    # No-diff and empty-index outcomes above are non-delegating state checks
+    # with their own receipt semantics. For implementation sessions, reserve a
+    # binding-scoped in-flight pass before checking the cap, then keep it until
+    # the result receipt (if any) is written. This makes admission, dispatch,
+    # and pass consumption one cross-process transaction.
+    reservation_acquired = False
     try:
-        result = _run_review_delegation(
-            template,
-            "review_implementation",
-            content=diff_content,
-            config=config,
-            cmd_config=cmd_config,
-            ai_tool=ai_tool,
-            model=model,
-            mode=mode,
-            effort=effort,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort_explicit=effort_explicit,
-            permission_mode=permission_mode,
-            yolo=yolo,
-            permission_mode_explicit=permission_mode_explicit,
-            sandbox=sandbox,
-            delegation_kind=DelegationKind.CODE_REVIEW,
-            method_section=prepared.method_section,
-            input_label="Diff input",
-            cwd=repo_root,
-            relaunch_skills=skills,
-            relaunch_staged=staged,
-        )
-    except SkillInvocationError as exc:
-        console.error(str(exc))
+        with binding_pass_reservation(
+            repo_root,
+            delegation=DelegationKind.CODE_REVIEW,
+            binding=prepared.binding,
+        ):
+            reservation_acquired = True
+            cap_skip = _skip_exhausted_implementation_review(repo_root, head, prepared, config)
+            if cap_skip is not None:
+                return cap_skip
+            return _execute_review()
+    except OSError as exc:
+        if reservation_acquired:
+            raise
         cleanup_delegation_bundle(prepared, preserve=True)
+        message = f"Could not reserve an implementation review pass: {exc}"
+        console.error(message)
         return DelegationResult(
             success=False,
-            feedback=str(exc),
+            feedback=message,
             mode=DelegationMode.PROMPT,
             exit_code=1,
         )
-    cleanup_delegation_bundle(prepared, preserve=not result.success)
-    # Count completed reviews and real headless timeouts toward the cap. A
-    # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
-    # has not consumed a review→fix cycle; counting it would make `done` skip a
-    # required review for an infrastructure failure (#462).
-    if (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
-        outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
-        passes = _record_binding_outcome(repo_root, head, prepared, outcome)
-        # Surface the running budget from the command itself so the caller sees
-        # how many passes remain before `done` stops requiring re-review — no
-        # need to rely on the "run at most N times" rule buried in the
-        # skill/prompt. Guarded by an int check so a mocked
-        # a failed receipt write never triggers it.
-        if isinstance(passes, int):
-            _announce_review_pass_budget(passes, config.done.max_review_passes)
-    elif result.success:
-        console.info(
-            "Prompt emitted; no satisfying review receipt was written. Perform the "
-            "self-review, then acknowledge it explicitly."
-        )
-    else:
-        _report_failed_review(repo_root, head, prepared, result)
-    return result

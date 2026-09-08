@@ -800,7 +800,14 @@ The implementation-review pass cap distinguishes an attempted, bounded review
 from a reviewer that never launched: success and a true headless timeout count
 toward `done.max_review_passes`, but missing credentials/PATH or a sandbox exec
 denial do not. Otherwise an unavailable reviewer could exhaust the cap and let
-`done` bypass its review gate without any review attempt.
+`done` bypass its review gate without any review attempt. For an implementation
+session, `wade review implementation` consults that same active frozen-binding
+count before dispatch and skips an excess launch; `implementation-session done`
+remains the authoritative classifier for accepting an unreviewed later commit
+and projecting its cap-reached PR review status. A valid `--ack-self-review`
+still records the current binding receipt because it acknowledges work already
+performed rather than dispatching a reviewer. Plan and PR-comment reviews are
+uncapped.
 
 The capability remediation is intentionally tool-neutral: retain the sandbox
 and grant only the worktree Git metadata paths, GitHub credential/API route, or

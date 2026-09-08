@@ -666,6 +666,12 @@ class TestWorkDoneCommand:
         assert ack2.returncode == 0, ack2.stdout + ack2.stderr
 
         _commit("v3\n")  # still a newer, un-reviewed commit — but the cap is hit
+        capped_review = _run(["review", "implementation"], cwd=worktree_path)
+        capped_out = " ".join((capped_review.stdout + capped_review.stderr).split())
+        assert capped_review.returncode == 0, capped_out
+        assert "safety limit reached (2 of 2)" in capped_out
+        assert "no additional implementation review was launched" in capped_out.lower()
+        assert "wade implementation-session done" in capped_out
         _record_implementation_docs(worktree_path)
         done2 = _run(["implementation-session", "done"], cwd=worktree_path)
         out2 = " ".join((done2.stdout + done2.stderr).split())
