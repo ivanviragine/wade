@@ -6,64 +6,52 @@ project:
   branch_prefix: feat
   merge_strategy: PR
 ai:
-  default_tool: claude
-  default_model: claude-opus-5
+  default_tool: codex
+  default_model: gpt-5.6-terra
   effort: xhigh
-  plan:
-    effort: xhigh
-    yolo: true
-  implement:
-    yolo: true
+  permission_mode: yolo
   deps:
-    tool: claude
-    model: claude-sonnet-5
     mode: headless
-    effort: high
     timeout: 900
   review_plan:
-    tool: claude
-    model: claude-sonnet-5
+    tool: antigravity-cli
+    model: gemini-3.8-flash
     mode: headless
     effort: high
     enabled: true
     timeout: 900
   review_implementation:
-    tool: claude
-    model: claude-sonnet-5
+    tool: antigravity-cli
+    model: gemini-3.8-flash
     mode: headless
     effort: high
     enabled: true
     timeout: 900
   review_batch:
-    tool: claude
-    model: claude-sonnet-5
     mode: interactive
-    effort: high
     enabled: true
-    yolo: true
-  yolo: false
+  review_pr_comments:
+    enabled: true
 models:
-  claude:
+  codex:
     easy:
-      model: claude-haiku-4.5
-      effort: max
-    medium:
-      model: claude-sonnet-5
-      effort: high
-    complex:
-      model: claude-sonnet-5
+      model: gpt-5.6-terra
       effort: xhigh
+    medium:
+      model: gpt-5.6-terra
+      effort: xhigh
+    complex:
+      model: gpt-5.6-sol
+      effort: high
     very_complex:
-      model: claude-opus-5
+      model: gpt-5.6-sol
       effort: xhigh
 provider:
   name: github
 bot_review:
-  # This repo runs CodeRabbit + Codex, not Cursor Bugbot. Bugbot is disabled so
-  # expectation-verified completion (#448) doesn't wait arrival_timeout for a
-  # review that never arrives on every review check. arrival_timeout/ack_timeout
-  # keep their defaults (300s / 900s).
-  auto_trigger: false
+  auto_trigger: true
+  arrival_timeout: 900
+  ack_timeout: 900
   bots:
   - name: coderabbit
     trigger: '@coderabbitai review'
