@@ -7,12 +7,13 @@ description: Review a code change for correctness, security, maintainability, te
 
 Read the complete diff in context and follow changed values through callers,
 models, persistence, and external boundaries. Prioritize concrete correctness
-bugs, security failures, data loss, broken compatibility, race or state errors,
-and missing tests. Verify error paths and edge conditions as carefully as the
-happy path.
+bugs, security failures, data loss, broken compatibility, concurrency or state
+errors, and missing regression tests where an untested behavior can plausibly
+fail. Anchor each concern to the intended behavior, public contracts, and
+established repository invariants; verify error paths and edge conditions as
+carefully as the happy path.
 
-Check whether the implementation satisfies its stated goal without unrelated
-scope, duplicate abstractions, or stale legacy behavior. Reference exact files
-and lines, explain the observable failure, and suggest the smallest robust fix.
-Distinguish required fixes from optional improvements. If no actionable issue
-exists, say so briefly.
+Reference exact files and lines, explain the observable failure, and suggest the
+smallest robust fix. Omit style preferences, alternative abstractions, generic
+maintainability advice, unrelated legacy cleanup, and hypothetical risks without
+a plausible execution path. If no material defect exists, say so briefly.

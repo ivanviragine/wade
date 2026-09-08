@@ -154,6 +154,13 @@ for the ownership boundary, typed registries, precedence, manifests, and review
 record model; see [Skills, Snapshots, and Pointer System](skills-system.md) for
 discovery, support projection, and filesystem rules.
 
+Closing-review methods are lifecycle-specific: `plan-review` validates an
+implementation plan, `code-review` validates an implementation change, and
+`feedback-fix-review` validates feedback-driven corrections. `review-comments`
+remains the separate WORK method for verifying incoming review feedback before
+editing. The service-owned bounded result contract, not a replaceable method,
+admits only concrete material findings and fixes the review scope.
+
 > `templates/hooks/pre-push` is the completion-gate backstop script installed
 > per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
 > `done`-marker* below).

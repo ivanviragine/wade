@@ -283,6 +283,7 @@ def _run_review_delegation(
     sandbox: bool | None = None,
     delegation_kind: DelegationKind | None = None,
     method_section: str = "",
+    host_session: SessionKind | None = None,
     input_label: str = "Operation input",
     cwd: Path | None = None,
     trusted_dirs: list[str] | None = None,
@@ -317,6 +318,7 @@ def _run_review_delegation(
                 input_label=input_label,
                 input_content=content,
                 budget_line=budget_line,
+                host_session=host_session,
             )
         trusted = base.replace(
             "{review_budget}", budget_line or "No hard deadline — take the time you need."
@@ -594,6 +596,7 @@ def review_plan(
             sandbox=sandbox,
             delegation_kind=DelegationKind.PLAN_REVIEW,
             method_section=prepared.method_section,
+            host_session=prepared.host_session,
             input_label="Plan input",
             cwd=review_cwd,
             trusted_dirs=(
@@ -1187,6 +1190,7 @@ def review_implementation(
                 sandbox=sandbox,
                 delegation_kind=DelegationKind.CODE_REVIEW,
                 method_section=prepared.method_section,
+                host_session=prepared.host_session,
                 input_label="Scoped review input",
                 cwd=repo_root,
                 relaunch_skills=skills,

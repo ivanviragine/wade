@@ -990,7 +990,7 @@ Default replaceable methods:
 |---|---|---|
 | planning session | `builtin:planning` | `builtin:plan-review` |
 | implementation session | `builtin:implementation` | `builtin:code-review` |
-| PR-comment session | `builtin:review-comments` | `builtin:code-review` |
+| PR-comment session | `builtin:review-comments` | `builtin:feedback-fix-review` |
 | batch review | `builtin:batch-review` | — |
 | dependency analysis | `builtin:dependency-analysis` | — |
 
@@ -1044,6 +1044,7 @@ sessions:
   review_pr_comments:
     skills:
       work: [builtin:review-comments]
+      # Omit review to use builtin:feedback-fix-review.
 
 delegations:
   code_review:
@@ -1065,6 +1066,13 @@ binding for REVIEW, then built-in default. A session REVIEW binding wins over a
 different `delegations.code_review`/`plan_review` value for that session.
 Standalone review, batch, and dependency operations use their delegation
 binding. `wade skills resolve` prints every candidate and the winner.
+
+The shared `delegations.code_review.skills.work` setting is an explicit fallback
+for both implementation and PR-comment session REVIEW slots. It intentionally
+replaces the stage-specific built-in default—including
+`builtin:feedback-fix-review` for PR-comment sessions—unless that session sets
+its own `skills.review`; existing frozen sessions keep their recorded binding
+until explicitly refreshed.
 
 Tool-native roots receive only fixed command-support skills. Session lifecycle
 comes from the rendered workflow, while default or custom methodology is frozen

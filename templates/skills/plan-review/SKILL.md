@@ -5,13 +5,14 @@ description: Review a software implementation plan for completeness, feasibility
 
 # Plan review methodology
 
-Check that the goal and non-goals are unambiguous and that the proposed design
-matches the current architecture. Trace every affected entry point, model,
-persistence boundary, migration, compatibility path, error case, test surface,
-and documentation surface. Look for hidden coupling, duplicated sources of
-truth, unsafe ordering, unverifiable acceptance criteria, and assumptions not
-supported by repository evidence.
+Check that the plan can achieve its stated goal and acceptance criteria: verify
+goal coverage, feasibility, architecture compatibility, ordering, failure
+behavior, testability, and implementation surfaces that materially affect the
+outcome. Use repository evidence to evaluate assumptions, contracts, and
+dependencies.
 
-Classify findings by impact and make each one actionable: explain the concrete
-failure mode, where the plan is deficient, and the smallest correction. Do not
-inflate preferences into blockers. If the plan is sound, say so directly.
+Treat explicit non-goals and accepted design choices as boundaries. Recommend
+the smallest plan correction for a demonstrated defect; do not replace the
+design unless evidence shows it is incorrect or unsafe. State the concrete
+failure mode, deficient plan section, and correction for each finding. If the
+plan is sound, say so directly.

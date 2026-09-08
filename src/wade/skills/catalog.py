@@ -15,6 +15,7 @@ BUILTIN_METHODOLOGY_SKILLS: tuple[str, ...] = (
     "review-comments",
     "plan-review",
     "code-review",
+    "feedback-fix-review",
     "batch-review",
     "dependency-analysis",
 )

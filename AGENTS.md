@@ -16,7 +16,7 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 | **the WADE repo** / **this project** | This source repository — `src/wade/`, `templates/`, `tests/`, `scripts/` |
 | **inited project** / **target project** | Any third-party repo that has run `wade init` to adopt the workflow |
 | **workflow templates** | Fixed WADE lifecycle files in `templates/workflows/`; rendered to `.wade/session/WORKFLOW.md` and never replaceable by skill configuration |
-| **methodology skill templates** | WADE-agnostic replaceable methods in `templates/skills/` (planning, implementation, review, and dependency analysis) |
+| **methodology skill templates** | WADE-agnostic replaceable methods in `templates/skills/` (planning, implementation, feedback handling, lifecycle-specific closing review, and dependency analysis) |
 | **session skill snapshots** | Immutable copies of active and available skills under `.wade/session/skills/`, including project skills discovered from the worktree and main checkout |
 | **support skills** | Fixed WADE command-support skills projected into `.claude/skills/` per worktree bootstrap; they are not replaceable methodology |
 | **AGENTS.md pointer** | A short `## Git Workflow` block that **worktree bootstrap** injects into an inited project's `AGENTS.md` per session, not by `wade init` |
@@ -159,7 +159,7 @@ Before considering any work complete:
 - [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed
-- [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, review-pr-comments-session for reviews)
+- [ ] **`templates/skills/`** — updated if agent-facing methodology changed (planning, implementation, feedback handling, or lifecycle-specific closing review)
 - [ ] **Commit** — uses conventional-commit prefix
 
 Note: for inited projects, the doc update pass is an explicit mandatory step in

@@ -474,6 +474,7 @@ def run_coherence_review(
             sandbox=sandbox,
             delegation_kind=DelegationKind.BATCH_REVIEW,
             method_section=prepared.method_section,
+            host_session=prepared.host_session,
             input_label="Batch context",
             cwd=repo_root or Path.cwd(),
             # `wade review batch` takes the tracking issue as a required
