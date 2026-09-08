@@ -686,6 +686,18 @@ def diff_between_checked(repo_root: Path, base: str, head: str) -> str:
     return _run_git("diff", f"{base}...{head}", cwd=repo_root).stdout
 
 
+def has_merge_commit_between(repo_root: Path, base: str, head: str) -> bool:
+    """Return whether the ancestry path from *base* to *head* contains a merge.
+
+    Callers first establish that ``base`` is an ancestor of ``head``.  Keeping
+    this query in the git layer lets review-input selection fail open when git
+    cannot establish a trustworthy incremental lineage.
+    """
+
+    result = _run_git("rev-list", "--merges", f"{base}..{head}", cwd=repo_root)
+    return bool(result.stdout.strip())
+
+
 def diff_worktree(repo_root: Path, *, staged: bool = False) -> str:
     """Return ``git diff`` output for the working tree (or the staged index).
 

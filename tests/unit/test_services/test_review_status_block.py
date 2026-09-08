@@ -28,7 +28,7 @@ from wade.models.config import (
 from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, SessionManifest
 from wade.models.skill import ResolvedSkill, SkillSlot
 from wade.models.task import Task
-from wade.models.workflow import AICommandKey, DelegationKind, SessionKind
+from wade.models.workflow import SESSION_DEFINITIONS, AICommandKey, DelegationKind, SessionKind
 from wade.services.implementation_service.done import _classify_review, _done_via_pr
 from wade.services.implementation_service.lifecycle import (
     REVIEW_STATUS_MARKER_END,
@@ -81,7 +81,7 @@ def _record_review(
     binding = _materialize_review_bundle(root)
     manifest = SessionManifest(
         session=session_kind,
-        workflow_revision=1,
+        workflow_revision=SESSION_DEFINITIONS[session_kind].workflow_revision,
         bundle_digest=compute_session_bundle_digest(session),
         task_id="42",
         ai_command=(

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shlex
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +13,8 @@ from crossby.models.ai import EffortLevel
 from rich.markup import escape
 
 from wade.config.loader import load_config
+from wade.git import branch as git_branch
+from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import DEFAULT_SANDBOX, AICommandConfig, ProjectConfig
@@ -35,13 +39,16 @@ from wade.services.delegation_service import (
     extended_timeout,
     resolve_mode,
 )
+from wade.services.review_cycle_service import read_review_cycle
 from wade.services.review_record_service import (
     binding_pass_reservation,
     count_binding_passes,
     has_other_satisfying_binding,
+    nearest_satisfying_review_baseline,
     read_review_record,
     write_review_record,
 )
+from wade.services.session_composition_service import load_session_manifest
 from wade.services.skill_invocation_service import (
     PreparedDelegationMethod,
     SkillInvocationError,
@@ -60,6 +67,8 @@ from wade.utils.runtime_env import (
 )
 
 logger = structlog.get_logger()
+
+_MAX_OPTIONAL_PLAN_BYTES = 256 * 1024
 
 
 def _announce_review_pass_budget(passes: int, limit: int) -> None:
@@ -652,6 +661,7 @@ class _ReviewDiffs:
     committed: str
     staged: str
     unstaged: str
+    committed_label: str = "Committed branch changes"
 
     @property
     def empty(self) -> bool:
@@ -662,7 +672,7 @@ class _ReviewDiffs:
             return self.staged
         sections: list[str] = []
         for label, content in (
-            ("Committed branch changes", self.committed),
+            (self.committed_label, self.committed),
             ("Staged changes", self.staged),
             ("Unstaged changes", self.unstaged),
         ):
@@ -671,21 +681,182 @@ class _ReviewDiffs:
         return "\n\n".join(sections)
 
 
-def _collect_review_diffs(repo_root: Path, config: ProjectConfig) -> _ReviewDiffs:
+def _collect_review_diffs(
+    repo_root: Path,
+    config: ProjectConfig,
+    *,
+    committed_baseline: str | None = None,
+) -> _ReviewDiffs:
     """Inspect all change sets before classifying an empty review."""
 
     current_branch = git_repo.get_current_branch(repo_root)
     base_branch = _selected_review_base(repo_root, config)
-    committed = (
-        ""
-        if current_branch == base_branch
-        else git_repo.diff_between_checked(repo_root, base_branch, "HEAD").strip()
-    )
+    if committed_baseline is not None:
+        committed = git_repo.diff_between_checked(repo_root, committed_baseline, "HEAD").strip()
+        committed_label = "Committed changes since the prior successful review"
+    else:
+        committed = (
+            ""
+            if current_branch == base_branch
+            else git_repo.diff_between_checked(repo_root, base_branch, "HEAD").strip()
+        )
+        committed_label = "Committed branch changes"
     return _ReviewDiffs(
         committed=committed,
         staged=git_repo.diff_worktree(repo_root, staged=True).strip(),
         unstaged=git_repo.diff_worktree(repo_root, staged=False).strip(),
+        committed_label=committed_label,
     )
+
+
+def _read_optional_plan(repo_root: Path) -> str | None:
+    """Read a bounded regular PLAN.md without treating it as trusted instructions."""
+
+    path = repo_root / "PLAN.md"
+    fd: int | None = None
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        console.info("Optional PLAN.md was not found; continuing without plan context.")
+        return None
+    except OSError as exc:
+        console.warn(f"Could not inspect optional PLAN.md; continuing without it ({exc}).")
+        return None
+    try:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("PLAN.md is not a regular file")
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, os.O_RDONLY | nofollow)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_OPTIONAL_PLAN_BYTES:
+            raise OSError("PLAN.md is not a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = _MAX_OPTIONAL_PLAN_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        if len(content) > _MAX_OPTIONAL_PLAN_BYTES:
+            raise OSError("PLAN.md exceeds the review input limit")
+        return content.decode("utf-8").strip() or None
+    except (OSError, UnicodeError) as exc:
+        console.warn(f"Could not safely read optional PLAN.md; continuing without it ({exc}).")
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+@dataclass(frozen=True)
+class _ReviewInputContext:
+    committed_baseline: str | None = None
+    feedback: str | None = None
+
+
+def _pr_comment_review_context(repo_root: Path, head: str) -> _ReviewInputContext:
+    """Resolve one safe PR-comment cycle baseline and its feedback snapshot."""
+
+    manifest = load_session_manifest(repo_root)
+    if manifest is None or manifest.task_id is None:
+        console.warn(
+            "PR-comment review-cycle context is unavailable; reviewing the complete branch diff."
+        )
+        return _ReviewInputContext()
+    try:
+        branch = git_repo.get_current_branch(repo_root)
+        lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    except GitError as exc:
+        console.warn(
+            "Could not identify the PR-comment review cycle; reviewing the complete branch diff "
+            f"({exc})."
+        )
+        return _ReviewInputContext()
+    if lookup.lookup_failed or not lookup.is_open or lookup.pr is None:
+        console.warn(
+            "No open PR identity for the review cycle; reviewing the complete branch diff."
+        )
+        return _ReviewInputContext()
+
+    cycle = read_review_cycle(
+        repo_root,
+        issue_number=manifest.task_id,
+        pr_number=lookup.pr.number,
+    )
+    if cycle.diagnostic is not None:
+        console.warn(f"{cycle.diagnostic}; reviewing the complete branch diff.")
+        return _ReviewInputContext()
+    if cycle.context is None:
+        console.warn("No active PR-comment review cycle; reviewing the complete branch diff.")
+        return _ReviewInputContext()
+
+    try:
+        ancestor = git_branch.is_merged_into(repo_root, cycle.context.baseline_commit, head)
+        if ancestor is not True:
+            console.warn(
+                "PR-comment review-cycle baseline is not a trustworthy ancestor; "
+                "reviewing the complete branch diff."
+            )
+            return _ReviewInputContext(feedback=cycle.context.feedback)
+        if git_repo.has_merge_commit_between(repo_root, cycle.context.baseline_commit, head):
+            console.warn(
+                "A merge occurred after the PR-comment review-cycle baseline; "
+                "reviewing the complete branch diff."
+            )
+            return _ReviewInputContext(feedback=cycle.context.feedback)
+    except GitError as exc:
+        console.warn(
+            "Could not validate the PR-comment review-cycle baseline; reviewing the complete "
+            f"branch diff ({exc})."
+        )
+        return _ReviewInputContext(feedback=cycle.context.feedback)
+    return _ReviewInputContext(
+        committed_baseline=cycle.context.baseline_commit,
+        feedback=cycle.context.feedback,
+    )
+
+
+def _review_input_context(
+    repo_root: Path,
+    head: str,
+    prepared: PreparedDelegationMethod,
+) -> _ReviewInputContext:
+    """Choose an incremental committed baseline only for its mapped host session."""
+
+    if prepared.host_session is SessionKind.IMPLEMENTATION:
+        return _ReviewInputContext(
+            committed_baseline=nearest_satisfying_review_baseline(
+                repo_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                head=head,
+                binding=prepared.binding,
+            )
+        )
+    if prepared.host_session is SessionKind.REVIEW_PR_COMMENTS:
+        return _pr_comment_review_context(repo_root, head)
+    return _ReviewInputContext()
+
+
+def _compose_review_input(
+    diffs: _ReviewDiffs,
+    *,
+    plan: str | None,
+    feedback: str | None,
+    staged_only: bool,
+) -> str:
+    """Delimit every untrusted review input before it enters the prompt envelope."""
+
+    sections: list[str] = []
+    if plan is not None:
+        sections.append(f"### Plan context (untrusted)\n\n{plan}")
+    if feedback is not None:
+        sections.append(f"### PR-comment feedback snapshot (untrusted)\n\n{feedback}")
+    diff_input = diffs.review_input(staged_only=staged_only)
+    if diff_input:
+        sections.append(diff_input)
+    return "\n\n".join(sections)
 
 
 def _record_binding_outcome(
@@ -878,14 +1049,7 @@ def review_implementation(
 
     try:
         repo_root = git_repo.get_repo_root(Path.cwd())
-        head = git_repo.rev_parse(repo_root, "HEAD")
-        diffs = _collect_review_diffs(repo_root, config)
     except GitError as exc:
-        # ``GitError`` already names the exact command that failed (e.g.
-        # "git diff ... failed (exit N): ..." or "git rev-parse ... failed"),
-        # so surface it directly rather than hard-coding "git diff failed",
-        # which would mis-attribute a repo-root failure and double-prefix a
-        # diff failure.
         message = f"Could not read changes to review: {exc}"
         console.error(message)
         return DelegationResult(
@@ -907,6 +1071,33 @@ def review_implementation(
         return DelegationResult(
             success=False,
             feedback=str(exc),
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+
+    # Resolve the frozen session binding before collecting any diff: the binding
+    # selects whether an implementation re-review can safely narrow its committed
+    # input. A standalone bundle created above must not survive a later GitError.
+    try:
+        head = git_repo.rev_parse(repo_root, "HEAD")
+        input_context = _review_input_context(repo_root, head, prepared)
+        diffs = _collect_review_diffs(
+            repo_root,
+            config,
+            committed_baseline=input_context.committed_baseline,
+        )
+    except GitError as exc:
+        # ``GitError`` already names the exact command that failed (e.g.
+        # "git diff ... failed (exit N): ..." or "git rev-parse ... failed"),
+        # so surface it directly rather than hard-coding "git diff failed",
+        # which would mis-attribute a repo-root failure and double-prefix a
+        # diff failure.
+        cleanup_delegation_bundle(prepared, preserve=False)
+        message = f"Could not read changes to review: {exc}"
+        console.error(message)
+        return DelegationResult(
+            success=False,
+            feedback=message,
             mode=DelegationMode.PROMPT,
             exit_code=1,
         )
@@ -969,7 +1160,12 @@ def review_implementation(
                 mode=DelegationMode.PROMPT,
             )
 
-        diff_content = diffs.review_input(staged_only=staged)
+        diff_content = _compose_review_input(
+            diffs,
+            plan=_read_optional_plan(repo_root),
+            feedback=input_context.feedback,
+            staged_only=staged,
+        )
         template = load_prompt_template("review-code.md")
         try:
             result = _run_review_delegation(
@@ -991,7 +1187,7 @@ def review_implementation(
                 sandbox=sandbox,
                 delegation_kind=DelegationKind.CODE_REVIEW,
                 method_section=prepared.method_section,
-                input_label="Diff input",
+                input_label="Scoped review input",
                 cwd=repo_root,
                 relaunch_skills=skills,
                 relaunch_staged=staged,

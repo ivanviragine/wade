@@ -289,7 +289,7 @@ WADE splits review into an **AI review pass** you or the agent can invoke, and
 | Command | What it reviews |
 |---------|-----------------|
 | `wade review plan <file>` | A plan file, before it becomes tasks |
-| `wade review implementation` | The current implementation diff (mandatory gate before `done`) |
+| `wade review implementation` | The current implementation change (mandatory gate before `done`) |
 | `wade review batch <N>` | Coherence across parallel implementation branches |
 | `wade review pr-comments <N>` | Starts a session to address human/bot PR comments |
 | `wade review trigger <N>` | Posts configured bot-review trigger comments on the task's PR |
@@ -305,9 +305,26 @@ implementation` exits successfully without launching another reviewer and direct
 you to `wade implementation-session done`. The dispatch cap does not block a
 valid `--ack-self-review`, which still writes its active-binding receipt.
 
+The first implementation review for a frozen reviewer binding receives the
+complete branch change. After a successful review and a new fix commit, a
+re-review receives only the committed delta since that successful same-binding
+review, plus any staged or unstaged changes and the local `PLAN.md` when safely
+available. This narrows repeated review work without weakening `done`: the final
+receipt is still written for the exact current commit. An unreadable record,
+changed binding, unreachable baseline, or merge on the baseline-to-HEAD path
+falls back to the complete branch change.
+
 To fetch the unresolved comments themselves during a review session, the agent
 runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads with
 `wade review-pr-comments-session resolve`.
+
+When a PR-comment session starts, WADE records its pre-edit commit and a feedback
+snapshot under local `.wade/review-cycles/` state, outside the immutable session
+bundle. Re-fetching feedback refreshes the snapshot but never advances that
+baseline. Its closing review receives the feedback and the cycle delta; unsafe,
+mismatched, stale, or merged lineage uses the full branch change instead. A
+successful `review-pr-comments-session done` clears the cycle so later feedback
+starts from the then-current PR head.
 
 ### The auto-launched review session
 

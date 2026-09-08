@@ -46,6 +46,7 @@ from wade.services.implementation_service.lifecycle import (
     _strip_summary_section,
 )
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
+from wade.services.review_cycle_service import clear_review_cycle
 from wade.services.review_record_service import (
     count_binding_passes,
     has_other_satisfying_binding,
@@ -386,6 +387,13 @@ def done(
         # Finalize failed — leave the worktree exactly as we found it (gitignore
         # block + skip-worktree still in place) so the user can fix and re-run.
         return False
+
+    if session_type == "review-pr-comments" and not clear_review_cycle(
+        worktree_root, issue_number=issue_number
+    ):
+        # The PR is already finalized, so an inability to clean unsafe local
+        # context is non-fatal. A later cycle will fail open instead of reusing it.
+        console.warn("Could not clear the completed PR-comment review-cycle state safely.")
 
     # Success only: strip the worktree gitignore block and restore .gitignore
     # visibility now that there is nothing left to retry. The PR is already
