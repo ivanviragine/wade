@@ -14,6 +14,7 @@ from wade.models.session_manifest import ResolvedBinding, SessionManifest
 from wade.models.skill import ResolvedSkill, SkillSlot
 from wade.models.workflow import AICommandKey, SessionKind
 from wade.services.session_composition_service import compose_session
+from wade.skills.catalog import BUILTIN_METHODOLOGY_SKILLS
 
 runner = CliRunner()
 
@@ -60,7 +61,7 @@ def test_skills_check_reports_valid_inventory(tmp_path: Path, monkeypatch) -> No
     result = runner.invoke(app, ["skills", "check"])
     assert result.exit_code == 0
     assert "VALID_SKILLS" in result.output
-    assert "builtins=7" in result.output
+    assert f"builtins={len(BUILTIN_METHODOLOGY_SKILLS)}" in result.output
 
 
 def test_session_describe_prints_frozen_bindings(tmp_path: Path) -> None:

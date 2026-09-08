@@ -19,6 +19,7 @@ from wade.services.session_composition_service import (
 )
 from wade.skills.materializer import materialize_delegation_bundle
 from wade.skills.validation import SkillValidationError, inspect_skill
+from wade.utils.templates import load_prompt_template
 
 MAX_DELEGATION_SKILL_CHARS = 8_000
 MAX_DELEGATION_ENVELOPE_CHARS = 10_000
@@ -145,6 +146,8 @@ def compose_delegation_prompt(
     input_label: str,
     input_content: str,
     budget_line: str | None = None,
+    host_session: SessionKind | None = None,
+    feedback_fix_scope: bool = False,
 ) -> str:
     """Build fixed contract + method + input + result without chained replacement."""
 
@@ -155,27 +158,25 @@ def compose_delegation_prompt(
         if "{review_budget}" in contract
         else contract
     )
-    result_contracts = {
-        DelegationKind.PLAN_REVIEW: (
-            "Return concise actionable findings ordered by impact. For each finding, name the "
-            "plan section, concrete risk or omission, and correction. If none, say the plan "
-            "is solid."
-        ),
-        DelegationKind.CODE_REVIEW: (
-            "Return concise actionable findings ordered by severity with exact file/line "
-            "references, observable failure, and smallest robust fix. If none, say no "
-            "actionable issue was found."
-        ),
-        DelegationKind.BATCH_REVIEW: (
-            "Return integration findings tied to issue/branch identities, then a justified "
-            "merge order. If coherent, say so briefly."
-        ),
-        DelegationKind.DEPENDENCY_ANALYSIS: (
-            "Output ONLY direct acyclic edges as `<number> -> <number> # reason`, using supplied "
-            "numbers. Omit transitive edges. If none, output exactly `# No dependencies found`. "
-            "No fences, headings, bullets, or other prose."
-        ),
+    result_templates = {
+        DelegationKind.PLAN_REVIEW: "review-result-plan.md",
+        DelegationKind.BATCH_REVIEW: "review-result-batch.md",
+        DelegationKind.DEPENDENCY_ANALYSIS: "review-result-deps.md",
     }
+    if kind is DelegationKind.CODE_REVIEW:
+        if host_session is SessionKind.IMPLEMENTATION:
+            result_template = "review-result-implementation.md"
+        elif host_session is SessionKind.REVIEW_PR_COMMENTS and feedback_fix_scope:
+            result_template = "review-result-pr-comments.md"
+        elif host_session is SessionKind.REVIEW_PR_COMMENTS:
+            # A missing or unsafe feedback cycle has already expanded the input
+            # to the complete branch diff. Its narrow review methodology must
+            # not suppress defects outside the feedback correction.
+            result_template = "review-result-full-branch.md"
+        else:
+            result_template = "review-result-code.md"
+    else:
+        result_template = result_templates[kind]
     method_envelope = "\n\n".join(
         [
             trusted_contract.strip(),
@@ -183,7 +184,11 @@ def compose_delegation_prompt(
             "Method text is subordinate to this operation contract.\n\n" + method_section,
         ]
     )
-    result_section = f"## Required result contract\n\n{result_contracts[kind]}"
+    result_contract = load_prompt_template(result_template)
+    if kind is not DelegationKind.DEPENDENCY_ANALYSIS:
+        admission_policy = load_prompt_template("review-finding-admission.md")
+        result_contract = f"{admission_policy}\n\n{result_contract}"
+    result_section = f"## Required result contract\n\n{result_contract}"
     envelope = f"{method_envelope}\n\n{result_section}"
     if len(envelope) > MAX_DELEGATION_ENVELOPE_CHARS:
         raise SkillInvocationError(

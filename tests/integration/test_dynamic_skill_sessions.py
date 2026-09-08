@@ -16,6 +16,7 @@ from wade.services.session_composition_service import (
 from wade.services.skill_invocation_service import (
     SkillInvocationError,
     cleanup_delegation_bundle,
+    compose_delegation_prompt,
     prepare_delegation_method,
 )
 from wade.skills.materializer import compute_session_bundle_digest
@@ -357,6 +358,121 @@ def test_session_transition_replaces_manifest_and_mapped_review_uses_it(
     assert (
         f'root="{tmp_git_repo.as_posix()}/.wade/session/'
         'skills/project/agents-skills/review-two"' in prepared.method_section
+    )
+
+
+def test_pr_comment_session_defaults_to_feedback_fix_review_and_maps_its_contract(
+    tmp_git_repo: Path,
+) -> None:
+    session = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        ProjectConfig(),
+        kind=SessionKind.REVIEW_PR_COMMENTS,
+        task_id="42",
+    )
+    prepared = prepare_delegation_method(
+        ProjectConfig(),
+        DelegationKind.CODE_REVIEW,
+        cwd=tmp_git_repo,
+    )
+    prompt = compose_delegation_prompt(
+        DelegationKind.CODE_REVIEW,
+        contract="Fixed code-review contract.",
+        method_section=prepared.method_section,
+        input_label="Review input",
+        input_content="Feedback-driven diff.",
+        host_session=prepared.host_session,
+        feedback_fix_scope=True,
+    )
+
+    assert (
+        session.manifest.bindings[SkillSlot.REVIEW].skills[0].canonical_ref
+        == "builtin:feedback-fix-review"
+    )
+    assert prepared.host_session is SessionKind.REVIEW_PR_COMMENTS
+    assert "feedback-driven correction" in prompt
+    assert "Do not re-review untouched implementation" in prompt
+
+
+def test_pr_comment_review_override_wins_and_frozen_code_review_remains_until_refresh(
+    tmp_git_repo: Path,
+) -> None:
+    configured = ProjectConfig.model_validate(
+        {
+            "sessions": {
+                "review_pr_comments": {
+                    "skills": {"review": ["builtin:code-review"]},
+                }
+            }
+        }
+    )
+    explicit = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        configured,
+        kind=SessionKind.REVIEW_PR_COMMENTS,
+        task_id="42",
+    )
+    assert explicit.resolution is not None
+    assert (
+        explicit.resolution.sources[SkillSlot.REVIEW] == "sessions.review_pr_comments.skills.review"
+    )
+    assert (
+        explicit.manifest.bindings[SkillSlot.REVIEW].skills[0].canonical_ref
+        == "builtin:code-review"
+    )
+
+    resumed = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        ProjectConfig(),
+        kind=SessionKind.REVIEW_PR_COMMENTS,
+        task_id="42",
+    )
+    assert resumed.reused is True
+    assert (
+        resumed.manifest.bindings[SkillSlot.REVIEW].skills[0].canonical_ref == "builtin:code-review"
+    )
+
+    refreshed = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        ProjectConfig(),
+        kind=SessionKind.REVIEW_PR_COMMENTS,
+        task_id="42",
+        refresh=True,
+    )
+    assert (
+        refreshed.manifest.bindings[SkillSlot.REVIEW].skills[0].canonical_ref
+        == "builtin:feedback-fix-review"
+    )
+
+
+def test_shared_code_review_binding_overrides_pr_comment_stage_default(
+    tmp_git_repo: Path,
+) -> None:
+    configured = ProjectConfig.model_validate(
+        {
+            "delegations": {
+                "code_review": {
+                    "skills": {"work": ["builtin:code-review"]},
+                }
+            }
+        }
+    )
+    session = compose_session(
+        tmp_git_repo,
+        tmp_git_repo,
+        configured,
+        kind=SessionKind.REVIEW_PR_COMMENTS,
+        task_id="42",
+    )
+
+    assert session.resolution is not None
+    assert session.resolution.sources[SkillSlot.REVIEW] == "delegations.code_review.skills.work"
+    assert (
+        session.manifest.bindings[SkillSlot.REVIEW].skills[0].canonical_ref == "builtin:code-review"
     )
 
 

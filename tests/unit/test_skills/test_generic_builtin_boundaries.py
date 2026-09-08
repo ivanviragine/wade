@@ -12,6 +12,10 @@ _SKILLS = Path(__file__).resolve().parents[3] / "templates/skills"
 _FORBIDDEN = ("wade ", ".wade/", "implementation-session", "plan-session", "reviewed@")
 
 
+def test_feedback_fix_review_is_a_registered_builtin_method() -> None:
+    assert "feedback-fix-review" in BUILTIN_METHODOLOGY_SKILLS
+
+
 @pytest.mark.parametrize("name", BUILTIN_METHODOLOGY_SKILLS)
 def test_replaceable_builtin_contains_no_wade_lifecycle_tokens(name: str) -> None:
     content = (_SKILLS / name / "SKILL.md").read_text(encoding="utf-8").lower()

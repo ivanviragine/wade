@@ -234,7 +234,7 @@ SESSION_DEFINITIONS: dict[SessionKind, SessionDefinition] = {
         ),
         default_skills={
             SkillSlot.WORK: (SkillRef.model_validate("builtin:review-comments"),),
-            SkillSlot.REVIEW: (SkillRef.model_validate("builtin:code-review"),),
+            SkillSlot.REVIEW: (SkillRef.model_validate("builtin:feedback-fix-review"),),
         },
         support_skills=("task", "knowledge"),
         readiness=ReadinessRequirements(

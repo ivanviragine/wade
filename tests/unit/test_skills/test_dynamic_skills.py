@@ -349,6 +349,26 @@ def test_session_bundle_snapshots_inventory_and_active_bindings(tmp_path: Path) 
     assert json.loads((session / "manifest.json").read_text())["task_id"] == "42"
 
 
+def test_plan_workflow_describes_advisory_review_without_a_receipt(tmp_path: Path) -> None:
+    inventory = discover_project_skills(tmp_path, tmp_path)
+    materialize_session_bundle(
+        tmp_path,
+        kind=SessionKind.PLAN,
+        task_id="42",
+        refs={
+            SkillSlot.WORK: (SkillRef.model_validate("builtin:planning"),),
+            SkillSlot.REVIEW: (SkillRef.model_validate("builtin:plan-review"),),
+        },
+        inventory=inventory,
+        review_enabled=True,
+        doc_targets="README.md",
+    )
+
+    workflow = (tmp_path / ".wade/session/WORKFLOW.md").read_text(encoding="utf-8")
+    assert "does not write a receipt or independently enforce completion" in workflow
+    assert "binding-aware receipt" not in workflow
+
+
 def test_refresh_replaces_only_session_and_preserves_operations_and_reviews(
     tmp_path: Path,
 ) -> None:
