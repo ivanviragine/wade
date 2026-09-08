@@ -15,10 +15,12 @@ from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.models.session_manifest import ResolvedBinding, ReviewOutcome
 from wade.models.skill import ResolvedSkill
+from wade.models.workflow import SessionKind
 from wade.services import review_delegation_service as rds
 from wade.services.review_delegation_service import (
     _committed_diff_fallback,
     _ReviewDiffs,
+    _ReviewInputContext,
     _run_review_delegation,
     review_implementation,
     review_plan,
@@ -1078,6 +1080,177 @@ class TestCommittedDiffFallback:
 
 
 class TestReviewImplementationChangeSets:
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.get_repo_root")
+    def test_initial_implementation_review_uses_full_diff_and_plan_context(
+        self,
+        mock_repo_root: MagicMock,
+        mock_diffs: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        plan = tmp_path / "PLAN.md"
+        plan.write_text("# Approved plan\n\nExpected behavior.", encoding="utf-8")
+        mock_repo_root.return_value = tmp_path
+        mock_diffs.return_value = _ReviewDiffs(
+            committed="complete branch diff", staged="", unstaged=""
+        )
+        mock_template.return_value = "Review:\n{review_budget}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+        monkeypatch.setattr(
+            rds,
+            "prepare_delegation_method",
+            lambda *args, **kwargs: PreparedDelegationMethod(
+                binding=_prepared_method().binding,
+                method_section="<method>Review carefully.</method>",
+                host_session=SessionKind.IMPLEMENTATION,
+                operation_bundle=None,
+            ),
+        )
+        monkeypatch.setattr(rds, "nearest_satisfying_review_baseline", lambda *args, **kwargs: None)
+
+        assert review_implementation().success
+        assert mock_diffs.call_args.kwargs["committed_baseline"] is None
+        prompt = mock_delegate.call_args.args[0].prompt
+        assert "Approved plan" in prompt
+        assert "complete branch diff" in prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.get_repo_root")
+    def test_implementation_rereview_scopes_committed_delta_to_prior_receipt(
+        self,
+        mock_repo_root: MagicMock,
+        mock_diffs: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        baseline = "b" * 40
+        mock_repo_root.return_value = tmp_path
+        mock_diffs.return_value = _ReviewDiffs(
+            committed="post-review fix only",
+            staged="",
+            unstaged="",
+            committed_label="Committed changes since the prior successful review",
+        )
+        mock_template.return_value = "Review:\n{review_budget}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+        monkeypatch.setattr(
+            rds,
+            "prepare_delegation_method",
+            lambda *args, **kwargs: PreparedDelegationMethod(
+                binding=_prepared_method().binding,
+                method_section="<method>Review carefully.</method>",
+                host_session=SessionKind.IMPLEMENTATION,
+                operation_bundle=None,
+            ),
+        )
+        monkeypatch.setattr(
+            rds, "nearest_satisfying_review_baseline", lambda *args, **kwargs: baseline
+        )
+
+        assert review_implementation().success
+        assert mock_diffs.call_args.kwargs["committed_baseline"] == baseline
+        prompt = mock_delegate.call_args.args[0].prompt
+        assert "post-review fix only" in prompt
+        assert "Committed changes since the prior successful review" in prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.get_repo_root")
+    def test_pr_comment_review_includes_cycle_feedback_and_baseline_delta(
+        self,
+        mock_repo_root: MagicMock,
+        mock_diffs: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        baseline = "b" * 40
+        mock_repo_root.return_value = tmp_path
+        mock_diffs.return_value = _ReviewDiffs(committed="feedback fix", staged="", unstaged="")
+        mock_template.return_value = "Review:\n{review_budget}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+        monkeypatch.setattr(
+            rds,
+            "prepare_delegation_method",
+            lambda *args, **kwargs: PreparedDelegationMethod(
+                binding=_prepared_method().binding,
+                method_section="<method>Review carefully.</method>",
+                host_session=SessionKind.REVIEW_PR_COMMENTS,
+                operation_bundle=None,
+            ),
+        )
+        monkeypatch.setattr(
+            rds,
+            "_pr_comment_review_context",
+            lambda *args, **kwargs: _ReviewInputContext(
+                committed_baseline=baseline,
+                feedback="Please handle the boundary condition.",
+            ),
+        )
+
+        assert review_implementation().success
+        assert mock_diffs.call_args.kwargs["committed_baseline"] == baseline
+        prompt = mock_delegate.call_args.args[0].prompt
+        assert "Please handle the boundary condition." in prompt
+        assert "feedback fix" in prompt
+
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.git.repo.rev_parse", side_effect=GitError("HEAD unavailable"))
+    @patch("wade.git.repo.get_repo_root")
+    def test_git_failure_after_foreign_preparation_cleans_operation_bundle(
+        self,
+        mock_repo_root: MagicMock,
+        _mock_head: MagicMock,
+        mock_config: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        bundle = tmp_path / "operation-bundle"
+        bundle.mkdir()
+        mock_repo_root.return_value = tmp_path
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        monkeypatch.setattr(
+            rds,
+            "prepare_delegation_method",
+            lambda *args, **kwargs: PreparedDelegationMethod(
+                binding=_prepared_method().binding,
+                method_section="<method>Review carefully.</method>",
+                host_session=None,
+                operation_bundle=bundle,
+            ),
+        )
+
+        result = review_implementation()
+
+        assert result.success is False
+        assert not bundle.exists()
+
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")

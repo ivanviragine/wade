@@ -72,6 +72,13 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 > GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
 > code still exists but is inert; removal is tracked as #357 C5.
 
+> **Closing-review state** lives in worktree files, not the immutable session
+> bundle: binding-aware receipts are under `.wade/reviews/`, and an active
+> PR-comment feedback cycle is under `.wade/review-cycles/`. The cycle preserves
+> its pre-edit baseline and feedback history across refreshes and is cleared
+> only after a successful PR-comment completion; unsafe state must fall back to
+> a full review.
+
 > **Deterministic git-hook install/reconcile/build logic lives in `git/hooks.py`**
 > (git layer), not `skills/installer.py`. Packaged template-asset loaders
 > (prompt/skill/hook templates) live in `utils/templates.py`, a leaf module.

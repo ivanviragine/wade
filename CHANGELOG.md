@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.2] — 2026-09-08
+
+### Bug Fixes
+
+- make closing reviews converge on final incremental changes (#503) (5599fb1)
+
 ## [v1.1.1] — 2026-09-08
 
 ### Bug Fixes

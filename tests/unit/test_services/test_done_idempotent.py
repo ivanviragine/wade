@@ -19,7 +19,13 @@ from wade.services.implementation_service.done import done
 _DONE = "wade.services.implementation_service.done"
 
 
-def _run_done(tmp_path: Path, *, pr_result: bool) -> MagicMock:
+def _run_done(
+    tmp_path: Path,
+    *,
+    pr_result: bool,
+    session_type: str = "implementation",
+    cycle_cleanup_result: bool = True,
+) -> tuple[MagicMock, MagicMock]:
     """Drive done("42") to the _done_via_pr call, returning the strip mock."""
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
@@ -43,25 +49,39 @@ def _run_done(tmp_path: Path, *, pr_result: bool) -> MagicMock:
         stack.enter_context(patch(f"{_DONE}._run_completion_gates", return_value=True))
         strip = stack.enter_context(patch(f"{_DONE}.strip_worktree_gitignore"))
         stack.enter_context(patch(f"{_DONE}._done_via_pr", return_value=pr_result))
+        clear_cycle = stack.enter_context(
+            patch(f"{_DONE}.clear_review_cycle", return_value=cycle_cleanup_result)
+        )
         stack.enter_context(patch(f"{_DONE}.console"))
 
-        result = done("42", project_root=repo_root)
+        result = done("42", project_root=repo_root, session_type=session_type)
 
-    assert result is pr_result
-    return strip
+    assert result is (pr_result and (session_type != "review-pr-comments" or cycle_cleanup_result))
+    return strip, clear_cycle
 
 
 class TestDoneDefersStrip:
     def test_failure_leaves_gitignore_unstripped(self, tmp_path: Path) -> None:
         # _done_via_pr fails (push / PR API error) → the strip must NOT run, so a
         # retry still passes the clean gate.
-        strip = _run_done(tmp_path, pr_result=False)
+        strip, _ = _run_done(tmp_path, pr_result=False)
         strip.assert_not_called()
 
     def test_success_strips_gitignore(self, tmp_path: Path) -> None:
         # Only on success is the worktree gitignore block stripped.
-        strip = _run_done(tmp_path, pr_result=True)
+        strip, _ = _run_done(tmp_path, pr_result=True)
         strip.assert_called_once()
+
+    def test_pr_comment_cleanup_failure_keeps_completion_incomplete(self, tmp_path: Path) -> None:
+        strip, clear_cycle = _run_done(
+            tmp_path,
+            pr_result=True,
+            session_type="review-pr-comments",
+            cycle_cleanup_result=False,
+        )
+
+        clear_cycle.assert_called_once()
+        strip.assert_not_called()
 
     def test_success_survives_strip_oserror(self, tmp_path: Path) -> None:
         # The PR is already pushed + updated when the strip runs. A filesystem

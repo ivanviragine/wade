@@ -29,9 +29,9 @@ Closing review methodology (loaded only by the bounded review step):
    `wade review-pr-comments-session resolve <thread-node-id>`.
 5. **Verify.** Run the repository-prescribed tests and checks, including a
    regression test when feedback exposed a missing case.
-6. **Method review.** {review_step_state}
-7. **Documentation [mandatory decision].** {documentation_step}
-8. **Knowledge.** {knowledge_step}
+6. **Documentation [mandatory decision].** {documentation_step}
+7. **Knowledge.** {knowledge_step}
+8. **Method review.** {review_step_state}
 9. **PR summary.** Update `PR-SUMMARY.md` with feedback addressed, changes, and
    any unresolved threads plus reasoning. Never commit it.
 10. **Sync.** Re-check readiness after resume or permission changes, then run

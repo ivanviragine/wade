@@ -175,6 +175,14 @@ An implementation-to-PR-comment transition is a new session and replaces the
 manifest/workflow. Durable review records survive outside the session bundle,
 but apply only if the new session's review binding is identical.
 
+The implementation and PR-comment definitions currently use workflow revision
+2. Their authoritative order is verification, documentation decision, knowledge,
+then closing method review; an old frozen revision is rejected until an explicit
+refresh replaces it. Expected tracked documentation and knowledge changes are
+therefore normally present in the final review. If a review finding creates a
+new tracked commit, the session repeats affected verification/documentation work
+and reviews that new final commit.
+
 ## Bounded invocation contract
 
 `skill_invocation_service.py` composes bounded prompts structurally in this
@@ -228,7 +236,25 @@ active binding. Switching A to B preserves A's history but makes it inapplicable
 switching back to byte-identical A at the same commit reuses its record. Refresh
 of only WORK does not invalidate a REVIEW record.
 
-Manifest, review, and documentation-gate state uses descriptor-relative,
+The first implementation review for a REVIEW binding uses the full branch diff.
+A later one may use the nearest same-binding satisfying record that is a safe
+ancestor of `HEAD`, reviewing only its committed delta while retaining staged and
+unstaged sections. Git errors, malformed or other-binding records, non-ancestors,
+and any merge on the selected ancestry path fail open to the full branch diff.
+The record is only an input baseline: every completed review still writes the
+normal exact-`HEAD`, binding-aware receipt.
+
+PR-comment cycles persist separately at
+`.wade/review-cycles/review-cycle@<issue>.json`, rather than in immutable
+`.wade/session/` methodology snapshots. A cycle captures the open PR identity,
+the pre-edit baseline, and normalized fetched feedback. Starting or resuming a
+cycle preserves its baseline and retains prior feedback while adding newly
+fetched feedback; successful `review-pr-comments-session done` removes the
+context. The closing review uses that accumulated feedback plus the cycle delta
+only after identity, ancestry, and merge-path validation; unreadable, mismatched,
+malformed, or unsafe state falls back to a full diff.
+
+Manifest, review, review-cycle, and documentation-gate state uses descriptor-relative,
 no-follow filesystem operations. Unsafe/malformed/unreadable state is absent for
 gate purposes and fails toward re-review, never toward completion. SHA marker
 files are never accepted as review evidence. The completion classifier also

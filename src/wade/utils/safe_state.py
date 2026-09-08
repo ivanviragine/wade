@@ -123,6 +123,31 @@ def list_state_files(root: Path, directories: tuple[str, ...]) -> tuple[str, ...
         _close(dir_fd)
 
 
+def state_file_present(root: Path, directories: tuple[str, ...], filename: str) -> bool:
+    """Whether a state file exists, treating an unsafe path as present.
+
+    This is intentionally more conservative than :func:`read_state_file`: a
+    caller that cannot safely read an existing state file must distinguish that
+    condition from a genuinely absent file, so it can fall back rather than
+    silently create or trust replacement state.
+    """
+
+    if not filename or "/" in filename or filename in {".", ".."}:
+        return False
+    dir_fd = _open_nested(root, directories, create=False)
+    if dir_fd is None:
+        return state_directory_present(root, directories)
+    try:
+        os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    finally:
+        _close(dir_fd)
+
+
 def state_directory_present(root: Path, directories: tuple[str, ...]) -> bool:
     """Whether state exists here, including unsafe or symlinked state.
 
@@ -207,4 +232,25 @@ def atomic_write_state_file(
         return False
     finally:
         _close(file_fd)
+        _close(dir_fd)
+
+
+def delete_state_file(root: Path, directories: tuple[str, ...], filename: str) -> bool:
+    """Safely delete one state file, without following a path component or file link."""
+
+    if not filename or "/" in filename or filename in {".", ".."}:
+        return False
+    dir_fd = _open_nested(root, directories, create=False)
+    if dir_fd is None:
+        return False
+    try:
+        entry = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+        if not stat.S_ISREG(entry.st_mode):
+            return False
+        os.unlink(filename, dir_fd=dir_fd)
+        os.fsync(dir_fd)
+        return True
+    except OSError:
+        return False
+    finally:
         _close(dir_fd)

@@ -253,12 +253,18 @@ def _review_step(kind: SessionKind, enabled: bool) -> str:
             "`wade review implementation --ack-self-review`; prompt emission alone "
             "never writes a satisfying receipt."
         )
+    convergence = (
+        "If review findings create another tracked commit, repeat affected verification and "
+        "the documentation decision, then review that new final commit. "
+        if kind in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}
+        else "If documentation, knowledge, or another later step creates a commit, repeat this "
+        "review before done. "
+    )
     return (
         f"Run {command}. The command loads only the frozen REVIEW methodology. "
         "Address actionable findings, commit changes, and re-review once after major fixes. "
-        "The successful receipt must match the final pre-sync commit; if documentation, "
-        "knowledge, or another later step creates a commit, repeat this review before done. "
-        f"{prompt_completion} A successful external review writes the deterministic "
+        "The successful receipt must match the final pre-sync commit. "
+        f"{convergence}{prompt_completion} A successful external review writes the deterministic "
         "binding-aware receipt."
     )
 
