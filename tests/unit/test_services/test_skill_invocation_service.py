@@ -73,6 +73,20 @@ def test_dependency_result_contract_remains_machine_readable() -> None:
     assert "Output ONLY direct acyclic edges" in prompt
 
 
+def test_implementation_result_contract_excludes_preexisting_defects() -> None:
+    prompt = compose_delegation_prompt(
+        DelegationKind.CODE_REVIEW,
+        contract="Fixed operation contract.",
+        method_section="<method>Review implementation.</method>",
+        input_label="Review input",
+        input_content="Implementation diff.",
+        host_session=SessionKind.IMPLEMENTATION,
+    )
+
+    assert "defects introduced by that change" in prompt
+    assert "introduced or exposed" not in prompt
+
+
 @pytest.mark.parametrize(
     ("kind", "host_session", "result_template", "uses_admission_policy"),
     [
