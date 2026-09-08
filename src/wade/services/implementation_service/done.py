@@ -391,9 +391,14 @@ def done(
     if session_type == "review-pr-comments" and not clear_review_cycle(
         worktree_root, issue_number=issue_number
     ):
-        # The PR is already finalized, so an inability to clean unsafe local
-        # context is non-fatal. A later cycle will fail open instead of reusing it.
-        console.warn("Could not clear the completed PR-comment review-cycle state safely.")
+        # The PR may already be finalized, but completion remains retryable
+        # until the active review-cycle state is gone or durably invalidated.
+        # Otherwise a later feedback cycle could inherit an obsolete baseline.
+        console.error(
+            "Could not clear the completed PR-comment review-cycle state safely; "
+            "restore filesystem access and re-run done."
+        )
+        return False
 
     # Success only: strip the worktree gitignore block and restore .gitignore
     # visibility now that there is nothing left to retry. The PR is already

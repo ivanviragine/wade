@@ -18,6 +18,7 @@ from wade.utils.safe_state import (
 )
 
 _DIRECTORIES = ("review-cycles",)
+_INVALIDATION_DIRECTORIES = ("review-cycle-invalidations",)
 _PREFIX = "review-cycle@"
 _FEEDBACK_SECTION = re.compile(r"(?m)(?=^### )")
 
@@ -51,6 +52,11 @@ def read_review_cycle(
         filename = review_cycle_filename(issue_number)
     except ValueError as exc:
         return ReviewCycleLookup(None, str(exc))
+    if state_file_present(root, _INVALIDATION_DIRECTORIES, filename):
+        return ReviewCycleLookup(
+            None,
+            "PR-comment review-cycle state was invalidated after an unsafe update",
+        )
     raw = read_state_file(root, _DIRECTORIES, filename)
     if raw is None:
         if state_file_present(root, _DIRECTORIES, filename):
@@ -107,6 +113,14 @@ def initialize_or_refresh_review_cycle(
 ) -> ReviewCycleLookup:
     """Create a cycle or retain its baseline and all feedback across refreshes."""
 
+    try:
+        filename = review_cycle_filename(issue_number)
+    except ValueError as exc:
+        return ReviewCycleLookup(None, f"Could not validate PR-comment review-cycle state: {exc}")
+    invalidation = _discard_invalidated_review_cycle(root, filename)
+    if invalidation is not None:
+        return ReviewCycleLookup(None, invalidation)
+
     existing = read_review_cycle(root, issue_number=issue_number, pr_number=pr_number)
     if existing.diagnostic is not None:
         return existing
@@ -126,7 +140,6 @@ def initialize_or_refresh_review_cycle(
                 feedback=feedback,
             )
         )
-        filename = review_cycle_filename(issue_number)
     except (ValidationError, ValueError) as exc:
         return ReviewCycleLookup(None, f"Could not validate PR-comment review-cycle state: {exc}")
     payload = context.serialized_payload()
@@ -137,12 +150,18 @@ def initialize_or_refresh_review_cycle(
             "the 256 KiB limit",
         )
     if not atomic_write_state_file(root, _DIRECTORIES, filename, payload):
+        if clear_review_cycle(root, issue_number=issue_number):
+            return ReviewCycleLookup(
+                None,
+                "Could not persist PR-comment review-cycle state safely; the prior state was "
+                "invalidated",
+            )
         return ReviewCycleLookup(None, "Could not persist PR-comment review-cycle state safely")
     return ReviewCycleLookup(context)
 
 
 def clear_review_cycle(root: Path, *, issue_number: str) -> bool:
-    """Remove an active cycle only after its PR-comment session has succeeded."""
+    """Remove an active cycle, or durably invalidate it when removal is unsafe."""
 
     try:
         filename = review_cycle_filename(issue_number)
@@ -150,4 +169,24 @@ def clear_review_cycle(root: Path, *, issue_number: str) -> bool:
         return False
     if not state_file_present(root, _DIRECTORIES, filename):
         return True
-    return delete_state_file(root, _DIRECTORIES, filename)
+    if delete_state_file(root, _DIRECTORIES, filename):
+        return True
+    # A successful marker makes every later read fail closed, even if the old
+    # regular JSON file remains readable after a failed deletion.  It lives in
+    # a sibling directory so a read-only review-cycles directory can still be
+    # invalidated through its writable .wade parent.
+    return atomic_write_state_file(root, _INVALIDATION_DIRECTORIES, filename, b"")
+
+
+def _discard_invalidated_review_cycle(root: Path, filename: str) -> str | None:
+    """Clear a previous invalidation before beginning a fresh feedback cycle."""
+
+    if not state_file_present(root, _INVALIDATION_DIRECTORIES, filename):
+        return None
+    if state_file_present(root, _DIRECTORIES, filename) and not delete_state_file(
+        root, _DIRECTORIES, filename
+    ):
+        return "Could not discard invalidated PR-comment review-cycle state safely"
+    if not delete_state_file(root, _INVALIDATION_DIRECTORIES, filename):
+        return "Could not clear PR-comment review-cycle invalidation safely"
+    return None
