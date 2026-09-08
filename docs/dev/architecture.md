@@ -820,11 +820,11 @@ and every review writes its ordinary exact-HEAD receipt.
 
 `review_cycle_service.py` stores the PR-comment session's issue/PR identity,
 pre-edit baseline, and normalized feedback in `.wade/review-cycles/`, outside
-the immutable session bundle. Re-fetching refreshes feedback but preserves the
-baseline; a successful PR-comment `done` removes it. The closing review receives
-the feedback and cycle delta only after safe state, identity, ancestry, and
-merge-path checks. Any failed check emits a diagnostic and reviews the complete
-branch diff instead.
+the immutable session bundle. Re-fetching retains prior feedback and adds new
+feedback while preserving the baseline; a successful PR-comment `done` removes
+it. The closing review receives the accumulated feedback and cycle delta only
+after safe state, identity, ancestry, and merge-path checks. Any failed check
+emits a diagnostic and reviews the complete branch diff instead.
 
 The capability remediation is intentionally tool-neutral: retain the sandbox
 and grant only the worktree Git metadata paths, GitHub credential/API route, or

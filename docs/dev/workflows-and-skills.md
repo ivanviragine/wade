@@ -248,11 +248,11 @@ PR-comment cycles persist separately at
 `.wade/review-cycles/review-cycle@<issue>.json`, rather than in immutable
 `.wade/session/` methodology snapshots. A cycle captures the open PR identity,
 the pre-edit baseline, and normalized fetched feedback. Starting or resuming a
-cycle preserves its baseline while feedback may refresh; successful
-`review-pr-comments-session done` removes the context. The closing review uses
-that feedback plus the cycle delta only after identity, ancestry, and merge-path
-validation; unreadable, mismatched, malformed, or unsafe state falls back to a
-full diff.
+cycle preserves its baseline and retains prior feedback while adding newly
+fetched feedback; successful `review-pr-comments-session done` removes the
+context. The closing review uses that accumulated feedback plus the cycle delta
+only after identity, ancestry, and merge-path validation; unreadable, mismatched,
+malformed, or unsafe state falls back to a full diff.
 
 Manifest, review, review-cycle, and documentation-gate state uses descriptor-relative,
 no-follow filesystem operations. Unsafe/malformed/unreadable state is absent for

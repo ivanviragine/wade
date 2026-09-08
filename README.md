@@ -320,11 +320,11 @@ runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads
 
 When a PR-comment session starts, WADE records its pre-edit commit and a feedback
 snapshot under local `.wade/review-cycles/` state, outside the immutable session
-bundle. Re-fetching feedback refreshes the snapshot but never advances that
-baseline. Its closing review receives the feedback and the cycle delta; unsafe,
-mismatched, stale, or merged lineage uses the full branch change instead. A
-successful `review-pr-comments-session done` clears the cycle so later feedback
-starts from the then-current PR head.
+bundle. Re-fetching retains prior feedback while adding new feedback, but never
+advances that baseline. Its closing review receives the accumulated feedback and
+the cycle delta; unsafe, mismatched, stale, or merged lineage uses the full
+branch change instead. A successful `review-pr-comments-session done` clears
+the cycle so later feedback starts from the then-current PR head.
 
 ### The auto-launched review session
 
