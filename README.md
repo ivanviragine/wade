@@ -322,9 +322,10 @@ When a PR-comment session starts, WADE records its pre-edit commit and a feedbac
 snapshot under local `.wade/review-cycles/` state, outside the immutable session
 bundle. Re-fetching retains prior feedback while adding new feedback, but never
 advances that baseline. Its closing review receives the accumulated feedback and
-the cycle delta; unsafe, mismatched, stale, or merged lineage uses the full
-branch change instead. A successful `review-pr-comments-session done` clears
-the cycle so later feedback starts from the then-current PR head.
+the cycle delta. Unsafe, mismatched, stale, or merged lineage instead uses the
+complete branch change and its full-branch result contract, which overrides the
+feedback-fix method's narrow scope. A successful `review-pr-comments-session
+done` clears the cycle so later feedback starts from the then-current PR head.
 
 ### The auto-launched review session
 

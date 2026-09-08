@@ -284,6 +284,7 @@ def _run_review_delegation(
     delegation_kind: DelegationKind | None = None,
     method_section: str = "",
     host_session: SessionKind | None = None,
+    feedback_fix_scope: bool = False,
     input_label: str = "Operation input",
     cwd: Path | None = None,
     trusted_dirs: list[str] | None = None,
@@ -319,6 +320,7 @@ def _run_review_delegation(
                 input_content=content,
                 budget_line=budget_line,
                 host_session=host_session,
+                feedback_fix_scope=feedback_fix_scope,
             )
         trusted = base.replace(
             "{review_budget}", budget_line or "No hard deadline — take the time you need."
@@ -757,6 +759,7 @@ def _read_optional_plan(repo_root: Path) -> str | None:
 class _ReviewInputContext:
     committed_baseline: str | None = None
     feedback: str | None = None
+    feedback_fix_scope: bool = False
 
 
 def _pr_comment_review_context(repo_root: Path, head: str) -> _ReviewInputContext:
@@ -818,6 +821,7 @@ def _pr_comment_review_context(repo_root: Path, head: str) -> _ReviewInputContex
     return _ReviewInputContext(
         committed_baseline=cycle.context.baseline_commit,
         feedback=cycle.context.feedback,
+        feedback_fix_scope=True,
     )
 
 
@@ -1191,6 +1195,7 @@ def review_implementation(
                 delegation_kind=DelegationKind.CODE_REVIEW,
                 method_section=prepared.method_section,
                 host_session=prepared.host_session,
+                feedback_fix_scope=input_context.feedback_fix_scope,
                 input_label="Scoped review input",
                 cwd=repo_root,
                 relaunch_skills=skills,

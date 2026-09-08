@@ -147,6 +147,7 @@ def compose_delegation_prompt(
     input_content: str,
     budget_line: str | None = None,
     host_session: SessionKind | None = None,
+    feedback_fix_scope: bool = False,
 ) -> str:
     """Build fixed contract + method + input + result without chained replacement."""
 
@@ -165,8 +166,13 @@ def compose_delegation_prompt(
     if kind is DelegationKind.CODE_REVIEW:
         if host_session is SessionKind.IMPLEMENTATION:
             result_template = "review-result-implementation.md"
-        elif host_session is SessionKind.REVIEW_PR_COMMENTS:
+        elif host_session is SessionKind.REVIEW_PR_COMMENTS and feedback_fix_scope:
             result_template = "review-result-pr-comments.md"
+        elif host_session is SessionKind.REVIEW_PR_COMMENTS:
+            # A missing or unsafe feedback cycle has already expanded the input
+            # to the complete branch diff. Its narrow review methodology must
+            # not suppress defects outside the feedback correction.
+            result_template = "review-result-full-branch.md"
         else:
             result_template = "review-result-code.md"
     else:

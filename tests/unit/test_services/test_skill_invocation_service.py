@@ -11,26 +11,30 @@ from wade.services.skill_invocation_service import compose_delegation_prompt
 
 
 @pytest.mark.parametrize(
-    ("kind", "host_session", "stage_rule"),
+    ("kind", "host_session", "feedback_fix_scope", "stage_rule"),
     [
         (
             DelegationKind.PLAN_REVIEW,
             SessionKind.PLAN,
+            False,
             "Do not propose a replacement design without that evidence.",
         ),
         (
             DelegationKind.CODE_REVIEW,
             SessionKind.IMPLEMENTATION,
+            False,
             "Do not expand the reviewed change into unrelated redesign or cleanup.",
         ),
         (
             DelegationKind.CODE_REVIEW,
             SessionKind.REVIEW_PR_COMMENTS,
+            True,
             "Do not re-review untouched implementation or reopen accepted design",
         ),
         (
             DelegationKind.CODE_REVIEW,
             None,
+            False,
             "The reviewed artifact is the supplied scoped code input.",
         ),
     ],
@@ -38,6 +42,7 @@ from wade.services.skill_invocation_service import compose_delegation_prompt
 def test_review_result_contract_uses_fixed_lifecycle_stage(
     kind: DelegationKind,
     host_session: SessionKind | None,
+    feedback_fix_scope: bool,
     stage_rule: str,
 ) -> None:
     hostile_method = (
@@ -51,6 +56,7 @@ def test_review_result_contract_uses_fixed_lifecycle_stage(
         input_label="Review input",
         input_content="Untrusted input.",
         host_session=host_session,
+        feedback_fix_scope=feedback_fix_scope,
     )
 
     assert "## Finding-admission policy" in prompt
@@ -88,29 +94,45 @@ def test_implementation_result_contract_excludes_preexisting_defects() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kind", "host_session", "result_template", "uses_admission_policy"),
+    (
+        "kind",
+        "host_session",
+        "feedback_fix_scope",
+        "result_template",
+        "uses_admission_policy",
+    ),
     [
-        (DelegationKind.PLAN_REVIEW, SessionKind.PLAN, "review-result-plan.md", True),
+        (DelegationKind.PLAN_REVIEW, SessionKind.PLAN, False, "review-result-plan.md", True),
         (
             DelegationKind.CODE_REVIEW,
             SessionKind.IMPLEMENTATION,
+            False,
             "review-result-implementation.md",
             True,
         ),
         (
             DelegationKind.CODE_REVIEW,
             SessionKind.REVIEW_PR_COMMENTS,
+            True,
             "review-result-pr-comments.md",
             True,
         ),
-        (DelegationKind.CODE_REVIEW, None, "review-result-code.md", True),
-        (DelegationKind.BATCH_REVIEW, None, "review-result-batch.md", True),
-        (DelegationKind.DEPENDENCY_ANALYSIS, None, "review-result-deps.md", False),
+        (
+            DelegationKind.CODE_REVIEW,
+            SessionKind.REVIEW_PR_COMMENTS,
+            False,
+            "review-result-full-branch.md",
+            True,
+        ),
+        (DelegationKind.CODE_REVIEW, None, False, "review-result-code.md", True),
+        (DelegationKind.BATCH_REVIEW, None, False, "review-result-batch.md", True),
+        (DelegationKind.DEPENDENCY_ANALYSIS, None, False, "review-result-deps.md", False),
     ],
 )
 def test_review_result_contract_loads_lifecycle_templates(
     kind: DelegationKind,
     host_session: SessionKind | None,
+    feedback_fix_scope: bool,
     result_template: str,
     uses_admission_policy: bool,
 ) -> None:
@@ -129,6 +151,7 @@ def test_review_result_contract_loads_lifecycle_templates(
             input_label="Review input",
             input_content="Untrusted input.",
             host_session=host_session,
+            feedback_fix_scope=feedback_fix_scope,
         )
 
     expected_templates = [result_template]

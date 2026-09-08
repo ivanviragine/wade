@@ -383,6 +383,7 @@ def test_pr_comment_session_defaults_to_feedback_fix_review_and_maps_its_contrac
         input_label="Review input",
         input_content="Feedback-driven diff.",
         host_session=prepared.host_session,
+        feedback_fix_scope=True,
     )
 
     assert (

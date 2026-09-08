@@ -219,9 +219,12 @@ For mapped closing reviews, the service also supplies the frozen host-session
 identity after the untrusted method text. That fixed result contract applies
 the common finding-admission rule—concrete, material, evidenced failures only—
 and narrows `code-review` to either implementation review or feedback-fix
-review. A custom reviewer cannot turn a feedback-fix review into whole-PR
-redesign, and optional preferences, speculative hardening, pre-existing
-problems, and unrelated cleanup are omitted rather than labeled as findings.
+review. Feedback-fix scope applies only when a PR-comment cycle has a validated
+baseline; otherwise the full-branch result contract overrides the narrow method
+and reviews the complete branch diff. A custom reviewer cannot turn a
+feedback-fix review into whole-PR redesign when that validated scope exists,
+and optional preferences, speculative hardening, pre-existing problems, and
+unrelated cleanup are omitted rather than labeled as findings.
 
 Foreign operations persist a narrower delegation manifest below
 `.wade/operations/`. A successful synchronous operation removes its own bundle;
@@ -275,7 +278,8 @@ cycle preserves its baseline and retains prior feedback while adding newly
 fetched feedback; successful `review-pr-comments-session done` removes the
 context. The closing review uses that accumulated feedback plus the cycle delta
 only after identity, ancestry, and merge-path validation; unreadable, mismatched,
-malformed, or unsafe state falls back to a full diff.
+malformed, or unsafe state falls back to a full diff and the full-branch result
+contract, which takes precedence over the feedback-fix methodology.
 
 Manifest, review, review-cycle, and documentation-gate state uses descriptor-relative,
 no-follow filesystem operations. Unsafe/malformed/unreadable state is absent for

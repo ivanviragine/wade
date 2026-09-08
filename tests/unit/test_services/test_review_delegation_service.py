@@ -1219,6 +1219,54 @@ class TestReviewImplementationChangeSets:
         prompt = mock_delegate.call_args.args[0].prompt
         assert "Please handle the boundary condition." in prompt
         assert "feedback fix" in prompt
+        assert "feedback-driven correction" in prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.get_repo_root")
+    def test_pr_comment_review_without_safe_cycle_uses_full_branch_contract(
+        self,
+        mock_repo_root: MagicMock,
+        mock_diffs: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        mock_diffs.return_value = _ReviewDiffs(
+            committed="complete branch diff", staged="", unstaged=""
+        )
+        mock_template.return_value = "Review:\n{review_budget}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+        monkeypatch.setattr(
+            rds,
+            "prepare_delegation_method",
+            lambda *args, **kwargs: PreparedDelegationMethod(
+                binding=_prepared_method().binding,
+                method_section="<method>Review carefully.</method>",
+                host_session=SessionKind.REVIEW_PR_COMMENTS,
+                operation_bundle=None,
+            ),
+        )
+        monkeypatch.setattr(
+            rds,
+            "_pr_comment_review_context",
+            lambda *args, **kwargs: _ReviewInputContext(feedback="The persisted cycle is unsafe."),
+        )
+
+        assert review_implementation().success
+        assert mock_diffs.call_args.kwargs["committed_baseline"] is None
+        prompt = mock_delegate.call_args.args[0].prompt
+        assert "complete branch diff" in prompt
+        assert "complete branch diff. Review all material defects" in prompt
+        assert "Do not re-review untouched implementation" not in prompt
 
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.git.repo.rev_parse", side_effect=GitError("HEAD unavailable"))
