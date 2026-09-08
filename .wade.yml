@@ -10,6 +10,10 @@ ai:
   default_model: gpt-5.6-terra
   effort: xhigh
   permission_mode: yolo
+  plan:
+    tool: codex
+    model: gpt-5.6-sol
+    effort: high
   deps:
     mode: headless
     timeout: 900
