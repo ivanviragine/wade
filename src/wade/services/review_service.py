@@ -88,11 +88,12 @@ from wade.utils.terminal import (
 
 logger = structlog.get_logger()
 
-# ``None`` means no caller choice, which lets ``resolve_effort`` read config.
-# The review confirmation UI also offers a distinct "none — use tool default"
-# choice; its value must survive a wait/relaunch without being mistaken for the
-# unset case. This string is accepted by the same ``--effort`` option used in
-# the recovery command, but is private to this review-session handoff.
+# ``None`` means no caller or retry choice, which lets ``resolve_effort`` read
+# config. The review confirmation UI also offers a distinct "none — use tool
+# default" choice; its value must survive a wait/relaunch without being
+# mistaken for the unset case. This string is accepted by the public
+# ``--effort`` option used in a recovery command, but is private to this
+# review-session handoff.
 _EXPLICIT_DEFAULT_EFFORT = "none"
 
 
@@ -1266,9 +1267,15 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
+    # A retry payload and a CLI override deliberately mean different things.
+    # ``effort_explicit`` says this invocation received ``--effort`` and locks
+    # the selector; a non-None ``effort`` can also be a prior UI selection that
+    # must remain editable. Its presence, rather than CLI explicitness, decodes
+    # the UI's retained "none — use tool default" sentinel.
+    effort_payload_present = effort is not None
     resolved_effort = (
         None
-        if effort_explicit and effort == _EXPLICIT_DEFAULT_EFFORT
+        if effort == _EXPLICIT_DEFAULT_EFFORT
         else resolve_effort(
             effort,
             config,
@@ -1341,13 +1348,13 @@ def start(
         )
 
     # Configuration-derived effort should continue to re-resolve when the user
-    # waits for a later review. Preserve a caller's explicit override, or an
-    # actual change made in the confirmation UI, without promoting an implicit
-    # default to an explicit argument.
-    retained_effort_explicit = effort_explicit or resolved_effort != initial_effort
+    # waits for a later review. Preserve a retry/CLI payload, or an actual
+    # confirmation-UI change, without promoting either a retained UI choice or
+    # an implicit configuration value into a CLI override.
+    should_retain_effort_payload = effort_payload_present or resolved_effort != initial_effort
     retained_effort = (
         (resolved_effort.value if resolved_effort is not None else _EXPLICIT_DEFAULT_EFFORT)
-        if retained_effort_explicit
+        if should_retain_effort_payload
         else None
     )
 
@@ -1531,7 +1538,7 @@ def start(
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 effort=retained_effort,
-                effort_explicit=retained_effort_explicit,
+                effort_explicit=effort_explicit,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,
@@ -1765,9 +1772,11 @@ def _post_review_lifecycle(
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
 
-    Explicit effort and sandbox selections must survive a "wait for new
-    reviews" re-launch rather than re-resolving from configuration. ``None``
-    (unset) still re-resolves, matching the non-explicit permission-mode path.
+    A retained effort payload and sandbox selection must survive a "wait for
+    new reviews" re-launch rather than re-resolving from configuration.
+    ``effort_explicit`` separately records a real CLI override, which is the
+    only source that locks the effort selector. ``None`` (unset) still
+    re-resolves, matching the non-explicit permission-mode path.
     """
     from wade.ui import prompts
 
