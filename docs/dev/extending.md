@@ -16,6 +16,18 @@ The task CLI is in `src/wade/cli/task.py`, business logic in `src/wade/services/
 
 AI tool adapters (`AbstractAITool` subclasses, using `__init_subclass__` auto-registration) live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, not in this repo — see `docs/dev/architecture.md` for the full list of what moved there. Adding a new AI tool means adding an adapter in crossby, then in wade: bump the `crossby` pin in `pyproject.toml`, and add the tool's binary name to `README.md`'s "Supported AI Tools" table. No changes to wade's `services/` or `cli/` are needed unless the tool needs command-specific handling.
 
+Eligibility for `wade plan` has a stricter adapter contract than ordinary
+launch support. Crossby's `PlanModeCapability` must truthfully declare a native
+activation that is effective before the first submitted task, a verified
+installed-version floor, support for the initial prompt after activation, and a
+plan-artifact disposition. Because WADE must validate and persist real
+`PLAN*.md` files, the adapter must also route native artifacts to the requested
+workspace directory (or expose a safe, session-bound import contract when
+Crossby adds one). A prompt prefix, read-only sandbox, WADE hook, private plan
+store without an import path, or normal editing mode does not satisfy this
+contract. Keep flags, version detection, output routing, and launch execution
+inside Crossby; WADE should only call the typed validation and launch APIs.
+
 ## Adding a New Provider
 
 The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider`, `ClickUpProvider`, and `MarkdownIssueProvider` as current implementations. Unlike AI tools (which are external, via crossby), providers are local to wade and use a registry pattern. To add a new provider (e.g., Linear, Jira):

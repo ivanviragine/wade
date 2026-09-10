@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import contextlib
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from crossby.models.ai import TokenUsage
+from crossby.ai_tools import PlanModeLaunchError
+from crossby.models.ai import AIToolID, TokenUsage
 
 from wade.git.pr import PRLookup, PRRef
 from wade.models.config import AIConfig, PermissionMode, ProjectConfig, ProjectSettings
@@ -25,6 +25,7 @@ from wade.services.plan_service import (
     _branch_work_in_flight,
     _create_issues_from_plans,
     _finalize_issues,
+    _normalize_plan_automation_mode,
     _offer_to_implement,
     _persist_plan_issue_ref,
     _preserve_generated_plans,
@@ -94,6 +95,49 @@ class TestResolveAITool:
             mock.return_value = []
             result = resolve_ai_tool(None, config)
             assert result is None
+
+
+class TestPlanAutomationMode:
+    @pytest.mark.parametrize("mode", [PermissionMode.ACCEPT_EDITS, PermissionMode.AUTO])
+    def test_non_yolo_autonomy_warns_and_falls_back(self, mode: PermissionMode) -> None:
+        with patch("wade.services.plan_service.console.warn") as warn:
+            assert _normalize_plan_automation_mode(mode) is PermissionMode.DEFAULT
+        assert mode.value in warn.call_args.args[0]
+
+    @pytest.mark.parametrize("mode", [PermissionMode.DEFAULT, PermissionMode.YOLO])
+    def test_default_and_parent_yolo_are_retained(self, mode: PermissionMode) -> None:
+        with patch("wade.services.plan_service.console.warn") as warn:
+            assert _normalize_plan_automation_mode(mode) is mode
+        warn.assert_not_called()
+
+    @pytest.mark.parametrize("command_specific", [False, True])
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [
+            ("yolo", PermissionMode.YOLO),
+            ("auto", PermissionMode.DEFAULT),
+            ("accept-edits", PermissionMode.DEFAULT),
+        ],
+    )
+    def test_global_and_plan_config_cannot_change_child_posture(
+        self,
+        configured: str,
+        expected: PermissionMode,
+        *,
+        command_specific: bool,
+    ) -> None:
+        from wade.models.config import AICommandConfig
+        from wade.services.ai_resolution import resolve_permission_mode
+
+        ai = (
+            AIConfig(plan=AICommandConfig(permission_mode=configured))
+            if command_specific
+            else AIConfig(permission_mode=configured)
+        )
+        resolved = resolve_permission_mode(None, None, ProjectConfig(ai=ai), "plan")
+
+        with patch("wade.services.plan_service.console.warn"):
+            assert _normalize_plan_automation_mode(resolved) is expected
 
 
 class TestResolveModel:
@@ -304,241 +348,125 @@ class TestPlanFile:
 
 
 class TestTranscriptWiring:
-    def test_codex_prefixes_plan_command(self, tmp_path: Path) -> None:
-        """Codex planning sessions should prefix prompt with /plan."""
-        with (
-            patch("wade.services.plan_service.render_plan_prompt", return_value="Plan this issue"),
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["codex", "--sandbox", "workspace-write"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
-            run_ai_planning_session(
+    def test_raw_prompt_has_no_plan_command_prefix(self, tmp_path: Path) -> None:
+        """Native activation is adapter-owned; prompt text is never mode emulation."""
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        with patch("wade.services.plan_service.render_plan_prompt", return_value="Plan this issue"):
+            result = run_ai_planning_session(
                 ai_tool="codex",
                 plan_dir=str(tmp_path),
-                model=None,
                 transcript_path=tmp_path / ".transcript",
+                adapter=adapter,
             )
 
-            kwargs = adapter.build_launch_command.call_args.kwargs
-            assert kwargs["initial_message"].startswith("/plan ")
-            prompt_file = tmp_path / "prompt.txt"
-            assert prompt_file.is_file()
-            assert prompt_file.read_text().startswith("/plan ")
+        assert result == 0
+        assert adapter.launch.call_args.kwargs["prompt"] == "Plan this issue"
+        assert (tmp_path / "prompt.txt").read_text() == "Plan this issue"
 
-    def test_unknown_ai_tool_missing_binary_returns_1(self, tmp_path: Path) -> None:
-        """Unknown tool should fail with code 1 when binary is missing."""
+    def test_unknown_ai_tool_fails_closed_without_direct_launch(self, tmp_path: Path) -> None:
         with (
             patch(
                 "wade.services.plan_service.AbstractAITool.get", side_effect=ValueError("unknown")
             ),
-            patch(
-                "wade.services.plan_service.subprocess.run",
-                side_effect=FileNotFoundError("not found"),
-            ),
+            patch("wade.services.plan_service.console") as mock_console,
         ):
-            result = run_ai_planning_session(
-                ai_tool="nonexistent-tool",
-                plan_dir=str(tmp_path),
-            )
-            assert result == 1
+            result = run_ai_planning_session(ai_tool="some-tool", plan_dir=str(tmp_path))
 
-    def test_unknown_ai_tool_passes_subprocess_exit_code(self, tmp_path: Path) -> None:
-        """Unknown tool fallback should propagate subprocess exit code."""
-        completed = subprocess.CompletedProcess(args=["x"], returncode=7)
-        with (
-            patch(
-                "wade.services.plan_service.AbstractAITool.get", side_effect=ValueError("unknown")
-            ),
-            patch("wade.services.plan_service.subprocess.run", return_value=completed),
-        ):
-            result = run_ai_planning_session(
-                ai_tool="some-tool",
-                plan_dir=str(tmp_path),
-            )
-            assert result == 7
+        assert result == 1
+        assert "cannot guarantee native planning mode" in mock_console.error.call_args.args[0]
 
-    def test_claude_no_output_file_flag(self, tmp_path: Path) -> None:
-        """run_ai_planning_session must NOT add --output-file (flag doesn't exist in Claude CLI).
-
-        Transcript capture is handled by run_with_transcript, not a CLI flag.
-        """
+    @pytest.mark.parametrize(
+        "tool",
+        ["claude", "cursor", "copilot", "opencode", "codex", "antigravity-cli"],
+    )
+    def test_adapter_launch_receives_native_plan_contract(self, tmp_path: Path, tool: str) -> None:
+        """Every capability-approved harness gets the same adapter-owned boundary."""
         transcript = tmp_path / ".transcript"
+        adapter = MagicMock()
+        adapter.launch.return_value = 7
 
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+        result = run_ai_planning_session(
+            ai_tool=tool,
+            plan_dir=str(tmp_path),
+            model="test-model",
+            transcript_path=transcript,
+            effort=MagicMock(),
+            allowed_commands=["wade:*"],
+            cwd=tmp_path,
+            sandbox=True,
+            adapter=adapter,
+        )
 
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
+        assert result == 7
+        kwargs = adapter.launch.call_args.kwargs
+        assert kwargs["working_dir"] == tmp_path
+        assert kwargs["model"] == "test-model"
+        assert kwargs["transcript_path"] == transcript
+        assert kwargs["allowed_commands"] == ["wade:*"]
+        assert kwargs["plan_mode"] is True
+        assert kwargs["plan_output_dir"] == tmp_path
+        assert kwargs["yolo"] is False
+        assert kwargs["auto"] is False
+        assert kwargs["accept_edits"] is False
+        assert kwargs["network_access"] is True
+        assert kwargs["sandbox"] is True
+        assert str(tmp_path) in kwargs["trusted_dirs"]
 
-            cmd = mock_rwt.call_args[0][0]
-            assert "--output-file" not in cmd
-
-    def test_transcript_path_forwarded_to_run_with_transcript(self, tmp_path: Path) -> None:
-        """run_ai_planning_session forwards transcript_path to run_with_transcript."""
+    def test_transcript_path_is_forwarded_to_adapter_launch(self, tmp_path: Path) -> None:
         transcript = tmp_path / ".transcript"
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
 
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = []
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+        run_ai_planning_session(
+            ai_tool="claude",
+            plan_dir=str(tmp_path),
+            transcript_path=transcript,
+            adapter=adapter,
+        )
 
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
-
-            assert mock_rwt.call_args[0][1] == transcript
+        assert adapter.launch.call_args.kwargs["transcript_path"] == transcript
 
     def test_spawn_permission_error_is_reported_as_a_failed_launch(self, tmp_path: Path) -> None:
         """A sandbox denial at the exec boundary must not raise a raw traceback."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch(
-                "wade.services.plan_service.run_with_transcript",
-                side_effect=PermissionError(13, "Permission denied"),
-            ),
-            patch("wade.services.plan_service.console.warn") as warn,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            mock_get.return_value = adapter
-
-            result = run_ai_planning_session(ai_tool="claude", plan_dir=str(tmp_path))
+        adapter = MagicMock()
+        adapter.launch.side_effect = PermissionError(13, "Permission denied")
+        with patch("wade.services.plan_service.console.warn") as warn:
+            result = run_ai_planning_session(
+                ai_tool="claude", plan_dir=str(tmp_path), adapter=adapter
+            )
 
         assert result == 1
         warn.assert_called_once_with("AI tool launch failed: [Errno 13] Permission denied")
 
     def test_no_transcript_path_passes_none(self, tmp_path: Path) -> None:
-        """When transcript_path is None, run_with_transcript receives None."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=None,
-            )
-
-            assert mock_rwt.call_args[0][1] is None
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        run_ai_planning_session(
+            ai_tool="claude", plan_dir=str(tmp_path), transcript_path=None, adapter=adapter
+        )
+        assert adapter.launch.call_args.kwargs["transcript_path"] is None
 
     def test_includes_plan_dir_args(self, tmp_path: Path) -> None:
-        """run_ai_planning_session should pass plan_dir inside trusted_dirs
-        to build_launch_command."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["copilot", "--model", "test"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        run_ai_planning_session(ai_tool="claude", plan_dir=str(tmp_path), adapter=adapter)
+        assert str(tmp_path) in adapter.launch.call_args.kwargs["trusted_dirs"]
 
-            run_ai_planning_session(
-                ai_tool="copilot",
-                plan_dir=str(tmp_path),
+    def test_plan_contract_error_is_actionable(self, tmp_path: Path) -> None:
+        adapter = MagicMock()
+        adapter.launch.side_effect = PlanModeLaunchError(
+            "native plan output unavailable",
+            tool_id=AIToolID.CLAUDE,
+            capability=MagicMock(),
+        )
+        with patch("wade.services.plan_service.console") as mock_console:
+            result = run_ai_planning_session(
+                ai_tool="claude", plan_dir=str(tmp_path), adapter=adapter
             )
 
-            call_kwargs = adapter.build_launch_command.call_args.kwargs
-            assert str(tmp_path) in call_kwargs["trusted_dirs"]
-
-    def test_antigravity_cli_planning_omits_mode_plan_and_receives_plan_context(
-        self, tmp_path: Path
-    ) -> None:
-        """Antigravity CLI planning omits --mode plan while receiving plan prompt & trusted dirs."""
-        transcript = tmp_path / ".transcript"
-        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
-            mock_rwt.return_value = 0
-            run_ai_planning_session(
-                ai_tool="antigravity-cli",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
-
-            cmd = mock_rwt.call_args[0][0]
-            # agy must NOT receive --mode plan because native plan mode sandboxes
-            # writes to its brain dir rather than the worktree
-            assert "--mode" not in cmd
-            assert "plan" not in cmd
-            assert "--prompt-interactive" in cmd
-            prompt_file = tmp_path / "prompt.txt"
-            assert prompt_file.is_file()
-            assert str(tmp_path) in prompt_file.read_text()
-
-    def test_unaffected_tools_receive_plan_mode_true(self, tmp_path: Path) -> None:
-        """Unaffected tools (claude, etc.) receive plan_mode=True with their native args."""
-        transcript = tmp_path / ".transcript"
-        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
-            mock_rwt.return_value = 0
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
-
-            cmd = mock_rwt.call_args[0][0]
-            assert "--permission-mode" in cmd
-            assert "plan" in cmd
-
-    def test_autonomy_mode_precedence_in_planning_session(self, tmp_path: Path) -> None:
-        """PermissionMode.YOLO supersedes native plan mode as expected."""
-        transcript = tmp_path / ".transcript"
-        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
-            mock_rwt.return_value = 0
-            # Antigravity CLI with YOLO
-            run_ai_planning_session(
-                ai_tool="antigravity-cli",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-                permission_mode=PermissionMode.YOLO,
-            )
-            agy_cmd = mock_rwt.call_args[0][0]
-            assert "--dangerously-skip-permissions" in agy_cmd
-            assert "--mode" not in agy_cmd
-
-            # Claude with YOLO
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-                permission_mode=PermissionMode.YOLO,
-            )
-            claude_cmd = mock_rwt.call_args[0][0]
-            assert "--dangerously-skip-permissions" in claude_cmd
-            assert "plan" not in claude_cmd
+        assert result == 1
+        assert "native plan output unavailable" in mock_console.error.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -549,64 +477,44 @@ class TestTranscriptWiring:
 class TestModelCompatibility:
     def test_incompatible_model_is_dropped(self, tmp_path: Path) -> None:
         """When the resolved model is incompatible with the tool, it must be dropped."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.is_model_compatible.return_value = False
-            adapter.build_launch_command.return_value = ["codex"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+        adapter = MagicMock()
+        adapter.is_model_compatible.return_value = False
+        adapter.launch.return_value = 0
+        run_ai_planning_session(
+            ai_tool="codex",
+            plan_dir=str(tmp_path),
+            model="claude-haiku-4-5-20251001",
+            adapter=adapter,
+        )
 
-            run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model="claude-haiku-4-5-20251001",
-            )
-
-            call_kwargs = adapter.build_launch_command.call_args.kwargs
-            assert call_kwargs["model"] is None
+        assert adapter.launch.call_args.kwargs["model"] is None
 
     def test_compatible_model_is_kept(self, tmp_path: Path) -> None:
         """When the resolved model is compatible with the tool, it is passed through."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.is_model_compatible.return_value = True
-            adapter.build_launch_command.return_value = ["codex", "--model", "codex-mini-latest"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+        adapter = MagicMock()
+        adapter.is_model_compatible.return_value = True
+        adapter.launch.return_value = 0
+        run_ai_planning_session(
+            ai_tool="codex",
+            plan_dir=str(tmp_path),
+            model="codex-mini-latest",
+            adapter=adapter,
+        )
 
-            run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model="codex-mini-latest",
-            )
-
-            call_kwargs = adapter.build_launch_command.call_args.kwargs
-            assert call_kwargs["model"] == "codex-mini-latest"
+        assert adapter.launch.call_args.kwargs["model"] == "codex-mini-latest"
 
     def test_no_model_skips_compatibility_check(self, tmp_path: Path) -> None:
         """When model is None, is_model_compatible is not called."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["codex"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        run_ai_planning_session(
+            ai_tool="codex",
+            plan_dir=str(tmp_path),
+            model=None,
+            adapter=adapter,
+        )
 
-            run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model=None,
-            )
-
-            adapter.is_model_compatible.assert_not_called()
+        adapter.is_model_compatible.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1042,9 +950,14 @@ class TestPlanOrchestrator:
         provider.snapshot_task_numbers.assert_not_called()
         mock_finalize.assert_called_once()
 
-    def test_plan_antigravity_cli_fails_when_no_git_repo(self, tmp_path: Path) -> None:
-        """Antigravity CLI plan requires a git planning worktree; fails fast outside git."""
+    def test_unsupported_plan_output_fails_before_fallback_workspace(self, tmp_path: Path) -> None:
         provider = MagicMock()
+        adapter = MagicMock()
+        adapter.validate_plan_mode_request.side_effect = PlanModeLaunchError(
+            "private plan artifacts cannot be imported",
+            tool_id=AIToolID.ANTIGRAVITY_CLI,
+            capability=MagicMock(),
+        )
         with (
             patch(
                 "wade.services.plan_service.load_config",
@@ -1057,58 +970,62 @@ class TestPlanOrchestrator:
                 "wade.services.plan_service.confirm_ai_selection",
                 return_value=("antigravity-cli", None, None, PermissionMode.DEFAULT),
             ),
-            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.plan_service.ensure_task_label") as ensure_label,
             patch("wade.services.plan_service.run_ai_planning_session") as mock_launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as mock_stop_title,
+            patch("wade.services.plan_service.tempfile.mkdtemp") as make_temp,
+            patch("wade.services.plan_service.set_terminal_title") as set_title,
+            patch("wade.services.plan_service.start_title_keeper") as start_title,
             patch("wade.git.repo.get_repo_root", side_effect=Exception("Not a git repo")),
             patch("wade.services.plan_service.console") as mock_console,
         ):
-            assert plan(project_root=tmp_path) is False
-            mock_launch.assert_not_called()
-            mock_stop_title.assert_called_once()
-            mock_console.error.assert_called_once()
-            assert "guarded git planning worktree" in mock_console.error.call_args[0][0]
+            assert plan(project_root=tmp_path, issue_id="42") is False
+        mock_launch.assert_not_called()
+        make_temp.assert_not_called()
+        ensure_label.assert_not_called()
+        provider.read_task.assert_not_called()
+        set_title.assert_not_called()
+        start_title.assert_not_called()
+        assert "private plan artifacts" in mock_console.error.call_args.args[0]
 
-    def test_plan_antigravity_cli_fails_and_cleans_up_when_worktree_bootstrap_fails(
-        self, tmp_path: Path
-    ) -> None:
-        """Antigravity CLI planning fails and cleans up if planning worktree bootstrap fails."""
+    def test_unsupported_plan_mode_fails_before_git_worktree_creation(self, tmp_path: Path) -> None:
         provider = MagicMock()
-        wt_path = tmp_path / "plan-wt"
+        adapter = MagicMock()
+        adapter.validate_plan_mode_request.side_effect = PlanModeLaunchError(
+            "native activation unsupported",
+            tool_id=AIToolID.CODEX,
+            capability=MagicMock(),
+        )
         with (
             patch(
                 "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="antigravity-cli")),
+                return_value=ProjectConfig(ai=AIConfig(default_tool="codex")),
             ),
             patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="antigravity-cli"),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="codex"),
             patch("wade.services.plan_service.resolve_model", return_value=None),
             patch(
                 "wade.services.plan_service.confirm_ai_selection",
-                return_value=("antigravity-cli", None, None, PermissionMode.DEFAULT),
+                return_value=("codex", None, None, PermissionMode.DEFAULT),
             ),
-            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.plan_service.ensure_task_label") as ensure_label,
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.git.worktree.create_detached_worktree", return_value=wt_path),
-            patch(
-                "wade.services.implementation_service.bootstrap_worktree",
-                side_effect=RuntimeError("bootstrap failed"),
-            ),
-            patch("wade.services.plan_service._remove_planning_worktree") as mock_remove_wt,
+            patch("wade.git.worktree.create_detached_worktree") as create_worktree,
+            patch("wade.services.implementation_service.bootstrap_worktree") as bootstrap,
             patch("wade.services.plan_service.run_ai_planning_session") as mock_launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as mock_stop_title,
+            patch("wade.services.plan_service.set_terminal_title") as set_title,
+            patch("wade.services.plan_service.start_title_keeper") as start_title,
             patch("wade.services.plan_service.console") as mock_console,
         ):
             assert plan(project_root=tmp_path) is False
-            mock_launch.assert_not_called()
-            mock_remove_wt.assert_called_once_with(tmp_path, wt_path)
-            mock_stop_title.assert_called_once()
-            mock_console.error.assert_called_once()
-            assert "guarded git planning worktree" in mock_console.error.call_args[0][0]
+        mock_launch.assert_not_called()
+        create_worktree.assert_not_called()
+        bootstrap.assert_not_called()
+        ensure_label.assert_not_called()
+        set_title.assert_not_called()
+        start_title.assert_not_called()
+        assert "native activation unsupported" in mock_console.error.call_args.args[0]
 
     def test_plan_unaffected_tool_uses_temp_dir_fallback_when_no_git_repo(
         self, tmp_path: Path
@@ -1165,6 +1082,13 @@ class TestPlanOrchestrator:
             mock_launch.assert_called_once()
             launch_plan_dir = mock_launch.call_args.kwargs["plan_dir"]
             assert "wade-plan-" in launch_plan_dir
+            assert mock_launch.call_args.kwargs["adapter"] is adapter
+            preflight = adapter.validate_plan_mode_request.call_args.kwargs
+            assert preflight["plan_mode"] is True
+            assert preflight["yolo"] is False
+            assert preflight["auto"] is False
+            assert preflight["accept_edits"] is False
+            assert preflight["initial_message"]
 
 
 # ---------------------------------------------------------------------------

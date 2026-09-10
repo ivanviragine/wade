@@ -224,31 +224,21 @@ class TestBuildLaunchCommandYolo:
         cmd = ClaudeAdapter().build_launch_command(yolo=False)
         assert "--dangerously-skip-permissions" not in cmd
 
-    def test_yolo_supersedes_plan_mode(self) -> None:
-        """When yolo=True and plan_mode=True, YOLO flags should be used
-        instead of plan_mode flags (for tools that support yolo)."""
+    def test_yolo_conflicts_with_plan_mode(self) -> None:
+        """Native plan mode must not be displaced by YOLO flags."""
         from crossby.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.plan_mode import PlanModeConflictError
 
-        cmd = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
-        assert "--dangerously-skip-permissions" in cmd
-        assert "--permission-mode" not in cmd
+        with pytest.raises(PlanModeConflictError, match="cannot be combined with --yolo"):
+            ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
 
-    def test_yolo_unsupported_falls_back_to_plan_mode(self) -> None:
-        """When yolo=True but tool doesn't support it, plan_mode_args should
-        still be used."""
+    def test_unsupported_yolo_still_conflicts_with_plan_mode(self) -> None:
+        """Unsupported YOLO must not silently fall back during plan mode."""
         from crossby.ai_tools.opencode import OpenCodeAdapter
+        from crossby.ai_tools.plan_mode import PlanModeConflictError
 
-        with pytest.warns(
-            UserWarning,
-            match=r"does not support YOLO mode; falling back to plan mode",
-        ):
-            cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
-        # OpenCode doesn't support yolo → should fall back to plan mode
-        # OpenCode has no plan_mode_args, so plan_mode flag has no effect,
-        # but the key assertion is that yolo_args are NOT in the command
-        assert "--force" not in cmd
-        assert "--dangerously-skip-permissions" not in cmd
-        assert "--yolo" not in cmd
+        with pytest.raises(PlanModeConflictError, match="cannot be combined with --yolo"):
+            OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
 
 
 # ---------------------------------------------------------------------------

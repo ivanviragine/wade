@@ -9,13 +9,14 @@ from __future__ import annotations
 from importlib.metadata import version
 from pathlib import Path
 
+from crossby.ai_tools import AbstractAITool
 from crossby.config.skills import (
     SKILLS_DIR,
     detect_skills_source,
     get_skills_target,
     list_skills,
 )
-from crossby.models.ai import AIToolID
+from crossby.models.ai import AIToolID, PlanArtifactLocation, PlanModeActivation
 from crossby.sync.readers import detect_skills
 
 
@@ -27,7 +28,7 @@ def _skill(root: Path, relative: str, name: str) -> Path:
 
 
 def test_crossby_version_and_skill_root_mapping_contract() -> None:
-    assert version("crossby") == "0.29.0"
+    assert version("crossby") == "0.30.0"
     assert SKILLS_DIR == {
         AIToolID.CLAUDE: ".claude/skills",
         AIToolID.CURSOR: ".cursor/skills",
@@ -40,6 +41,54 @@ def test_crossby_version_and_skill_root_mapping_contract() -> None:
         AIToolID.VSCODE,
         AIToolID.OPENCODE,
     }
+
+
+def test_crossby_native_plan_capability_contract() -> None:
+    """Tripwire the adapter-owned activation and output dispositions WADE consumes."""
+    expected = {
+        AIToolID.CLAUDE: (
+            PlanModeActivation.CLI_ARGUMENT,
+            PlanArtifactLocation.REQUESTED_PATH,
+        ),
+        AIToolID.CURSOR: (
+            PlanModeActivation.CLI_ARGUMENT,
+            PlanArtifactLocation.SESSION,
+        ),
+        AIToolID.COPILOT: (
+            PlanModeActivation.CLI_ARGUMENT,
+            PlanArtifactLocation.PRIVATE,
+        ),
+        AIToolID.OPENCODE: (
+            PlanModeActivation.CLI_ARGUMENT,
+            PlanArtifactLocation.WORKSPACE_MANAGED,
+        ),
+        AIToolID.ANTIGRAVITY_CLI: (
+            PlanModeActivation.CLI_ARGUMENT,
+            PlanArtifactLocation.PRIVATE,
+        ),
+        AIToolID.CODEX: (
+            PlanModeActivation.UNSUPPORTED,
+            PlanArtifactLocation.UNAVAILABLE,
+        ),
+        AIToolID.ANTIGRAVITY: (
+            PlanModeActivation.UNSUPPORTED,
+            PlanArtifactLocation.UNAVAILABLE,
+        ),
+        AIToolID.VSCODE: (
+            PlanModeActivation.UNSUPPORTED,
+            PlanArtifactLocation.UNAVAILABLE,
+        ),
+    }
+
+    assert set(expected) == set(AIToolID)
+    for tool_id, (activation, artifact_location) in expected.items():
+        adapter = AbstractAITool.get(tool_id)
+        capability = adapter.capabilities().plan_mode
+        assert capability.activation is activation
+        assert capability.artifact_location is artifact_location
+        if capability.supported:
+            assert capability.initial_prompt_after_activation
+            assert capability.verified_version
 
 
 def test_crossby_detects_symlinked_roots_and_skill_directories(tmp_path: Path) -> None:

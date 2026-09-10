@@ -214,6 +214,14 @@ _PERMISSION_MODE_OPT = typer.Option(
     autocompletion=complete_permission_modes,
 )
 
+_PLAN_PERMISSION_MODE_OPT = typer.Option(
+    None,
+    "--permission-mode",
+    help="Planning always uses native Plan mode. Only yolo affects WADE by skipping "
+    "post-plan confirmations; accept-edits and auto are ignored with a warning.",
+    autocompletion=complete_permission_modes,
+)
+
 # Shared tri-state flag for the AI-runtime sandbox profile. ``--sandbox``
 # confines the runtime to its own workspace sandbox; ``--no-sandbox`` launches it
 # unrestricted so delegated child tools keep their own host credentials;
@@ -244,8 +252,12 @@ def plan_cmd(
         help="Reasoning effort level: low, medium, high, max.",
         autocompletion=complete_effort_levels,
     ),
-    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
-    permission_mode: str | None = _PERMISSION_MODE_OPT,
+    yolo: bool = typer.Option(
+        False,
+        "--yolo",
+        help="Skip WADE post-plan confirmations; the planner still uses native Plan mode.",
+    ),
+    permission_mode: str | None = _PLAN_PERMISSION_MODE_OPT,
     sandbox: bool | None = _SANDBOX_OPT,
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
