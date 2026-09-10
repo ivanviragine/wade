@@ -749,6 +749,21 @@ class TestConfirmAiSelectionAlwaysDisplays:
         pm = [v for k, v in _kv_pairs(mock_kv) if k == "Permission mode"]
         assert pm and pm[0].startswith("accept-edits — ")
 
+    def test_fixed_posture_replaces_permission_mode_display(self) -> None:
+        with patch(_IS_TTY, return_value=False), patch(_CONSOLE_KV) as mock_kv:
+            confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_permission_mode=PermissionMode.YOLO,
+                effective_posture=("Planning mode", "native"),
+            )
+
+        pairs = _kv_pairs(mock_kv)
+        assert ("Planning mode", "native") in pairs
+        assert all(key != "Permission mode" for key, _ in pairs)
+
     @pytest.mark.parametrize("mode", list(PermissionMode))
     def test_each_mode_renders_its_descriptor(self, mode: PermissionMode) -> None:
         from wade.models.permission import describe_permission_mode

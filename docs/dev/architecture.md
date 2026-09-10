@@ -1207,7 +1207,34 @@ The tier values `wade init` writes are **not wade constants** — `init_service/
 
 **Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for every command, with no per-command asymmetry. Network access is unconditionally on and no longer configurable — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
 
-**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True` for native plan tools, and `plan_mode=False` for Antigravity CLI whose native plan mode sandboxes writes to an external brain store while WADE's plan-artifact guard enforces containment); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`. Every launch command (`plan`, `implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
+**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**:
+The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`,
+`models/delegation.py`) governs *how* a tool is dispatched. `permission_mode`
+(`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`,
+`models/permission.py`) governs *how much* an ordinary interactive tool may do
+without prompting. Resolution (`resolve_permission_mode()` in
+`ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command
+config > global config > `default`; `permission_mode` wins over the legacy
+`yolo` alias at any level.
+
+For implementation and interactive review/dependency launches, WADE forwards
+the requested autonomy tier and Crossby owns capability-aware downgrades and
+warnings (`_autonomy_launch_args`). Headless analytical delegation always
+forces `default`; `review_pr_comments` is the interactive exception and honors
+its own configured tier. Those launch paths display the effective permission
+mode before dispatch, and a completed non-zero headless exit preserves trimmed
+stdout plus a bounded stderr tail.
+
+`wade plan` is deliberately different. Its child posture is fixed to Crossby's
+native plan contract: `plan_mode=True`, with `yolo=False`, `auto=False`, and
+`accept_edits=False`. Global, per-command, and CLI autonomy settings cannot
+displace that posture. The legacy YOLO resolution is retained only for WADE's
+parent-side confirmations after the planner exits; `accept-edits` and `auto`
+warn and normalize to ordinary confirmations. The selection UI therefore shows
+`Planning mode: native` instead of claiming that an autonomy tier applies to
+the child, and reports the parent confirmation behavior separately. A supplied
+`permission_mode: plan` remains invalid because native planning is a Crossby
+capability, not a `PermissionMode` value.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
@@ -1364,18 +1391,37 @@ after it exits **wade** validates those files and persists the issues and draft
 PRs itself. This is a deliberate determinism boundary (see *Determinism via
 Services*): the agent authors plan content; code decides what becomes an issue.
 
-**Phase 1 — generate plan files.** In a git repo the service creates a
-detached-HEAD **planning worktree** (`git/worktree.py:create_detached_worktree`),
-bootstraps its fixed plan workflow and frozen WORK/REVIEW bindings, and points the
-AI at `<worktree>/.wade/plans/`. Isolating outputs to that subdirectory keeps
-ordinary repo markdown (e.g. `README.md`) from being misread as a generated plan.
-Outside a git repo it falls back to a `tempfile.mkdtemp(prefix="wade-plan-")`
-temp dir, materializes the same session bundle inside that directory, and skips
-draft-PR creation (except for Antigravity CLI, which requires a
-guarded git planning worktree because its launch uses normal file writing mode with
-WADE's plan-artifact PreToolUse guard rather than agy's brain-sandboxed native plan mode).
-The launch prompt (`plan-session.md`) tells the agent to write a plan file per issue
-and to **not** create the issues.
+**Phase 1 — validate native mode, then generate plan files.** After the final
+interactive tool selection, `plan_service` obtains that tool's Crossby adapter
+and calls `validate_plan_mode_request()` with native mode, an initial prompt,
+and WADE's required output directory. Unsupported activation, an unverified
+installed version, or a non-routable artifact disposition fails before terminal
+title keepers, worktree/temp creation, provider mutation, or child launch.
+Crossby's typed `PlanModeCapability` is the only tool-specific source of truth;
+WADE does not mirror native flags or version floors.
+
+For a supported tool in a git repo, the service creates a detached-HEAD
+**planning worktree** (`git/worktree.py:create_detached_worktree`), bootstraps
+its fixed plan workflow and frozen WORK/REVIEW bindings, and uses
+`<worktree>/.wade/plans/`. Outside a git repo it creates a hidden temporary
+directory inside the requested working directory so Crossby's project-relative
+plan-output routing remains valid, materializes the same session bundle there,
+and skips draft-PR creation. The launch goes through `AbstractAITool.launch()`
+with `plan_mode=True`, all autonomy booleans false, the raw managed prompt,
+model/effort, trusted paths, sandbox/network context, and transcript path.
+Crossby owns activation, output arguments, environment additions, command
+construction, version enforcement, and process execution. There is no unknown
+binary fallback and no `/plan` prompt prefix.
+
+Crossby 0.30.0 declares Claude's requested-path output as compatible with
+WADE. Cursor (session output), Copilot and Antigravity CLI (private output), and
+OpenCode (harness-managed workspace output) have native activation but cannot
+yet guarantee a `PLAN*.md` in WADE's directory. Codex, VS Code, and Antigravity
+IDE cannot guarantee programmatic native activation before the first task.
+Those dispositions remain fail-closed until Crossby supplies a compatible
+strategy; in particular, Antigravity CLI is never launched in normal editing
+mode as a substitute. The launch prompt (`plan-session.md`) tells the agent to
+write a plan file per issue and to **not** create the issues.
 
 **Phase 2 — validate, then persist.** After the AI exits, wade discovers the
 title-parseable files (`validate_plan_files`) and runs the **strict**

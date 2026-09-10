@@ -495,6 +495,8 @@ def display_ai_selection(
     effort: EffortLevel | None,
     permission_mode: PermissionMode,
     sandbox: bool | None = None,
+    *,
+    effective_posture: tuple[str, str] | None = None,
 ) -> None:
     """Print the resolved AI selection (tool, model, effort, permission, sandbox).
 
@@ -502,12 +504,12 @@ def display_ai_selection(
     entirely — a detached review, which has no interactive loop to run — still
     owes the user the posture it is about to launch under.
 
-    The permission-mode line is **always** printed with a human-readable
-    descriptor (including ``default``), so every launch states both which tier
-    is active and what it means. The sandbox line follows the same rule for the
-    same reason — the profile decides whether the runtime can reach the host, so
-    it must be stated, never inferred. It is omitted only when the caller
-    resolved no profile (``sandbox=None``), which no launch path does.
+    By default the permission-mode line is printed with a human-readable
+    descriptor (including ``default``), so every ordinary launch states both
+    which tier is active and what it means. ``effective_posture`` replaces that
+    line for a fixed child posture such as native planning mode. The sandbox
+    line is likewise omitted only when the caller resolved no profile
+    (``sandbox=None``), which no launch path does.
 
     When no tool resolved, renders a single ``AI tool: not resolved`` line rather
     than passing ``None`` to :meth:`console.kv` (which is typed ``str`` and would
@@ -523,10 +525,13 @@ def display_ai_selection(
         console.kv("Model", model)
     if effort:
         console.kv("Effort", effort.value)
-    console.kv(
-        "Permission mode",
-        f"{permission_mode.value} — {describe_permission_mode(permission_mode)}",
-    )
+    if effective_posture is None:
+        console.kv(
+            "Permission mode",
+            f"{permission_mode.value} — {describe_permission_mode(permission_mode)}",
+        )
+    else:
+        console.kv(*effective_posture)
     if sandbox is not None:
         console.kv("Sandbox", describe_sandbox(sandbox))
 
@@ -543,12 +548,18 @@ def confirm_ai_selection(
     permission_mode_explicit: bool = True,
     mode: DelegationMode | None = None,
     sandbox: bool | None = None,
+    effective_posture: tuple[str, str] | None = None,
 ) -> tuple[str | None, str | None, EffortLevel | None, PermissionMode]:
     """Display the resolved AI selection, then interactively confirm/change it.
 
     The resolved selection (tool, model, effort, permission mode, sandbox
     profile) is **always displayed exactly once** — before any skip guard — so it
     surfaces on every launch path (TTY, non-TTY, headless, all-flags-explicit).
+
+    *effective_posture* replaces the generic permission-mode line for launch
+    paths whose child posture is fixed independently of the retained permission
+    value. Such callers also suppress the permission-mode picker so the UI
+    cannot imply that a child setting can be changed when it cannot.
 
     *sandbox* is display-only: it is never offered in the change-loop, because
     the profile is a launch-time OS property that cannot be renegotiated after
@@ -569,7 +580,12 @@ def confirm_ai_selection(
 
     # Always surface the resolved selection once, before the skip guard below.
     display_ai_selection(
-        resolved_tool, resolved_model, resolved_effort, resolved_permission_mode, sandbox
+        resolved_tool,
+        resolved_model,
+        resolved_effort,
+        resolved_permission_mode,
+        sandbox,
+        effective_posture=effective_posture,
     )
 
     # Skip the change-loop when non-TTY, no tool resolved, all flags were
@@ -594,7 +610,14 @@ def confirm_ai_selection(
         # iteration was already rendered by the hoisted call above — don't
         # double-print it.
         if not first_render:
-            display_ai_selection(tool, model, effort, permission_mode, sandbox)
+            display_ai_selection(
+                tool,
+                model,
+                effort,
+                permission_mode,
+                sandbox,
+                effective_posture=effective_posture,
+            )
         first_render = False
 
         # Build menu dynamically based on which flags were NOT explicit.
@@ -621,7 +644,7 @@ def confirm_ai_selection(
             pass
         if not effort_explicit and tool_supports_effort:
             menu_items.append("Change effort")
-        if not permission_mode_explicit and tool_supports_autonomy:
+        if effective_posture is None and not permission_mode_explicit and tool_supports_autonomy:
             menu_items.append("Change permission mode")
 
         if len(menu_items) == 1:

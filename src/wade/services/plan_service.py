@@ -11,14 +11,13 @@ import contextlib
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import structlog
-from crossby.ai_tools import AbstractAITool
+from crossby.ai_tools import AbstractAITool, PlanModeLaunchError
 from crossby.ai_tools.transcript import (
     extract_token_usage_from_text,
     read_transcript_excerpt,
@@ -28,7 +27,7 @@ from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
 from wade.config.loader import load_config
 from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
-from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
+from wade.models.permission import PermissionMode
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
@@ -69,7 +68,6 @@ from wade.utils.plan_validation import discover_plan_files as discover_plan_file
 from wade.utils.plan_validation import has_valid_plan as has_valid_plan
 from wade.utils.plan_validation import plan_done as plan_done
 from wade.utils.plan_validation import validate_plan_dir as validate_plan_dir
-from wade.utils.process import run_with_transcript
 from wade.utils.runtime_env import detect_parent_runtime, requires_unsandboxed_relaunch
 from wade.utils.terminal import (
     compose_plan_title,
@@ -79,6 +77,12 @@ from wade.utils.terminal import (
 )
 
 logger = structlog.get_logger()
+
+_NATIVE_PLAN_POSTURE = (
+    "Planning mode",
+    "native — active before the first user turn; autonomy flags are disabled",
+)
+_PLAN_PREFLIGHT_PROMPT = "WADE managed planning prompt"
 
 
 def get_plan_prompt_template() -> str:
@@ -303,9 +307,9 @@ def run_ai_planning_session(
     effort: EffortLevel | None = None,
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
-    permission_mode: PermissionMode = PermissionMode.DEFAULT,
     session_bundle: str = ".wade/session",
     sandbox: bool = DEFAULT_SANDBOX,
+    adapter: AbstractAITool | None = None,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -324,30 +328,22 @@ def run_ai_planning_session(
         session_bundle=session_bundle,
     )
 
-    # For Copilot/Codex, prefix with /plan
-    tool_lower = ai_tool.lower()
-    if tool_lower in ("copilot", "codex"):
-        prompt = f"/plan {prompt}"
-
     prompt_file = Path(plan_dir) / "prompt.txt"
     prompt_file.write_text(prompt)
     snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
     console.panel(snippet, title="Planning Prompt (preview)")
 
-    # Resolve adapter
-    try:
-        adapter = AbstractAITool.get(AIToolID(ai_tool))
-    except (ValueError, KeyError):
-        console.warn(f"Unknown AI tool: {ai_tool} — launching directly")
+    # Unknown binaries cannot prove that they entered native planning mode, so
+    # they fail closed instead of using the old direct-executable fallback.
+    if adapter is None:
         try:
-            result = subprocess.run([ai_tool], cwd=str(session_cwd))
-        except FileNotFoundError:
-            console.error(f"AI tool binary not found: {ai_tool}")
+            adapter = AbstractAITool.get(AIToolID(ai_tool))
+        except (ValueError, KeyError):
+            console.error(
+                f"Unknown AI tool '{ai_tool}' cannot guarantee native planning mode. "
+                "Choose a Crossby-supported planning harness."
+            )
             return 1
-        except OSError as exc:
-            console.warn(f"AI tool launch failed: {exc}")
-            return 1
-        return result.returncode
 
     # Check model compatibility — drop model if it's not valid for this tool
     if model and not adapter.is_model_compatible(model):
@@ -355,56 +351,35 @@ def run_ai_planning_session(
         model = None
 
     deliver_prompt_if_needed(adapter, prompt)
-
-    # Derive whether to request native plan mode. Antigravity CLI's native
-    # --mode plan sandboxes file writes into its per-conversation brain
-    # directory (~/.gemini/antigravity-cli/brain/<id>/), rejecting worktree
-    # paths before WADE's plan_artifact_only PreToolUse guard can allow them.
-    # WADE requires real PLAN*.md files in the worktree/plan directory, so we
-    # launch agy with plan_mode=False and rely on WADE's plan-mode PreToolUse
-    # hook in the planning worktree for containment.
-    tool_id = getattr(adapter.capabilities(), "tool_id", None)
-    plan_mode = tool_id is not AIToolID.ANTIGRAVITY_CLI
-
-    # Build command. crossby (>=0.17.1) places the initial_message as the FIRST
-    # positional arg and appends the autonomy/effort/trusted-dir flags AFTER it
-    # (see crossby.ai_tools.base.build_launch_command). plan_dir is included in
-    # trusted_dirs so the plan session can write there. If a "flag ignored after
-    # positional" issue ever reproduces on a directly-wired path, it belongs
-    # upstream in crossby's arg ordering — WADE cannot fix it here.
-    cmd = adapter.build_launch_command(
-        model=model,
-        plan_mode=plan_mode,
-        trusted_dirs=[str(session_cwd), tempfile.gettempdir(), plan_dir],
-        initial_message=prompt,
-        effort=effort,
-        allowed_commands=allowed_commands,
-        # A planning session may run in a linked planning worktree; grant its
-        # out-of-root git metadata so a sandboxed Codex plan session can commit
-        # generated plan artefacts. Inert for a main checkout, for every tool
-        # without a sandbox, and under an unrestricted profile (where crossby
-        # skips the grants because there is no boundary to widen).
-        working_dir=session_cwd,
-        network_access=LAUNCH_NETWORK_ACCESS,
-        sandbox=sandbox,
-        **permission_mode_launch_kwargs(permission_mode),
-    )
     console.info(f"Plan directory: {plan_dir}")
 
     console.empty()
-    logger.info(
-        "plan.ai_launch",
-        tool=ai_tool,
-        model=model,
-        cmd=" ".join(cmd),
-    )
+    logger.info("plan.ai_launch", tool=ai_tool, model=model)
 
-    # An ``OSError`` here means the process could not be spawned at all (for
-    # example, a parent sandbox denied executing a binary found on PATH). Keep
-    # that launch boundary narrow: exceptions after a planner has run must not
-    # be mistaken for a failed launch and cause generated plans to be discarded.
+    # Crossby owns native-mode activation, output routing, command construction,
+    # environment additions, and process execution. Explicitly disable every
+    # autonomy tier: native plan mode is an exclusive child-process posture even
+    # when WADE retains YOLO for its own post-session confirmations.
     try:
-        return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
+        return adapter.launch(
+            working_dir=session_cwd,
+            model=model,
+            prompt=prompt,
+            transcript_path=transcript_path,
+            trusted_dirs=[str(session_cwd), tempfile.gettempdir(), plan_dir],
+            effort=effort,
+            allowed_commands=allowed_commands,
+            yolo=False,
+            plan_mode=True,
+            accept_edits=False,
+            auto=False,
+            network_access=LAUNCH_NETWORK_ACCESS,
+            plan_output_dir=Path(plan_dir),
+            sandbox=sandbox,
+        )
+    except PlanModeLaunchError as exc:
+        console.error(f"Cannot start native planning session: {exc}")
+        return 1
     except OSError as exc:
         console.warn(f"AI tool launch failed: {exc}")
         return 1
@@ -452,6 +427,54 @@ def _warn_token_extraction(transcript_path: Path | None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_plan_automation_mode(mode: PermissionMode) -> PermissionMode:
+    """Keep only the legacy YOLO meaning used by WADE after planning exits.
+
+    Native plan mode is the fixed child posture. ``accept-edits`` and ``auto``
+    therefore have no truthful effect in a plan session; surface that fact and
+    fall back to the ordinary parent-side confirmation behavior.
+    """
+    if mode in (PermissionMode.ACCEPT_EDITS, PermissionMode.AUTO):
+        console.warn(
+            f"Permission mode '{mode.value}' does not apply to a planning child; "
+            "native Plan mode remains active. Using normal WADE post-plan confirmations."
+        )
+        return PermissionMode.DEFAULT
+    return mode
+
+
+def _preflight_native_plan_mode(
+    ai_tool: str,
+    *,
+    working_dir: Path,
+    plan_output_dir: Path,
+) -> AbstractAITool | None:
+    """Validate a Crossby-owned native plan/output launch before side effects."""
+    try:
+        adapter = AbstractAITool.get(AIToolID(ai_tool))
+    except (ValueError, KeyError):
+        console.error(
+            f"Unknown AI tool '{ai_tool}' cannot guarantee native planning mode. "
+            "Choose a Crossby-supported planning harness."
+        )
+        return None
+
+    try:
+        adapter.validate_plan_mode_request(
+            plan_mode=True,
+            yolo=False,
+            auto=False,
+            accept_edits=False,
+            initial_message=_PLAN_PREFLIGHT_PROMPT,
+            plan_output_dir=plan_output_dir,
+            working_dir=working_dir,
+        )
+    except PlanModeLaunchError as exc:
+        console.error(f"Cannot start native planning session: {exc}")
+        return None
+    return adapter
+
+
 def plan(
     ai_tool: str | None = None,
     model: str | None = None,
@@ -492,8 +515,12 @@ def plan(
     # Resolve effort level
     resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
 
-    # Resolve autonomy / permission mode (yolo is a back-compat alias)
-    resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
+    # Resolve the legacy parent-side automation switch separately from the
+    # child posture. Native plan mode is fixed and never receives autonomy
+    # flags; only YOLO still skips WADE's confirmations after the planner exits.
+    resolved_permission_mode = _normalize_plan_automation_mode(
+        resolve_permission_mode(permission_mode, yolo, config, "plan")
+    )
 
     # Resolve the AI-runtime sandbox profile. A planning session is a launch path
     # like any other, so it carries the profile too (#478). The capability check
@@ -515,11 +542,17 @@ def plan(
             permission_mode_explicit or permission_mode is not None or yolo is not None
         ),
         sandbox=resolved_sandbox,
+        effective_posture=_NATIVE_PLAN_POSTURE,
     )
+    resolved_permission_mode = _normalize_plan_automation_mode(resolved_permission_mode)
     resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
     if not resolved_tool:
         console.error("No AI tool selected.")
         return False
+    console.kv(
+        "Post-plan confirmations",
+        "skipped" if resolved_yolo else "enabled",
+    )
 
     # Checked against the *confirmed* tool: the menu above may have switched to a
     # runtime that cannot honor the requested profile.
@@ -528,25 +561,6 @@ def plan(
     except SandboxCapabilityError as e:
         console.error(str(e))
         return False
-
-    # Pre-load existing issue context when issue_id is supplied
-    existing_issue: Task | None = None
-    if issue_id:
-        try:
-            existing_issue = provider.read_task(issue_id)
-            safe_title = console.escape_markup(existing_issue.title)
-            console.kv("Issue", f"#{existing_issue.id}: {safe_title}")
-        except Exception as e:
-            console.error(f"Could not fetch issue #{issue_id}: {e}")
-            return False
-
-    # Set terminal title for the plan session
-    plan_title = compose_plan_title(
-        existing_issue.id if existing_issue else None,
-        existing_issue.title if existing_issue else None,
-    )
-    set_terminal_title(plan_title)
-    start_title_keeper(plan_title)
 
     # Resolve repo root for draft PR creation
     from wade.git import repo as git_repo
@@ -559,8 +573,55 @@ def plan(
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except Exception:
-        console.warn("Not in a git repo — draft PRs will not be created.")
         repo_root = None
+
+    # Compute, but do not create, the planning workspace. Crossby's typed gate
+    # must reject unsupported activation, versions, and output locations before
+    # title keepers, worktrees, temporary directories, or provider mutations.
+    planning_worktree_dir: Path | None = None
+    if repo_root is not None:
+        worktrees_dir = _resolve_worktrees_dir(config, repo_root)
+        repo_name = repo_root.name
+        short_id = os.urandom(4).hex()
+        planning_worktree_dir = worktrees_dir / repo_name / f"plan-{short_id}"
+        preflight_working_dir = planning_worktree_dir
+        preflight_plan_dir = planning_worktree_dir / ".wade" / "plans"
+    else:
+        # The eventual fallback is created under cwd, keeping Claude's requested
+        # plansDirectory project-relative while the WADE guard confines writes
+        # to that hidden temporary directory.
+        preflight_working_dir = cwd
+        preflight_plan_dir = cwd / ".wade-plan-preflight"
+
+    adapter = _preflight_native_plan_mode(
+        resolved_tool,
+        working_dir=preflight_working_dir,
+        plan_output_dir=preflight_plan_dir,
+    )
+    if adapter is None:
+        return False
+
+    if repo_root is None:
+        console.warn("Not in a git repo — draft PRs will not be created.")
+
+    # Pre-load existing issue context when issue_id is supplied
+    existing_issue: Task | None = None
+    if issue_id:
+        try:
+            existing_issue = provider.read_task(issue_id)
+            safe_title = console.escape_markup(existing_issue.title)
+            console.kv("Issue", f"#{existing_issue.id}: {safe_title}")
+        except Exception as e:
+            console.error(f"Could not fetch issue #{issue_id}: {e}")
+            return False
+
+    # Set terminal title only after native planning support is proven.
+    plan_title = compose_plan_title(
+        existing_issue.id if existing_issue else None,
+        existing_issue.title if existing_issue else None,
+    )
+    set_terminal_title(plan_title)
+    start_title_keeper(plan_title)
 
     # Recover votes a previous run had to leave behind before starting a new
     # session — a retained worktree is only retryable if something retries it.
@@ -569,11 +630,7 @@ def plan(
 
     # Create a detached-HEAD planning worktree
     planning_worktree: Path | None = None
-    if repo_root is not None:
-        worktrees_dir = _resolve_worktrees_dir(config, repo_root)
-        repo_name = repo_root.name
-        short_id = os.urandom(4).hex()
-        planning_worktree_dir = worktrees_dir / repo_name / f"plan-{short_id}"
+    if repo_root is not None and planning_worktree_dir is not None:
         try:
             planning_worktree = git_worktree.create_detached_worktree(
                 repo_root=repo_root,
@@ -605,25 +662,10 @@ def plan(
                 _remove_planning_worktree(repo_root, planning_worktree)
             planning_worktree = None
 
-    # Antigravity CLI's native plan mode sandboxes writes into its brain dir,
-    # so WADE launches it with normal file writes and relies on the planning
-    # worktree's PreToolUse guard for safety. That containment requires a
-    # successfully created and bootstrapped planning worktree.
     if planning_worktree is None:
-        try:
-            is_agy_cli = AIToolID(resolved_tool) is AIToolID.ANTIGRAVITY_CLI
-        except (ValueError, KeyError):
-            is_agy_cli = False
-
-        if is_agy_cli:
-            console.error("Antigravity CLI planning requires a guarded git planning worktree.")
-            stop_title_keeper()
-            return False
-
-        plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
-        # The supported no-worktree fallback cannot write the caller's checkout.
-        # Materialize its immutable bundle under the writable plan directory and
-        # name that exact path in the launch prompt.
+        plan_dir = tempfile.mkdtemp(prefix=".wade-plan-", dir=cwd)
+        # Materialize the immutable bundle under the hidden writable plan
+        # directory and name that exact path in the launch prompt.
         from wade.services.session_composition_service import (
             SessionCompositionError,
             compose_session,
@@ -632,7 +674,7 @@ def plan(
         try:
             compose_session(
                 Path(plan_dir),
-                repo_root or Path.cwd(),
+                repo_root or cwd,
                 config,
                 kind=SessionKind.PLAN,
                 task_id=existing_issue.id if existing_issue else None,
@@ -679,7 +721,7 @@ def plan(
     # Launch AI session
     console.empty()
     issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
-    session_cwd = planning_worktree or Path.cwd()
+    session_cwd = planning_worktree or cwd
     session_bundle = (
         ".wade/session" if planning_worktree is not None else str(Path(plan_dir) / ".wade/session")
     )
@@ -716,19 +758,15 @@ def plan(
             effort=resolved_effort,
             allowed_commands=config.permissions.allowed_commands,
             cwd=session_cwd,
-            permission_mode=resolved_permission_mode,
             session_bundle=session_bundle,
             sandbox=resolved_sandbox,
+            adapter=adapter,
         )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
     # Non-blocking tools (VS Code, Antigravity) return immediately.
     # Wait for user confirmation before post-session processing.
-    try:
-        tool_adapter = AbstractAITool.get(AIToolID(resolved_tool))
-        tool_caps = tool_adapter.capabilities()
-    except (ValueError, KeyError):
-        tool_caps = None
+    tool_caps = adapter.capabilities()
 
     if tool_caps and not tool_caps.blocks_until_exit:
         console.empty()

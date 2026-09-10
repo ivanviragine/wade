@@ -240,7 +240,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade plan-session done <plan_dir>` | Finalize a planning session |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `review pr-comments` additionally accepts `--effort none` to pin the tool default instead of a configured effort across a later wait/relaunch. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, standalone reviews (`review plan`, `review implementation`, `review batch`), `review pr-comments`, `task deps`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. Planning is the exception: its child always uses the harness's native Plan mode, so `accept-edits` and `auto` are ignored with a warning; only `yolo` retains its legacy parent-side meaning of skipping WADE's confirmations after the planner exits. `review pr-comments` additionally accepts `--effort none` to pin the tool default instead of a configured effort across a later wait/relaunch. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, standalone reviews (`review plan`, `review implementation`, `review batch`), `review pr-comments`, `task deps`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
@@ -260,7 +260,28 @@ per plan file, a comment and a `> **Superseded by ...**` banner are added to
 `--yolo`/non-interactive). If any plan file fails to become a task, `#N` is
 left open with a warning instead of superseding on a partial split.
 
-Antigravity CLI (`agy`) planning sessions launch in normal file-writing mode within a guarded git planning worktree rather than `agy`'s native `--mode plan` (which sandboxes writes to its own per-conversation artifact store outside the worktree). WADE's plan-artifact guard strictly confines writes to `.wade/plans/` and scratch paths, preserving planning safety while generating real plan files. Antigravity CLI planning therefore requires a guarded git planning worktree.
+Every successful `wade plan` launch enters the selected harness's native Plan
+mode before its initial task is processed. WADE asks Crossby to validate both
+that activation and a writable native plan-artifact route before it creates a
+planning worktree or starts a child process. Prompt text such as `/plan`, WADE's
+plan-artifact guard, and an AI-runtime sandbox are additional controls; none is
+accepted as a substitute for the harness mode.
+
+Crossby 0.30.0 currently reports these dispositions:
+
+| Harness | Native activation | Plan artifact disposition | `wade plan` |
+|---------|-------------------|---------------------------|-------------|
+| Claude Code | CLI argument before the first turn | Routable to WADE's requested `.wade/plans/` path | Supported when the installed version satisfies Crossby's verified floor |
+| Cursor CLI | CLI argument before the first turn | Interactive session only | Rejected: no guaranteed `PLAN*.md` handoff |
+| GitHub Copilot CLI | CLI argument before the first turn | Private planning workspace | Rejected: no import route to WADE's plan directory |
+| OpenCode | Native plan agent selected before the first turn | Harness-managed workspace path | Rejected: not routable to WADE's plan directory |
+| Antigravity CLI (`agy`) | Native `--mode plan` | Private per-conversation brain directory | Rejected unless Crossby exposes a session-bound import route |
+| Codex | No verified pre-first-turn CLI activation | Unavailable | Rejected; a positional `/plan` prompt is not activation |
+| VS Code / Antigravity IDE | No programmatic native-plan launch | Unavailable | Rejected |
+
+This matrix comes from Crossby's typed capabilities rather than a WADE-owned
+tool/flag table, so a future Crossby release can make another harness eligible
+by providing both truthful activation and output routing.
 
 ### Base branch
 
@@ -616,7 +637,7 @@ Description body here. Sub-headings, code blocks, anything markdown.
 
 ### Permission modes
 
-`--permission-mode` sets how much autonomy the AI tool is granted — an axis
+Outside `wade plan`, `--permission-mode` sets how much autonomy the AI tool is granted — an axis
 independent of the delegation `--mode` (which controls *how* a tool is
 dispatched: prompt/interactive/headless). The tiers, most→least permissive, are
 `yolo` > `auto` > `accept-edits` > `default`:
@@ -643,14 +664,20 @@ tier: `wade review plan`, `wade review implementation`, `wade review batch`, and
 `wade task deps` all accept `--yolo` / `--permission-mode` (matching `wade review
 pr-comments`), and `ai.review_batch.yolo: true` / `ai.deps.yolo: true` apply when
 those commands run interactively; the auto-launched review session honors its own
-tier via `ai.review_pr_comments` (see above). `plan` is not a permission mode —
-it's driven separately — and is rejected (warn + fall back to `default`) if
-configured.
+tier via `ai.review_pr_comments` (see above). A planning child is different: it
+always receives `plan_mode=True` and `yolo=False`, `auto=False`, and
+`accept_edits=False`. Global or `ai.plan` autonomy settings cannot displace
+native Plan mode. `yolo` remains available only to skip WADE's parent-side
+post-plan confirmations; `accept-edits` and `auto` warn and fall back to normal
+confirmations. The invalid value `plan` is still rejected by permission-mode
+parsing because native planning is a separate Crossby capability.
 
-The **resolved permission mode is always displayed** at launch, on every path
+The **resolved permission mode is always displayed** for ordinary launches, on every path
 (TTY, non-TTY, headless, all-flags-explicit), with a one-line descriptor — so a
 `default` session states what `default` means, and what is shown always equals
-what is applied.
+what is applied. Planning instead displays native Plan mode as the effective
+child posture and reports separately whether WADE's post-plan confirmations are
+enabled or skipped.
 
 ### Headless review budget
 

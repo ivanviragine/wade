@@ -28,6 +28,7 @@ def _install_fake_claude(mock_bin: Path) -> None:
         """#!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -36,6 +37,13 @@ def _find_plan_dir(argv: list[str]) -> Path | None:
     add_dirs: list[Path] = []
     i = 0
     while i < len(argv):
+        if argv[i] == "--settings" and i + 1 < len(argv):
+            settings = json.loads(argv[i + 1])
+            plans_directory = settings.get("plansDirectory")
+            if isinstance(plans_directory, str):
+                return (Path.cwd() / plans_directory).resolve()
+            i += 2
+            continue
         if argv[i] == "--add-dir" and i + 1 < len(argv):
             add_dirs.append(Path(argv[i + 1]))
             i += 2
@@ -52,6 +60,10 @@ def _find_plan_dir(argv: list[str]) -> Path | None:
         return add_dirs[-1]
     return None
 
+
+if "--version" in sys.argv[1:]:
+    print("2.1.263 (Claude Code)")
+    sys.exit(0)
 
 plan_dir = _find_plan_dir(sys.argv[1:])
 if plan_dir is not None:
