@@ -97,7 +97,7 @@ def parse_artifact(markdown: str) -> PlanBundle:
     """Accept one Markdown plan or one explicit envelope, never infer task boundaries."""
     if not markdown.strip() or len(markdown.encode("utf-8")) > 2_000_000:
         raise ValueError("native plan is blank or exceeds the 2 MB import limit")
-    if "wade:plan-bundle:" not in markdown:
+    if not markdown.strip().startswith("<!-- wade:plan-bundle:"):
         return PlanBundle(plans=(PlanMember(filename="PLAN.md", markdown=markdown),))
     match = re.fullmatch(
         re.escape(BUNDLE_MARKER) + r"\s*```json\s*\n(.*)\n```\s*", markdown.strip(), re.DOTALL

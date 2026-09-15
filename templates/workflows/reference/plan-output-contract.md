@@ -11,6 +11,8 @@ non-default base. Plans describe implementation; they do not perform it.
 
 For multiple tasks, relationships, or knowledge ratings, return exactly this
 versioned envelope: the marker followed by one JSON fence, with no outside prose.
+Only a marker at the start selects bundle parsing; examples inside a normal
+single-plan document remain plan content.
 
 <!-- wade:plan-bundle:v1 -->
 ```json

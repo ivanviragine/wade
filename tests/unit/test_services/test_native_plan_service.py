@@ -165,6 +165,13 @@ def test_explicit_bundle_preserves_members_and_relationships() -> None:
     assert native.parse_artifact(artifact) == bundle
 
 
+def test_literal_envelope_documentation_inside_one_plan_is_not_a_bundle() -> None:
+    markdown = MARKDOWN + "\n## Example\n```text\n" + BUNDLE_MARKER + "\n```\n"
+    bundle = native.parse_artifact(markdown)
+    assert len(bundle.plans) == 1
+    assert bundle.plans[0].markdown == markdown
+
+
 @pytest.mark.parametrize("tool, sandbox", [("claude", True), ("opencode", True), ("codex", False)])
 def test_explicit_no_network_is_not_silently_an_absent_grant(
     tmp_path: Path,

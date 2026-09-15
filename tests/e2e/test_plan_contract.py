@@ -211,7 +211,7 @@ class TestPlanCommand:
             cwd=e2e_repo,
         )
         assert result.returncode == 1
-        assert "cannot guarantee --no-network-access" in result.stderr
+        assert "cannot guarantee --no-network-access" in " ".join(result.stderr.split())
         assert json.loads(mock_gh_cli["state_file"].read_text()) == before
         assert not (e2e_repo.parent / ".worktrees").exists()
 
