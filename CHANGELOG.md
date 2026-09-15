@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.3] — 2026-09-15
+
+### Bug Fixes
+
+- integrate Crossby native planning sessions (#512) (c58ea77)
+
 ## [v1.2.2] — 2026-09-09
 
 ### Bug Fixes
