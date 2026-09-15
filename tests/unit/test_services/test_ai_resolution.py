@@ -982,6 +982,12 @@ class TestNetworkAccessRetirement:
                 stripped = line.strip()
                 if not stripped.startswith("network_access="):
                     continue
+                if path.name in {"main.py", "plan_service.py"} and stripped in {
+                    "network_access=network_access,",
+                    "network_access=network_access is True,",
+                }:
+                    # Complete planning requests preserve the explicit independent policy.
+                    continue
                 if stripped != "network_access=LAUNCH_NETWORK_ACCESS,":
                     offenders.append(f"{path.name}:{lineno}: {stripped}")
         assert not offenders, (
@@ -1005,6 +1011,8 @@ class TestNetworkAccessRetirement:
             if path.parent.name != "cli":
                 continue
             text = path.read_text(encoding="utf-8")
+            if path.name == "main.py":
+                text = text.replace('"--network-access/--no-network-access"', "")
             assert "--network" not in text, f"{path.name} still declares a --network flag"
             assert "--no-network" not in text
 
@@ -1021,7 +1029,6 @@ class TestCapabilityCheckFollowsTheConfirmedTool:
     @pytest.mark.parametrize(
         "module",
         [
-            "wade.services.plan_service",
             "wade.services.deps_service",
             "wade.services.review_delegation_service",
             "wade.services.review_service",

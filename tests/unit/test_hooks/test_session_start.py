@@ -146,9 +146,10 @@ class TestPhaseContent:
         # the plan reminder (including the plan-dir arg to ``done``) still emits.
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
         assert "Issue #" not in ctx
-        assert "wade plan-session done <plan dir>" in ctx
+        assert "native" in ctx and "parent" in ctx
+        assert "Never approve implementation" in ctx
         assert ".wade/session/WORKFLOW.md" in ctx
-        assert "Never implement or create issues" in ctx
+        assert "completion commands from the native planner" in ctx
 
     def test_plan_reinjects_persisted_issue_ref(self, tmp_path: Path) -> None:
         # A ``wade plan --issue-id`` session persists .wade/plan-issue.md so a
@@ -157,7 +158,8 @@ class TestPhaseContent:
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
         assert "Issue #351" in ctx
         assert _ISSUE_TITLE in ctx
-        assert "wade plan-session done <plan dir>" in ctx
+        assert "native" in ctx and "parent" in ctx
+        assert "Never approve implementation" in ctx
 
 
 class TestWorkflowPointerSeparation:

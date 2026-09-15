@@ -20,6 +20,7 @@ consistent.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 
@@ -33,6 +34,39 @@ from wade.utils.conventional import (
     conventional_title_error,
 )
 from wade.utils.gitref import is_valid_git_ref
+from wade.utils.safe_state import read_state_file
+
+
+def load_plan_file(path: Path) -> PlanFile:
+    """Read canonical artifacts without following links; require one task title."""
+    if path.parent.name == "plans" and path.parent.parent.name == ".wade":
+        data = read_state_file(path.parent.parent.parent, ("plans",), path.name)
+        if data is None:
+            raise ValueError("Plan artifact is unsafe, unreadable, or too large")
+        content = data.decode("utf-8")
+    else:
+        if path.is_symlink():
+            raise ValueError("Plan files must not be symlinks")
+        content = path.read_text(encoding="utf-8")
+    fence: str | None = None
+    titles = 0
+    title_line_index: int | None = None
+    for index, line in enumerate(content.splitlines()):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            if fence is None:
+                fence = marker[1]
+            elif marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                fence = None
+        elif fence is None and re.match(r"^ {0,3}#\s+\S", line):
+            titles += 1
+            title_line_index = index
+    if titles != 1:
+        raise ValueError("Each WADE plan must contain exactly one '# Title' H1 heading")
+    assert title_line_index is not None
+    title_and_body = "".join(content.splitlines(keepends=True)[title_line_index:])
+    return PlanFile.from_text(path, title_and_body)
+
 
 # ---------------------------------------------------------------------------
 # Plan file discovery
@@ -118,7 +152,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
 
     for md_file in md_files:
         try:
-            plan = PlanFile.from_markdown(md_file)
+            plan = load_plan_file(md_file)
         except (ValueError, OSError) as e:
             result.diagnostics.append(
                 PlanDiagnostic(file=md_file.name, level=PlanDiagnosticLevel.ERROR, message=str(e))

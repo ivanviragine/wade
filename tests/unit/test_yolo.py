@@ -224,31 +224,20 @@ class TestBuildLaunchCommandYolo:
         cmd = ClaudeAdapter().build_launch_command(yolo=False)
         assert "--dangerously-skip-permissions" not in cmd
 
-    def test_yolo_supersedes_plan_mode(self) -> None:
-        """When yolo=True and plan_mode=True, YOLO flags should be used
-        instead of plan_mode flags (for tools that support yolo)."""
+    def test_yolo_cannot_displace_plan_mode(self) -> None:
+        """Even the legacy launch API rejects conflicting planning authority."""
+        from crossby.ai_tools import PlanModeConflictError
         from crossby.ai_tools.claude import ClaudeAdapter
 
-        cmd = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
-        assert "--dangerously-skip-permissions" in cmd
-        assert "--permission-mode" not in cmd
+        with pytest.raises(PlanModeConflictError):
+            ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
 
-    def test_yolo_unsupported_falls_back_to_plan_mode(self) -> None:
-        """When yolo=True but tool doesn't support it, plan_mode_args should
-        still be used."""
+    def test_unsupported_yolo_does_not_silently_fall_back(self) -> None:
+        from crossby.ai_tools import PlanModeConflictError
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
-        with pytest.warns(
-            UserWarning,
-            match=r"does not support YOLO mode; falling back to plan mode",
-        ):
-            cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
-        # OpenCode doesn't support yolo → should fall back to plan mode
-        # OpenCode has no plan_mode_args, so plan_mode flag has no effect,
-        # but the key assertion is that yolo_args are NOT in the command
-        assert "--force" not in cmd
-        assert "--dangerously-skip-permissions" not in cmd
-        assert "--yolo" not in cmd
+        with pytest.raises(PlanModeConflictError):
+            OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
 
 
 # ---------------------------------------------------------------------------

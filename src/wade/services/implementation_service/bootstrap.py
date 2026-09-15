@@ -1250,12 +1250,10 @@ def bootstrap_worktree(
         worktree_path, guard_type="plan" if plan_mode else "worktree", sandbox=sandbox
     )
 
-    # Every session gets a Stop-hook completion reminder, but the guard differs:
-    # plan sessions nudge to write a valid plan; impl/review sessions nudge to run
-    # `done` (and also get the pre-push backstop that hard-enforces it).
-    if plan_mode:
-        _install_stop_hook(worktree_path, guard=StopGuard.PLAN_COMPLETE)
-    else:
+    # Native planning returns an artifact before the parent can import files.
+    # A file-existence Stop nudge would demand output that cannot exist yet;
+    # the parent collection/validation gates now enforce planning completion.
+    if not plan_mode:
         _install_stop_hook(worktree_path)
 
         # Managed git hooks: the pre-push backstop (makes `done` hard to skip) plus

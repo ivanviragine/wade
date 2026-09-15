@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import typer
 
@@ -244,9 +245,37 @@ def plan_cmd(
         help="Reasoning effort level: low, medium, high, max.",
         autocompletion=complete_effort_levels,
     ),
-    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
-    permission_mode: str | None = _PERMISSION_MODE_OPT,
-    sandbox: bool | None = _SANDBOX_OPT,
+    yolo: bool = typer.Option(
+        False, "--yolo", help="Automate WADE post-plan confirmations only; never child approvals."
+    ),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Parent confirmations: default or yolo. Native Plan rejects auto/accept-edits.",
+    ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Require native confinement or unrestricted execution; unsupported requirements fail.",
+    ),
+    network_access: bool | None = typer.Option(
+        None,
+        "--network-access/--no-network-access",
+        help="Require native network on/off; default adds no grant, not universal isolation.",
+    ),
+    approval_policy: str = typer.Option(
+        "on-request",
+        "--approval-policy",
+        help="Native approval policy: on-request, untrusted, or never.",
+    ),
+    trusted_dir: list[Path] | None = typer.Option(  # noqa: B008
+        None, "--trusted-dir", help="Explicit native trusted directory; repeat as needed."
+    ),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        help="Collection deadline: 1-3600 seconds (default: ai.plan.timeout or 600).",
+    ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
     ),
@@ -257,7 +286,7 @@ def plan_cmd(
         False, "--refresh-skills", help="Explicitly replace a resumed session's frozen skills."
     ),
 ) -> None:
-    """Start a planning session with AI."""
+    """Collect plans in the selected tool's native Plan mode."""
     from wade.services.plan_service import plan as do_plan
 
     success = do_plan(
@@ -274,6 +303,10 @@ def plan_cmd(
         work_skills=skill,
         review_skills=review_skill,
         refresh_skills=refresh_skills,
+        network_access=network_access,
+        approval_policy=approval_policy,
+        trusted_dirs=trusted_dir,
+        timeout=timeout,
     )
     raise typer.Exit(0 if success else 1)
 

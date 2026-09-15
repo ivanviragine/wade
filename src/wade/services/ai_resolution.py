@@ -495,6 +495,8 @@ def display_ai_selection(
     effort: EffortLevel | None,
     permission_mode: PermissionMode,
     sandbox: bool | None = None,
+    *,
+    native_plan: bool = False,
 ) -> None:
     """Print the resolved AI selection (tool, model, effort, permission, sandbox).
 
@@ -523,12 +525,22 @@ def display_ai_selection(
         console.kv("Model", model)
     if effort:
         console.kv("Effort", effort.value)
-    console.kv(
-        "Permission mode",
-        f"{permission_mode.value} — {describe_permission_mode(permission_mode)}",
-    )
+    if native_plan:
+        console.kv("Planning mode", "Native Plan — active before the first task turn")
+        console.kv("Parent confirmations", permission_mode.value)
+        console.hint("YOLO affects WADE after collection only; auto/accept-edits cannot apply.")
+    else:
+        console.kv(
+            "Permission mode",
+            f"{permission_mode.value} — {describe_permission_mode(permission_mode)}",
+        )
     if sandbox is not None:
-        console.kv("Sandbox", describe_sandbox(sandbox))
+        console.kv(
+            "Sandbox",
+            (f"Requested: {sandbox}; native support checked at preflight")
+            if native_plan
+            else describe_sandbox(sandbox),
+        )
 
 
 def confirm_ai_selection(
@@ -543,6 +555,7 @@ def confirm_ai_selection(
     permission_mode_explicit: bool = True,
     mode: DelegationMode | None = None,
     sandbox: bool | None = None,
+    native_plan: bool = False,
 ) -> tuple[str | None, str | None, EffortLevel | None, PermissionMode]:
     """Display the resolved AI selection, then interactively confirm/change it.
 
@@ -569,7 +582,12 @@ def confirm_ai_selection(
 
     # Always surface the resolved selection once, before the skip guard below.
     display_ai_selection(
-        resolved_tool, resolved_model, resolved_effort, resolved_permission_mode, sandbox
+        resolved_tool,
+        resolved_model,
+        resolved_effort,
+        resolved_permission_mode,
+        sandbox,
+        **({"native_plan": True} if native_plan else {}),
     )
 
     # Skip the change-loop when non-TTY, no tool resolved, all flags were
@@ -594,7 +612,14 @@ def confirm_ai_selection(
         # iteration was already rendered by the hoisted call above — don't
         # double-print it.
         if not first_render:
-            display_ai_selection(tool, model, effort, permission_mode, sandbox)
+            display_ai_selection(
+                tool,
+                model,
+                effort,
+                permission_mode,
+                sandbox,
+                **({"native_plan": True} if native_plan else {}),
+            )
         first_render = False
 
         # Build menu dynamically based on which flags were NOT explicit.
@@ -621,8 +646,10 @@ def confirm_ai_selection(
             pass
         if not effort_explicit and tool_supports_effort:
             menu_items.append("Change effort")
-        if not permission_mode_explicit and tool_supports_autonomy:
-            menu_items.append("Change permission mode")
+        if not permission_mode_explicit and (tool_supports_autonomy or native_plan):
+            menu_items.append(
+                "Change parent confirmations" if native_plan else "Change permission mode"
+            )
 
         if len(menu_items) == 1:
             break
@@ -640,7 +667,8 @@ def confirm_ai_selection(
             new_tool = tool_names[new_idx]
             if new_tool != tool:
                 tool = new_tool
-                model = _prompt_model_selection(tool)
+                if not native_plan or not model_explicit:
+                    model = _prompt_model_selection(tool)
                 # Clear stale effort when the new tool can't honor it — either it
                 # has no effort concept, or it restricts efforts to a subset that
                 # excludes the retained level (e.g. antigravity-cli rejects
@@ -648,7 +676,7 @@ def confirm_ai_selection(
                 # level without reopening the effort picker. The permission mode
                 # is left as requested — crossby downgrades any unsupported tier
                 # at launch (WADE must not reimplement that).
-                if effort is not None and not _tool_honors_effort(tool, effort):
+                if not native_plan and effort is not None and not _tool_honors_effort(tool, effort):
                     effort = None
 
         elif choice == "Change model":
@@ -659,6 +687,9 @@ def confirm_ai_selection(
 
         elif choice == "Change permission mode":
             permission_mode = _prompt_permission_mode_selection(permission_mode, tool)
+        elif choice == "Change parent confirmations":
+            index = prompts.select("Post-plan confirmations", ["Ask", "Automatic (YOLO)"])
+            permission_mode = (PermissionMode.DEFAULT, PermissionMode.YOLO)[index]
 
     return tool, model, effort, permission_mode
 

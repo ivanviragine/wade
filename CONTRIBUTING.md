@@ -17,6 +17,10 @@ cd wade
 uv pip install -e ".[dev]"
 ```
 
+`uv.lock` is tracked for reproducible dependency validation. When adopting a
+Crossby release, update the declaration, lockfile and contract tripwire together;
+use `uv sync --all-extras` to verify the installed release without a local override.
+
 ## Running Checks
 
 > Always use the scripts — never invoke `pytest`, `mypy`, or `ruff` directly.
@@ -28,7 +32,7 @@ uv pip install -e ".[dev]"
 | `./scripts/check.sh` | Lint + type-check |
 | `./scripts/check.sh --lint` | Lint only |
 | `./scripts/check.sh --types` | mypy strict only |
-| `./scripts/fmt.sh` | Auto-format in-place |
+| `./scripts/fmt.sh [paths...]` | Auto-format selected paths (default: `src/`) |
 | `./scripts/check-all.sh` | Full suite (tests + lint + types) |
 
 ## Architecture

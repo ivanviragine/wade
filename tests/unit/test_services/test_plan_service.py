@@ -2,24 +2,45 @@
 
 from __future__ import annotations
 
-import contextlib
-import subprocess
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from crossby.models.ai import TokenUsage
+from crossby.ai_tools import AbstractAITool, PlanSessionError
+from crossby.ai_tools.plan_mode import (
+    PlanArtifactMalformedError,
+    PlanSessionUnsupportedError,
+    PlanTransportError,
+)
+from crossby.models.ai import (
+    AIToolID,
+    EffortLevel,
+    PlanApprovalPolicy,
+    PlanArtifactSource,
+    PlanCommandPolicy,
+    PlanSessionBinding,
+    PlanSessionRequest,
+    PlanSessionResult,
+    TokenUsage,
+)
+from crossby.utils.versioning import BinaryVersion
 
 from wade.git.pr import PRLookup, PRRef
-from wade.models.config import AIConfig, PermissionMode, ProjectConfig, ProjectSettings
-from wade.models.task import CloseReason, Complexity, PlanFile, Task
+from wade.models.config import (
+    AICommandConfig,
+    AIConfig,
+    PermissionMode,
+    ProjectConfig,
+    ProjectSettings,
+)
+from wade.models.plan_bundle import BUNDLE_MARKER
+from wade.models.task import CloseReason, PlanFile, Task
 from wade.models.worktree import Worktree
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
-    PlanDiagnostic,
-    PlanDiagnosticLevel,
-    PlanValidationResult,
+    PLAN_FINALIZATION_FAILED,
     _attach_plan_to_existing_issue,
     _base_retarget_is_safe,
     _branch_work_in_flight,
@@ -41,7 +62,6 @@ from wade.services.plan_service import (
     validate_plan_dir,
     validate_plan_files,
 )
-from wade.services.session_composition_service import SessionCompositionError
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -303,318 +323,287 @@ class TestPlanFile:
 # ---------------------------------------------------------------------------
 
 
-class TestTranscriptWiring:
-    def test_codex_prefixes_plan_command(self, tmp_path: Path) -> None:
-        """Codex planning sessions should prefix prompt with /plan."""
-        with (
-            patch("wade.services.plan_service.render_plan_prompt", return_value="Plan this issue"),
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["codex", "--sandbox", "workspace-write"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+# Native collection replaces positional /plan prompts and launch-flag composition.
+PLAN_TEXT = (
+    "# feat: native test plan\n\n## Complexity\neasy\n\n"
+    "## Tasks\n- [ ] Implement and test\n\n## Acceptance Criteria\n- [ ] Tests pass\n"
+)
 
-            run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=tmp_path / ".transcript",
-            )
 
-            kwargs = adapter.build_launch_command.call_args.kwargs
-            assert kwargs["initial_message"].startswith("/plan ")
-            prompt_file = tmp_path / "prompt.txt"
-            assert prompt_file.is_file()
-            assert prompt_file.read_text().startswith("/plan ")
+def native_result(markdown: str = PLAN_TEXT) -> PlanSessionResult:
+    return PlanSessionResult(
+        tool=AIToolID.CODEX,
+        version="9999.9.9",
+        plan=markdown,
+        session_id="native-session",
+        native_mode="collaborationMode.mode=plan",
+        artifact_source=PlanArtifactSource.PROTOCOL_EVENT,
+        binding=PlanSessionBinding.THREAD_TURN_IDS,
+        thread_id="native-thread",
+        turn_id="native-turn",
+        artifact_id="native-plan",
+        exit_code=0,
+    )
 
-    def test_unknown_ai_tool_missing_binary_returns_1(self, tmp_path: Path) -> None:
-        """Unknown tool should fail with code 1 when binary is missing."""
+
+def bundle_text(*members: tuple[str, str]) -> str:
+    payload = {"plans": [{"filename": name, "markdown": body} for name, body in members]}
+    return BUNDLE_MARKER + "\n\x60\x60\x60json\n" + json.dumps(payload) + "\n\x60\x60\x60\n"
+
+
+@pytest.fixture
+def collected_harness(
+    tmp_path: Path,
+) -> Iterator[tuple[ProjectConfig, MagicMock, MagicMock, Path]]:
+    config = ProjectConfig(
+        ai=AIConfig(
+            default_tool="codex",
+            review_plan=AICommandConfig(enabled=False),
+        )
+    )
+    root = tmp_path / "planning-worktree"
+    root.mkdir()
+    provider = MagicMock()
+    provider.create_task.side_effect = [
+        Task(id=str(number), title="feat: native test plan") for number in range(1, 10)
+    ]
+    provider.read_task.return_value = Task(id="330", title="feat: existing", body="Original body")
+    with (
+        patch("wade.services.plan_service.load_config", return_value=config),
+        patch("wade.services.review_delegation_service.load_config", return_value=config),
+        patch("wade.services.plan_service.get_provider", return_value=provider),
+        patch(
+            "crossby.utils.versioning.detect_binary_version_info",
+            return_value=BinaryVersion(normalized=(9999, 9, 9), text="9999.9.9"),
+        ),
+        patch.object(
+            AbstractAITool, "run_plan_session", autospec=True, return_value=native_result()
+        ) as collect,
+        patch("wade.services.plan_service.prompts.is_tty", return_value=False),
+        patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        patch("wade.git.worktree.create_detached_worktree", return_value=root),
+        patch("wade.services.implementation_service.bootstrap_worktree"),
+        patch(
+            "wade.services.plan_service.bootstrap_draft_pr",
+            return_value={"number": "12", "url": "https://example.test/pull/12"},
+        ),
+        patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=True),
+        patch("wade.services.plan_service.set_terminal_title"),
+        patch("wade.services.plan_service.start_title_keeper"),
+        patch("wade.services.plan_service.stop_title_keeper"),
+    ):
+        yield config, provider, collect, root
+
+
+class TestCollectedSession:
+    @pytest.mark.parametrize("existing", [False, True])
+    def test_partial_persistence_retains_all_output_without_implementation_offer(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        existing: bool,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.return_value = native_result(
+            bundle_text(("PLAN-a.md", PLAN_TEXT), ("PLAN-b.md", PLAN_TEXT))
+        )
         with (
             patch(
-                "wade.services.plan_service.AbstractAITool.get", side_effect=ValueError("unknown")
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["1"], ["PLAN-b.md"]),
             ),
+            patch("wade.services.plan_service._offer_to_implement") as offer,
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330" if existing else None)
+        preserve.assert_called_once()
+        offer.assert_not_called()
+        provider.close_task.assert_not_called()
+
+    @pytest.mark.parametrize("issue_id", [None, "330"])
+    def test_failed_implementation_handoff_does_not_preserve_persisted_plans(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        issue_id: str | None,
+    ) -> None:
+        with (
+            patch("wade.services.plan_service._attach_plan_to_existing_issue", return_value=True),
+            patch("wade.services.plan_service._finalize_issues", return_value=False),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
             patch(
-                "wade.services.plan_service.subprocess.run",
-                side_effect=FileNotFoundError("not found"),
-            ),
+                "wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=True
+            ) as cleanup,
         ):
-            result = run_ai_planning_session(
-                ai_tool="nonexistent-tool",
-                plan_dir=str(tmp_path),
-            )
-            assert result == 1
+            assert not plan(project_root=tmp_path, issue_id=issue_id)
+        preserve.assert_not_called()
+        cleanup.assert_called_once()
 
-    def test_unknown_ai_tool_passes_subprocess_exit_code(self, tmp_path: Path) -> None:
-        """Unknown tool fallback should propagate subprocess exit code."""
-        completed = subprocess.CompletedProcess(args=["x"], returncode=7)
-        with (
-            patch(
-                "wade.services.plan_service.AbstractAITool.get", side_effect=ValueError("unknown")
-            ),
-            patch("wade.services.plan_service.subprocess.run", return_value=completed),
-        ):
-            result = run_ai_planning_session(
-                ai_tool="some-tool",
-                plan_dir=str(tmp_path),
-            )
-            assert result == 7
-
-    def test_claude_no_output_file_flag(self, tmp_path: Path) -> None:
-        """run_ai_planning_session must NOT add --output-file (flag doesn't exist in Claude CLI).
-
-        Transcript capture is handled by run_with_transcript, not a CLI flag.
-        """
-        transcript = tmp_path / ".transcript"
-
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
-
-            cmd = mock_rwt.call_args[0][0]
-            assert "--output-file" not in cmd
-
-    def test_transcript_path_forwarded_to_run_with_transcript(self, tmp_path: Path) -> None:
-        """run_ai_planning_session forwards transcript_path to run_with_transcript."""
-        transcript = tmp_path / ".transcript"
-
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = []
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
-
-            assert mock_rwt.call_args[0][1] == transcript
-
-    def test_spawn_permission_error_is_reported_as_a_failed_launch(self, tmp_path: Path) -> None:
-        """A sandbox denial at the exec boundary must not raise a raw traceback."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch(
-                "wade.services.plan_service.run_with_transcript",
-                side_effect=PermissionError(13, "Permission denied"),
-            ),
-            patch("wade.services.plan_service.console.warn") as warn,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            mock_get.return_value = adapter
-
-            result = run_ai_planning_session(ai_tool="claude", plan_dir=str(tmp_path))
-
-        assert result == 1
-        warn.assert_called_once_with("AI tool launch failed: [Errno 13] Permission denied")
-
-    def test_no_transcript_path_passes_none(self, tmp_path: Path) -> None:
-        """When transcript_path is None, run_with_transcript receives None."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=None,
-            )
-
-            assert mock_rwt.call_args[0][1] is None
-
-    def test_includes_plan_dir_args(self, tmp_path: Path) -> None:
-        """run_ai_planning_session should pass plan_dir inside trusted_dirs
-        to build_launch_command."""
-        with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
-        ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["copilot", "--model", "test"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
-            run_ai_planning_session(
-                ai_tool="copilot",
-                plan_dir=str(tmp_path),
-            )
-
-            call_kwargs = adapter.build_launch_command.call_args.kwargs
-            assert str(tmp_path) in call_kwargs["trusted_dirs"]
-
-    def test_antigravity_cli_planning_omits_mode_plan_and_receives_plan_context(
+    def test_terminal_collector_receives_public_identity_bearing_consent(
         self, tmp_path: Path
     ) -> None:
-        """Antigravity CLI planning omits --mode plan while receiving plan prompt & trusted dirs."""
-        transcript = tmp_path / ".transcript"
-        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
-            mock_rwt.return_value = 0
-            run_ai_planning_session(
-                ai_tool="antigravity-cli",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
+        from crossby.ai_tools import terminal_interaction_handler
 
-            cmd = mock_rwt.call_args[0][0]
-            # agy must NOT receive --mode plan because native plan mode sandboxes
-            # writes to its brain dir rather than the worktree
-            assert "--mode" not in cmd
-            assert "plan" not in cmd
-            assert "--prompt-interactive" in cmd
-            prompt_file = tmp_path / "prompt.txt"
-            assert prompt_file.is_file()
-            assert str(tmp_path) in prompt_file.read_text()
-
-    def test_unaffected_tools_receive_plan_mode_true(self, tmp_path: Path) -> None:
-        """Unaffected tools (claude, etc.) receive plan_mode=True with their native args."""
-        transcript = tmp_path / ".transcript"
-        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
-            mock_rwt.return_value = 0
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-            )
-
-            cmd = mock_rwt.call_args[0][0]
-            assert "--permission-mode" in cmd
-            assert "plan" in cmd
-
-    def test_autonomy_mode_precedence_in_planning_session(self, tmp_path: Path) -> None:
-        """PermissionMode.YOLO supersedes native plan mode as expected."""
-        transcript = tmp_path / ".transcript"
-        with patch("wade.services.plan_service.run_with_transcript") as mock_rwt:
-            mock_rwt.return_value = 0
-            # Antigravity CLI with YOLO
-            run_ai_planning_session(
-                ai_tool="antigravity-cli",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-                permission_mode=PermissionMode.YOLO,
-            )
-            agy_cmd = mock_rwt.call_args[0][0]
-            assert "--dangerously-skip-permissions" in agy_cmd
-            assert "--mode" not in agy_cmd
-
-            # Claude with YOLO
-            run_ai_planning_session(
-                ai_tool="claude",
-                plan_dir=str(tmp_path),
-                model=None,
-                transcript_path=transcript,
-                permission_mode=PermissionMode.YOLO,
-            )
-            claude_cmd = mock_rwt.call_args[0][0]
-            assert "--dangerously-skip-permissions" in claude_cmd
-            assert "plan" not in claude_cmd
-
-
-# ---------------------------------------------------------------------------
-# Model compatibility tests
-# ---------------------------------------------------------------------------
-
-
-class TestModelCompatibility:
-    def test_incompatible_model_is_dropped(self, tmp_path: Path) -> None:
-        """When the resolved model is incompatible with the tool, it must be dropped."""
         with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
+            patch.object(
+                AbstractAITool, "run_plan_session", return_value=native_result()
+            ) as collect,
+            patch("wade.services.plan_service.prompts.is_tty", return_value=True),
         ):
-            adapter = MagicMock()
-            adapter.is_model_compatible.return_value = False
-            adapter.build_launch_command.return_value = ["codex"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
             run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model="claude-haiku-4-5-20251001",
+                "claude",
+                str(tmp_path / ".wade/plans"),
+                request=PlanSessionRequest(prompt="plan", working_dir=tmp_path),
             )
+        assert collect.call_args.kwargs["interaction_handler"] is terminal_interaction_handler
 
-            call_kwargs = adapter.build_launch_command.call_args.kwargs
-            assert call_kwargs["model"] is None
+    def test_returned_plan_after_callback_cancellation_is_not_success(self, tmp_path: Path) -> None:
+        from crossby.models.ai import (
+            PlanInteraction,
+            PlanInteractionKind,
+            PlanInteractionOutcome,
+            PlanInteractionResponse,
+        )
 
-    def test_compatible_model_is_kept(self, tmp_path: Path) -> None:
-        """When the resolved model is compatible with the tool, it is passed through."""
+        def collect(
+            request: PlanSessionRequest, *, interaction_handler: object
+        ) -> PlanSessionResult:
+            assert callable(interaction_handler)
+            interaction_handler(
+                PlanInteraction(
+                    kind=PlanInteractionKind.PLAN_APPROVAL,
+                    question_id="final",
+                    prompt="Keep plan?",
+                    session_id="native-session",
+                )
+            )
+            return native_result()
+
         with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
+            patch.object(AbstractAITool, "run_plan_session", side_effect=collect),
+            patch("wade.services.plan_service.prompts.is_tty", return_value=True),
+            patch(
+                "wade.services.native_plan_service.interact",
+                return_value=PlanInteractionResponse(outcome=PlanInteractionOutcome.CANCELLED),
+            ),
+            pytest.raises(KeyboardInterrupt),
         ):
-            adapter = MagicMock()
-            adapter.is_model_compatible.return_value = True
-            adapter.build_launch_command.return_value = ["codex", "--model", "codex-mini-latest"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
-
             run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model="codex-mini-latest",
+                "codex",
+                str(tmp_path / ".wade/plans"),
+                request=PlanSessionRequest(prompt="plan", working_dir=tmp_path),
             )
+        assert (tmp_path / ".wade/plans/native-session.json").is_file()
+        assert not (tmp_path / ".wade/plans/PLAN.md").exists()
 
-            call_kwargs = adapter.build_launch_command.call_args.kwargs
-            assert call_kwargs["model"] == "codex-mini-latest"
+    @pytest.mark.parametrize("vote_id", ["known-entry", "unknown-entry"])
+    def test_knowledge_votes_are_validated_and_staged_in_parent(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        vote_id: str,
+    ) -> None:
+        config, provider, collect, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        payload = {
+            "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+            "knowledge_votes": [{"entry_id": vote_id, "direction": "up"}],
+        }
+        collect.return_value = native_result(
+            BUNDLE_MARKER + "\n```json\n" + json.dumps(payload) + "\n```"
+        )
+        with patch("wade.services.knowledge_service.record_rating_for_session") as rate:
+            assert plan(project_root=tmp_path) is (vote_id == "known-entry")
+        if vote_id == "known-entry":
+            rate.assert_called_once_with(root, config.knowledge, vote_id, "up")
+        else:
+            rate.assert_not_called()
+            provider.create_task.assert_not_called()
 
-    def test_no_model_skips_compatibility_check(self, tmp_path: Path) -> None:
-        """When model is None, is_model_compatible is not called."""
+    def test_raw_prompt_and_exact_request(self, tmp_path: Path) -> None:
+        request = PlanSessionRequest(
+            prompt="preflight",
+            working_dir=tmp_path,
+            model="gpt-5.6",
+            effort=EffortLevel.HIGH,
+            sandbox=True,
+            network_access=False,
+            approval_policy=PlanApprovalPolicy.NEVER,
+        )
         with (
-            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
+            patch.object(
+                AbstractAITool, "run_plan_session", autospec=True, return_value=native_result()
+            ) as collect,
+            patch("wade.services.plan_service.prompts.is_tty", return_value=False),
         ):
-            adapter = MagicMock()
-            adapter.build_launch_command.return_value = ["codex"]
-            mock_get.return_value = adapter
-            mock_rwt.return_value = 0
+            result = run_ai_planning_session(
+                "codex", str(tmp_path / ".wade/plans"), request=request
+            )
+        actual = collect.call_args.args[1]
+        assert isinstance(actual, PlanSessionRequest)
+        assert actual.prompt.startswith("# Managed planning session")
+        assert not actual.prompt.startswith("/plan")
+        assert actual.model == "gpt-5.6"
+        assert actual.effort is EffortLevel.HIGH
+        assert actual.approval_policy is PlanApprovalPolicy.NEVER
+        assert actual.network_access is False
+        assert actual.sandbox is True
+        assert collect.call_args.kwargs == {"interaction_handler": None}
+        assert result == native_result()
+        assert not (tmp_path / ".wade/plans/.transcript").exists()
 
+    def test_unknown_tool_is_not_launched_directly(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
             run_ai_planning_session(
-                ai_tool="codex",
-                plan_dir=str(tmp_path),
-                model=None,
+                "not-a-tool",
+                str(tmp_path / ".wade/plans"),
+                request=PlanSessionRequest(prompt="plan", working_dir=tmp_path),
             )
 
-            adapter.is_model_compatible.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# _finalize_issues — label failure resilience
-# ---------------------------------------------------------------------------
+    @pytest.mark.parametrize("mode", [PermissionMode.DEFAULT, PermissionMode.YOLO])
+    def test_parent_autonomy_never_changes_native_request(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        mode: PermissionMode,
+    ) -> None:
+        config, provider, collect, root = collected_harness
+        config.ai.permission_mode = mode.value
+        assert plan(project_root=tmp_path)
+        request = collect.call_args.args[1]
+        assert isinstance(request, PlanSessionRequest)
+        assert request.working_dir == root
+        assert request.command_policy == PlanCommandPolicy(allowed_commands=("wade *",))
+        assert request.trusted_dirs == ()
+        assert request.network_access is False
+        assert request.approval_policy is PlanApprovalPolicy.ON_REQUEST
+        assert request.plan_output_dir is None
+        assert provider.create_task.call_count == 1
+        assert all(key not in request.model_dump() for key in ("yolo", "auto", "accept_edits"))
+        bodies = [call.kwargs.get("body", "") for call in provider.update_task.call_args_list]
+        assert any("native-session" in body and "protocol_event" in body for body in bodies)
+        assert not any("Total tokens" in body for body in bodies)
 
 
 class TestFinalizeIssues:
+    def test_native_provenance_failure_requires_plan_preservation(self) -> None:
+        provider = MagicMock()
+        provider.read_task.side_effect = RuntimeError("API error")
+
+        with (
+            patch("wade.services.plan_service.add_planned_by_labels"),
+            patch("wade.services.plan_service.console"),
+        ):
+            result = _finalize_issues(
+                provider=provider,
+                config=ProjectConfig(),
+                issue_numbers=["1"],
+                native_result=native_result(),
+            )
+
+        assert result is PLAN_FINALIZATION_FAILED
+
     def test_label_failure_does_not_abort(self) -> None:
         """A failing add_planned_by_labels must not prevent finalization."""
         provider = MagicMock()
@@ -850,326 +839,190 @@ class TestPlanDone:
 
 
 class TestPlanOrchestrator:
-    def test_plan_returns_false_when_no_ai_tool_available(self) -> None:
-        """plan() should fail fast with a clear error when no AI tool is resolved."""
+    def test_no_ai_tool(self) -> None:
         with (
             patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
-            patch("wade.services.plan_service.get_provider", return_value=MagicMock()),
+            patch("wade.services.plan_service.get_provider"),
             patch("wade.services.plan_service.resolve_ai_tool", return_value=None),
-            patch("wade.services.plan_service.console") as mock_console,
         ):
-            assert plan() is False
-            mock_console.error.assert_called_once()
+            assert not plan()
 
-    def test_fallback_composition_failure_removes_partial_temp_bundle(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        fallback_dir = tmp_path / "wade-plan-fallback"
-        fallback_dir.mkdir()
-
-        def fail_composition(*args, **kwargs) -> None:
-            partial = fallback_dir / ".wade" / "session"
-            partial.mkdir(parents=True)
-            (partial / "partial.txt").write_text("partial")
-            raise SessionCompositionError("invalid custom skill")
-
+    @pytest.mark.parametrize("selected", ["not-a-tool", "vscode", "copilot", "antigravity-cli"])
+    def test_final_selection_preflight_has_no_side_effects(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        selected: str,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
         with (
             patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
                 "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, PermissionMode.DEFAULT),
+                return_value=(selected, None, None, PermissionMode.DEFAULT),
             ),
-            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("not a repo")),
-            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(fallback_dir)),
-            patch(
-                "wade.services.session_composition_service.compose_session",
-                side_effect=fail_composition,
-            ),
-            patch("wade.services.plan_service.ensure_task_label") as ensure_label,
-            patch("wade.services.plan_service.run_ai_planning_session") as launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
-            patch("wade.services.plan_service.console"),
+            patch("wade.git.worktree.create_detached_worktree") as create,
         ):
-            assert plan(project_root=tmp_path) is False
+            assert not plan(project_root=tmp_path)
+        create.assert_not_called()
+        collect.assert_not_called()
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
 
-        assert not fallback_dir.exists()
-        ensure_label.assert_not_called()
-        launch.assert_not_called()
-        stop_keeper.assert_called_once()
-
-    def test_provider_setup_failure_removes_fallback_temp_dir(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        fallback_dir = tmp_path / "wade-plan-fallback"
-        fallback_dir.mkdir()
-
+    @pytest.mark.parametrize(
+        "detected",
+        [
+            None,
+            BinaryVersion(normalized=(0, 1, 0), text="codex-cli 0.1.0"),
+        ],
+    )
+    def test_unknown_or_old_version_fails_before_worktree(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        detected: BinaryVersion | None,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
         with (
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, PermissionMode.DEFAULT),
-            ),
-            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("not a repo")),
-            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(fallback_dir)),
+            patch("crossby.utils.versioning.detect_binary_version_info", return_value=detected),
+            patch("wade.git.worktree.create_detached_worktree") as create,
+        ):
+            assert not plan(project_root=tmp_path)
+        create.assert_not_called()
+        collect.assert_not_called()
+        provider.create_task.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"permission_mode": "auto"},
+            {"permission_mode": "accept-edits"},
+            {"effort": "invalid"},
+            {"model": "claude-opus-4-6"},
+            {"approval_policy": "invalid"},
+            {"timeout": 3601},
+            {"timeout": 0},
+        ],
+    )
+    def test_unsupported_explicit_requirement_is_not_dropped(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        kwargs: dict[str, object],
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        with patch("wade.git.worktree.create_detached_worktree") as create:
+            assert not plan(project_root=tmp_path, **kwargs)
+        create.assert_not_called()
+        collect.assert_not_called()
+        provider.create_task.assert_not_called()
+
+    def test_explicit_policies_are_preserved(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        config, _, collect, _ = collected_harness
+        config.permissions.allowed_commands = ["wade *", "git status"]
+        assert plan(
+            project_root=tmp_path,
+            model="gpt-5.6",
+            effort="high",
+            sandbox=False,
+            network_access=True,
+            approval_policy="never",
+            trusted_dirs=[tmp_path],
+            timeout=123,
+        )
+        request = collect.call_args.args[1]
+        assert request.model == "gpt-5.6"
+        assert request.effort is EffortLevel.HIGH
+        assert request.sandbox is False
+        assert request.network_access is True
+        assert request.approval_policy is PlanApprovalPolicy.NEVER
+        assert request.trusted_dirs == (tmp_path,)
+        assert request.timeout_seconds == 123
+        assert request.command_policy.allowed_commands == ("wade *", "git status")
+
+    def test_success_imports_once_and_preserves_exact_provenance(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        _, provider, collect, root = collected_harness
+        assert plan(project_root=tmp_path)
+        collect.assert_called_once()
+        assert provider.create_task.call_count == 1
+        assert (root / ".wade/plans/PLAN.md").read_text() == PLAN_TEXT
+        raw = json.loads((root / ".wade/plans/native-session.json").read_text())
+        assert raw == native_result().model_dump(mode="json")
+
+    @pytest.mark.parametrize(
+        "error_type",
+        [
+            PlanSessionUnsupportedError,
+            PlanTransportError,
+            PlanArtifactMalformedError,
+        ],
+    )
+    def test_typed_runtime_failures_create_no_tasks(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        error_type: type[PlanSessionError],
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.side_effect = error_type(
+            "native failure",
+            tool_id=AIToolID.CODEX,
+            capability=AbstractAITool.get("codex").capabilities().plan_mode,
+        )
+        assert not plan(project_root=tmp_path)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+
+    def test_interruption_cleans_without_creating_a_task(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.side_effect = KeyboardInterrupt()
+        with patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup:
+            assert not plan(project_root=tmp_path)
+        cleanup.assert_called_once()
+        provider.create_task.assert_not_called()
+
+    def test_no_worktree_fallback_is_isolated(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        _, _, collect, _ = collected_harness
+        with (
+            patch("wade.git.repo.get_repo_root", side_effect=RuntimeError("no repository")),
             patch("wade.services.session_composition_service.compose_session"),
-            patch(
-                "wade.services.plan_service.ensure_task_label",
-                side_effect=RuntimeError("provider unavailable"),
-            ),
-            patch("wade.services.plan_service.run_ai_planning_session") as launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
-            patch("wade.services.plan_service.console"),
-            pytest.raises(RuntimeError, match="provider unavailable"),
         ):
-            plan(project_root=tmp_path)
+            assert plan(project_root=tmp_path)
+        cwd = collect.call_args.args[1].working_dir
+        assert cwd != tmp_path
+        assert cwd.name.startswith("wade-plan-")
+        assert (cwd / ".wade/plans/PLAN.md").is_file()
 
-        assert not fallback_dir.exists()
-        launch.assert_not_called()
-        stop_keeper.assert_called_once()
-
-    def test_provider_setup_failure_removes_detached_planning_worktree(
-        self, tmp_path: Path
+    def test_required_review_failure_preserves_output(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
     ) -> None:
-        provider = MagicMock()
-        worktree = tmp_path / "plan-worktree"
-
+        _, provider, _, _ = collected_harness
         with (
             patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+                "wade.services.native_plan_service.review_materialized_plans", return_value=False
             ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, PermissionMode.DEFAULT),
-            ),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.plan_service.report_retained_vote_recovery"),
-            patch("wade.git.worktree.create_detached_worktree", return_value=worktree),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
-            patch("wade.services.knowledge_service.mark_throwaway_knowledge_session"),
-            patch(
-                "wade.services.plan_service.ensure_task_label",
-                side_effect=RuntimeError("provider unavailable"),
-            ),
-            patch("wade.git.worktree.remove_worktree") as remove_worktree,
-            patch("wade.services.plan_service.run_ai_planning_session") as launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as stop_keeper,
-            patch("wade.services.plan_service.console"),
-            pytest.raises(RuntimeError, match="provider unavailable"),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
         ):
-            plan(project_root=tmp_path)
-
-        remove_worktree.assert_called_once_with(tmp_path, worktree, force=True)
-        launch.assert_not_called()
-        stop_keeper.assert_called_once()
-
-    def test_plan_creates_issues_from_plan_files_without_snapshot_fallback(
-        self, tmp_path: Path
-    ) -> None:
-        """Regression: plan() should rely on plan files, not snapshot-based detection."""
-        provider = MagicMock()
-        provider.snapshot_task_numbers.side_effect = AssertionError(
-            "snapshot_task_numbers should not be called"
-        )
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
-        plan_file = PlanFile(
-            path=tmp_path / "plan-1.md",
-            title="Add deterministic tests",
-            body="## Tasks\n- Add tests\n",
-            sections={"tasks": "- Add tests"},
-        )
-
-        with (
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, False),
-            ),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch("wade.services.plan_service.run_ai_planning_session", return_value=0),
-            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
-            patch(
-                "wade.services.plan_service._extract_token_usage",
-                return_value=TokenUsage(total_tokens=123),
-            ),
-            patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
-            # Strict gate sees no error diagnostics → the plan file passes through.
-            patch(
-                "wade.services.plan_service.validate_plan_dir",
-                return_value=PlanValidationResult(),
-            ),
-            patch(
-                "wade.services.plan_service._create_issues_from_plans",
-                return_value=(["101"], []),
-            ),
-            patch(
-                "wade.services.plan_service._finalize_issues", return_value=None
-            ) as mock_finalize,
-            patch("wade.services.plan_service._cleanup_plan_dir"),
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper"),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-        ):
-            assert plan(project_root=tmp_path) is True
-
-        provider.snapshot_task_numbers.assert_not_called()
-        mock_finalize.assert_called_once()
-
-    def test_plan_antigravity_cli_fails_when_no_git_repo(self, tmp_path: Path) -> None:
-        """Antigravity CLI plan requires a git planning worktree; fails fast outside git."""
-        provider = MagicMock()
-        with (
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="antigravity-cli")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="antigravity-cli"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("antigravity-cli", None, None, PermissionMode.DEFAULT),
-            ),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch("wade.services.plan_service.run_ai_planning_session") as mock_launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as mock_stop_title,
-            patch("wade.git.repo.get_repo_root", side_effect=Exception("Not a git repo")),
-            patch("wade.services.plan_service.console") as mock_console,
-        ):
-            assert plan(project_root=tmp_path) is False
-            mock_launch.assert_not_called()
-            mock_stop_title.assert_called_once()
-            mock_console.error.assert_called_once()
-            assert "guarded git planning worktree" in mock_console.error.call_args[0][0]
-
-    def test_plan_antigravity_cli_fails_and_cleans_up_when_worktree_bootstrap_fails(
-        self, tmp_path: Path
-    ) -> None:
-        """Antigravity CLI planning fails and cleans up if planning worktree bootstrap fails."""
-        provider = MagicMock()
-        wt_path = tmp_path / "plan-wt"
-        with (
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="antigravity-cli")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="antigravity-cli"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("antigravity-cli", None, None, PermissionMode.DEFAULT),
-            ),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.git.worktree.create_detached_worktree", return_value=wt_path),
-            patch(
-                "wade.services.implementation_service.bootstrap_worktree",
-                side_effect=RuntimeError("bootstrap failed"),
-            ),
-            patch("wade.services.plan_service._remove_planning_worktree") as mock_remove_wt,
-            patch("wade.services.plan_service.run_ai_planning_session") as mock_launch,
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper") as mock_stop_title,
-            patch("wade.services.plan_service.console") as mock_console,
-        ):
-            assert plan(project_root=tmp_path) is False
-            mock_launch.assert_not_called()
-            mock_remove_wt.assert_called_once_with(tmp_path, wt_path)
-            mock_stop_title.assert_called_once()
-            mock_console.error.assert_called_once()
-            assert "guarded git planning worktree" in mock_console.error.call_args[0][0]
-
-    def test_plan_unaffected_tool_uses_temp_dir_fallback_when_no_git_repo(
-        self, tmp_path: Path
-    ) -> None:
-        """Unaffected tools (e.g. claude) still use temp plan dir when outside a git repo."""
-        provider = MagicMock()
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
-        plan_file = PlanFile(
-            path=tmp_path / "plan-1.md",
-            title="feat: add feature",
-            body="## Complexity\neasy\n## Tasks\n- task 1\n",
-            sections={"complexity": "easy", "tasks": "- task 1"},
-        )
-
-        with (
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, PermissionMode.DEFAULT),
-            ),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch(
-                "wade.services.plan_service.run_ai_planning_session", return_value=0
-            ) as mock_launch,
-            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
-            patch(
-                "wade.services.plan_service._extract_token_usage",
-                return_value=TokenUsage(total_tokens=50),
-            ),
-            patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
-            patch(
-                "wade.services.plan_service.validate_plan_dir",
-                return_value=PlanValidationResult(),
-            ),
-            patch(
-                "wade.services.plan_service._create_issues_from_plans",
-                return_value=(["101"], []),
-            ),
-            patch("wade.services.plan_service._finalize_issues", return_value=None),
-            patch("wade.services.plan_service._cleanup_plan_dir"),
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper"),
-            patch("wade.git.repo.get_repo_root", side_effect=Exception("Not a git repo")),
-        ):
-            assert plan(project_root=tmp_path) is True
-            mock_launch.assert_called_once()
-            launch_plan_dir = mock_launch.call_args.kwargs["plan_dir"]
-            assert "wade-plan-" in launch_plan_dir
-
-
-# ---------------------------------------------------------------------------
-# _offer_to_implement tests
-# ---------------------------------------------------------------------------
+            assert not plan(project_root=tmp_path)
+        provider.create_task.assert_not_called()
+        preserve.assert_called_once()
 
 
 class TestOfferToImplement:
@@ -2027,182 +1880,68 @@ class TestSupersedeIssueWithPlans:
 
 
 class TestPlanExistingIssueBranch:
-    def _base_patches(
+    def test_single_plan_attaches_without_creating_an_issue(
         self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
-        provider: MagicMock,
-        adapter: MagicMock,
-        plan_files: list[PlanFile],
-    ) -> list[contextlib.AbstractContextManager[MagicMock]]:
-        return [
+    ) -> None:
+        _, provider, _, _ = collected_harness
+        with patch(
+            "wade.services.plan_service._attach_plan_to_existing_issue", return_value=True
+        ) as attach:
+            assert plan(project_root=tmp_path, issue_id="330")
+        attach.assert_called_once()
+        provider.create_task.assert_not_called()
+
+    def test_multiple_plans_supersede_only_after_validation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.return_value = native_result(
+            bundle_text(
+                ("PLAN-one.md", PLAN_TEXT),
+                ("PLAN-two.md", PLAN_TEXT.replace("test plan", "second plan")),
+            )
+        )
+        with (
             patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
-            patch(
-                "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, False),
-            ),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch("wade.services.plan_service.run_ai_planning_session", return_value=0),
-            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
-            patch(
-                "wade.services.plan_service._extract_token_usage",
-                return_value=TokenUsage(total_tokens=123),
-            ),
-            patch("wade.services.plan_service.validate_plan_files", return_value=plan_files),
-            # Strict gate sees no error diagnostics → all plan files pass through.
-            patch(
-                "wade.services.plan_service.validate_plan_dir",
-                return_value=PlanValidationResult(),
-            ),
-            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree"),
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper"),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-        ]
+                "wade.services.plan_service._supersede_issue_with_plans", return_value=["1", "2"]
+            ) as supersede,
+            patch("wade.services.plan_service._finalize_issues", return_value=None) as finalize,
+        ):
+            assert plan(project_root=tmp_path, issue_id="330")
+        supersede.assert_called_once()
+        assert len(supersede.call_args.kwargs["plan_files"]) == 2
+        assert finalize.call_args.kwargs["issue_numbers"] == ["1", "2"]
+        provider.create_task.assert_not_called()
 
-    def test_single_plan_file_attaches_and_issue_stays_open(self, tmp_path: Path) -> None:
-        """--issue N with exactly one plan file keeps today's attach behavior."""
-        provider = MagicMock()
-        existing_issue = Task(id="330", title="Some bug", body="Original body")
-        provider.read_task.return_value = existing_issue
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+    def test_refused_retarget_preserves_plan(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        _, provider, _, _ = collected_harness
+        with (
+            patch("wade.services.plan_service._attach_plan_to_existing_issue", return_value=False),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330")
+        preserve.assert_called_once()
+        provider.create_task.assert_not_called()
 
-        plan_path = tmp_path / "PLAN.md"
-        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
-        plan_file = PlanFile.from_markdown(plan_path)
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [plan_file]):
-                stack.enter_context(p)
-            mock_attach = stack.enter_context(
-                patch("wade.services.plan_service._attach_plan_to_existing_issue")
-            )
-            mock_supersede = stack.enter_context(
-                patch("wade.services.plan_service._supersede_issue_with_plans")
-            )
-            mock_finalize = stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is True
-
-        mock_attach.assert_called_once()
-        assert mock_attach.call_args.kwargs["plan_file"] is plan_file
-        assert mock_attach.call_args.kwargs["issue"] is existing_issue
-        mock_supersede.assert_not_called()
-
-        mock_finalize.assert_called_once()
-        assert mock_finalize.call_args.kwargs["issue_numbers"] == ["330"]
-
-    def test_multi_plan_files_supersede_and_finalize_only_new_issues(self, tmp_path: Path) -> None:
-        """--issue N with 2+ plan files supersedes #N; only new issues are finalized."""
-        provider = MagicMock()
-        existing_issue = Task(id="330", title="Split me", body="Original body")
-        provider.read_task.return_value = existing_issue
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
-
-        plan_files = []
-        for i in range(2):
-            p = tmp_path / f"PLAN-{i}.md"
-            p.write_text(f"# feat: part {i}\n\n## Tasks\n- Do {i}\n")
-            plan_files.append(PlanFile.from_markdown(p))
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, plan_files):
-                stack.enter_context(p)
-            mock_attach = stack.enter_context(
-                patch("wade.services.plan_service._attach_plan_to_existing_issue")
-            )
-            mock_supersede = stack.enter_context(
-                patch(
-                    "wade.services.plan_service._supersede_issue_with_plans",
-                    return_value=["101", "102"],
-                )
-            )
-            mock_finalize = stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is True
-
-        mock_attach.assert_not_called()
-        mock_supersede.assert_called_once()
-        assert mock_supersede.call_args.kwargs["issue"] is existing_issue
-        assert mock_supersede.call_args.kwargs["plan_files"] == plan_files
-
-        mock_finalize.assert_called_once()
-        assert mock_finalize.call_args.kwargs["issue_numbers"] == ["101", "102"]
-
-    def test_handoff_cleanup_failure_makes_plan_fail_for_retry(self, tmp_path: Path) -> None:
-        """A retained staged vote must never be hidden behind a successful plan exit."""
-        provider = MagicMock()
-        existing_issue = Task(id="330", title="Some bug", body="Original body")
-        provider.read_task.return_value = existing_issue
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
-
-        plan_path = tmp_path / "PLAN.md"
-        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
-        plan_file = PlanFile.from_markdown(plan_path)
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [plan_file]):
-                stack.enter_context(p)
-            stack.enter_context(patch("wade.services.plan_service._attach_plan_to_existing_issue"))
-            stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-            cleanup = stack.enter_context(
-                patch(
-                    "wade.services.plan_service._cleanup_plan_dir_or_worktree",
-                    return_value=False,
-                )
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is False
-
+    def test_handoff_cleanup_failure_requires_recovery(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        with patch(
+            "wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=False
+        ) as cleanup:
+            assert not plan(project_root=tmp_path)
         cleanup.assert_called_once()
 
-    def test_supersede_with_no_created_issues_skips_finalize(self, tmp_path: Path) -> None:
-        """If supersede created nothing at all, plan() must not call _finalize_issues."""
-        provider = MagicMock()
-        existing_issue = Task(id="330", title="Split me", body="Original body")
-        provider.read_task.return_value = existing_issue
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
-
-        plan_files = []
-        for i in range(2):
-            p = tmp_path / f"PLAN-{i}.md"
-            p.write_text(f"# feat: part {i}\n\n## Tasks\n- Do {i}\n")
-            plan_files.append(PlanFile.from_markdown(p))
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, plan_files):
-                stack.enter_context(p)
-            stack.enter_context(
-                patch("wade.services.plan_service._supersede_issue_with_plans", return_value=[])
-            )
-            mock_finalize = stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues")
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is False
-
-        mock_finalize.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# _select_valid_plans — the strict gate before issue creation (E2)
-# ---------------------------------------------------------------------------
 
 _GATE_VALID = "# feat: add retry logic\n\n## Complexity\ncomplex\n\n## Tasks\n- a\n"
 _GATE_NO_COMPLEXITY = "# feat: add retry logic\n\n## Tasks\n- a\n"
@@ -2240,7 +1979,7 @@ class TestSelectValidPlans:
         mock_prompts.confirm.assert_not_called()
         assert mock_console.error.called  # errors are surfaced loudly
 
-    def test_mixed_non_tty_proceeds_with_valid_subset(self, tmp_path: Path) -> None:
+    def test_mixed_non_tty_requires_a_decision(self, tmp_path: Path) -> None:
         good = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
         bad = self._plan(tmp_path, "PLAN-2.md", _GATE_NO_COMPLEXITY)
         with (
@@ -2249,7 +1988,7 @@ class TestSelectValidPlans:
         ):
             mock_prompts.is_tty.return_value = False
             result = _select_valid_plans(tmp_path, [good, bad], yolo=False)
-        assert result == [good]
+        assert result is None
         mock_prompts.confirm.assert_not_called()  # never hang headless
 
     def test_mixed_yolo_proceeds_with_valid_subset(self, tmp_path: Path) -> None:
@@ -2262,7 +2001,7 @@ class TestSelectValidPlans:
             mock_prompts.is_tty.return_value = True
             result = _select_valid_plans(tmp_path, [good, bad], yolo=True)
         assert result == [good]
-        mock_prompts.confirm.assert_not_called()  # yolo skips the prompt
+        mock_prompts.confirm.assert_called_once()  # subset decisions never inherit YOLO
 
     def test_mixed_tty_confirm_proceeds(self, tmp_path: Path) -> None:
         good = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
@@ -2360,7 +2099,7 @@ class TestPreserveGeneratedPlans:
 
         with (
             patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(preserved_dir)),
-            patch("wade.services.plan_service.shutil.copy2", side_effect=OSError("disk full")),
+            patch("wade.services.plan_service.shutil.copytree", side_effect=OSError("disk full")),
             patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as mock_cleanup,
             patch("wade.services.plan_service.console") as mock_console,
         ):
@@ -2375,283 +2114,82 @@ class TestPreserveGeneratedPlans:
 
 
 class TestStrictValidationGateWiring:
-    """plan() wires the strict gate at both issue-creation call sites (E2)."""
-
-    def _adapter(self) -> MagicMock:
-        adapter = MagicMock()
-        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
-        return adapter
-
-    def _valid(self, tmp_path: Path, name: str = "PLAN.md") -> PlanFile:
-        return PlanFile(
-            path=tmp_path / name,
-            title="feat: good",
-            complexity=Complexity.COMPLEX,
-            body="body",
-            sections={},
-        )
-
-    def _invalid(self, tmp_path: Path, name: str = "PLAN-2.md") -> PlanFile:
-        # Title-parseable (survives validate_plan_files) but strict-invalid.
-        return PlanFile(
-            path=tmp_path / name,
-            title="bad title without prefix",
-            complexity=None,
-            body="body",
-            sections={},
-        )
-
-    def _errors_for(self, *names: str) -> PlanValidationResult:
-        return PlanValidationResult(
-            diagnostics=[
-                PlanDiagnostic(
-                    file=n,
-                    level=PlanDiagnosticLevel.ERROR,
-                    message="Missing or invalid '## Complexity' section.",
-                )
-                for n in names
-            ]
-        )
-
-    def _base_patches(
+    @pytest.mark.parametrize("issue_id", [None, "330"])
+    @pytest.mark.parametrize("accepted", [False, True])
+    def test_invalid_subset_requires_an_explicit_decision(
         self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
-        provider: MagicMock,
-        adapter: MagicMock,
-        plan_files: list[PlanFile],
-        validation: PlanValidationResult,
-    ) -> list[contextlib.AbstractContextManager[MagicMock]]:
-        return [
-            patch(
-                "wade.services.plan_service.load_config",
-                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
-            ),
-            patch("wade.services.plan_service.get_provider", return_value=provider),
-            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
-            patch("wade.services.plan_service.resolve_model", return_value=None),
+        issue_id: str | None,
+        accepted: bool,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.return_value = native_result(
+            bundle_text(
+                ("PLAN-good.md", PLAN_TEXT),
+                ("PLAN-bad.md", "# feat: missing complexity\n"),
+            )
+        )
+        with (
+            patch("wade.services.plan_service.prompts.is_tty", return_value=True),
             patch(
                 "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None, False),
+                return_value=("codex", None, None, PermissionMode.YOLO),
             ),
-            patch("wade.services.plan_service.ensure_task_label"),
-            patch("wade.services.plan_service.run_ai_planning_session", return_value=0),
-            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.plan_service.prompts.confirm", return_value=accepted) as confirm,
             patch(
-                "wade.services.plan_service._extract_token_usage",
-                return_value=TokenUsage(total_tokens=123),
-            ),
-            patch("wade.services.plan_service.validate_plan_files", return_value=plan_files),
-            patch("wade.services.plan_service.validate_plan_dir", return_value=validation),
-            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree"),
-            patch("wade.services.plan_service.set_terminal_title"),
-            patch("wade.services.plan_service.start_title_keeper"),
-            patch("wade.services.plan_service.stop_title_keeper"),
-            patch("wade.services.plan_service.console"),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-        ]
+                "wade.services.plan_service._attach_plan_to_existing_issue", return_value=True
+            ) as attach,
+            patch("wade.services.plan_service._finalize_issues", return_value=None),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+        ):
+            assert plan(project_root=tmp_path, issue_id=issue_id) is accepted
+        confirm.assert_called_once()
+        if accepted:
+            if issue_id:
+                attach.assert_called_once()
+            else:
+                assert provider.create_task.call_count == 1
+            preserve.assert_not_called()
+        else:
+            provider.create_task.assert_not_called()
+            attach.assert_not_called()
+            preserve.assert_called_once()
 
-    def test_new_issue_invalid_plan_skipped_only_valid_created(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        adapter = self._adapter()
-        good = self._valid(tmp_path)
-        bad = self._invalid(tmp_path)
-        validation = self._errors_for("PLAN-2.md")
+    @pytest.mark.parametrize(
+        "markdown",
+        [
+            "# feat: missing complexity\n",
+            "not a plan",
+            PLAN_TEXT + "\n# feat: another task\n",
+            BUNDLE_MARKER + "\nmalformed envelope",
+        ],
+    )
+    def test_invalid_output_never_creates_tasks(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        markdown: str,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.return_value = native_result(markdown)
+        with patch("wade.services.plan_service._preserve_generated_plans") as preserve:
+            assert not plan(project_root=tmp_path)
+        provider.create_task.assert_not_called()
+        preserve.assert_called_once()
 
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [good, bad], validation):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = False
-            create = stack.enter_context(
-                patch(
-                    "wade.services.plan_service._create_issues_from_plans",
-                    return_value=(["101"], []),
-                )
+    def test_noninteractive_invalid_subset_is_not_implicitly_accepted(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        _, provider, collect, _ = collected_harness
+        collect.return_value = native_result(
+            bundle_text(
+                ("PLAN-good.md", PLAN_TEXT),
+                ("PLAN-bad.md", "# bad plan\n"),
             )
-            stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-
-            assert plan(project_root=tmp_path) is True
-
-        create.assert_called_once()
-        assert create.call_args.kwargs["plan_files"] == [good]  # invalid dropped
-
-    def test_new_issue_all_invalid_creates_nothing(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        adapter = self._adapter()
-        bad = self._invalid(tmp_path, "PLAN.md")
-        validation = self._errors_for("PLAN.md")
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [bad], validation):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = False
-            create = stack.enter_context(
-                patch("wade.services.plan_service._create_issues_from_plans")
-            )
-            preserve = stack.enter_context(
-                patch("wade.services.plan_service._preserve_generated_plans")
-            )
-
-            assert plan(project_root=tmp_path) is False
-
-        create.assert_not_called()
-        preserve.assert_called_once()  # generated plans salvaged, not discarded
-
-    def test_new_issue_mixed_abort_creates_nothing(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        adapter = self._adapter()
-        good = self._valid(tmp_path)
-        bad = self._invalid(tmp_path)
-        validation = self._errors_for("PLAN-2.md")
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [good, bad], validation):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = True
-            mock_prompts.confirm.return_value = False  # user declines the partial run
-            create = stack.enter_context(
-                patch("wade.services.plan_service._create_issues_from_plans")
-            )
-            preserve = stack.enter_context(
-                patch("wade.services.plan_service._preserve_generated_plans")
-            )
-
-            assert plan(project_root=tmp_path) is False
-
-        create.assert_not_called()
-        preserve.assert_called_once()  # generated plans salvaged, not discarded
-
-    def test_new_issue_all_valid_passes(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        adapter = self._adapter()
-        good = self._valid(tmp_path)
-        clean = PlanValidationResult()
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [good], clean):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = True
-            create = stack.enter_context(
-                patch(
-                    "wade.services.plan_service._create_issues_from_plans",
-                    return_value=(["101"], []),
-                )
-            )
-            stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-
-            assert plan(project_root=tmp_path) is True
-
-        create.assert_called_once()
-        assert create.call_args.kwargs["plan_files"] == [good]
-        mock_prompts.confirm.assert_not_called()  # nothing invalid → no prompt
-
-    def test_existing_issue_path_filters_invalid(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        existing = Task(id="330", title="Some bug", body="Original")
-        provider.read_task.return_value = existing
-        adapter = self._adapter()
-        good = self._valid(tmp_path)
-        bad = self._invalid(tmp_path)
-        validation = self._errors_for("PLAN-2.md")
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [good, bad], validation):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = False
-            mock_attach = stack.enter_context(
-                patch("wade.services.plan_service._attach_plan_to_existing_issue")
-            )
-            mock_supersede = stack.enter_context(
-                patch("wade.services.plan_service._supersede_issue_with_plans")
-            )
-            stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is True
-
-        # One valid file remains → single-plan attach, not supersede.
-        mock_attach.assert_called_once()
-        assert mock_attach.call_args.kwargs["plan_file"] is good
-        mock_supersede.assert_not_called()
-
-    def test_existing_issue_refused_retarget_preserves_plan(self, tmp_path: Path) -> None:
-        # The plan is valid but attaching it would retarget an in-flight PR, which the
-        # guard refuses. plan() must salvage the freshly generated plan and abort —
-        # never finalize the issue against the stale PR and force-remove the worktree,
-        # discarding the replacement plan (#376).
-        provider = MagicMock()
-        existing = Task(id="330", title="Some bug", body="Original")
-        provider.read_task.return_value = existing
-        adapter = self._adapter()
-        good = self._valid(tmp_path)
-        validation = PlanValidationResult(diagnostics=[])
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [good], validation):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = False
-            # Guard refuses the in-flight retarget.
-            mock_attach = stack.enter_context(
-                patch(
-                    "wade.services.plan_service._attach_plan_to_existing_issue",
-                    return_value=False,
-                )
-            )
-            mock_finalize = stack.enter_context(
-                patch("wade.services.plan_service._finalize_issues", return_value=None)
-            )
-            preserve = stack.enter_context(
-                patch("wade.services.plan_service._preserve_generated_plans")
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is False
-
-        mock_attach.assert_called_once()
-        assert mock_attach.call_args.kwargs["yolo"] is False  # resolved yolo forwarded
-        mock_finalize.assert_not_called()  # aborted before finalization
-        preserve.assert_called_once()  # replacement plan salvaged, not discarded
-
-    def test_existing_issue_all_invalid_mutates_nothing(self, tmp_path: Path) -> None:
-        provider = MagicMock()
-        existing = Task(id="330", title="Some bug", body="Original")
-        provider.read_task.return_value = existing
-        adapter = self._adapter()
-        bad = self._invalid(tmp_path, "PLAN.md")
-        validation = self._errors_for("PLAN.md")
-
-        with contextlib.ExitStack() as stack:
-            for p in self._base_patches(tmp_path, provider, adapter, [bad], validation):
-                stack.enter_context(p)
-            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
-            mock_prompts.is_tty.return_value = False
-            # Override the base console patch so we can inspect the messages.
-            mock_console = stack.enter_context(patch("wade.services.plan_service.console"))
-            mock_attach = stack.enter_context(
-                patch("wade.services.plan_service._attach_plan_to_existing_issue")
-            )
-            mock_supersede = stack.enter_context(
-                patch("wade.services.plan_service._supersede_issue_with_plans")
-            )
-            preserve = stack.enter_context(
-                patch("wade.services.plan_service._preserve_generated_plans")
-            )
-
-            assert plan(project_root=tmp_path, issue_id="330") is False
-
-        mock_attach.assert_not_called()
-        mock_supersede.assert_not_called()
-        preserve.assert_called_once()  # generated plans salvaged, not discarded
-        # Files WERE produced (just invalid), so the misleading "No plan files
-        # found" message must not fire — the helper already reported the reason.
-        warn_msgs = " ".join(str(c.args[0]) for c in mock_console.warn.call_args_list if c.args)
-        assert "No plan files found" not in warn_msgs
+        )
+        with patch("wade.services.plan_service._preserve_generated_plans"):
+            assert not plan(project_root=tmp_path, yolo=True)
+        provider.create_task.assert_not_called()

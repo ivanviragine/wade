@@ -1,8 +1,7 @@
 """Plan service — AI-assisted planning session orchestration.
 
-Implements a two-phase planning design:
-  Phase 1: Launch AI with initial prompt, let it write plan files to temp dir
-  Phase 2: After AI exits, read plan files from temp dir and create issues
+Preflight and collect through Crossby's public native session API, then import,
+review, validate and persist authoritative plans from the parent.
 """
 
 from __future__ import annotations
@@ -11,40 +10,47 @@ import contextlib
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import structlog
-from crossby.ai_tools import AbstractAITool
-from crossby.ai_tools.transcript import (
-    extract_token_usage_from_text,
-    read_transcript_excerpt,
+from crossby.ai_tools import (
+    AbstractAITool,
+    PlanSessionError,
+    preflight_plan_session,
+    terminal_interaction_handler,
 )
-from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
+from crossby.models.ai import (
+    EffortLevel,
+    PlanApprovalPolicy,
+    PlanInteraction,
+    PlanInteractionOutcome,
+    PlanInteractionResponse,
+    PlanInteractionSupport,
+    PlanSessionRequest,
+    PlanSessionResult,
+    TokenUsage,
+)
 
 from wade.config.loader import load_config
-from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
+from wade.models.config import ProjectConfig
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
-from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
+from wade.models.permission import PermissionMode
+from wade.models.plan_bundle import PlanBundle
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import native_plan_service as native_plan
 from wade.services.ai_resolution import (
-    LAUNCH_NETWORK_ACCESS,
-    SandboxCapabilityError,
     announce_inherited_sandbox,
     build_relaunch_command,
     confirm_ai_selection,
-    enforce_sandbox_capability,
     resolve_ai_tool,
-    resolve_effort,
     resolve_model,
     resolve_permission_mode,
-    resolve_sandbox,
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
@@ -52,7 +58,6 @@ from wade.services.knowledge_recovery import (
     RETAINED_VOTE_RECOVERY_HINT,
     report_retained_vote_recovery,
 )
-from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
     add_planned_by_labels,
@@ -67,10 +72,11 @@ from wade.utils.plan_validation import PlanDiagnosticLevel as PlanDiagnosticLeve
 from wade.utils.plan_validation import PlanValidationResult as PlanValidationResult
 from wade.utils.plan_validation import discover_plan_files as discover_plan_files
 from wade.utils.plan_validation import has_valid_plan as has_valid_plan
+from wade.utils.plan_validation import load_plan_file
 from wade.utils.plan_validation import plan_done as plan_done
 from wade.utils.plan_validation import validate_plan_dir as validate_plan_dir
-from wade.utils.process import run_with_transcript
 from wade.utils.runtime_env import detect_parent_runtime, requires_unsandboxed_relaunch
+from wade.utils.safe_state import exclusive_write_state_file
 from wade.utils.terminal import (
     compose_plan_title,
     set_terminal_title,
@@ -79,6 +85,13 @@ from wade.utils.terminal import (
 )
 
 logger = structlog.get_logger()
+
+
+class _PlanFinalizationFailure:
+    """Sentinel for failures that require preserving generated plan artifacts."""
+
+
+PLAN_FINALIZATION_FAILED = _PlanFinalizationFailure()
 
 
 def get_plan_prompt_template() -> str:
@@ -95,10 +108,12 @@ def render_plan_prompt(
     plan_dir: str,
     issue_context: str | None = None,
     session_bundle: str = ".wade/session",
+    source_root: str = ".",
 ) -> str:
     """Render the plan prompt template with the plan directory."""
     template = get_plan_prompt_template()
     prompt = template.replace("{plan_dir}", plan_dir).replace("{session_bundle}", session_bundle)
+    prompt = prompt.replace("{source_root}", source_root)
     if issue_context:
         prompt = issue_context + "\n\n" + prompt
     return prompt
@@ -111,8 +126,8 @@ def _build_issue_context_header(issue: Task) -> str:
         f"# Existing Issue #{issue.id}: {issue.title}",
         "",
         "You are planning the following existing GitHub issue.",
-        "**Do NOT ask the user what to plan** — skip step 1 and go straight to analysis.",
-        "Write the plan for this specific issue and save it to the plan directory.",
+        "**Do NOT ask the user what to plan** — still perform readiness and every fixed step.",
+        "Return the native plan artifact for this specific issue.",
         "",
         "## Issue Details",
         "",
@@ -172,7 +187,7 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
 
     for md_file in md_files:
         try:
-            plan = PlanFile.from_markdown(md_file)
+            plan = load_plan_file(md_file)
             valid.append(plan)
         except (ValueError, OSError) as e:
             console.warn(f"Skipping {md_file.name}: {e}")
@@ -185,6 +200,7 @@ def _select_valid_plans(
     plan_files: list[PlanFile],
     *,
     yolo: bool,
+    selected_names: set[str] | None = None,
 ) -> list[PlanFile] | None:
     """Strict-validate discovered plans before wade turns them into issues.
 
@@ -209,46 +225,49 @@ def _select_valid_plans(
 
     Every error is surfaced loudly via ``console.error`` (invalid files are never
     silently dropped); warnings via ``console.warn`` do not exclude a file. In a
-    non-TTY or ``yolo`` run the valid subset proceeds after the loud warning, so
-    headless runs never hang on the confirmation prompt.
+    mixed-validity run, even ``yolo``, the user must explicitly accept the valid
+    subset. Noninteractive execution preserves the artifacts and creates nothing.
     """
     result = validate_plan_dir(plan_dir)
     errors_by_file: dict[str, list[str]] = {}
     for diag in result.errors:
+        if selected_names is not None and diag.file not in selected_names:
+            continue
         errors_by_file.setdefault(diag.file, []).append(diag.message)
     for diag in result.warnings:
         console.warn(f"{diag.file}: {diag.message}")
 
     valid: list[PlanFile] = []
-    invalid: list[PlanFile] = []
+    for filename, messages in errors_by_file.items():
+        for message in messages:
+            console.error(f"{filename}: {message}", markup=False)
     for plan in plan_files:
+        if selected_names is not None and plan.path.name not in selected_names:
+            continue
         file_errors = errors_by_file.get(plan.path.name)
-        if file_errors:
-            invalid.append(plan)
-            for message in file_errors:
-                # Diagnostic messages can embed the plan's own (untrusted) title —
-                # render without Rich markup so bracket tokens aren't parsed.
-                console.error(f"{plan.path.name}: {message}", markup=False)
-        else:
+        if not file_errors:
             valid.append(plan)
 
     if not valid:
         console.error(
-            f"No valid plan files — all {len(invalid)} failed validation "
+            f"No valid plan files — {len(errors_by_file)} failed validation "
             "(need a '## Complexity' and a conventional-commit title prefix)."
         )
         return []
 
-    if invalid:
+    if errors_by_file:
         console.warn(
-            f"{len(invalid)} plan file(s) failed validation and will be skipped: "
-            f"{', '.join(p.path.name for p in invalid)}"
+            f"{len(errors_by_file)} plan file(s) failed validation and will be skipped: "
+            f"{', '.join(errors_by_file)}"
         )
-        if prompts.is_tty() and not yolo:
+        if not prompts.is_tty():
+            console.error("An invalid subset requires an explicit decision; retaining all plans.")
+            return None
+        if prompts.is_tty():
             proceed = prompts.confirm(
-                f"{len(invalid)} plan file(s) failed validation and will be skipped — "
+                f"{len(errors_by_file)} plan file(s) failed validation and will be skipped — "
                 f"continue with the {len(valid)} valid one(s)?",
-                default=True,
+                default=False,
             )
             if not proceed:
                 console.info(
@@ -269,8 +288,8 @@ def _plan_dir_fallback_env(plan_dir: str, planning_worktree: Path | None) -> Ite
     """Advertise the plan directory to the child only in worktree-less fallback mode.
 
     ``wade plan-session check`` runs inside the AI tool and sees only its own
-    cwd, which in this mode is the caller's checkout — indistinguishable from an
-    agent that simply started in the wrong place. Exporting the plan directory
+    cwd, which in this mode is the isolated fallback root, not a git worktree.
+    Exporting the plan directory
     for the duration of the launch is what lets the check recognise the
     supported fallback (``PLAN_DIR_ONLY``) instead of telling the agent to stop.
 
@@ -297,154 +316,52 @@ def _plan_dir_fallback_env(plan_dir: str, planning_worktree: Path | None) -> Ite
 def run_ai_planning_session(
     ai_tool: str,
     plan_dir: str,
-    model: str | None = None,
-    transcript_path: Path | None = None,
+    *,
+    request: PlanSessionRequest,
     issue_context: str | None = None,
-    effort: EffortLevel | None = None,
-    allowed_commands: list[str] | None = None,
-    cwd: Path | None = None,
-    permission_mode: PermissionMode = PermissionMode.DEFAULT,
     session_bundle: str = ".wade/session",
-    sandbox: bool = DEFAULT_SANDBOX,
-) -> int:
-    """Launch the AI CLI for a planning session.
-
-    Launches the AI tool with the plan prompt as an initial message,
-    plan-mode and plan-directory permission args.
-
-    Args:
-        cwd: Working directory for the AI process. Defaults to ``Path.cwd()``.
-    """
-    session_cwd = cwd or Path.cwd()
-
-    # Build prompt
+    source_root: str = ".",
+) -> PlanSessionResult:
+    """Submit the raw managed prompt to one complete native planning session."""
     prompt = render_plan_prompt(
         plan_dir,
         issue_context=issue_context,
         session_bundle=session_bundle,
+        source_root=source_root,
     )
-
-    # For Copilot/Codex, prefix with /plan
-    tool_lower = ai_tool.lower()
-    if tool_lower in ("copilot", "codex"):
-        prompt = f"/plan {prompt}"
-
-    prompt_file = Path(plan_dir) / "prompt.txt"
-    prompt_file.write_text(prompt)
-    snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
-    console.panel(snippet, title="Planning Prompt (preview)")
-
-    # Resolve adapter
-    try:
-        adapter = AbstractAITool.get(AIToolID(ai_tool))
-    except (ValueError, KeyError):
-        console.warn(f"Unknown AI tool: {ai_tool} — launching directly")
-        try:
-            result = subprocess.run([ai_tool], cwd=str(session_cwd))
-        except FileNotFoundError:
-            console.error(f"AI tool binary not found: {ai_tool}")
-            return 1
-        except OSError as exc:
-            console.warn(f"AI tool launch failed: {exc}")
-            return 1
-        return result.returncode
-
-    # Check model compatibility — drop model if it's not valid for this tool
-    if model and not adapter.is_model_compatible(model):
-        console.warn(f"Model '{model}' is not compatible with {ai_tool}; using tool default")
-        model = None
-
-    deliver_prompt_if_needed(adapter, prompt)
-
-    # Derive whether to request native plan mode. Antigravity CLI's native
-    # --mode plan sandboxes file writes into its per-conversation brain
-    # directory (~/.gemini/antigravity-cli/brain/<id>/), rejecting worktree
-    # paths before WADE's plan_artifact_only PreToolUse guard can allow them.
-    # WADE requires real PLAN*.md files in the worktree/plan directory, so we
-    # launch agy with plan_mode=False and rely on WADE's plan-mode PreToolUse
-    # hook in the planning worktree for containment.
-    tool_id = getattr(adapter.capabilities(), "tool_id", None)
-    plan_mode = tool_id is not AIToolID.ANTIGRAVITY_CLI
-
-    # Build command. crossby (>=0.17.1) places the initial_message as the FIRST
-    # positional arg and appends the autonomy/effort/trusted-dir flags AFTER it
-    # (see crossby.ai_tools.base.build_launch_command). plan_dir is included in
-    # trusted_dirs so the plan session can write there. If a "flag ignored after
-    # positional" issue ever reproduces on a directly-wired path, it belongs
-    # upstream in crossby's arg ordering — WADE cannot fix it here.
-    cmd = adapter.build_launch_command(
-        model=model,
-        plan_mode=plan_mode,
-        trusted_dirs=[str(session_cwd), tempfile.gettempdir(), plan_dir],
-        initial_message=prompt,
-        effort=effort,
-        allowed_commands=allowed_commands,
-        # A planning session may run in a linked planning worktree; grant its
-        # out-of-root git metadata so a sandboxed Codex plan session can commit
-        # generated plan artefacts. Inert for a main checkout, for every tool
-        # without a sandbox, and under an unrestricted profile (where crossby
-        # skips the grants because there is no boundary to widen).
-        working_dir=session_cwd,
-        network_access=LAUNCH_NETWORK_ACCESS,
-        sandbox=sandbox,
-        **permission_mode_launch_kwargs(permission_mode),
-    )
+    if not exclusive_write_state_file(request.working_dir, ("plans",), "prompt.txt", prompt):
+        raise ValueError("Cannot safely save planning prompt; existing artifacts were not replaced")
+    console.panel("\n".join(prompt.splitlines()[:5]) + "\n…", title="Planning Prompt (preview)")
     console.info(f"Plan directory: {plan_dir}")
+    cancelled = False
 
-    console.empty()
-    logger.info(
-        "plan.ai_launch",
-        tool=ai_tool,
-        model=model,
-        cmd=" ".join(cmd),
+    def present(interaction: PlanInteraction) -> PlanInteractionResponse:
+        nonlocal cancelled
+        response = native_plan.interact(interaction)
+        cancelled = cancelled or response.outcome is PlanInteractionOutcome.CANCELLED
+        return response
+
+    adapter = AbstractAITool.get(ai_tool)
+    handler = present if prompts.is_tty() else None
+    if (
+        prompts.is_tty()
+        and adapter.capabilities().plan_mode.interaction is PlanInteractionSupport.TERMINAL
+    ):
+        # Public identity-bearing consent: Crossby owns the terminal and process.
+        handler = terminal_interaction_handler
+    result = adapter.run_plan_session(
+        request.model_copy(update={"prompt": prompt}),
+        interaction_handler=handler,
     )
-
-    # An ``OSError`` here means the process could not be spawned at all (for
-    # example, a parent sandbox denied executing a binary found on PATH). Keep
-    # that launch boundary narrow: exceptions after a planner has run must not
-    # be mistaken for a failed launch and cause generated plans to be discarded.
-    try:
-        return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
-    except OSError as exc:
-        console.warn(f"AI tool launch failed: {exc}")
-        return 1
+    if cancelled:
+        native_plan.save_artifact(request.working_dir, result)
+        raise KeyboardInterrupt
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Post-session processing
 # ---------------------------------------------------------------------------
-
-
-def _extract_token_usage(transcript_path: Path | None) -> TokenUsage:
-    """Extract token usage from a transcript file."""
-    if not transcript_path or not transcript_path.is_file():
-        return TokenUsage()
-    text = read_transcript_excerpt(transcript_path)
-    return extract_token_usage_from_text(text)
-
-
-def _warn_token_extraction(transcript_path: Path | None) -> None:
-    """Warn the user that token usage could not be extracted.
-
-    If a transcript file exists, copies it to a stable debug path so the
-    user can inspect it after the temp plan directory is cleaned up.
-    """
-    if not transcript_path or not transcript_path.is_file():
-        logger.warning("plan.transcript_not_captured", path=str(transcript_path))
-        console.warn("Session transcript was not captured — token usage unavailable.")
-        return
-
-    fd, debug_path_str = tempfile.mkstemp(prefix="wade-transcript-", suffix=".txt")
-    os.close(fd)
-    debug_path = Path(debug_path_str)
-    try:
-        shutil.copy2(transcript_path, debug_path)
-        logger.warning("plan.token_extraction_failed", transcript=str(debug_path))
-        console.warn("Could not extract token usage from session transcript.")
-        console.hint(f"Transcript saved for inspection: {debug_path}")
-    except OSError:
-        logger.warning("plan.token_extraction_failed", transcript=str(transcript_path))
-        console.warn("Could not extract token usage from session transcript.")
 
 
 # ---------------------------------------------------------------------------
@@ -469,11 +386,15 @@ def plan(
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
+    network_access: bool | None = None,
+    approval_policy: str = "on-request",
+    trusted_dirs: list[Path] | None = None,
+    timeout: int | None = None,
 ) -> bool:
     """Run an AI-assisted planning session.
 
-    The AI writes plan files to a temp dir. After the session ends, wade reads
-    them back and creates issues + draft PRs.
+    Crossby returns the native Markdown artifact. WADE imports and gates its
+    members before creating issues and draft PRs.
 
     When ``issue_id`` is provided the session is pre-loaded with that issue's
     context and the resulting plan is attached to it via draft PR (no new issue).
@@ -487,18 +408,38 @@ def plan(
         console.error("No AI tool specified and none detected. Use --ai <tool>.")
         return False
 
-    resolved_model = resolve_model(model, config, "plan", tool=resolved_tool)
-
-    # Resolve effort level
-    resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
+    # Do not use the ordinary launch resolvers' compatibility downgrades.
+    resolved_model = resolve_model(model, config, "plan")
+    raw_effort = (
+        effort or os.environ.get("WADE_EFFORT") or config.ai.plan.effort or config.ai.effort
+    )
+    try:
+        resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
+        if permission_mode is not None:
+            PermissionMode(permission_mode)
+    except ValueError:
+        console.error("Invalid planning effort or permission mode; no session was started.")
+        return False
+    if config.ai.plan.mode is not None:
+        console.error(
+            "ai.plan.mode cannot select a native collector transport; remove this override."
+        )
+        return False
 
     # Resolve autonomy / permission mode (yolo is a back-compat alias)
     resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
 
-    # Resolve the AI-runtime sandbox profile. A planning session is a launch path
-    # like any other, so it carries the profile too (#478). The capability check
-    # waits until after the confirmation UI, which can still change the tool.
-    resolved_sandbox = resolve_sandbox(sandbox, config, "plan")
+    # Native planning defaults to the collector's safe posture. Explicit CLI/
+    # project requirements still win; ordinary non-plan launch defaults do not change.
+    sandbox_requirement = next(
+        (
+            value
+            for value in (sandbox, config.ai.plan.sandbox, config.ai.sandbox)
+            if value is not None
+        ),
+        None,
+    )
+    resolved_sandbox = sandbox_requirement if sandbox_requirement is not None else True
 
     console.rule("wade plan")
 
@@ -515,19 +456,57 @@ def plan(
             permission_mode_explicit or permission_mode is not None or yolo is not None
         ),
         sandbox=resolved_sandbox,
+        native_plan=True,
     )
     resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
     if not resolved_tool:
         console.error("No AI tool selected.")
         return False
 
-    # Checked against the *confirmed* tool: the menu above may have switched to a
-    # runtime that cannot honor the requested profile.
-    try:
-        enforce_sandbox_capability(resolved_tool, resolved_sandbox)
-    except SandboxCapabilityError as e:
-        console.error(str(e))
+    if resolved_permission_mode not in {PermissionMode.DEFAULT, PermissionMode.YOLO}:
+        console.error(
+            "Native Plan mode cannot apply auto or accept-edits. Use default or parent-only yolo."
+        )
         return False
+    try:
+        request = native_plan.prepare_request(
+            resolved_tool,
+            PlanSessionRequest(
+                prompt="WADE native planning preflight",
+                working_dir=(project_root or Path.cwd()).resolve(),
+                model=resolved_model,
+                effort=resolved_effort,
+                sandbox=resolved_sandbox,
+                network_access=network_access is True,
+                approval_policy=PlanApprovalPolicy(approval_policy),
+                trusted_dirs=tuple(path.resolve() for path in (trusted_dirs or ())),
+                timeout_seconds=timeout
+                if timeout is not None
+                else (config.ai.plan.timeout if config.ai.plan.timeout is not None else 600),
+            ),
+            allowed_commands=config.permissions.allowed_commands,
+            confinement_required=sandbox_requirement is True,
+            network_restriction_required=network_access is False,
+        )
+        checked = preflight_plan_session(resolved_tool, request)
+        if (
+            checked.capability.interaction is PlanInteractionSupport.TERMINAL
+            and not prompts.is_tty()
+        ):
+            raise ValueError(
+                "This native collector needs an attached terminal. Run wade plan interactively "
+                "or select a collector with callback interaction."
+            )
+    except (PlanSessionError, ValueError, OSError) as exc:
+        console.error(
+            f"Planning preflight failed: {native_plan.failure_message(exc)}", markup=False
+        )
+        return False
+    console.info(f"Native plan preflight passed: {resolved_tool} {checked.detected_version}")
+    console.hint(
+        "Model availability, authentication, protocol, and artifact collection "
+        "remain runtime checks."
+    )
 
     # Pre-load existing issue context when issue_id is supplied
     existing_issue: Task | None = None
@@ -605,22 +584,9 @@ def plan(
                 _remove_planning_worktree(repo_root, planning_worktree)
             planning_worktree = None
 
-    # Antigravity CLI's native plan mode sandboxes writes into its brain dir,
-    # so WADE launches it with normal file writes and relies on the planning
-    # worktree's PreToolUse guard for safety. That containment requires a
-    # successfully created and bootstrapped planning worktree.
     if planning_worktree is None:
-        try:
-            is_agy_cli = AIToolID(resolved_tool) is AIToolID.ANTIGRAVITY_CLI
-        except (ValueError, KeyError):
-            is_agy_cli = False
-
-        if is_agy_cli:
-            console.error("Antigravity CLI planning requires a guarded git planning worktree.")
-            stop_title_keeper()
-            return False
-
-        plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
+        fallback_root = Path(tempfile.mkdtemp(prefix="wade-plan-")).resolve()
+        plan_dir = str(fallback_root / ".wade/plans")
         # The supported no-worktree fallback cannot write the caller's checkout.
         # Materialize its immutable bundle under the writable plan directory and
         # name that exact path in the launch prompt.
@@ -631,7 +597,7 @@ def plan(
 
         try:
             compose_session(
-                Path(plan_dir),
+                fallback_root,
                 repo_root or Path.cwd(),
                 config,
                 kind=SessionKind.PLAN,
@@ -639,7 +605,7 @@ def plan(
                 work_skills=work_skills,
                 review_skills=review_skills,
                 refresh=refresh_skills,
-                display_root=str(Path(plan_dir) / ".wade/session"),
+                display_root=str(fallback_root / ".wade/session"),
             )
         except SessionCompositionError as exc:
             console.error(f"Cannot start planning session: {exc}")
@@ -651,37 +617,23 @@ def plan(
         # dedicated subdirectory so repo markdown files (e.g., README.md) are not
         # misinterpreted as generated plans.
         plan_output_dir = planning_worktree / ".wade" / "plans"
-        plan_output_dir.mkdir(parents=True, exist_ok=True)
+        if (planning_worktree / ".wade").is_symlink() or plan_output_dir.is_symlink():
+            console.error("Unsafe planning output directory; no native session was started.")
+            _remove_planning_worktree(repo_root, planning_worktree, config)
+            stop_title_keeper()
+            return False
         plan_dir = str(plan_output_dir)
         # Persist the issue ref so a resumed/compacted issue-scoped plan session
         # can re-inject "which issue am I planning" via the SessionStart hook.
         if existing_issue is not None:
             _persist_plan_issue_ref(planning_worktree, existing_issue)
 
-    # Provider setup is intentionally deferred until the session's immutable
-    # skill bundle has resolved. An invalid configured or CLI skill must fail
-    # before WADE creates labels, issues, PRs, or any other provider-side state.
-    try:
-        ensure_task_label(provider, config.project.issue_label)
-    except Exception:
-        # No AI session has run yet, so neither workspace can contain generated
-        # plans or staged knowledge votes. Remove it before preserving the
-        # provider exception for the caller; retries must not leak temp dirs or
-        # registered detached worktrees.
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-        stop_title_keeper()
-        raise
-
-    # Set up transcript capture
-    transcript_path = Path(plan_dir) / ".transcript"
-    console.hint(f"Transcript: {transcript_path}")
-
     # Launch AI session
     console.empty()
     issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
-    session_cwd = planning_worktree or Path.cwd()
+    session_cwd = (planning_worktree or fallback_root).resolve()
     session_bundle = (
-        ".wade/session" if planning_worktree is not None else str(Path(plan_dir) / ".wade/session")
+        ".wade/session" if planning_worktree is not None else str(session_cwd / ".wade/session")
     )
     # Unlike implement and pr-comment review, planning has no nested-AI guard: it
     # launches a runtime unconditionally, so an inherited parent sandbox reaches
@@ -706,54 +658,103 @@ def plan(
                 review_skills=review_skills,
             ),
         )
-    with _plan_dir_fallback_env(plan_dir, planning_worktree):
-        exit_code = run_ai_planning_session(
-            ai_tool=resolved_tool,
-            plan_dir=plan_dir,
-            model=resolved_model,
-            transcript_path=transcript_path,
-            issue_context=issue_context,
-            effort=resolved_effort,
-            allowed_commands=config.permissions.allowed_commands,
-            cwd=session_cwd,
-            permission_mode=resolved_permission_mode,
-            session_bundle=session_bundle,
-            sandbox=resolved_sandbox,
-        )
-    logger.info("plan.ai_exited", exit_code=exit_code)
-
-    # Non-blocking tools (VS Code, Antigravity) return immediately.
-    # Wait for user confirmation before post-session processing.
     try:
-        tool_adapter = AbstractAITool.get(AIToolID(resolved_tool))
-        tool_caps = tool_adapter.capabilities()
-    except (ValueError, KeyError):
-        tool_caps = None
-
-    if tool_caps and not tool_caps.blocks_until_exit:
-        console.empty()
-        if not prompts.confirm("Have you finished the session?", default=True):
-            console.info("Plan directory preserved — review output manually.")
-            console.hint(f"Plan dir: {plan_dir}")
-            stop_title_keeper()
-            _remove_planning_worktree(
-                repo_root,
-                planning_worktree,
-                config if config.knowledge.enabled else None,
+        request = native_plan.prepare_request(
+            resolved_tool,
+            request.model_copy(update={"working_dir": session_cwd}),
+            allowed_commands=config.permissions.allowed_commands,
+            confinement_required=sandbox_requirement is True,
+            network_restriction_required=network_access is False,
+        )
+        with _plan_dir_fallback_env(plan_dir, planning_worktree):
+            collected = run_ai_planning_session(
+                ai_tool=resolved_tool,
+                plan_dir=plan_dir,
+                request=request,
+                issue_context=issue_context,
+                session_bundle=session_bundle,
+                source_root=str(planning_worktree or repo_root or cwd),
             )
+        native_plan.save_artifact(session_cwd, collected)
+        bundle = native_plan.parse_artifact(collected.plan)
+        if bundle.knowledge_votes and (not config.knowledge.enabled or planning_worktree is None):
+            raise ValueError("Knowledge votes require an enabled, managed planning worktree")
+        if (
+            config.knowledge.enabled
+            and planning_worktree is not None
+            and bundle.knowledge_votes is None
+        ):
+            raise ValueError(
+                "Knowledge-enabled planning requires the bundle's explicit knowledge_votes handoff"
+            )
+        native_plan.materialize(session_cwd, bundle)
+        accepted_plans = _select_valid_plans(
+            Path(plan_dir), validate_plan_files(Path(plan_dir)), yolo=resolved_yolo
+        )
+        if not accepted_plans:
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            stop_title_keeper()
             return False
+        names = native_plan.validate_selection(bundle, accepted_plans)
+        if not native_plan.review_materialized_plans(
+            [plan.path for plan in accepted_plans], project_root or Path.cwd(), yolo=resolved_yolo
+        ):
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            stop_title_keeper()
+            return False
+        # Review may have edited a plan. Repeat parent validation before persistence.
+        native_plan.validate_imported_set(session_cwd, bundle)
+        accepted_plans = _select_valid_plans(
+            Path(plan_dir),
+            validate_plan_files(Path(plan_dir)),
+            yolo=resolved_yolo,
+            selected_names=names,
+        )
+        if not accepted_plans:
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            stop_title_keeper()
+            return False
+        native_plan.validate_selection(bundle, accepted_plans)
+        if config.knowledge.enabled and planning_worktree is not None:
+            from wade.services.knowledge_service import record_rating_for_session
+            from wade.utils.knowledge_file import parse_entries, resolve_knowledge_path
 
-    # Post-session: extract token usage (skip for non-blocking tools)
-    usage = TokenUsage()
-    if not tool_caps or tool_caps.blocks_until_exit:
-        usage = _extract_token_usage(transcript_path)
-        if not usage.total_tokens:
-            _warn_token_extraction(transcript_path)
+            if bundle.knowledge_votes:
+                knowledge_path = resolve_knowledge_path(planning_worktree, config.knowledge)
+                known_ids = {
+                    entry.entry_id
+                    for entry in parse_entries(knowledge_path.read_text(encoding="utf-8"))
+                }
+                if any(vote.entry_id not in known_ids for vote in bundle.knowledge_votes):
+                    raise ValueError("Native plan returned a rating for an unknown knowledge entry")
+
+            for vote in bundle.knowledge_votes or ():
+                record_rating_for_session(
+                    planning_worktree, config.knowledge, vote.entry_id, vote.direction
+                )
+        console.info(
+            "Native session collected; transcript and token usage are unavailable from Crossby."
+        )
+        # No provider mutation occurs until collection, validation, and required review succeed.
+        ensure_task_label(provider, config.project.issue_label)
+    except (Exception, KeyboardInterrupt) as exc:
+        category = type(exc).__name__
+        message = (
+            "Cancelled" if isinstance(exc, KeyboardInterrupt) else native_plan.failure_message(exc)
+        )
+        if isinstance(exc, PlanSessionError):
+            for native_path in exc.paths:
+                console.hint(f"Native recovery reference (not imported): {native_path}")
+        console.error(f"Planning failed ({category}): {message}", markup=False)
+        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+        stop_title_keeper()
+        return False
+    usage = None
 
     # Existing issue — attach the plan to it, or supersede it if the session
     # decided the work should be split into multiple issues.
     if existing_issue is not None:
-        plan_files = validate_plan_files(Path(plan_dir))
+        plan_files = accepted_plans
         if not plan_files:
             console.warn("No plan files found — the AI session may not have produced output.")
         else:
@@ -761,7 +762,7 @@ def plan(
             # ``None`` (user aborted) or ``[]`` (all invalid) both bail below via
             # _preserve_generated_plans (the helper already reported why), mutating
             # no issue — the "No plan files found" line above is skipped.
-            selected = _select_valid_plans(Path(plan_dir), plan_files, yolo=resolved_yolo)
+            selected = plan_files
             if selected:
                 plan_files = selected
                 console.info(f"Found {len(plan_files)} plan file(s)")
@@ -795,7 +796,7 @@ def plan(
                 stop_title_keeper()
                 if not finalize_issue_numbers:
                     console.warn("No issues were created from plan files.")
-                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                     return False
                 offer_result = _finalize_issues(
                     provider=provider,
@@ -804,12 +805,18 @@ def plan(
                     ai_tool=resolved_tool,
                     model=resolved_model,
                     usage=usage,
+                    native_result=collected,
+                    plan_bundle=bundle,
+                    plan_files=plan_files,
                     repo_root=repo_root,
                     planning_worktree=planning_worktree,
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                     sandbox=resolved_sandbox,
                 )
+                if offer_result is PLAN_FINALIZATION_FAILED:
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+                    return False
                 if not _cleanup_plan_dir_or_worktree(
                     plan_dir, repo_root, planning_worktree, config
                 ):
@@ -818,7 +825,7 @@ def plan(
                     # automation caller must be able to retry the parent-side
                     # recovery rather than treating the retained vote as delivered.
                     return False
-                if offer_result is not None:
+                if isinstance(offer_result, bool):
                     return offer_result
                 return True
             # Strict gate rejected the batch (all invalid, or the user aborted a
@@ -835,14 +842,14 @@ def plan(
         return False
 
     # Read plan files from worktree/temp dir and create issues
-    plan_files = validate_plan_files(Path(plan_dir))
+    plan_files = accepted_plans
 
     if plan_files:
         # Strict gate — invalid plans (missing complexity / bad title prefix)
         # never silently become issues. ``None`` (aborted) or ``[]`` (all invalid)
         # take the preserve-then-bail else branch below; the helper already
         # surfaced the reason loudly.
-        selected = _select_valid_plans(Path(plan_dir), plan_files, yolo=resolved_yolo)
+        selected = plan_files
         if selected:
             plan_files = selected
             console.info(f"Found {len(plan_files)} plan file(s)")
@@ -861,12 +868,18 @@ def plan(
                     ai_tool=resolved_tool,
                     model=resolved_model,
                     usage=usage,
+                    native_result=collected,
+                    plan_bundle=bundle,
+                    plan_files=plan_files,
                     repo_root=repo_root,
                     planning_worktree=planning_worktree,
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                     sandbox=resolved_sandbox,
                 )
+                if offer_result is PLAN_FINALIZATION_FAILED:
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+                    return False
                 if failed_files:
                     # Some plans never became draft PRs (e.g. an unresolvable declared
                     # base). Their content lives only in the planning worktree, so
@@ -887,7 +900,7 @@ def plan(
                     # The helper has already preserved the generated plan and/or
                     # detached vote artifact and printed its recovery location.
                     return False
-                if offer_result is not None:
+                if isinstance(offer_result, bool):
                     return offer_result
                 return True
             if failed_files:
@@ -1438,17 +1451,21 @@ def _finalize_issues(
     effort: EffortLevel | None = None,
     yolo: bool = False,
     sandbox: bool | None = None,
-) -> bool | None:
+    native_result: PlanSessionResult | None = None,
+    plan_bundle: PlanBundle | None = None,
+    plan_files: list[PlanFile] | None = None,
+) -> bool | _PlanFinalizationFailure | None:
     """Finalize newly created issues: token summaries, labels, hints.
 
     *sandbox* is the planning session's resolved profile, carried only so an
     accepted implement offer can hand it to the implementation session.
 
     Returns a bool if the user accepted the offer to implement (single issue),
-    or None if no interactive offer was made.
+    :data:`PLAN_FINALIZATION_FAILED` when generated plans must be preserved, or
+    None if no interactive offer was made.
     """
     # Apply token usage to issue bodies
-    if usage:
+    if usage is not None and usage.total_tokens:
         apply_plan_token_usage(
             provider=provider,
             issue_numbers=issue_numbers,
@@ -1475,19 +1492,36 @@ def _finalize_issues(
         )
 
     # Record plan session ID in issue bodies and draft PR bodies
-    if usage and usage.session_id:
+    session_id = native_result.session_id if native_result else usage.session_id if usage else None
+    if session_id:
         for issue_id in issue_numbers:
             # Update issue body
-            with contextlib.suppress(Exception):
+            try:
                 task = provider.read_task(issue_id)
                 new_body = append_session_to_body(
                     task.body,
                     phase="Plan",
                     ai_tool=ai_tool or "",
-                    session_id=usage.session_id,
+                    session_id=session_id,
                 )
+                if native_result is not None:
+                    from wade.utils.body_markers import upsert_marked_block
+
+                    provenance = native_result.model_dump_json(exclude={"plan"}, indent=2)
+                    new_body = upsert_marked_block(
+                        new_body,
+                        "<!-- wade:plan-provenance:start -->",
+                        "<!-- wade:plan-provenance:end -->",
+                        "## Native Planning Provenance\n\n```json\n" + provenance + "\n```\n\n"
+                        "Transcript and token usage are unavailable "
+                        "from the collected-session API.",
+                    )
                 provider.update_task(issue_id, body=new_body)
                 logger.info("plan.session_id_recorded", issue=issue_id)
+            except Exception:
+                console.warn(f"Could not record planning session provenance on issue #{issue_id}.")
+                if native_result is not None:
+                    return PLAN_FINALIZATION_FAILED
 
     # Add planned-by labels
     for issue_id in issue_numbers:
@@ -1498,7 +1532,43 @@ def _finalize_issues(
             logger.warning("plan.planned_by_labels_failed", task_id=issue_id, error=str(e))
 
     # Auto-dependency analysis for 2+ issues
-    if len(issue_numbers) >= 2:
+    if plan_bundle is not None and plan_files is not None and len(plan_files) != len(issue_numbers):
+        console.error("Some plans were not persisted; recover output before implementing any task.")
+        return PLAN_FINALIZATION_FAILED
+    if plan_bundle is not None and plan_files is not None and len(issue_numbers) >= 2:
+        from wade.models.deps import DependencyEdge, DependencyGraph
+        from wade.services.deps_service import apply_deps_to_issues, create_tracking_issue
+
+        numbers = {
+            plan.path.name: number for plan, number in zip(plan_files, issue_numbers, strict=True)
+        }
+        declared_graph = DependencyGraph(
+            edges=[
+                DependencyEdge(from_task=numbers[dependency], to_task=numbers[member.filename])
+                for member in plan_bundle.plans
+                if member.filename in numbers
+                for dependency in member.depends_on
+            ]
+        )
+        declared_graph.topological_order = declared_graph.topo_sort(issue_numbers)
+        if declared_graph.edges:
+            affected = sorted(
+                {node for edge in declared_graph.edges for node in (edge.from_task, edge.to_task)}
+            )
+            if apply_deps_to_issues(provider, affected, declared_graph.edges) != len(affected):
+                console.error(
+                    "Task dependency persistence was incomplete; planning output must be recovered."
+                )
+                return PLAN_FINALIZATION_FAILED
+            titles = {
+                number: plan.title for plan, number in zip(plan_files, issue_numbers, strict=True)
+            }
+            if (
+                create_tracking_issue(provider, config, issue_numbers, declared_graph, titles)
+                is None
+            ):
+                return PLAN_FINALIZATION_FAILED
+    elif len(issue_numbers) >= 2:
         console.empty()
         console.step("Running automatic dependency analysis...")
         try:
@@ -1669,7 +1739,14 @@ def _cleanup_plan_dir_or_worktree(
 def _cleanup_plan_dir(plan_dir: str) -> None:
     """Remove the temporary plan directory."""
     with contextlib.suppress(Exception):
-        shutil.rmtree(plan_dir, ignore_errors=True)
+        path = Path(plan_dir)
+        if (
+            path.name == "plans"
+            and path.parent.name == ".wade"
+            and path.parent.parent.name.startswith("wade-plan-")
+        ):
+            path = path.parent.parent
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _preserve_generated_plans(
@@ -1685,19 +1762,22 @@ def _preserve_generated_plans(
     dir/worktree outright would discard output the user can often repair by hand (a
     missing ``## Complexity`` header is a one-line edit), forcing a full AI
     re-planning session for a trivial fix. So copy the files to a stable temp dir
-    first — the same copy-then-clean approach :func:`_warn_token_extraction` uses
-    for transcripts — point the user at them, and only then run the usual cleanup,
+    first, point the user at them, and only then run the usual cleanup,
     which keeps the worktree/temp dir from lingering.
     """
     generated = discover_plan_files(Path(plan_dir))
-    if not generated:
+    has_native_output = (Path(plan_dir) / "native-session.json").exists() or (
+        Path(plan_dir) / ".native"
+    ).exists()
+    if not generated and not has_native_output:
         # Nothing to salvage — the usual cleanup can run unconditionally.
         return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
 
     try:
         preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
-        for plan_file in generated:
-            shutil.copy2(plan_file, preserved / plan_file.name)
+        # Recovery is not import: keep owned raw output, without following links
+        # or treating native source files as additional tasks.
+        shutil.copytree(plan_dir, preserved, dirs_exist_ok=True, symlinks=True)
     except OSError:
         # A copy failed after mkdtemp, so the temp dir may hold only part of the
         # batch. Retain the original plan dir/worktree instead of deleting it —

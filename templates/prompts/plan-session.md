@@ -7,6 +7,11 @@ each WORK methodology `SKILL.md` listed there. Read
 help; availability does not activate a skill. If a skill conflicts with the
 workflow, the workflow wins.
 
-Plan the requested feature and write one plan file per task under `{plan_dir}`.
-Do not create tasks or implement code. After exit, the trusted parent process
-creates the issue(s) and draft PR(s).
+Inspect source at `{source_root}` (read-only reference if outside the planning
+workspace; this does not grant additional write access).
+
+Plan the requested feature in the harness's native Plan mode. Return one native
+Markdown artifact using `{session_bundle}/reference/plan-output-contract.md`.
+The trusted parent process imports its members under `{plan_dir}`, runs the fixed
+review and validation, and creates the issue(s) and draft PR(s). Do not write WADE
+plan files, create tasks, approve implementation, or run completion commands.

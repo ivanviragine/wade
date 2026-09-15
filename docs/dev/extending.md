@@ -16,6 +16,24 @@ The task CLI is in `src/wade/cli/task.py`, business logic in `src/wade/services/
 
 AI tool adapters (`AbstractAITool` subclasses, using `__init_subclass__` auto-registration) live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, not in this repo — see `docs/dev/architecture.md` for the full list of what moved there. Adding a new AI tool means adding an adapter in crossby, then in wade: bump the `crossby` pin in `pyproject.toml`, and add the tool's binary name to `README.md`'s "Supported AI Tools" table. No changes to wade's `services/` or `cli/` are needed unless the tool needs command-specific handling.
 
+### Native planning collectors
+
+For **planning collectors**, activation-only `supports_plan_mode` is insufficient.
+Adopt a published Crossby release with complete-session metadata, public
+`preflight_plan_session`, `run_plan_session`, and supported `PlanCommandPolicy`.
+Update `pyproject.toml`, the tracked `uv.lock`, and the Crossby contract tripwire
+together, then verify without local sources or PR overrides. Do not manually
+bump WADE's version. Temporary isolated development must record the full SHA.
+WADE must not add tool-specific flags, protocol parsing, private collectors,
+storage scraping, or an editing-mode fallback to make a collector eligible.
+
+Extend tests at the public request/result/interaction boundary, plus deterministic
+CLI handoff tests. An artifact source need not support a requested output path:
+WADE imports returned Markdown using the same explicit one/multi-plan contract.
+Validate native regressions against the adopted release (see
+[testing](testing.md#native-planning-dependency-validation)); do not equate mocked
+success with installed/authenticated all-tool success.
+
 ## Adding a New Provider
 
 The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider`, `ClickUpProvider`, and `MarkdownIssueProvider` as current implementations. Unlike AI tools (which are external, via crossby), providers are local to wade and use a registry pattern. To add a new provider (e.g., Linear, Jira):
