@@ -107,6 +107,17 @@ def test_symlinked_member_is_not_read_after_review(tmp_path: Path) -> None:
         load_plan_file(directory / "PLAN.md")
 
 
+def test_plan_title_ignores_h1_like_text_in_a_leading_fence(tmp_path: Path) -> None:
+    plan_path = tmp_path / "PLAN.md"
+    plan_path.write_text(
+        "```sh\n# install deps\n```\n\n# feat: collected plan\n\n## Complexity\neasy\n"
+    )
+
+    plan = load_plan_file(plan_path)
+
+    assert plan.title == "feat: collected plan"
+
+
 @pytest.mark.parametrize("filename", ["../PLAN.md", "/PLAN.md", "C:\\PLAN.md", "README.md"])
 def test_unsafe_names_rejected(filename: str) -> None:
     with pytest.raises(ValidationError):

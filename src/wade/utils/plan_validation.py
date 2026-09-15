@@ -50,7 +50,8 @@ def load_plan_file(path: Path) -> PlanFile:
         content = path.read_text(encoding="utf-8")
     fence: str | None = None
     titles = 0
-    for line in content.splitlines():
+    title_line_index: int | None = None
+    for index, line in enumerate(content.splitlines()):
         marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
         if marker:
             if fence is None:
@@ -59,9 +60,12 @@ def load_plan_file(path: Path) -> PlanFile:
                 fence = None
         elif fence is None and re.match(r"^ {0,3}#\s+\S", line):
             titles += 1
+            title_line_index = index
     if titles != 1:
         raise ValueError("Each WADE plan must contain exactly one '# Title' H1 heading")
-    return PlanFile.from_text(path, content)
+    assert title_line_index is not None
+    title_and_body = "".join(content.splitlines(keepends=True)[title_line_index:])
+    return PlanFile.from_text(path, title_and_body)
 
 
 # ---------------------------------------------------------------------------

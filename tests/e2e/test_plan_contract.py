@@ -198,7 +198,7 @@ class TestPlanCommand:
         binary.chmod(0o755)
         result = _run(["plan", "--ai", "claude", "--model", "claude-sonnet-4.6"], cwd=e2e_repo)
         assert result.returncode == 1
-        assert "attached terminal" in result.stderr
+        assert "attached terminal" in " ".join(result.stderr.split())
         assert not (e2e_repo.parent / ".worktrees").exists()
 
     def test_explicit_no_network_cannot_be_ignored_by_unrestricted_collection(

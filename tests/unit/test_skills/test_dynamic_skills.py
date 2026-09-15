@@ -365,9 +365,12 @@ def test_plan_workflow_describes_advisory_review_without_a_receipt(tmp_path: Pat
     )
 
     workflow = (tmp_path / ".wade/session/WORKFLOW.md").read_text(encoding="utf-8")
-    assert "parent" in workflow
-    assert "self-review" in workflow
-    assert "native" in workflow
+    assert "the trusted parent runs the equivalent of `wade review plan <plan_file>`" in workflow
+    assert (
+        "Prompt-mode review requires actual self-review and an explicit parent-side acknowledgement"
+        in workflow
+    )
+    assert "The native planner must not load REVIEW skills or launch reviewers." in workflow
     assert "binding-aware receipt" not in workflow
 
 

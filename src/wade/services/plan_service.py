@@ -87,6 +87,13 @@ from wade.utils.terminal import (
 logger = structlog.get_logger()
 
 
+class _PlanFinalizationFailure:
+    """Sentinel for failures that require preserving generated plan artifacts."""
+
+
+PLAN_FINALIZATION_FAILED = _PlanFinalizationFailure()
+
+
 def get_plan_prompt_template() -> str:
     """Load the plan session prompt template."""
     from wade.skills.installer import get_templates_dir
@@ -807,7 +814,7 @@ def plan(
                     yolo=resolved_yolo,
                     sandbox=resolved_sandbox,
                 )
-                if offer_result is False:
+                if offer_result is PLAN_FINALIZATION_FAILED:
                     _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                     return False
                 if not _cleanup_plan_dir_or_worktree(
@@ -818,7 +825,7 @@ def plan(
                     # automation caller must be able to retry the parent-side
                     # recovery rather than treating the retained vote as delivered.
                     return False
-                if offer_result is not None:
+                if isinstance(offer_result, bool):
                     return offer_result
                 return True
             # Strict gate rejected the batch (all invalid, or the user aborted a
@@ -870,7 +877,7 @@ def plan(
                     yolo=resolved_yolo,
                     sandbox=resolved_sandbox,
                 )
-                if offer_result is False:
+                if offer_result is PLAN_FINALIZATION_FAILED:
                     _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                     return False
                 if failed_files:
@@ -893,7 +900,7 @@ def plan(
                     # The helper has already preserved the generated plan and/or
                     # detached vote artifact and printed its recovery location.
                     return False
-                if offer_result is not None:
+                if isinstance(offer_result, bool):
                     return offer_result
                 return True
             if failed_files:
@@ -1447,14 +1454,15 @@ def _finalize_issues(
     native_result: PlanSessionResult | None = None,
     plan_bundle: PlanBundle | None = None,
     plan_files: list[PlanFile] | None = None,
-) -> bool | None:
+) -> bool | _PlanFinalizationFailure | None:
     """Finalize newly created issues: token summaries, labels, hints.
 
     *sandbox* is the planning session's resolved profile, carried only so an
     accepted implement offer can hand it to the implementation session.
 
     Returns a bool if the user accepted the offer to implement (single issue),
-    or None if no interactive offer was made.
+    :data:`PLAN_FINALIZATION_FAILED` when generated plans must be preserved, or
+    None if no interactive offer was made.
     """
     # Apply token usage to issue bodies
     if usage is not None and usage.total_tokens:
@@ -1513,7 +1521,7 @@ def _finalize_issues(
             except Exception:
                 console.warn(f"Could not record planning session provenance on issue #{issue_id}.")
                 if native_result is not None:
-                    return False
+                    return PLAN_FINALIZATION_FAILED
 
     # Add planned-by labels
     for issue_id in issue_numbers:
@@ -1526,7 +1534,7 @@ def _finalize_issues(
     # Auto-dependency analysis for 2+ issues
     if plan_bundle is not None and plan_files is not None and len(plan_files) != len(issue_numbers):
         console.error("Some plans were not persisted; recover output before implementing any task.")
-        return False
+        return PLAN_FINALIZATION_FAILED
     if plan_bundle is not None and plan_files is not None and len(issue_numbers) >= 2:
         from wade.models.deps import DependencyEdge, DependencyGraph
         from wade.services.deps_service import apply_deps_to_issues, create_tracking_issue
@@ -1551,7 +1559,7 @@ def _finalize_issues(
                 console.error(
                     "Task dependency persistence was incomplete; planning output must be recovered."
                 )
-                return False
+                return PLAN_FINALIZATION_FAILED
             titles = {
                 number: plan.title for plan, number in zip(plan_files, issue_numbers, strict=True)
             }
@@ -1559,7 +1567,7 @@ def _finalize_issues(
                 create_tracking_issue(provider, config, issue_numbers, declared_graph, titles)
                 is None
             ):
-                return False
+                return PLAN_FINALIZATION_FAILED
     elif len(issue_numbers) >= 2:
         console.empty()
         console.step("Running automatic dependency analysis...")

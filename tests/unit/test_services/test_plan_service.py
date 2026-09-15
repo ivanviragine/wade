@@ -40,6 +40,7 @@ from wade.models.task import CloseReason, PlanFile, Task
 from wade.models.worktree import Worktree
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
+    PLAN_FINALIZATION_FAILED,
     _attach_plan_to_existing_issue,
     _base_retarget_is_safe,
     _branch_work_in_flight,
@@ -419,6 +420,25 @@ class TestCollectedSession:
         offer.assert_not_called()
         provider.close_task.assert_not_called()
 
+    @pytest.mark.parametrize("issue_id", [None, "330"])
+    def test_failed_implementation_handoff_does_not_preserve_persisted_plans(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        issue_id: str | None,
+    ) -> None:
+        with (
+            patch("wade.services.plan_service._attach_plan_to_existing_issue", return_value=True),
+            patch("wade.services.plan_service._finalize_issues", return_value=False),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+            patch(
+                "wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=True
+            ) as cleanup,
+        ):
+            assert not plan(project_root=tmp_path, issue_id=issue_id)
+        preserve.assert_not_called()
+        cleanup.assert_called_once()
+
     def test_terminal_collector_receives_public_identity_bearing_consent(
         self, tmp_path: Path
     ) -> None:
@@ -567,6 +587,23 @@ class TestCollectedSession:
 
 
 class TestFinalizeIssues:
+    def test_native_provenance_failure_requires_plan_preservation(self) -> None:
+        provider = MagicMock()
+        provider.read_task.side_effect = RuntimeError("API error")
+
+        with (
+            patch("wade.services.plan_service.add_planned_by_labels"),
+            patch("wade.services.plan_service.console"),
+        ):
+            result = _finalize_issues(
+                provider=provider,
+                config=ProjectConfig(),
+                issue_numbers=["1"],
+                native_result=native_result(),
+            )
+
+        assert result is PLAN_FINALIZATION_FAILED
+
     def test_label_failure_does_not_abort(self) -> None:
         """A failing add_planned_by_labels must not prevent finalization."""
         provider = MagicMock()
