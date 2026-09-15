@@ -201,6 +201,20 @@ class TestPlanCommand:
         assert "attached terminal" in result.stderr
         assert not (e2e_repo.parent / ".worktrees").exists()
 
+    def test_explicit_no_network_cannot_be_ignored_by_unrestricted_collection(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        _install_fake_codex(mock_gh_cli["mock_bin"])
+        before = json.loads(mock_gh_cli["state_file"].read_text())
+        result = _run(
+            ["plan", "--ai", "codex", "--model", "gpt-5.4", "--no-sandbox", "--no-network-access"],
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 1
+        assert "cannot guarantee --no-network-access" in result.stderr
+        assert json.loads(mock_gh_cli["state_file"].read_text()) == before
+        assert not (e2e_repo.parent / ".worktrees").exists()
+
 
 class TestPlanSessionDoneCommand:
     """Test `wade plan-session done` validation behavior."""

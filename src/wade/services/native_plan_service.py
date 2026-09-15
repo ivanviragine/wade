@@ -42,12 +42,20 @@ def prepare_request(
     *,
     allowed_commands: list[str],
     confinement_required: bool = False,
+    network_restriction_required: bool = False,
 ) -> PlanSessionRequest:
     """Preserve caller policy; capability validation and versions remain Crossby's."""
     adapter = AbstractAITool.get(tool)
     capability = adapter.capabilities().plan_mode
     if confinement_required and capability.sandbox_behavior is not PlanRequestBehavior.PRESERVED:
         raise ValueError(f"{tool} cannot guarantee explicit sandbox confinement for collection")
+    if network_restriction_required and (
+        not adapter.capabilities().supports_network_access or not request.sandbox
+    ):
+        raise ValueError(
+            "The published collector cannot guarantee --no-network-access with this "
+            "execution profile. Select a supported sandboxed collector."
+        )
     if request.model and not adapter.is_model_compatible(request.model):
         raise ValueError(f"Selected model is not compatible with {tool}; select a supported model")
     return request.model_copy(

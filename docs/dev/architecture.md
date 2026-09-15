@@ -236,13 +236,19 @@ parent-owned. The file-based plan Stop nudge is not installed: imported files
 cannot exist before collection finishes.
 
 Native planning resolves sandbox (unset defaults to the collector's safe
-posture), explicit network (default false), approval, trusted directories and
+posture), explicit network, approval, trusted directories and
 timeout separately. Explicit confinement requires preserved sandbox support;
 tool-managed behavior is not a confinement promise. Parent YOLO is independent;
 auto/accept-edits and `ai.plan.mode` transport overrides are rejected. Model and
 effort requests are never silently downgraded to pass validation. Ordinary
 implementation, PR-comment and delegation launches retain their autonomy/network
 behavior below.
+
+An unset network flag forwards Crossby's default false (no additional grant),
+not a universal isolation promise. Explicit false additionally requires public
+network control and a sandboxed profile; the adopted contract offers no network
+confinement in an unrestricted profile. Unsupported restrictions fail before
+worktree mutation, rather than being silently reduced to an absent opt-in.
 
 Planning did not expose scene selection before this migration and still does
 not. The collector inherits the process environment, including scoped fallback

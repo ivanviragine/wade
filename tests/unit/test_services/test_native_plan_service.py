@@ -165,6 +165,33 @@ def test_explicit_bundle_preserves_members_and_relationships() -> None:
     assert native.parse_artifact(artifact) == bundle
 
 
+@pytest.mark.parametrize("tool, sandbox", [("claude", True), ("opencode", True), ("codex", False)])
+def test_explicit_no_network_is_not_silently_an_absent_grant(
+    tmp_path: Path,
+    tool: str,
+    sandbox: bool,
+) -> None:
+    with pytest.raises(ValueError, match="cannot guarantee --no-network-access"):
+        native.prepare_request(
+            tool,
+            PlanSessionRequest(prompt="plan", working_dir=tmp_path, sandbox=sandbox),
+            allowed_commands=["wade *"],
+            network_restriction_required=True,
+        )
+    assert not (tmp_path / ".wade").exists()
+
+
+def test_explicit_no_network_is_preserved_for_supported_sandbox(tmp_path: Path) -> None:
+    request = native.prepare_request(
+        "codex",
+        PlanSessionRequest(prompt="plan", working_dir=tmp_path),
+        allowed_commands=["wade *"],
+        network_restriction_required=True,
+    )
+    assert request.network_access is False
+    assert request.sandbox is True
+
+
 @pytest.mark.parametrize(
     "tool, requested_path", [("claude", True), ("codex", False), ("opencode", False)]
 )

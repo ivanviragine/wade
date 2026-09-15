@@ -24,6 +24,13 @@ The collector's safe defaults do not imply preserved confinement on tools with
 tool-managed sandbox behavior. Claude's terminal handler is identity-bearing
 consent and must not be wrapped as an ordinary callback.
 
+Network false is an opt-in absence in the upstream default, not universal
+confinement. WADE distinguishes an explicit `--no-network-access` restriction:
+the release cannot honor it on tool-managed/no-network-control collectors or
+with an unrestricted profile, so those combinations fail preflight rather than
+silently dropping the request. Other supported planning combinations remain
+eligible; broader independent network confinement needs upstream public support.
+
 Release verification (published wheel, isolated environment; checkout pytest
 `pythonpath` disabled): **377 passed** across plan sessions, permission responses,
 OpenCode server, plan-mode contract, command-policy and preflight suites.

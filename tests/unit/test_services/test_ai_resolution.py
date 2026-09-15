@@ -982,10 +982,10 @@ class TestNetworkAccessRetirement:
                 stripped = line.strip()
                 if not stripped.startswith("network_access="):
                     continue
-                if (
-                    path.name in {"main.py", "plan_service.py"}
-                    and stripped == "network_access=network_access,"
-                ):
+                if path.name in {"main.py", "plan_service.py"} and stripped in {
+                    "network_access=network_access,",
+                    "network_access=network_access is True,",
+                }:
                     # Complete planning requests preserve the explicit independent policy.
                     continue
                 if stripped != "network_access=LAUNCH_NETWORK_ACCESS,":

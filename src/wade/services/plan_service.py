@@ -379,7 +379,7 @@ def plan(
     work_skills: list[str] | None = None,
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
-    network_access: bool = False,
+    network_access: bool | None = None,
     approval_policy: str = "on-request",
     trusted_dirs: list[Path] | None = None,
     timeout: int | None = None,
@@ -470,7 +470,7 @@ def plan(
                 model=resolved_model,
                 effort=resolved_effort,
                 sandbox=resolved_sandbox,
-                network_access=network_access,
+                network_access=network_access is True,
                 approval_policy=PlanApprovalPolicy(approval_policy),
                 trusted_dirs=tuple(path.resolve() for path in (trusted_dirs or ())),
                 timeout_seconds=timeout
@@ -479,6 +479,7 @@ def plan(
             ),
             allowed_commands=config.permissions.allowed_commands,
             confinement_required=sandbox_requirement is True,
+            network_restriction_required=network_access is False,
         )
         checked = preflight_plan_session(resolved_tool, request)
         if (
@@ -656,6 +657,7 @@ def plan(
             request.model_copy(update={"working_dir": session_cwd}),
             allowed_commands=config.permissions.allowed_commands,
             confinement_required=sandbox_requirement is True,
+            network_restriction_required=network_access is False,
         )
         with _plan_dir_fallback_env(plan_dir, planning_worktree):
             collected = run_ai_planning_session(

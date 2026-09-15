@@ -260,7 +260,7 @@ self-review and explicit acknowledgement, so it cannot complete noninteractively
 Review failures preserve output instead of creating tasks.
 
 Planning has independent `--sandbox` / `--no-sandbox`,
-`--network-access` / `--no-network-access` (default off),
+`--network-access` / `--no-network-access`,
 `--approval-policy on-request|untrusted|never`, repeatable `--trusted-dir`, and
 `--timeout` (1–3600 seconds; default 600, or `ai.plan.timeout`) requirements.
 Unset sandbox uses the collector's safe default; explicit confinement requires
@@ -269,6 +269,12 @@ Unsupported policies, model/effort combinations, or `ai.plan.mode` transport
 overrides fail clearly. `--yolo` affects only WADE's post-plan confirmations;
 `auto` and `accept-edits` are rejected. The separate implementation offer still
 requires explicit confirmation.
+
+Omitting the network flag adds no network grant; it does not promise isolation
+for an unrestricted or tool-managed runtime. Explicit `--no-network-access`
+requires supported sandbox network control (and is rejected with `--no-sandbox`
+in the adopted contract). WADE never drops that explicit restriction to enable
+a collector.
 
 Eligibility follows Crossby's complete-session metadata and bounded version
 preflight after final tool selection, before worktree/provider mutations.

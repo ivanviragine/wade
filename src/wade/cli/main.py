@@ -258,10 +258,10 @@ def plan_cmd(
         "--sandbox/--no-sandbox",
         help="Require native confinement or unrestricted execution; unsupported requirements fail.",
     ),
-    network_access: bool = typer.Option(
-        False,
+    network_access: bool | None = typer.Option(
+        None,
         "--network-access/--no-network-access",
-        help="Request native network access (default: off).",
+        help="Require native network on/off; default adds no grant, not universal isolation.",
     ),
     approval_policy: str = typer.Option(
         "on-request",
