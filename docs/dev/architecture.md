@@ -80,6 +80,7 @@ src/wade/
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
 │   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
+│   ├── native_plan_service.py # Public collected-session boundary and safe artifact import
 │   ├── review_service.py           # PR review session lifecycle
 │   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
@@ -190,6 +191,68 @@ Wade still owns a thin `services/ai_resolution.py` rather than delegating outrig
 
 Adding support for a new AI tool means contributing an adapter to crossby, not to this repo — see `docs/dev/extending.md`.
 
+### Native planning collection
+
+`plan_service.plan()` resolves the final confirmed selection, builds the public
+`PlanSessionRequest`, then calls `preflight_plan_session()` before worktree or
+provider mutations. Crossby owns complete-session/version/command-policy
+validation, protocol binding and process cleanup. Preflight explicitly defers
+filesystem, authentication, model availability, protocol and artifact checks.
+The runner submits one raw managed prompt via `run_plan_session()`; it never uses
+ordinary launch autonomy flags or positional `/plan` activation.
+
+`native_plan_service` consumes public metadata, routes `plan_output_dir` only to
+requested-path collectors, and supplies the required `PlanCommandPolicy`
+(`wade *` plus configured canonical patterns). Unknown/unsupported requests fail
+closed; no per-tool version/flag table or native wire parser lives in WADE.
+Native terminal collectors receive Crossby's explicit terminal handler identity
+only on a TTY. Callback collectors use a thin bridge preserving native IDs,
+multi-select, free text, denial and cancellation; non-TTY supplies no handler.
+Plan approval is never an implementation grant.
+
+The public result is persisted privately as `.wade/plans/native-session.json`;
+its exact provenance (excluding the plan text) is attached to task accounting.
+There is no transcript/usage result: report unavailable telemetry, not zero usage
+or a plan masquerading as a transcript. Native source files are recovery evidence,
+never additional tasks. Only `result.plan` is imported, through exclusive,
+no-follow writes under `.wade/plans/`. Review revalidation reads without following
+symlinks. Unsupported safe-I/O platforms fail closed.
+
+`models/plan_bundle.py` defines the explicit versioned multi-plan envelope; the
+workflow's output reference specifies filenames, titles, complexity, dependencies,
+and knowledge votes. Duplicate/case-colliding names, traversal, malformed members,
+unknown edges and cycles fail before provider writes. A mixed-validity subset
+requires human consent even under YOLO, and must retain its prerequisites.
+Dependencies are mapped to the created IDs deterministically, not rediscovered
+by another model.
+
+After import the parent runs the frozen REVIEW binding, strict validation, and
+validated knowledge-rating staging before issue/draft-PR persistence. Prompt
+review needs actual self-review and acknowledgement; noninteractive prompt mode
+cannot satisfy it. Failed review/import/runtime output is retained for recovery,
+never reported as successful collection. Existing vote flushing, cleanup,
+supersession, session IDs, and explicit post-plan implementation handoff remain
+parent-owned. The file-based plan Stop nudge is not installed: imported files
+cannot exist before collection finishes.
+
+Native planning resolves sandbox (unset defaults to the collector's safe
+posture), explicit network (default false), approval, trusted directories and
+timeout separately. Explicit confinement requires preserved sandbox support;
+tool-managed behavior is not a confinement promise. Parent YOLO is independent;
+auto/accept-edits and `ai.plan.mode` transport overrides are rejected. Model and
+effort requests are never silently downgraded to pass validation. Ordinary
+implementation, PR-comment and delegation launches retain their autonomy/network
+behavior below.
+
+Planning did not expose scene selection before this migration and still does
+not. The collector inherits the process environment, including scoped fallback
+`WADE_PLAN_DIR`; copied project files and bootstrap setup remain available. A
+required scoped scene/environment override needs an upstream public facility,
+not invented request fields. Ambient settings/hooks need not survive collectors
+that exclude them to enforce command policy (notably Claude). Frozen workflow
+loading is in the managed prompt and required completion gates are parent-side,
+not contingent on those hooks.
+
 ## Hook Guard Layer
 
 wade installs AI-tool hooks that enforce session rules in *code* rather than
@@ -209,7 +272,7 @@ trusting the agent to follow the skill. The split across the two repos:
 | `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree (except the active tool's memory subtree and always-allowed scratch — see [Memory allowlist](#memory-allowlist) and below) |
 | `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts (the memory subtree and always-allowed scratch are also exempt) |
 | `session-complete` | Stop | **open** (allow) | Ending an impl/review turn with commits ahead of base and no current `done` marker (once) |
-| `plan-complete` | Stop | **open** (allow) | Ending a plan turn with no valid `PLAN*.md` in `.wade/plans` (once) |
+| `plan-complete` (legacy, not installed by native planning) | Stop | **open** (allow) | Ending a legacy plan turn with no valid `PLAN*.md` (once) |
 
 The asymmetry is deliberate and must not regress: a write guard that allows on
 error is worse than useless, while a Stop guard that blocks on error traps the
@@ -224,7 +287,8 @@ failure — unresolvable dir, missing `--root`, exception — fails open. The tw
 Stop guards share the single-shot `.wade/stop-nudged` marker because a worktree
 is either a plan worktree or an impl worktree, never both. Installation:
 `bootstrap_worktree` installs `session-complete` for impl/review sessions (plus
-the pre-push `done` backstop) and `plan-complete` for plan sessions.
+the pre-push `done` backstop). Native plan sessions use parent completion gates,
+not the legacy `plan-complete` Stop hook.
 
 ### Two write channels
 
@@ -473,6 +537,10 @@ installed instead — see the sandbox-profile section below.
 
 ### AI runtime sandbox profile & sandboxed-worktree git writes (#423, #478)
 
+This section describes **ordinary non-plan launch** policy. Native collection
+uses the independent public request contract described above; it does not inherit
+blanket network/temp-directory/git-metadata grants from launch builders.
+
 A linked worktree's git metadata lives **outside** the worktree tree
 (`<main>/.git/worktrees/<wt>` private dir, `<main>/.git` common dir), so under
 `--sandbox workspace-write` every git write to it (`index`/`index.lock`, refs,
@@ -484,9 +552,9 @@ the out-of-root metadata dirs from it and grants them with additive `--add-dir`
 on and shell containment is **not** widened — only these two metadata roots are
 added. The six threaded sites are the impl detached/inline × initial/resume and
 review detached/inline launches (`implementation_service/core.py`,
-`review_service.py`); `delegation_service`/`plan_service` thread the same
+`review_service.py`); `delegation_service` threads the same
 `working_dir` for their worktree-capable paths, under the same network constant
-as everything else — there is no network-off launch path left.
+as other ordinary launches. Native planning has an explicit independent network choice.
 
 **One axis, not two.** `ai.sandbox` is the single cross-tool boolean deciding
 whether the AI runtime launches inside its own filesystem sandbox;
@@ -498,7 +566,7 @@ per-command asymmetry: that asymmetry is exactly what the retired
 strips a separately authenticated reviewer of its host login).
 
 Network access is now a **constant**, not a setting: `LAUNCH_NETWORK_ACCESS` is
-passed `True` at all nine adapter call sites. It must be *passed*, not omitted —
+passed `True` at ordinary launch call sites. It must be *passed*, not omitted —
 crossby's `network_access` parameter defaults to `False`, so a sandboxed launch
 that dropped it would pin `sandbox_workspace_write.network_access=false` and take
 the network away from the very lifecycle (`git fetch`/`push`, `gh`) that requires
@@ -645,7 +713,7 @@ next launch.
 | implementation | `implementation_service/core.py` | `wade implement <id> --no-sandbox` |
 | batch implementation | `implementation_service/batch.py` | `wade implement-batch <ids> --no-sandbox` — assessed once before terminal-broker dispatch, because broker shells may not retain the parent's markers |
 | PR-comment review | `review_service.py` | `wade review pr-comments <id> --no-sandbox` |
-| plan | `plan_service.py` | `wade plan --issue <id> --no-sandbox` (or `wade plan --no-sandbox`) — built here because it calls `build_launch_command` + `run_with_transcript` directly, bypassing `delegate()`, and has no nested-AI guard |
+| plan | `plan_service.py` | `wade plan --issue <id> --no-sandbox` (or `wade plan --no-sandbox`) — native collection bypasses `delegate()` and has no nested-AI guard; explicit native policies still require preflight support |
 | deps, standalone plan/code review, batch review | `delegation_service.delegate()` | per-operation, from `DelegationRequest.operation` / `.relaunch_command` |
 
 Deps (`deps_service.py`), standalone review (`review_delegation_service.py`) and
@@ -770,10 +838,11 @@ default when no hostname is given.
 
 **Plan-directory fallback.** `plan()` keeps a supported worktree-less mode: if
 the detached planning worktree cannot be created (bootstrap failure, or no git
-repo at all), it writes plan files to a throwaway directory and launches the
-agent from the caller's checkout. A bare worktree check would report
-`IN_MAIN_CHECKOUT` / `NOT_IN_GIT_REPO` there and the mandatory first action
-would tell the agent to stop, making the fallback unusable. `plan()` therefore
+repo at all), it collects and imports in an isolated throwaway root's
+`.wade/plans/`, with the frozen bundle alongside it. The planner runs there,
+and the prompt names the source checkout only as a read reference, not an added
+write grant. A bare worktree check would report `NOT_IN_GIT_REPO` there.
+`plan()` therefore
 exports `WADE_PLAN_DIR` (`PLAN_DIR_ENV_VAR`) for the duration of that launch
 only; PLAN readiness consults it exclusively when the base check did **not**
 return `IN_WORKTREE`, write-probes the directory, and returns `PLAN_DIR_ONLY`
@@ -1205,9 +1274,9 @@ exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 The tier values `wade init` writes are **not wade constants** — `init_service/config_io.py::_resolve_models()` seeds them from `crossby.config.defaults.get_defaults(tool)`, so **bumping the crossby pin changes what newly initialized projects get**. The example above shows crossby's `claude` defaults at the currently pinned version; run `get_defaults()` for the authoritative set rather than trusting a doc snapshot, and re-check this block on every crossby bump. A bump does **not** rewrite tiers an existing `.wade.yml` already sets: `wade update` re-resolves the defaults and calls `_patch_config` without `force`, which backfills only *absent* tiers. So a fresh `wade init` picks up the new defaults wholesale, while an existing project changes only where it left a tier unset.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for every command, with no per-command asymmetry. Network access is unconditionally on and no longer configurable — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for ordinary launches. Native planning instead defaults to its collector's safe posture and preserves explicit sandbox requirements. Network access is unconditionally on for ordinary launches; native planning exposes an independent default-off request — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
 
-**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True` for native plan tools, and `plan_mode=False` for Antigravity CLI whose native plan mode sandboxes writes to an external brain store while WADE's plan-artifact guard enforces containment); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`. Every launch command (`plan`, `implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
+**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. `plan` is intentionally excluded from `PermissionMode` (WADE drives native planning through `plan_service` → `run_plan_session`; there is no editing-mode fallback); ordinary invalid autonomy configuration warns and falls back to `default`; native planning rejects unsupported resolved autonomy before collection. Every ordinary launch command (`implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
@@ -1356,72 +1425,31 @@ Each AI tool adapter must implement the abstract method `capabilities()` (binary
 
 **Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
-## Planning Lifecycle (plan-file contract)
+## Planning Lifecycle (collected-session contract)
 
-`wade plan` (`services/plan_service.py`) is a **two-phase** flow. The AI **never
-creates issues** — it writes one `PLAN*.md` per issue to a plan directory, and
-after it exits **wade** validates those files and persists the issues and draft
-PRs itself. This is a deliberate determinism boundary (see *Determinism via
-Services*): the agent authors plan content; code decides what becomes an issue.
+The native collection boundary above supplies validated, reviewed `PlanFile`
+members to the existing task lifecycle. The agent authors content; deterministic
+services decide what becomes a task. Collection/import/review errors and
+noninteractive mixed-validity subsets create no tasks.
 
-**Phase 1 — generate plan files.** In a git repo the service creates a
-detached-HEAD **planning worktree** (`git/worktree.py:create_detached_worktree`),
-bootstraps its fixed plan workflow and frozen WORK/REVIEW bindings, and points the
-AI at `<worktree>/.wade/plans/`. Isolating outputs to that subdirectory keeps
-ordinary repo markdown (e.g. `README.md`) from being misread as a generated plan.
-Outside a git repo it falls back to a `tempfile.mkdtemp(prefix="wade-plan-")`
-temp dir, materializes the same session bundle inside that directory, and skips
-draft-PR creation (except for Antigravity CLI, which requires a
-guarded git planning worktree because its launch uses normal file writing mode with
-WADE's plan-artifact PreToolUse guard rather than agy's brain-sandboxed native plan mode).
-The launch prompt (`plan-session.md`) tells the agent to write a plan file per issue
-and to **not** create the issues.
+For each accepted plan, `_create_issues_from_plans` creates a lightweight task,
+adds complexity labels, bootstraps a draft PR containing the full plan, then
+links that PR in the task. Task providers may be non-GitHub; PR APIs still use
+`GitHubPRDelegateMixin`. A failed draft bootstrap closes the lightweight issue
+best-effort to avoid orphaning it, reports failure, and retains the plan.
 
-**Phase 2 — validate, then persist.** After the AI exits, wade discovers the
-title-parseable files (`validate_plan_files`) and runs the **strict**
-`_select_valid_plans` gate (`utils/plan_validation.py:validate_plan_dir`): every
-plan must carry a `## Complexity` and a conventional-commit title prefix. Invalid
-files are surfaced loudly and skipped — a TTY run confirms before proceeding with
-the valid subset; a non-TTY / `yolo` run proceeds after the warning. For a
-from-scratch plan, `_create_issues_from_plans` then, **per valid plan file**:
+With `--issue <id>`, one accepted plan attaches to the original task, preserving
+its body and guarding in-flight PR base retargets. Multiple plans supersede it
+only when all their task/PR writes succeed; the existing close confirmation
+remains. A partial split leaves the original open and retains failed output;
+it does not authorize an implementation offer or report overall success.
 
-1. Creates a **lightweight task** (title + a brief context excerpt) via the
-   configured provider's `create_task` — this may be a **non-GitHub** provider.
-2. Adds the `complexity:X` label.
-3. Bootstraps a **draft PR** carrying the full plan body (`bootstrap_draft_pr`),
-   then appends the PR link to the task body. Draft-PR / review APIs always flow
-   through GitHub (`gh`) regardless of the task provider: non-GitHub providers
-   compose `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), so task CRUD
-   uses the provider's own backend while PR/review operations delegate to `gh`.
-
-**`--issue <id>` (attach / supersede).** With an issue id, the session is
-pre-loaded with that issue's context (and the issue heading is persisted to
-`.wade/plan-issue.md` so a resumed/compacted plan session can re-inject it). A
-**single** valid plan is attached to the existing issue via a draft PR
-(`_attach_plan_to_existing_issue`, preserving the original body and appending the
-PR link); **multiple** plans **supersede** it — one new issue per plan
-(`_supersede_issue_with_plans`). Only if every plan became an issue does it then
-comment on the original and — unless `yolo` — prompt to close it as *not
-planned*; declining that prompt leaves the original open even though every plan
-succeeded. A partial split (some plans failed to become issues) always leaves
-the original open, no prompt asked.
-
-**Partial-plan preservation.** When the strict gate rejects a batch (all invalid,
-or the user aborted a partial run) or a draft PR can't be persisted (e.g. an
-unresolvable declared base), the generated `PLAN*.md` are salvaged to a stable
-temp dir (`_preserve_generated_plans`) instead of being discarded with the
-worktree — a one-line fix (a missing `## Complexity`) shouldn't force a full
-re-plan. This covers the from-scratch multi-plan path and the single-plan attach
-failure path. The `--issue` **supersede** path is the exception: on a partial
-split, the failed plan files are *not* salvaged — `_supersede_issue_with_plans`
-returns only the successful issue numbers, and the caller finalizes those and
-removes the planning worktree/temp dir, discarding the failed plan(s) along with
-it. On the full-success paths the planning worktree/temp dir is cleaned up.
-
-**Automatic dependency analysis.** When a run produces **2+** issues,
-`_finalize_issues` runs `deps_service.analyze_deps` over them and applies any
-dependency edges it finds (reusing the planning worktree). A single-issue run
-instead offers to start implementing it immediately.
+Native provenance is recorded independently of token usage. Explicit bundle
+dependencies are mapped to task IDs and persisted with a tracking issue when
+edges exist. Failures preserve recoverable output and report incomplete
+persistence, rather than pretending already-created external state was rolled
+back. The single-task implementation offer is a separate human confirmation,
+including under YOLO. Successful vote flushing and cleanup remain required.
 
 ## Merge Strategy
 

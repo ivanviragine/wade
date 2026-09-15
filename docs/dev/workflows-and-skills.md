@@ -67,6 +67,14 @@ REVIEW examines material defects introduced by the planned change,
 review-comment WORK verifies incoming claims before editing, and feedback-fix
 REVIEW checks only those corrections and their directly affected behavior.
 
+Native planning returns one Markdown artifact rather than writing WADE files.
+The parent imports explicit bundle members, invokes each frozen plan REVIEW,
+revalidates, stages returned knowledge votes, and persists tasks. Prompt-mode
+review requires actual self-review plus an explicit acknowledgement; non-TTY
+cannot supply it. The planner never loads REVIEW skills itself or authorizes
+implementation. The plan workflow revision reflects this ownership change;
+the old file-presence Stop hook is not installed for collected sessions.
+
 ## Fixed workflow rendering
 
 Interactive bootstrap renders `.wade/session/WORKFLOW.md` from the session

@@ -173,8 +173,8 @@ wade plan ─▶ tasks + draft PRs ─▶ wade <N> ─▶ AI implements in an is
   `wade review pr-comments <N>`, and `wade cd <N>`.
 - **The AI runs** the session commands that enforce the workflow and open/update
   the PR: `wade implementation-session {check,sync,done}`,
-  `wade review-pr-comments-session {check,sync,done,fetch,resolve}`, and
-  `wade plan-session done`.
+  `wade review-pr-comments-session {check,sync,done,fetch,resolve}`. Native
+  planning returns an artifact; the parent runs its review and validation gates.
 
 ## Commands
 
@@ -237,19 +237,52 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
 | `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
-| `wade plan-session done <plan_dir>` | Finalize a planning session |
+| `wade plan-session done <plan_dir>` | Validate materialized plans (not native collection or task persistence) |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `review pr-comments` additionally accepts `--effort none` to pin the tool default instead of a configured effort across a later wait/relaunch. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, standalone reviews (`review plan`, `review implementation`, `review batch`), `review pr-comments`, `task deps`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
-`wade plan` runs an AI planning session and then, from the validated plan files
-it produces, creates a lightweight task plus a draft PR for each one (labeled by
-complexity). Plan files are **strictly validated** before they become tasks — a
-`PLAN*.md` missing a valid `## Complexity` or a conventional-commit title is
-dropped with a loud error rather than silently becoming a task with no complexity
-label.
+`wade plan` enters the selected tool's **native Plan mode before the first task
+turn**. Crossby collects one authoritative Markdown artifact; WADE imports its
+plans, runs the fixed review and strict validation, then creates a lightweight
+task plus a draft PR per accepted plan. It never substitutes `/plan`, an editing
+session, or a hook for native activation.
+
+One task can be plain Markdown (`# feat: title`, `## Complexity`, tasks and
+acceptance criteria). Multiple tasks use the explicit versioned
+[plan bundle contract](templates/workflows/reference/plan-output-contract.md),
+with filenames and `depends_on` relationships; headings do not imply task
+boundaries. Knowledge-enabled sessions also use the bundle to return ratings.
+The parent runs the frozen plan-review method; prompt-mode review needs actual
+self-review and explicit acknowledgement, so it cannot complete noninteractively.
+Review failures preserve output instead of creating tasks.
+
+Planning has independent `--sandbox` / `--no-sandbox`,
+`--network-access` / `--no-network-access` (default off),
+`--approval-policy on-request|untrusted|never`, repeatable `--trusted-dir`, and
+`--timeout` (1–3600 seconds; default 600, or `ai.plan.timeout`) requirements.
+Unset sandbox uses the collector's safe default; explicit confinement requires
+public support and tool-managed behavior is not a confinement guarantee.
+Unsupported policies, model/effort combinations, or `ai.plan.mode` transport
+overrides fail clearly. `--yolo` affects only WADE's post-plan confirmations;
+`auto` and `accept-edits` are rejected. The separate implementation offer still
+requires explicit confirmation.
+
+Eligibility follows Crossby's complete-session metadata and bounded version
+preflight after final tool selection, before worktree/provider mutations.
+With the adopted release, Claude (attached terminal), Codex, and OpenCode support
+WADE's required command policy. Cursor and Antigravity CLI are rejected until
+their collectors support that policy; Copilot lacks native-question collection,
+and GUI launchers are unsupported. This is not a permanent tool allowlist.
+Authentication, model availability, protocol negotiation, and artifacts are
+checked at runtime; static preflight does not promise them. Unavailable input
+never supplies a native answer or permission grant.
+
+Session IDs and exact native provenance are retained. The collection API does
+not provide a full transcript or token usage; WADE reports them unavailable,
+without substituting the plan text or fabricated usage totals.
 
 `wade plan --issue <N>` re-plans an existing task. If the session produces a
 single plan file, it's attached to `#N` and the task stays open. If the
@@ -259,8 +292,6 @@ per plan file, a comment and a `> **Superseded by ...**` banner are added to
 `#N`, and it's closed as *not planned* (confirmed via prompt unless
 `--yolo`/non-interactive). If any plan file fails to become a task, `#N` is
 left open with a warning instead of superseding on a partial split.
-
-Antigravity CLI (`agy`) planning sessions launch in normal file-writing mode within a guarded git planning worktree rather than `agy`'s native `--mode plan` (which sandboxes writes to its own per-conversation artifact store outside the worktree). WADE's plan-artifact guard strictly confines writes to `.wade/plans/` and scratch paths, preserving planning safety while generating real plan files. Antigravity CLI planning therefore requires a guarded git planning worktree.
 
 ### Base branch
 
@@ -461,16 +492,17 @@ enough to pick up improvements, with no re-init or migration.
 | Worktree containment | Writes that land outside your worktree |
 | Plan-artifact | During `wade plan`, writes to anything but plan artifacts |
 | Session completion | Finishing an implement/review session with unfinished work not yet run through `done` (nudges once) |
-| Plan completion | Finishing a `wade plan` session that produced no valid `PLAN*.md` yet (nudges once) |
+| Native plan completion (parent gate) | Creating tasks before authoritative import, review, and strict plan validation |
 
 The session-completion guard keys on the same fact `done` records — a sha-keyed
 `.wade/done@<HEAD>` marker written when `done`'s gates pass — so it nudges only
 when the branch has commits ahead of its base **and** `done` has not finalized
 the current commit. An early "stopping to ask a question" turn (no commits ahead)
-never triggers it. The plan-completion guard is the planning counterpart: it
-nudges once if a plan session is about to end with no valid plan file (a title
-with a conventional-commit prefix plus a `## Complexity`). Both fail **open** — a
-session is never trapped.
+never triggers it. This Stop nudge fails **open**. Native planning does not
+install the old file-based Stop nudge: canonical files exist only after the
+collector returns. Required review and validation now run in the parent.
+Native transports may exclude ambient tool settings/hooks to preserve command
+policy; hooks are defense in depth, not a native collection guarantee.
 
 Independently of that nudge, `wade plan` now **strictly validates** plan files
 before creating tasks: a `PLAN*.md` missing a valid `## Complexity` or a
@@ -494,8 +526,8 @@ the label never fails task creation, and a body with no `## Complexity` section
 just skips it. An explicit `--label complexity:X` takes precedence over the body
 value, so the task never ends up with two conflicting complexity labels.
 
-If some files pass and others fail, an interactive run asks whether to continue
-with the valid ones; `--yolo` and non-interactive runs continue without asking.
+If some files pass and others fail, a human must explicitly accept a
+dependency-closed valid subset, even with `--yolo`. Noninteractive runs abort.
 If you decline, or if every plan file fails validation, no tasks are created —
 the generated `PLAN*.md` are preserved to a temp directory so you can fix the
 reported errors and re-run instead of regenerating from scratch.
@@ -616,6 +648,9 @@ Description body here. Sub-headings, code blocks, anything markdown.
 
 ### Permission modes
 
+These autonomy tiers apply to ordinary launches. Native `wade plan` is the
+exception described above: default/YOLO control the parent, never the child.
+
 `--permission-mode` sets how much autonomy the AI tool is granted — an axis
 independent of the delegation `--mode` (which controls *how* a tool is
 dispatched: prompt/interactive/headless). The tiers, most→least permissive, are
@@ -677,6 +712,9 @@ failure feedback, and any truncation is labeled.
 
 ### AI runtime sandbox profile
 
+The defaults below apply to **non-plan launches**. Native planning uses the
+independent request policies described in [Planning & base branches](#planning--base-branches).
+
 `ai.sandbox` is a single cross-tool boolean that decides whether WADE launches
 the **AI runtime** inside its own filesystem sandbox. It governs the external
 runtime boundary only — it never relaxes WADE's own guards (see below).
@@ -686,9 +724,9 @@ runtime boundary only — it never relaxes WADE's own guards (see below).
 | `sandbox: false` (**default**) | Launch the runtime unrestricted. Codex gets `--sandbox danger-full-access`, Cursor `--sandbox disabled`. Repository commands and delegated child tools keep **normal host access and credentials**. |
 | `sandbox: true` | Launch the runtime confined. Codex gets `--sandbox workspace-write`, Cursor `--sandbox enabled`. |
 
-Network access is **on in both profiles** and is no longer configurable — it is
-enabled for every WADE launch. Not every phase needs it (planning and
-dependency analysis deliberately do not), but the phases that do — `git
+Network access is **on in both non-plan profiles** and is not configurable for
+ordinary launches. Not every phase needs it (dependency analysis does not),
+but the phases that do — `git
 fetch`/`push`, `gh`, package installs — cannot work without it, and the profile
 is fixed at launch.
 

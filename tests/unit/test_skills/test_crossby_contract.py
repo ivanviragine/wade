@@ -9,14 +9,17 @@ from __future__ import annotations
 from importlib.metadata import version
 from pathlib import Path
 
+import pytest
+from crossby.ai_tools import AbstractAITool, preflight_plan_session
 from crossby.config.skills import (
     SKILLS_DIR,
     detect_skills_source,
     get_skills_target,
     list_skills,
 )
-from crossby.models.ai import AIToolID
+from crossby.models.ai import AIToolID, PlanSessionRequest, PlanSessionResult
 from crossby.sync.readers import detect_skills
+from pydantic import ValidationError
 
 
 def _skill(root: Path, relative: str, name: str) -> Path:
@@ -27,7 +30,7 @@ def _skill(root: Path, relative: str, name: str) -> Path:
 
 
 def test_crossby_version_and_skill_root_mapping_contract() -> None:
-    assert version("crossby") == "0.29.0"
+    assert version("crossby") == "0.32.0"
     assert SKILLS_DIR == {
         AIToolID.CLAUDE: ".claude/skills",
         AIToolID.CURSOR: ".cursor/skills",
@@ -40,6 +43,41 @@ def test_crossby_version_and_skill_root_mapping_contract() -> None:
         AIToolID.VSCODE,
         AIToolID.OPENCODE,
     }
+
+
+def test_complete_session_contract_is_distinct_from_legacy_launch(tmp_path: Path) -> None:
+    assert callable(preflight_plan_session)
+    assert callable(AbstractAITool.run_plan_session)
+    assert set(PlanSessionRequest.model_fields) == {
+        "prompt",
+        "working_dir",
+        "model",
+        "effort",
+        "trusted_dirs",
+        "plan_output_dir",
+        "sandbox",
+        "network_access",
+        "approval_policy",
+        "command_policy",
+        "timeout_seconds",
+    }
+    assert set(PlanSessionResult.model_fields) == {
+        "tool",
+        "version",
+        "plan",
+        "session_id",
+        "native_mode",
+        "artifact_source",
+        "binding",
+        "exit_code",
+        "thread_id",
+        "turn_id",
+        "artifact_id",
+        "artifact_path",
+    }
+    with pytest.raises(ValidationError):
+        PlanSessionRequest.model_validate({"prompt": "plan", "working_dir": tmp_path, "yolo": True})
+    assert not AbstractAITool.get("copilot").capabilities().supports_plan_session
 
 
 def test_crossby_detects_symlinked_roots_and_skill_directories(tmp_path: Path) -> None:

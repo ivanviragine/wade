@@ -14,6 +14,27 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+def test_native_selection_does_not_promise_tool_managed_confinement() -> None:
+    from wade.models.permission import PermissionMode
+    from wade.services.ai_resolution import display_ai_selection
+
+    with patch("wade.ui.console.console") as output:
+        display_ai_selection(
+            "claude",
+            None,
+            None,
+            permission_mode=PermissionMode.YOLO,
+            sandbox=True,
+            native_plan=True,
+        )
+    text = str(output.method_calls)
+    assert "Native Plan" in text
+    assert "Parent confirmations" in text
+    assert "preflight" in text
+    assert "confined" not in text
+
+
 # ---------------------------------------------------------------------------
 # PermissionMode model + helpers
 # ---------------------------------------------------------------------------

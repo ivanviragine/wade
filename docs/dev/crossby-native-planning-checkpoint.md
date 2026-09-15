@@ -1,5 +1,57 @@
 # Crossby native planning dependency checkpoint — #511
 
+## Adoption checkpoint — 2026-09-15
+
+Crossby [#179](https://github.com/ivanviragine/crossby/issues/179) is closed by
+[#180](https://github.com/ivanviragine/crossby/pull/180), published as
+[v0.32.0](https://github.com/ivanviragine/crossby/releases/tag/v0.32.0).
+The release tag resolves to `76000aa076b5ec7722dcf4ec7933da4f56415b73`.
+This resolves the earlier public preflight/command-policy blocker; the historical
+checkpoint below remains an as-of record, not a list of current defects.
+
+WADE adopts the published registry wheel via `pyproject.toml`, its now-tracked
+`uv.lock`, and the contract tripwire. Ordinary validation runs use `uv sync
+--all-extras` with no PR source or `UV_PROJECT` override. Distribution metadata
+reports 0.32.0 and no `direct_url.json`. Lockfile tracking is an explicit change
+to satisfy #511's delivery requirement, superseding this repo's prior ignored
+lockfile practice. WADE's own version is unchanged.
+
+The final public request adds `command_policy: PlanCommandPolicy`; public
+`preflight_plan_session` shares static validation with collection and declares
+runtime-deferred checks. Native interaction exposes authoritative operation
+details, but WADE does not match/parse native commands: Crossby owns enforcement.
+The collector's safe defaults do not imply preserved confinement on tools with
+tool-managed sandbox behavior. Claude's terminal handler is identity-bearing
+consent and must not be wrapped as an ordinary callback.
+
+Release verification (published wheel, isolated environment; checkout pytest
+`pythonpath` disabled): **377 passed** across plan sessions, permission responses,
+OpenCode server, plan-mode contract, command-policy and preflight suites.
+Opt-in native tests: **12 passed** using the actual Codex app-server and OpenCode
+server/local model. These include ambient writable-root isolation,
+progress-versus-terminal exports, native clarification/multi-select, disabled
+effort variants, callback timeout/cleanup and exact session binding. The focused
+suite also covers conflicting allow-option/text denial and unsupported Copilot
+question transport; it does not claim a native Copilot collection success.
+
+Probed CLI versions: Claude `2.1.263 (Claude Code)`; Codex `codex-cli 0.154.0`;
+Cursor `2026.09.02-c22c1a3`; OpenCode `1.18.29`; Copilot
+`GitHub Copilot CLI 1.0.83.`; Antigravity CLI `1.2.3`. Only Codex/OpenCode were
+exercised by those native local checks, not authenticated paid-model smoke tests.
+WADE's deterministic native-wire E2E tests cover the consumer-to-task handoff;
+they use a fake binary and are not all-tool native inference evidence.
+
+Compatibility is explicitly adapted in the native planning section of
+`architecture.md`: parent import/review/validation, explicit multi-plan and
+knowledge-vote envelope, unchanged managed persistence and handoff, unavailable
+transcript/usage, inherited environment without a new scene API, and no reliance
+on collector-excluded ambient hooks for fixed completion gates. Current collector
+eligibility is capability-driven; required command policy rejects Cursor and
+Antigravity CLI in this release, while Copilot and GUI collectors remain
+unsupported. No WADE adapter or permanent allowlist is introduced.
+
+## Historical development checkpoint — 2026-09-13
+
 Inspected on 2026-09-13. This records the public-contract checkpoint required by
 issue #511; it is not an implementation-completion or release-acceptance report.
 

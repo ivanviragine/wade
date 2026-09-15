@@ -235,6 +235,31 @@ def atomic_write_state_file(
         _close(dir_fd)
 
 
+def exclusive_write_state_file(
+    root: Path, directories: tuple[str, ...], filename: str, content: str
+) -> bool:
+    """Create a private artifact without following links or replacing any existing file."""
+    if not filename or "/" in filename or filename in {".", ".."}:
+        return False
+    dir_fd = _open_nested(root, directories, create=True)
+    if dir_fd is None:
+        return False
+    try:
+        fd = os.open(
+            filename,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=dir_fd,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        return True
+    except OSError:
+        return False
+    finally:
+        _close(dir_fd)
+
+
 def delete_state_file(root: Path, directories: tuple[str, ...], filename: str) -> bool:
     """Safely delete one state file, without following a path component or file link."""
 

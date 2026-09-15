@@ -244,11 +244,13 @@ def _review_step(kind: SessionKind, enabled: bool) -> str:
     if not enabled:
         return "Skipped explicitly by project review configuration; record this step as skipped."
     if kind is SessionKind.PLAN:
-        command = "`wade review plan <plan_file>` for each generated plan"
-        prompt_completion = (
-            "Exit 2 requires performing the emitted self-review. This advisory review does not "
-            "write a receipt or independently enforce completion; address findings before "
-            "continuing with the plan workflow."
+        return (
+            "After collection, the trusted parent runs the equivalent of "
+            "`wade review plan <plan_file>` for every imported plan, using this frozen REVIEW "
+            "binding. The native planner must not load REVIEW skills or launch reviewers. "
+            "Prompt-mode review requires actual self-review and an explicit parent-side "
+            "acknowledgement; noninteractive prompt mode cannot satisfy this step. Review "
+            "failure or declined findings retains the output for revision, without creating tasks."
         )
     else:
         command = "`wade review implementation` for the current commit"

@@ -365,7 +365,9 @@ def test_plan_workflow_describes_advisory_review_without_a_receipt(tmp_path: Pat
     )
 
     workflow = (tmp_path / ".wade/session/WORKFLOW.md").read_text(encoding="utf-8")
-    assert "does not write a receipt or independently enforce completion" in workflow
+    assert "parent" in workflow
+    assert "self-review" in workflow
+    assert "native" in workflow
     assert "binding-aware receipt" not in workflow
 
 

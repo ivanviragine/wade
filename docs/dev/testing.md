@@ -116,6 +116,42 @@ ANTHROPIC_API_KEY=... ./scripts/test-live-ai-taskr.sh
 Live scripts are strict by design: they fail fast when required env vars,
 credentials, or binaries are missing.
 
+## Native planning dependency validation
+
+Use real public Crossby request/result models in consumer tests, not mocks that
+invent fields. `tests/e2e/test_plan_contract.py` uses a deterministic fake Codex
+app-server with the **published collector** and real WADE CLI/provider handoff;
+this is protocol-contract evidence, not genuine model inference.
+
+For dependency adoption, also run the release's own focused native suites from
+a disposable checkout of its release tag. Install the published wheel in an
+isolated environment and disable the checkout's pytest `pythonpath=src` so tests
+exercise the wheel. Using Crossby's script (not raw pytest):
+
+```bash
+UV_PROJECT_ENVIRONMENT=/absolute/isolated/.venv UV_NO_SYNC=1 \
+./scripts/test.sh tests/unit/test_ai_tools/test_plan_sessions.py \
+  tests/unit/test_ai_tools/test_plan_permission_responses.py \
+  tests/unit/test_ai_tools/test_opencode_plan_server.py \
+  tests/unit/test_ai_tools/test_plan_mode_contract.py \
+  tests/unit/test_ai_tools/test_plan_command_policy.py \
+  tests/unit/test_ai_tools/test_plan_preflight.py -o pythonpath=
+
+UV_PROJECT_ENVIRONMENT=/absolute/isolated/.venv UV_NO_SYNC=1 \
+CROSSBY_CODEX_LOCAL_SMOKE=1 CROSSBY_OPENCODE_LOCAL_SMOKE=1 \
+./scripts/test.sh tests/integration/test_codex_plan_policy.py \
+  tests/integration/test_opencode_plan_http.py -o pythonpath=
+```
+
+These opt-ins use real native binaries without paid inference: Codex verifies
+the app-server's sandbox roots before inference; OpenCode uses a deterministic
+local model for native clarification, multi-select, progress-versus-final export,
+effort variants, timeout and cleanup. Permission text/option conflicts,
+unsupported Copilot transport, authoritative binding, and command-policy checks
+are covered upstream, not by copied WADE parsers. Record exact CLI versions and
+distinguish these tests from authenticated smoke success or entitlement failures.
+Paid all-tool smoke runs are separate explicit opt-ins in Crossby.
+
 ## Pytest Markers
 
 - `e2e_docker`: deterministic e2e tests executed in docker/CI lanes

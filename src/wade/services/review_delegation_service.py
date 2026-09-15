@@ -538,9 +538,10 @@ def review_plan(
     permission_mode_explicit: bool = False,
     sandbox: bool | None = None,
     skills: list[str] | None = None,
+    project_root: Path | None = None,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
-    config, cmd_config = _load_review_config("review_plan")
+    config, cmd_config = _load_review_config("review_plan", project_root)
     skip = _check_review_enabled("review_plan", cmd_config)
     if skip is not None:
         return skip
@@ -570,7 +571,7 @@ def review_plan(
     try:
         review_cwd = git_repo.get_repo_root(binding_root)
     except GitError:
-        review_cwd = caller_cwd
+        review_cwd = project_root or caller_cwd
     template = load_prompt_template("review-plan.md")
     try:
         prepared = prepare_delegation_method(
