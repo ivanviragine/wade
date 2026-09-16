@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.4] — 2026-09-16
+
+### Bug Fixes
+
+- restore native interactive planning for CLI tools (#513) (51ec787)
+
 ## [v1.2.3] — 2026-09-15
 
 ### Bug Fixes
