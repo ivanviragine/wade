@@ -79,6 +79,24 @@ for line in sys.stdin:
         encoding="utf-8",
     )
     codex_script.chmod(0o755)
+    # Keep the collector lane explicit now that production Codex prefers its TUI.
+    # Only capability selection is overridden; real CLI, collector, and provider run.
+    collector_wade = mock_bin / "wade"
+    collector_wade.write_text(
+        """#!/usr/bin/env python3
+from crossby.ai_tools.codex import CodexAdapter
+from crossby.models.ai import PlanModeActivation
+from wade.cli.main import cli_main
+original = CodexAdapter.capabilities
+def collected_capabilities(self):
+    caps = original(self)
+    return caps.model_copy(update={"plan_mode": caps.plan_mode.model_copy(
+        update={"activation": PlanModeActivation.UNSUPPORTED})})
+CodexAdapter.capabilities = collected_capabilities
+cli_main()
+"""
+    )
+    collector_wade.chmod(0o755)
 
 
 def _disable_plan_review(repo: Path) -> None:

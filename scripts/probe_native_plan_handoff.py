@@ -30,9 +30,10 @@ def main() -> int:
     parser.add_argument(
         "--tool",
         required=True,
-        choices=["claude", "cursor", "opencode", "antigravity-cli", "copilot"],
+        choices=["claude", "cursor", "opencode", "antigravity-cli", "copilot", "codex"],
     )
     parser.add_argument("--model")
+    parser.add_argument("--sandbox", action="store_true", help="Enable the native runtime sandbox")
     parser.add_argument(
         "--worktree", action="store_true", help="Also exercise actual worktree bootstrap and hooks"
     )
@@ -76,7 +77,7 @@ def main() -> int:
             selected_ai_tool=args.tool,
             session_phase=SessionPhase.PLAN,
             session_kind=SessionKind.PLAN,
-            sandbox=False,
+            sandbox=args.sandbox,
         )
     else:
         compose_session(root, root, config, kind=SessionKind.PLAN, task_id=None)
@@ -93,7 +94,7 @@ def main() -> int:
                 prompt="Plan handoff probe",
                 working_dir=root,
                 model=args.model,
-                sandbox=False,
+                sandbox=args.sandbox,
             ),
             permission_mode=PermissionMode.DEFAULT,
             config=config,

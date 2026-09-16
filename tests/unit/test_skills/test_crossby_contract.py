@@ -30,7 +30,7 @@ def _skill(root: Path, relative: str, name: str) -> Path:
 
 
 def test_crossby_version_and_skill_root_mapping_contract() -> None:
-    assert version("crossby") == "0.32.1"
+    assert version("crossby") == "0.33.0"
     assert SKILLS_DIR == {
         AIToolID.CLAUDE: ".claude/skills",
         AIToolID.CURSOR: ".cursor/skills",
@@ -115,3 +115,19 @@ def test_crossby_list_skills_is_sorted_and_requires_skill_markdown(
     (tmp_path / ".claude/skills/not-a-skill").mkdir()
 
     assert list_skills(tmp_path / ".claude/skills") == ["alpha", "zeta"]
+
+
+def test_interactive_plan_startup_events_contract() -> None:
+    from crossby.ai_tools import InteractiveLaunchEvent, InteractiveLaunchEventKind
+    from crossby.models.ai import PlanModeActivation
+
+    caps = AbstractAITool.get("codex").capabilities()
+    assert caps.supports_plan_mode
+    assert caps.plan_mode.activation is PlanModeActivation.TERMINAL_INPUT
+    assert caps.plan_mode.supports_ready_event
+    assert caps.plan_mode.collector_verified_version == "0.153.4"
+    assert set(InteractiveLaunchEvent.model_fields) == {"kind", "tool_id"}
+    assert {kind.value for kind in InteractiveLaunchEventKind} == {
+        "plan_ready",
+        "message_submitted",
+    }

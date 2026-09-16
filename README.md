@@ -244,11 +244,12 @@ Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level
 
 ## Planning & base branches
 
-`wade plan` launches **Claude, Cursor, Copilot, OpenCode, and Antigravity CLI**
+`wade plan` launches **Claude, Cursor, Copilot, OpenCode, Antigravity CLI, and Codex**
 in their own interactive terminal, with **native Plan mode active before the
 first task turn**. You keep the tool's UI, questions, and conversation. Crossby
-validates native support and translates approval flags; WADE does not type
-`/plan`, switch to an editing session, or replace the tool's questions.
+validates native support and translates approval flags. For Codex, Crossby
+submits `/plan` first and WADE sends the task on its ready event. Native questions
+and subsequent interaction stay in the tool.
 
 Use `--permission-mode` (or `--yolo`) for the native approval policy:
 
@@ -259,6 +260,7 @@ Use `--permission-mode` (or `--yolo`) for the native approval policy:
 | Copilot | `default`, `accept-edits`, `yolo` |
 | OpenCode | `default`, `yolo` |
 | Antigravity CLI | `default`, `yolo` |
+| Codex CLI | `default`, `accept-edits`, `auto`, `yolo` |
 
 Unsupported combinations fail before creating a planning worktree. These are
 native approval settings, not permission to implement the plan. The later
@@ -283,20 +285,23 @@ including an explicit empty list when appropriate. The parent revalidates the
 completed handoff after exit, then creates tasks and draft PRs. Failed or missing
 handoffs retain output and create no tasks.
 
-**Codex keeps the collected-session path** for now: Crossby collects its native
-plan artifact and questions, then WADE runs review and validation in the parent.
-Its `--yolo` affects parent confirmations only; `auto` and `accept-edits` remain
-unsupported. Codex's native session provenance is retained separately from the
-plan; no transcript or token totals are invented from plan text.
+**Codex requires CLI 0.154.x and a POSIX terminal (macOS/Linux).** Crossby's
+current startup adapter waits for the rendered Plan indicator before WADE sends
+the initial task; unknown versions or an unrecognized startup screen fail
+without retrying the task. This temporary terminal adapter can be replaced by a
+native launch flag when Codex provides one. WADE requires the task-submitted
+event before collecting the explicit reviewed handoff. Codex can submit plan
+Markdown through `--from-stdin`; no native file destination is assumed.
 
-Interactive terminals use the ordinary sandbox default (off); the Codex collector
-keeps its safe default (on). Explicit `--sandbox`, `--network-access` /
+All native terminals now use the ordinary sandbox default (off), including Codex;
+use `--sandbox` or `ai.plan.sandbox: true` to retain confinement. The retained
+collector fallback has its own safe default (on). Explicit `--sandbox`, `--network-access` /
 `--no-network-access`, and `--trusted-dir` require support from the selected tool.
 No network flag adds no network grant and does not promise isolation.
 `--approval-policy on-request|untrusted|never` and `--timeout` are collector
 settings; interactive terminals use `--permission-mode` and have no time limit.
-Set `ai.plan.mode` to `interactive` or leave it unset for native terminals; leave
-it unset for Codex. GUI launchers remain unsupported for planning.
+Set `ai.plan.mode` to `interactive` or leave it unset for native terminals.
+GUI launchers remain unsupported for planning.
 
 Authentication, model availability, and successful handoff are runtime checks.
 Native terminal output is retained for recovery; usage is reported only when

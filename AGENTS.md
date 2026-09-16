@@ -93,8 +93,10 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
 
 Native planning prefers Crossby's ordinary interactive launch with native Plan
-mode and supported approval flags. Tools without terminal Plan support (Codex)
-retain the public collected-session/preflight API. WADE owns explicit file/stdin
+mode and supported approval flags. For deferred startup (currently Codex), WADE
+handles Crossby's typed ready/submitted events and sends the task exactly once;
+Crossby owns `/plan` and terminal mechanics. The public collected-session API
+remains the fallback for adapters without terminal Plan support. WADE owns explicit file/stdin
 handoff, review receipts bound to current content and frozen skills, validation,
 knowledge handoff, and task persistence; native flags/protocols stay upstream.
 Update the tracked `uv.lock` and Crossby contract tripwire with dependency
