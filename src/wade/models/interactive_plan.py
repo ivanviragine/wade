@@ -13,6 +13,9 @@ class InteractivePlanState(BaseModel):
     version: Literal[1] = 1
     session_id: str
     tool: str
+    model: str | None = None
+    effort: str | None = None
+    sandbox: bool | None = None
     review_required: bool
     knowledge_required: bool = False
     bundle_digest: str

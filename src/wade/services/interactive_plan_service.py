@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import stat
 import uuid
 from pathlib import Path
@@ -18,22 +19,40 @@ from wade.models.workflow import SessionKind
 from wade.services import native_plan_service as native
 from wade.services.session_composition_service import (
     SessionCompositionError,
-    load_session_manifest,
+    load_session_manifest_strict,
     validate_frozen_session_bundle,
 )
 from wade.utils.plan_validation import load_plan_file, plan_done
 from wade.utils.safe_state import (
+    StateFileAccessError,
+    StateFileUnsafeError,
     atomic_write_state_file,
     delete_state_file,
     exclusive_write_state_file,
     list_state_files,
+    list_state_files_strict,
     read_state_file,
+    read_state_file_strict,
     state_file_present,
 )
 
 STATE = "interactive-session.json"
 REVIEWS = "interactive-reviews.json"
 MAX_HANDOFF_BYTES = 4_000_000
+
+
+class InteractivePlanAccessError(ValueError):
+    """Parent collection was blocked by an external filesystem access denial."""
+
+    def __init__(self, root: Path, cause: StateFileAccessError) -> None:
+        self.root = root
+        self.path = cause.path
+        recovery = shlex.join(["wade", "plan", "--recover", str(root)])
+        super().__init__(
+            f"Filesystem permission denied while collecting the planning handoff at "
+            f"{cause.path}. Restore access, then recover the retained handoff with "
+            f"`{recovery}`."
+        )
 
 
 def read_artifact(path: Path) -> str:
@@ -53,9 +72,12 @@ def active(root: Path) -> bool:
 
 
 def _binding_digest(root: Path) -> str:
-    manifest = load_session_manifest(root)
-    if manifest is None:
-        raise ValueError("Interactive planning requires its frozen session bundle")
+    try:
+        manifest = load_session_manifest_strict(root)
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        raise ValueError("Interactive planning requires its frozen session bundle") from exc
     try:
         validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
     except SessionCompositionError as exc:
@@ -64,11 +86,21 @@ def _binding_digest(root: Path) -> str:
 
 
 def begin(
-    root: Path, tool: str, *, review_required: bool, knowledge_required: bool = False
+    root: Path,
+    tool: str,
+    *,
+    review_required: bool,
+    knowledge_required: bool = False,
+    model: str | None = None,
+    effort: str | None = None,
+    sandbox: bool | None = None,
 ) -> None:
     state = InteractivePlanState(
         session_id=str(uuid.uuid4()),
         tool=tool,
+        model=model,
+        effort=effort,
+        sandbox=sandbox,
         review_required=review_required,
         knowledge_required=knowledge_required,
         bundle_digest=_binding_digest(root),
@@ -78,8 +110,13 @@ def begin(
 
 
 def _load(root: Path) -> InteractivePlanState:
-    raw = read_state_file(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
-    if raw is None:
+    try:
+        raw = read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        raise ValueError("Interactive planning handoff is absent or unsafe") from exc
+    if raw is None:  # pragma: no cover - strict reads return bytes or raise
         raise ValueError("Interactive planning handoff is absent or unsafe")
     state = InteractivePlanState.model_validate_json(raw)
     if state.bundle_digest != _binding_digest(root):
@@ -129,13 +166,15 @@ def import_artifact(root: Path, markdown: str) -> None:
 
 def _current_bundle(root: Path, state: InteractivePlanState) -> PlanBundle:
     if state.bundle is None:
-        files = list_state_files(root, ("plans",))
-        if files is None:
-            raise ValueError("Unsafe planning directory")
+        files = list_state_files_strict(root, ("plans",))
         names = [name for name in files if name.startswith("PLAN") and name.endswith(".md")]
         members = tuple(PlanMember(filename=name, markdown=_content(root, name)) for name in names)
         return PlanBundle(plans=members)
-    native.validate_imported_set(root, state.bundle)
+    files = list_state_files_strict(root, ("plans",))
+    if {name for name in files if name.startswith("PLAN") and name.endswith(".md")} != {
+        member.filename for member in state.bundle.plans
+    }:
+        raise ValueError("Imported plan members changed; recover the retained native artifact")
     return PlanBundle(
         plans=tuple(
             PlanMember(
@@ -151,18 +190,19 @@ def _current_bundle(root: Path, state: InteractivePlanState) -> PlanBundle:
 
 def _content(root: Path, name: str) -> str:
     # Also require a valid task boundary before handing content to a reviewer.
-    load_plan_file(root / ".wade/plans" / name)
-    raw = read_state_file(root, ("plans",), name)
-    if raw is None:
-        raise ValueError("Plan artifact is unsafe or unreadable")
+    load_plan_file(root / ".wade/plans" / name, strict=True)
+    raw = read_state_file_strict(root, ("plans",), name)
     return raw.decode("utf-8")
 
 
 def _reviews(root: Path) -> InteractivePlanReviews:
-    raw = read_state_file(root, ("plans",), REVIEWS)
-    if raw is None:
+    try:
+        raw = read_state_file_strict(root, ("plans",), REVIEWS)
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
         if state_file_present(root, ("plans",), REVIEWS):
-            raise ValueError("Plan review state is unsafe or unreadable")
+            raise ValueError("Plan review state is unsafe or unreadable") from exc
         return InteractivePlanReviews()
     return InteractivePlanReviews.model_validate_json(raw)
 
@@ -266,11 +306,20 @@ def complete(root: Path) -> None:
 
 def collect(root: Path) -> PlanBundle:
     """Accept only a completed submission whose files and reviews are still current."""
-    state = _load(root)
-    if not state.completed or state.bundle is None:
-        raise ValueError("No completed plan handoff; run wade plan-session done before exiting")
-    bundle = _current_bundle(root, state)
-    if bundle != state.bundle:
-        raise ValueError("Plans changed after completion; run wade plan-session done again")
-    _validate_reviews(root, state, bundle)
-    return bundle
+    return collect_with_state(root)[1]
+
+
+def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
+    """Collect a completed handoff and return its validated launch metadata."""
+
+    try:
+        state = _load(root)
+        if not state.completed or state.bundle is None:
+            raise ValueError("No completed plan handoff; run wade plan-session done before exiting")
+        bundle = _current_bundle(root, state)
+        if bundle != state.bundle:
+            raise ValueError("Plans changed after completion; run wade plan-session done again")
+        _validate_reviews(root, state, bundle)
+        return state, bundle
+    except StateFileAccessError as exc:
+        raise InteractivePlanAccessError(root, exc) from exc

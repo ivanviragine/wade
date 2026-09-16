@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -35,7 +36,8 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
 )
-from wade.models.plan_bundle import BUNDLE_MARKER
+from wade.models.interactive_plan import InteractivePlanState
+from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.models.worktree import Worktree
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
@@ -62,6 +64,8 @@ from wade.services.plan_service import (
     validate_plan_dir,
     validate_plan_files,
 )
+from wade.utils import safe_state
+from wade.utils.safe_state import StateFileAccessError
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -888,6 +892,166 @@ class TestPlanOrchestrator:
         launch.assert_called_once()
         collect.assert_not_called()
         provider.create_task.assert_called_once()
+
+    def test_parent_permission_denial_retains_completed_native_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        config.ai.review_plan.enabled = True
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        deny_parent = False
+        original_open = os.open
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            nonlocal deny_parent
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.record_review(root / ".wade/plans/PLAN.md", PLAN_TEXT, self_review=False)
+            interactive.complete(root)
+            deny_parent = True
+            return 0
+
+        def denied_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if deny_parent and Path(path).name == interactive.STATE:
+                raise PermissionError(13, "denied", os.fspath(path))
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+            patch.object(safe_state.os, "open", side_effect=denied_open),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not plan(project_root=tmp_path, permission_mode="yolo")
+
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        cleanup.assert_not_called()
+        assert root.is_dir()
+        error = " ".join(str(call) for call in mock_console.error.call_args_list)
+        hints = " ".join(str(call) for call in mock_console.hint.call_args_list)
+        assert "permission denied" in error.lower()
+        assert "--recover" in hints
+
+    def test_recovery_reruns_strict_plan_validation_before_provider_mutation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        interactive.begin(root, "claude", review_required=False)
+        interactive.import_artifact(root, PLAN_TEXT)
+        interactive.complete(root)
+
+        invalid_plan = PLAN_TEXT.replace("## Complexity\neasy\n\n", "")
+        plan_path = root / ".wade/plans/PLAN.md"
+        plan_path.write_text(invalid_plan)
+        state_path = root / ".wade/plans" / interactive.STATE
+        state = InteractivePlanState.model_validate_json(state_path.read_text())
+        state.bundle = PlanBundle(plans=(PlanMember(filename="PLAN.md", markdown=invalid_plan),))
+        state_path.write_text(state.model_dump_json())
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        provider.ensure_label.assert_not_called()
+
+    def test_recovery_revalidates_retained_handoff_then_consumes_it(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        interactive.begin(root, "claude", review_required=False)
+        interactive.import_artifact(root, PLAN_TEXT)
+        interactive.complete(root)
+        linked = [Worktree(path=str(root), branch="(detached)")]
+        original_open = os.open
+
+        def denied_state_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if Path(path).name == interactive.STATE:
+                raise PermissionError(13, "denied", os.fspath(path))
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=linked),
+            patch.object(safe_state.os, "open", side_effect=denied_state_open),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        assert root.is_dir()
+
+        with patch("wade.git.worktree.list_worktrees", return_value=linked):
+            assert plan(project_root=tmp_path, recover=root)
+        collect.assert_not_called()
+        provider.create_task.assert_called_once()
+
+    @pytest.mark.parametrize("changed_gate", ["content", "review", "binding"])
+    def test_recovery_rejects_changed_completed_handoff_before_provider_mutation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        changed_gate: str,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        interactive.begin(root, "claude", review_required=True)
+        interactive.import_artifact(root, PLAN_TEXT)
+        plan_path = root / ".wade/plans/PLAN.md"
+        interactive.record_review(plan_path, PLAN_TEXT, self_review=False)
+        interactive.complete(root)
+        if changed_gate == "content":
+            plan_path.write_text(PLAN_TEXT + "\nchanged\n")
+        elif changed_gate == "review":
+            (root / ".wade/plans" / interactive.REVIEWS).unlink()
+        else:
+            (root / ".wade/session/WORKFLOW.md").write_text("changed")
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
 
     @pytest.mark.parametrize(
         ("tool", "kwargs"),
@@ -2236,6 +2400,37 @@ class TestPreserveGeneratedPlans:
         assert (plan_dir / "PLAN-2.md").is_file()
         # ...and the user is pointed at where they still live, not the temp dir.
         mock_console.hint.assert_called_once_with(f"Plan files: {plan_dir}")
+
+    def test_inaccessible_directory_reports_unknown_count_and_retains_worktree(
+        self, tmp_path: Path
+    ) -> None:
+        worktree = tmp_path / "plan-worktree"
+        plan_dir = worktree / ".wade/plans"
+        plan_dir.mkdir(parents=True)
+        denied = PermissionError(13, "denied", str(plan_dir))
+
+        with (
+            patch(
+                "wade.services.plan_service.list_state_files_strict",
+                side_effect=StateFileAccessError(plan_dir, denied),
+            ),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not _preserve_generated_plans(str(plan_dir), tmp_path, worktree, ProjectConfig())
+
+        cleanup.assert_not_called()
+        output = " ".join(
+            str(call)
+            for call in [
+                *mock_console.info.call_args_list,
+                *mock_console.warn.call_args_list,
+            ]
+        )
+        assert "count is unknown" in output
+        assert "Preserved 0" not in output
+        assert worktree.is_dir()
+        assert any("--recover" in str(call) for call in mock_console.hint.call_args_list)
 
 
 class TestStrictValidationGateWiring:

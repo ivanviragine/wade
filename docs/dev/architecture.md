@@ -256,6 +256,20 @@ The legacy file-presence Stop nudge is not installed; correctness depends on the
 completion and parent gates, not ambient hooks. Collected transports may exclude
 ambient settings; native terminals use their ordinary launch behavior.
 
+Parent collection uses the additive strict `safe_state` read/list API. The
+legacy API continues to collapse unsafe or unreadable state to `None` for review
+receipts, review cycles, documentation receipts, and other established callers;
+the strict path preserves `EACCES`/`EPERM` as `StateFileAccessError` while keeping
+the same descriptor-relative `O_NOFOLLOW`, regular-file, and byte-limit checks.
+An access denial after native exit causes no provider mutation and never enters
+normal worktree cleanup. Enumeration denial reports an unknown plan count and
+retains the original detached worktree. `wade plan --recover <worktree>` accepts
+only a detached worktree still registered with the current repo, skips launch,
+reloads its frozen plan manifest and explicit completed handoff, and reruns
+binding, content, review, dependency, and strict plan-validation gates before
+persistence. Successful recovery resumes the ordinary finalization and cleanup
+path; WADE does not invoke platform privacy tools or weaken sandbox policy.
+
 ## Hook Guard Layer
 
 wade installs AI-tool hooks that enforce session rules in *code* rather than

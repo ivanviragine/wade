@@ -29,7 +29,12 @@ from wade.skills.materializer import (
 )
 from wade.skills.resolver import SkillResolutionError
 from wade.skills.validation import SkillValidationError
-from wade.utils.safe_state import read_state_file, state_directory_present
+from wade.utils.safe_state import (
+    StateFileUnsafeError,
+    read_state_file,
+    read_state_file_strict,
+    state_directory_present,
+)
 
 
 class SessionCompositionError(RuntimeError):
@@ -194,6 +199,16 @@ def load_session_manifest(worktree_root: Path) -> SessionManifest | None:
         return SessionManifest.model_validate_json(raw)
     except (ValueError, ValidationError):
         return None
+
+
+def load_session_manifest_strict(worktree_root: Path) -> SessionManifest:
+    """Load a manifest without collapsing OS access denial into missing state."""
+
+    raw = read_state_file_strict(worktree_root, ("session",), "manifest.json")
+    try:
+        return SessionManifest.model_validate_json(raw)
+    except (ValueError, ValidationError) as exc:
+        raise StateFileUnsafeError("Active session manifest is malformed") from exc
 
 
 def session_state_present(worktree_root: Path) -> bool:

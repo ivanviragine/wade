@@ -8,8 +8,10 @@ The parent validates and persists accepted plans.
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import re
+import shlex
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator
@@ -65,6 +67,7 @@ from wade.services.knowledge_recovery import (
     RETAINED_VOTE_RECOVERY_HINT,
     report_retained_vote_recovery,
 )
+from wade.services.session_composition_service import load_session_manifest_strict
 from wade.services.task_service import (
     add_complexity_label,
     add_planned_by_labels,
@@ -83,7 +86,13 @@ from wade.utils.plan_validation import load_plan_file
 from wade.utils.plan_validation import plan_done as plan_done
 from wade.utils.plan_validation import validate_plan_dir as validate_plan_dir
 from wade.utils.runtime_env import detect_parent_runtime, requires_unsandboxed_relaunch
-from wade.utils.safe_state import exclusive_write_state_file
+from wade.utils.safe_state import (
+    StateFileAccessError,
+    StateFileError,
+    StateFileIOError,
+    exclusive_write_state_file,
+    list_state_files_strict,
+)
 from wade.utils.terminal import (
     compose_plan_title,
     set_terminal_title,
@@ -386,6 +395,9 @@ def run_interactive_planning_session(
         ai_tool,
         review_required=config.ai.review_plan.enabled is not False,
         knowledge_required=config.knowledge.enabled,
+        model=request.model,
+        effort=request.effort.value if request.effort is not None else None,
+        sandbox=request.sandbox,
     )
     console.panel("\n".join(prompt.splitlines()[:5]) + "\n…", title="Planning Prompt (preview)")
     console.info(f"Plan directory: {plan_dir}")
@@ -449,6 +461,309 @@ def run_interactive_planning_session(
 # ---------------------------------------------------------------------------
 
 
+def _prepare_plan_handoff(
+    *,
+    bundle: PlanBundle,
+    plan_dir: str,
+    session_cwd: Path,
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+    planning_worktree: Path | None,
+    project_root: Path | None,
+    interactive: bool,
+    resolved_yolo: bool,
+) -> list[PlanFile] | None:
+    """Revalidate one collected handoff before any provider mutation."""
+
+    if bundle.knowledge_votes and (not config.knowledge.enabled or planning_worktree is None):
+        raise ValueError("Knowledge votes require an enabled, managed planning worktree")
+    if (
+        config.knowledge.enabled
+        and planning_worktree is not None
+        and bundle.knowledge_votes is None
+    ):
+        raise ValueError(
+            "Knowledge-enabled planning requires the bundle's explicit knowledge_votes handoff"
+        )
+    accepted_plans = _select_valid_plans(
+        Path(plan_dir), validate_plan_files(Path(plan_dir)), yolo=resolved_yolo
+    )
+    if not accepted_plans:
+        return None
+    names = native_plan.validate_selection(bundle, accepted_plans)
+    if not interactive and not native_plan.review_materialized_plans(
+        [plan.path for plan in accepted_plans], project_root or Path.cwd(), yolo=resolved_yolo
+    ):
+        return None
+    # Review may have edited a plan. Repeat parent validation before persistence.
+    native_plan.validate_imported_set(session_cwd, bundle)
+    accepted_plans = _select_valid_plans(
+        Path(plan_dir),
+        validate_plan_files(Path(plan_dir)),
+        yolo=resolved_yolo,
+        selected_names=names,
+    )
+    if not accepted_plans:
+        return None
+    native_plan.validate_selection(bundle, accepted_plans)
+    if config.knowledge.enabled and planning_worktree is not None:
+        from wade.services.knowledge_service import record_rating_for_session
+        from wade.utils.knowledge_file import parse_entries, resolve_knowledge_path
+
+        if bundle.knowledge_votes:
+            knowledge_path = resolve_knowledge_path(planning_worktree, config.knowledge)
+            known_ids = {
+                entry.entry_id
+                for entry in parse_entries(knowledge_path.read_text(encoding="utf-8"))
+            }
+            if any(vote.entry_id not in known_ids for vote in bundle.knowledge_votes):
+                raise ValueError("Native plan returned a rating for an unknown knowledge entry")
+
+        for vote in bundle.knowledge_votes or ():
+            record_rating_for_session(
+                planning_worktree, config.knowledge, vote.entry_id, vote.direction
+            )
+    if not interactive:
+        console.info(
+            "Native session collected; transcript and token usage are unavailable from Crossby."
+        )
+    # No provider mutation occurs until collection, validation, and required review succeed.
+    ensure_task_label(provider, config.project.issue_label)
+    return accepted_plans
+
+
+def _persist_accepted_plans(
+    *,
+    accepted_plans: list[PlanFile],
+    bundle: PlanBundle,
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+    existing_issue: Task | None,
+    plan_dir: str,
+    repo_root: Path | None,
+    planning_worktree: Path | None,
+    resolved_tool: str,
+    resolved_model: str | None,
+    resolved_effort: EffortLevel | None,
+    resolved_yolo: bool,
+    resolved_sandbox: bool,
+    usage: TokenUsage | None,
+    collected: PlanSessionResult | None,
+) -> bool:
+    """Persist a fully revalidated handoff and finish its managed lifecycle."""
+
+    plan_files = accepted_plans
+    console.info(f"Found {len(plan_files)} plan file(s)")
+    if existing_issue is not None:
+        if len(plan_files) == 1:
+            if not _attach_plan_to_existing_issue(
+                provider=provider,
+                config=config,
+                issue=existing_issue,
+                plan_file=plan_files[0],
+                repo_root=repo_root,
+                yolo=resolved_yolo,
+            ):
+                _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+                stop_title_keeper()
+                return False
+            finalize_issue_numbers = [existing_issue.id]
+        else:
+            finalize_issue_numbers = _supersede_issue_with_plans(
+                provider=provider,
+                config=config,
+                issue=existing_issue,
+                plan_files=plan_files,
+                repo_root=repo_root,
+                yolo=resolved_yolo,
+            )
+        stop_title_keeper()
+        if not finalize_issue_numbers:
+            console.warn("No issues were created from plan files.")
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            return False
+        offer_result = _finalize_issues(
+            provider=provider,
+            config=config,
+            issue_numbers=finalize_issue_numbers,
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            usage=usage,
+            native_result=collected,
+            plan_bundle=bundle,
+            plan_files=plan_files,
+            repo_root=repo_root,
+            planning_worktree=planning_worktree,
+            effort=resolved_effort,
+            yolo=resolved_yolo,
+            sandbox=resolved_sandbox,
+        )
+        if offer_result is PLAN_FINALIZATION_FAILED:
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            return False
+        if not _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config):
+            return False
+        if isinstance(offer_result, bool):
+            return offer_result
+        return True
+
+    created_numbers, failed_files = _create_issues_from_plans(
+        provider=provider,
+        config=config,
+        plan_files=plan_files,
+        repo_root=repo_root,
+    )
+    if created_numbers:
+        stop_title_keeper()
+        offer_result = _finalize_issues(
+            provider=provider,
+            config=config,
+            issue_numbers=created_numbers,
+            ai_tool=resolved_tool,
+            model=resolved_model,
+            usage=usage,
+            native_result=collected,
+            plan_bundle=bundle,
+            plan_files=plan_files,
+            repo_root=repo_root,
+            planning_worktree=planning_worktree,
+            effort=resolved_effort,
+            yolo=resolved_yolo,
+            sandbox=resolved_sandbox,
+        )
+        if offer_result is PLAN_FINALIZATION_FAILED:
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            return False
+        if failed_files:
+            console.warn(
+                f"{len(failed_files)} plan(s) could not be persisted to a draft "
+                f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
+            )
+            cleanup_succeeded = _preserve_generated_plans(
+                plan_dir, repo_root, planning_worktree, config
+            )
+        else:
+            cleanup_succeeded = _cleanup_plan_dir_or_worktree(
+                plan_dir, repo_root, planning_worktree, config
+            )
+        if not cleanup_succeeded:
+            return False
+        if isinstance(offer_result, bool):
+            return offer_result
+        return True
+    if failed_files:
+        console.warn(
+            f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
+            f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
+        )
+        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+        stop_title_keeper()
+        return False
+    console.warn("No issues were created from plan files.")
+    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+    stop_title_keeper()
+    return False
+
+
+def _recover_completed_handoff(
+    *,
+    recovery_root: Path,
+    project_root: Path | None,
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+    yolo: bool,
+) -> bool:
+    """Revalidate and consume one retained managed planning handoff."""
+
+    from wade.git import repo as git_repo
+    from wade.git import worktree as git_worktree
+
+    repo_root = git_repo.get_repo_root(project_root or Path.cwd())
+    root = Path(os.path.abspath(recovery_root))
+    linked = next(
+        (
+            entry
+            for entry in git_worktree.list_worktrees(repo_root)
+            if Path(os.path.abspath(entry.path)) == root
+        ),
+        None,
+    )
+    if linked is None or linked.branch != "(detached)":
+        console.error(
+            "Planning recovery requires a retained detached worktree registered with this repo."
+        )
+        return False
+
+    plan_dir = str(root / ".wade/plans")
+    console.rule("wade plan recovery")
+    console.kv("Planning worktree", str(root))
+    try:
+        manifest = load_session_manifest_strict(root)
+        state, bundle = interactive_plan.collect_with_state(root)
+        adapter = AbstractAITool.get(state.tool)
+        transcript = root / ".wade/plans/terminal.log"
+        usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
+        raw_effort = state.effort or config.ai.plan.effort or config.ai.effort
+        resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
+        resolved_sandbox = (
+            state.sandbox
+            if state.sandbox is not None
+            else next(
+                (
+                    value
+                    for value in (config.ai.plan.sandbox, config.ai.sandbox)
+                    if value is not None
+                ),
+                False,
+            )
+        )
+        resolved_model = state.model or config.get_model("plan")
+        existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
+        accepted_plans = _prepare_plan_handoff(
+            bundle=bundle,
+            plan_dir=plan_dir,
+            session_cwd=root,
+            config=config,
+            provider=provider,
+            planning_worktree=root,
+            project_root=project_root or repo_root,
+            interactive=True,
+            resolved_yolo=yolo,
+        )
+        if not accepted_plans:
+            _retain_inaccessible_handoff(plan_dir, root, access_denied=False)
+            return False
+    except (Exception, KeyboardInterrupt) as exc:
+        category = type(exc).__name__
+        message = (
+            "Cancelled" if isinstance(exc, KeyboardInterrupt) else native_plan.failure_message(exc)
+        )
+        console.error(f"Planning recovery failed ({category}): {message}", markup=False)
+        access_denied = isinstance(
+            exc, (StateFileAccessError, interactive_plan.InteractivePlanAccessError)
+        )
+        _retain_inaccessible_handoff(plan_dir, root, access_denied=access_denied)
+        return False
+
+    return _persist_accepted_plans(
+        accepted_plans=accepted_plans,
+        bundle=bundle,
+        provider=provider,
+        config=config,
+        existing_issue=existing_issue,
+        plan_dir=plan_dir,
+        repo_root=repo_root,
+        planning_worktree=root,
+        resolved_tool=state.tool,
+        resolved_model=resolved_model,
+        resolved_effort=resolved_effort,
+        resolved_yolo=yolo,
+        resolved_sandbox=resolved_sandbox,
+        usage=usage,
+        collected=None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main plan orchestrator
 # ---------------------------------------------------------------------------
@@ -475,6 +790,7 @@ def plan(
     approval_policy: str = "on-request",
     trusted_dirs: list[Path] | None = None,
     timeout: int | None = None,
+    recover: Path | None = None,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -486,6 +802,40 @@ def plan(
     """
     config = load_config(project_root)
     provider = get_provider(config)
+
+    if recover is not None:
+        if (
+            any(
+                value is not None
+                for value in (
+                    ai_tool,
+                    model,
+                    issue_id,
+                    effort,
+                    permission_mode,
+                    sandbox,
+                    work_skills,
+                    review_skills,
+                    network_access,
+                    trusted_dirs,
+                    timeout,
+                )
+            )
+            or refresh_skills
+            or approval_policy != "on-request"
+        ):
+            console.error(
+                "--recover consumes the frozen completed handoff; do not combine it with "
+                "AI launch, policy, timeout, or skill options."
+            )
+            return False
+        return _recover_completed_handoff(
+            recovery_root=recover,
+            project_root=project_root,
+            config=config,
+            provider=provider,
+            yolo=bool(yolo),
+        )
 
     # Resolve AI tool and model
     resolved_tool = resolve_ai_tool(ai_tool, config, "plan")
@@ -816,66 +1166,21 @@ def plan(
                 native_plan.save_artifact(session_cwd, collected)
                 bundle = native_plan.parse_artifact(collected.plan)
                 native_plan.materialize(session_cwd, bundle)
-        if bundle.knowledge_votes and (not config.knowledge.enabled or planning_worktree is None):
-            raise ValueError("Knowledge votes require an enabled, managed planning worktree")
-        if (
-            config.knowledge.enabled
-            and planning_worktree is not None
-            and bundle.knowledge_votes is None
-        ):
-            raise ValueError(
-                "Knowledge-enabled planning requires the bundle's explicit knowledge_votes handoff"
-            )
-        accepted_plans = _select_valid_plans(
-            Path(plan_dir), validate_plan_files(Path(plan_dir)), yolo=resolved_yolo
+        accepted_plans = _prepare_plan_handoff(
+            bundle=bundle,
+            plan_dir=plan_dir,
+            session_cwd=session_cwd,
+            config=config,
+            provider=provider,
+            planning_worktree=planning_worktree,
+            project_root=project_root,
+            interactive=interactive,
+            resolved_yolo=resolved_yolo,
         )
         if not accepted_plans:
             _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
-        names = native_plan.validate_selection(bundle, accepted_plans)
-        if not interactive and not native_plan.review_materialized_plans(
-            [plan.path for plan in accepted_plans], project_root or Path.cwd(), yolo=resolved_yolo
-        ):
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-            stop_title_keeper()
-            return False
-        # Review may have edited a plan. Repeat parent validation before persistence.
-        native_plan.validate_imported_set(session_cwd, bundle)
-        accepted_plans = _select_valid_plans(
-            Path(plan_dir),
-            validate_plan_files(Path(plan_dir)),
-            yolo=resolved_yolo,
-            selected_names=names,
-        )
-        if not accepted_plans:
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-            stop_title_keeper()
-            return False
-        native_plan.validate_selection(bundle, accepted_plans)
-        if config.knowledge.enabled and planning_worktree is not None:
-            from wade.services.knowledge_service import record_rating_for_session
-            from wade.utils.knowledge_file import parse_entries, resolve_knowledge_path
-
-            if bundle.knowledge_votes:
-                knowledge_path = resolve_knowledge_path(planning_worktree, config.knowledge)
-                known_ids = {
-                    entry.entry_id
-                    for entry in parse_entries(knowledge_path.read_text(encoding="utf-8"))
-                }
-                if any(vote.entry_id not in known_ids for vote in bundle.knowledge_votes):
-                    raise ValueError("Native plan returned a rating for an unknown knowledge entry")
-
-            for vote in bundle.knowledge_votes or ():
-                record_rating_for_session(
-                    planning_worktree, config.knowledge, vote.entry_id, vote.direction
-                )
-        if not interactive:
-            console.info(
-                "Native session collected; transcript and token usage are unavailable from Crossby."
-            )
-        # No provider mutation occurs until collection, validation, and required review succeed.
-        ensure_task_label(provider, config.project.issue_label)
     except (Exception, KeyboardInterrupt) as exc:
         category = type(exc).__name__
         message = (
@@ -885,188 +1190,30 @@ def plan(
             for native_path in exc.paths:
                 console.hint(f"Native recovery reference (not imported): {native_path}")
         console.error(f"Planning failed ({category}): {message}", markup=False)
-        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+        if isinstance(exc, (interactive_plan.InteractivePlanAccessError, StateFileIOError)):
+            _retain_inaccessible_handoff(plan_dir, planning_worktree)
+        else:
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
         stop_title_keeper()
         return False
 
-    # Existing issue — attach the plan to it, or supersede it if the session
-    # decided the work should be split into multiple issues.
-    if existing_issue is not None:
-        plan_files = accepted_plans
-        if not plan_files:
-            console.warn("No plan files found — the AI session may not have produced output.")
-        else:
-            # Strict gate — drop plans missing complexity / a valid title prefix.
-            # ``None`` (user aborted) or ``[]`` (all invalid) both bail below via
-            # _preserve_generated_plans (the helper already reported why), mutating
-            # no issue — the "No plan files found" line above is skipped.
-            selected = plan_files
-            if selected:
-                plan_files = selected
-                console.info(f"Found {len(plan_files)} plan file(s)")
-                if len(plan_files) == 1:
-                    if not _attach_plan_to_existing_issue(
-                        provider=provider,
-                        config=config,
-                        issue=existing_issue,
-                        plan_file=plan_files[0],
-                        repo_root=repo_root,
-                        yolo=resolved_yolo,
-                    ):
-                        # Attach did not fully succeed — the retarget guard refused an
-                        # in-flight base change, draft-PR bootstrap failed, or the
-                        # worktree merge-target pin could not be reconciled. Preserve
-                        # the freshly generated plan and abort — finalizing here would
-                        # discard it when the worktree is force-removed below (#376).
-                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-                        stop_title_keeper()
-                        return False
-                    finalize_issue_numbers = [existing_issue.id]
-                else:
-                    finalize_issue_numbers = _supersede_issue_with_plans(
-                        provider=provider,
-                        config=config,
-                        issue=existing_issue,
-                        plan_files=plan_files,
-                        repo_root=repo_root,
-                        yolo=resolved_yolo,
-                    )
-                stop_title_keeper()
-                if not finalize_issue_numbers:
-                    console.warn("No issues were created from plan files.")
-                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-                    return False
-                offer_result = _finalize_issues(
-                    provider=provider,
-                    config=config,
-                    issue_numbers=finalize_issue_numbers,
-                    ai_tool=resolved_tool,
-                    model=resolved_model,
-                    usage=usage,
-                    native_result=collected,
-                    plan_bundle=bundle,
-                    plan_files=plan_files,
-                    repo_root=repo_root,
-                    planning_worktree=planning_worktree,
-                    effort=resolved_effort,
-                    yolo=resolved_yolo,
-                    sandbox=resolved_sandbox,
-                )
-                if offer_result is PLAN_FINALIZATION_FAILED:
-                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-                    return False
-                if not _cleanup_plan_dir_or_worktree(
-                    plan_dir, repo_root, planning_worktree, config
-                ):
-                    # A failed staging handoff deliberately preserves the detached
-                    # worktree. Do not report the overall plan as successful: an
-                    # automation caller must be able to retry the parent-side
-                    # recovery rather than treating the retained vote as delivered.
-                    return False
-                if isinstance(offer_result, bool):
-                    return offer_result
-                return True
-            # Strict gate rejected the batch (all invalid, or the user aborted a
-            # partial run). Preserve the generated files — the helper already
-            # surfaced the reason — so a validation miss doesn't force a full
-            # AI re-planning run.
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-            stop_title_keeper()
-            return False
-        # Reached only when the session produced no plan files (nothing to
-        # preserve) — clean up like every other failure path.
-        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
-        stop_title_keeper()
-        return False
-
-    # Read plan files from worktree/temp dir and create issues
-    plan_files = accepted_plans
-
-    if plan_files:
-        # Strict gate — invalid plans (missing complexity / bad title prefix)
-        # never silently become issues. ``None`` (aborted) or ``[]`` (all invalid)
-        # take the preserve-then-bail else branch below; the helper already
-        # surfaced the reason loudly.
-        selected = plan_files
-        if selected:
-            plan_files = selected
-            console.info(f"Found {len(plan_files)} plan file(s)")
-            created_numbers, failed_files = _create_issues_from_plans(
-                provider=provider,
-                config=config,
-                plan_files=plan_files,
-                repo_root=repo_root,
-            )
-            if created_numbers:
-                stop_title_keeper()
-                offer_result = _finalize_issues(
-                    provider=provider,
-                    config=config,
-                    issue_numbers=created_numbers,
-                    ai_tool=resolved_tool,
-                    model=resolved_model,
-                    usage=usage,
-                    native_result=collected,
-                    plan_bundle=bundle,
-                    plan_files=plan_files,
-                    repo_root=repo_root,
-                    planning_worktree=planning_worktree,
-                    effort=resolved_effort,
-                    yolo=resolved_yolo,
-                    sandbox=resolved_sandbox,
-                )
-                if offer_result is PLAN_FINALIZATION_FAILED:
-                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-                    return False
-                if failed_files:
-                    # Some plans never became draft PRs (e.g. an unresolvable declared
-                    # base). Their content lives only in the planning worktree, so
-                    # preserve it instead of removing the worktree and discarding the
-                    # un-persisted plans (#376 review).
-                    console.warn(
-                        f"{len(failed_files)} plan(s) could not be persisted to a draft "
-                        f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
-                    )
-                    cleanup_succeeded = _preserve_generated_plans(
-                        plan_dir, repo_root, planning_worktree, config
-                    )
-                else:
-                    cleanup_succeeded = _cleanup_plan_dir_or_worktree(
-                        plan_dir, repo_root, planning_worktree, config
-                    )
-                if not cleanup_succeeded:
-                    # The helper has already preserved the generated plan and/or
-                    # detached vote artifact and printed its recovery location.
-                    return False
-                if isinstance(offer_result, bool):
-                    return offer_result
-                return True
-            if failed_files:
-                # Nothing was persisted, but plans were generated — preserve them so a
-                # re-run recovers the output rather than losing it with the worktree.
-                console.warn(
-                    f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
-                    f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
-                )
-                _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-                stop_title_keeper()
-                return False
-            console.warn("No issues were created from plan files.")
-        else:
-            # Strict gate rejected the batch (all invalid, or the user aborted a
-            # partial run). Preserve the generated files — the helper already
-            # surfaced the reason — so a validation miss doesn't force a full
-            # AI re-planning run.
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
-            stop_title_keeper()
-            return False
-    else:
-        console.warn("No plan files found.")
-        console.hint("The AI session may not have produced any output.")
-
-    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
-    stop_title_keeper()
-    return False
+    return _persist_accepted_plans(
+        accepted_plans=accepted_plans,
+        bundle=bundle,
+        provider=provider,
+        config=config,
+        existing_issue=existing_issue,
+        plan_dir=plan_dir,
+        repo_root=repo_root,
+        planning_worktree=planning_worktree,
+        resolved_tool=resolved_tool,
+        resolved_model=resolved_model,
+        resolved_effort=resolved_effort,
+        resolved_yolo=resolved_yolo,
+        resolved_sandbox=resolved_sandbox,
+        usage=usage,
+        collected=collected,
+    )
 
 
 def _build_lightweight_issue_body(plan: PlanFile) -> str:
@@ -1903,10 +2050,25 @@ def _preserve_generated_plans(
     first, point the user at them, and only then run the usual cleanup,
     which keeps the worktree/temp dir from lingering.
     """
-    generated = discover_plan_files(Path(plan_dir))
-    has_native_output = any(
-        (Path(plan_dir) / name).exists()
-        for name in ("native-session.json", ".native", interactive_plan.STATE)
+    path = Path(plan_dir)
+    try:
+        if path.name == "plans" and path.parent.name == ".wade":
+            names = list_state_files_strict(path.parent.parent, ("plans",))
+        else:
+            names = tuple(sorted(os.listdir(path)))
+    except (StateFileError, OSError) as exc:
+        access_denied = isinstance(exc, StateFileAccessError) or (
+            isinstance(exc, OSError) and exc.errno in {errno.EACCES, errno.EPERM}
+        )
+        logger.warning("plan.preserve_enumeration_failed", exc_info=True)
+        _retain_inaccessible_handoff(
+            plan_dir, planning_worktree, access_denied=access_denied, count=None
+        )
+        return False
+
+    generated = tuple(name for name in names if name.startswith("PLAN") and name.endswith(".md"))
+    has_native_output = bool(
+        {"native-session.json", ".native", interactive_plan.STATE}.intersection(names)
     )
     if not generated and not has_native_output:
         # Nothing to salvage — the usual cleanup can run unconditionally.
@@ -1923,7 +2085,9 @@ def _preserve_generated_plans(
         # never trade a partial salvage for the intact source — and point the
         # user at the untouched originals still sitting in ``plan_dir``.
         logger.warning("plan.preserve_generated_failed", exc_info=True)
-        _report_preserved_plans(len(generated), Path(plan_dir))
+        _retain_inaccessible_handoff(
+            plan_dir, planning_worktree, access_denied=False, count=len(generated)
+        )
         return False
 
     # Every file copied cleanly — the stable copy now stands in for the source,
@@ -1939,3 +2103,42 @@ def _report_preserved_plans(count: int, location: Path) -> None:
         "errors and re-run `wade plan` instead of regenerating from scratch."
     )
     console.hint(f"Plan files: {location}")
+
+
+def _retain_inaccessible_handoff(
+    plan_dir: str,
+    planning_worktree: Path | None,
+    *,
+    access_denied: bool = True,
+    count: int | None = None,
+) -> None:
+    """Report an intact original without cleaning an uncollected handoff."""
+
+    path = Path(plan_dir)
+    if count is None:
+        try:
+            if path.name == "plans" and path.parent.name == ".wade":
+                names = list_state_files_strict(path.parent.parent, ("plans",))
+            else:
+                names = tuple(sorted(os.listdir(path)))
+            count = sum(name.startswith("PLAN") and name.endswith(".md") for name in names)
+        except (StateFileError, OSError):
+            count = None
+
+    if count is None:
+        reason = " because filesystem access was denied" if access_denied else ""
+        console.warn(
+            "Generated plan files could not be enumerated"
+            f"{reason}; the count is unknown. The original planning output was retained."
+        )
+    else:
+        console.info(f"Retained {count} generated plan file(s) in the original planning output.")
+    console.hint(f"Plan files: {path}")
+    if planning_worktree is not None:
+        command = shlex.join(["wade", "plan", "--recover", str(planning_worktree)])
+        prefix = (
+            "After restoring filesystem access, recover with"
+            if access_denied
+            else "Recover the retained handoff with"
+        )
+        console.hint(f"{prefix}: {command}")
