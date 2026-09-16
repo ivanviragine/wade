@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.5] — 2026-09-16
+
+### Bug Fixes
+
+- launch Codex native UI with deferred prompt delivery (#514) (8424a77)
+
 ## [v1.2.4] — 2026-09-16
 
 ### Bug Fixes
