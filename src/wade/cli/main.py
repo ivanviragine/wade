@@ -246,12 +246,13 @@ def plan_cmd(
         autocompletion=complete_effort_levels,
     ),
     yolo: bool = typer.Option(
-        False, "--yolo", help="Automate WADE post-plan confirmations only; never child approvals."
+        False, "--yolo", help="Request native skip-approval mode and automate WADE confirmations."
     ),
     permission_mode: str | None = typer.Option(
         None,
         "--permission-mode",
-        help="Parent confirmations: default or yolo. Native Plan rejects auto/accept-edits.",
+        help="Native approvals: default, yolo, auto, or accept-edits where supported. "
+        "Codex is collector-only.",
     ),
     sandbox: bool | None = typer.Option(
         None,
@@ -266,7 +267,7 @@ def plan_cmd(
     approval_policy: str = typer.Option(
         "on-request",
         "--approval-policy",
-        help="Native approval policy: on-request, untrusted, or never.",
+        help="Collector-only approval policy: on-request, untrusted, or never.",
     ),
     trusted_dir: list[Path] | None = typer.Option(  # noqa: B008
         None, "--trusted-dir", help="Explicit native trusted directory; repeat as needed."
@@ -274,7 +275,7 @@ def plan_cmd(
     timeout: int | None = typer.Option(
         None,
         "--timeout",
-        help="Collection deadline: 1-3600 seconds (default: ai.plan.timeout or 600).",
+        help="Collector-only deadline: 1-3600 seconds (default: ai.plan.timeout or 600).",
     ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
@@ -286,7 +287,7 @@ def plan_cmd(
         False, "--refresh-skills", help="Explicitly replace a resumed session's frozen skills."
     ),
 ) -> None:
-    """Collect plans in the selected tool's native Plan mode."""
+    """Plan in the selected tool's native CLI (Codex retains its collector)."""
     from wade.services.plan_service import plan as do_plan
 
     success = do_plan(

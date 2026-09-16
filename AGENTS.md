@@ -92,11 +92,13 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 
 AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
 
-Native planning uses Crossby's public collected-session/preflight API, not the
-ordinary launch/autonomy path. WADE owns bundle import, parent review/validation,
-knowledge handoff and task persistence; native protocols and command-policy
-translation stay upstream. Update the tracked `uv.lock` and Crossby contract
-tripwire alongside a dependency adoption. Native plans are not transcripts.
+Native planning prefers Crossby's ordinary interactive launch with native Plan
+mode and supported approval flags. Tools without terminal Plan support (Codex)
+retain the public collected-session/preflight API. WADE owns explicit file/stdin
+handoff, review receipts bound to current content and frozen skills, validation,
+knowledge handoff, and task persistence; native flags/protocols stay upstream.
+Update the tracked `uv.lock` and Crossby contract tripwire with dependency
+adoptions. Native plans are not transcripts; never scrape tool storage to find them.
 
 CLI modules are thin dispatch — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 

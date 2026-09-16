@@ -1250,9 +1250,8 @@ def bootstrap_worktree(
         worktree_path, guard_type="plan" if plan_mode else "worktree", sandbox=sandbox
     )
 
-    # Native planning returns an artifact before the parent can import files.
-    # A file-existence Stop nudge would demand output that cannot exist yet;
-    # the parent collection/validation gates now enforce planning completion.
+    # Planning uses explicit handoff or collection gates. A file-existence Stop
+    # nudge cannot establish a current review or an authoritative native artifact.
     if not plan_mode:
         _install_stop_hook(worktree_path)
 

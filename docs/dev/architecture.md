@@ -81,6 +81,7 @@ src/wade/
 │   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
 │   ├── native_plan_service.py # Public collected-session boundary and safe artifact import
+│   ├── interactive_plan_service.py # Explicit native-terminal import/review/completion state
 │   ├── review_service.py           # PR review session lifecycle
 │   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
@@ -191,73 +192,65 @@ Wade still owns a thin `services/ai_resolution.py` rather than delegating outrig
 
 Adding support for a new AI tool means contributing an adapter to crossby, not to this repo — see `docs/dev/extending.md`.
 
-### Native planning collection
+### Native planning and handoff
 
-`plan_service.plan()` resolves the final confirmed selection, builds the public
-`PlanSessionRequest`, then calls `preflight_plan_session()` before worktree or
-provider mutations. Crossby owns complete-session/version/command-policy
-validation, protocol binding and process cleanup. Preflight explicitly defers
-filesystem, authentication, model availability, protocol and artifact checks.
-The runner submits one raw managed prompt via `run_plan_session()`; it never uses
-ordinary launch autonomy flags or positional `/plan` activation.
+`plan_service.plan()` resolves the final confirmed selection before worktree or
+provider mutations. An adapter advertising `supports_plan_mode` uses ordinary
+`launch(plan_mode=True)` after `validate_plan_mode_request()`. Crossby owns
+native flags, version gates, and approval compatibility. WADE forwards the
+requested autonomy tier without downgrading unsupported Plan combinations.
+Claude, Cursor, Copilot, OpenCode, and Antigravity CLI currently use this path.
+Questions and the full terminal UI remain native. Explicit unsupported sandbox,
+network, trusted-directory, timeout, or transport settings fail before launch.
+The default sandbox is off, as for ordinary interactive launches.
 
-`native_plan_service` consumes public metadata, routes `plan_output_dir` only to
-requested-path collectors, and supplies the required `PlanCommandPolicy`
-(`wade *` plus configured canonical patterns). Unknown/unsupported requests fail
-closed; no per-tool version/flag table or native wire parser lives in WADE.
-Native terminal collectors receive Crossby's explicit terminal handler identity
-only on a TTY. Callback collectors use a thin bridge preserving native IDs,
-multi-select, free text, denial and cancellation; non-TTY supplies no handler.
-Plan approval is never an implementation grant.
+`interactive_plan_service` owns a WADE handoff ID, frozen-session digest, optional
+bundle, completion state, and review receipts under `.wade/plans/`. The native
+planner supplies an explicit file or stdin artifact through `plan-session done`;
+WADE never scans tool storage or parses terminal output for a plan. Native source
+files remain untouched. For public `REQUESTED_PATH` support, native launch uses
+`.wade/plans/native/` so artifact writes remain inside the planning guards. Other
+tools retain their own native storage and can submit explicit stdin content.
+Imports use bounded, no-follow writes and can replace
+only files owned by this handoff. Revisions invalidate completion; review receipts
+match exact plan content, the frozen bundle, and this run. `review plan` records
+successful delegated review, or a pending self-review requiring the explicit
+`--ack-self-review` command after the method has been performed. A new failed
+review cannot reuse a previous success. `done` requires strict validation, current
+reviews (unless explicitly disabled), and the knowledge handoff when enabled.
+After native exit the parent verifies the completed state and files again.
+Nonzero exits and absent/stale handoffs retain output without creating tasks.
+Native terminal output can supply adapter-parsed usage; the WADE handoff ID is
+never presented as a native CLI session ID.
 
-The public result is persisted privately as `.wade/plans/native-session.json`;
-its exact provenance (excluding the plan text) is attached to task accounting.
-There is no transcript/usage result: report unavailable telemetry, not zero usage
-or a plan masquerading as a transcript. Native source files are recovery evidence,
-never additional tasks. Only `result.plan` is imported, through exclusive,
-no-follow writes under `.wade/plans/`. Review revalidation reads without following
-symlinks. Unsupported safe-I/O platforms fail closed.
+Tools without terminal Plan support, currently Codex, retain the public
+`PlanSessionRequest` → `preflight_plan_session()` → `run_plan_session()` flow.
+`native_plan_service` consumes Crossby's complete-session metadata, required
+`PlanCommandPolicy` (`wade *` plus configured patterns), and supported path policy.
+No per-tool flag/version table or wire parser lives in WADE. Callback collection
+preserves native question IDs, multi-select, free text, denial, and cancellation;
+non-TTY supplies no handler. Parent YOLO never answers a native question or grants
+permission. This path defaults to sandbox on, preserves explicit confinement,
+and uses independent approval/network/trusted-directory/timeout requirements.
+Its raw result and provenance are retained in `native-session.json`; only the
+returned artifact becomes tasks. Transcript and usage remain unavailable when
+the public collector does not return them. Required review still runs in the
+parent for this path, with explicit acknowledgement for prompt-mode self-review.
 
-`models/plan_bundle.py` defines the explicit versioned multi-plan envelope; the
-workflow's output reference specifies filenames, titles, complexity, dependencies,
-and knowledge votes. Duplicate/case-colliding names, traversal, malformed members,
-unknown edges and cycles fail before provider writes. A mixed-validity subset
-requires human consent even under YOLO, and must retain its prerequisites.
-Dependencies are mapped to the created IDs deterministically, not rediscovered
-by another model.
+Both paths share `models/plan_bundle.py` and the workflow output contract.
+Duplicate/case-colliding names, traversal, malformed members, unknown edges, and
+cycles fail before provider writes. Multiple tasks require an explicit envelope;
+Markdown headings never infer boundaries. A mixed-validity subset needs human
+consent even under YOLO and must retain prerequisites. Dependencies map to task
+IDs deterministically. The parent owns strict revalidation, knowledge vote
+staging/flushing, persistence, supersession, cleanup, and the separate explicit
+implementation offer. Failures preserve recovery files.
 
-After import the parent runs the frozen REVIEW binding, strict validation, and
-validated knowledge-rating staging before issue/draft-PR persistence. Prompt
-review needs actual self-review and acknowledgement; noninteractive prompt mode
-cannot satisfy it. Failed review/import/runtime output is retained for recovery,
-never reported as successful collection. Existing vote flushing, cleanup,
-supersession, session IDs, and explicit post-plan implementation handoff remain
-parent-owned. The file-based plan Stop nudge is not installed: imported files
-cannot exist before collection finishes.
-
-Native planning resolves sandbox (unset defaults to the collector's safe
-posture), explicit network, approval, trusted directories and
-timeout separately. Explicit confinement requires preserved sandbox support;
-tool-managed behavior is not a confinement promise. Parent YOLO is independent;
-auto/accept-edits and `ai.plan.mode` transport overrides are rejected. Model and
-effort requests are never silently downgraded to pass validation. Ordinary
-implementation, PR-comment and delegation launches retain their autonomy/network
-behavior below.
-
-An unset network flag forwards Crossby's default false (no additional grant),
-not a universal isolation promise. Explicit false additionally requires public
-network control and a sandboxed profile; the adopted contract offers no network
-confinement in an unrestricted profile. Unsupported restrictions fail before
-worktree mutation, rather than being silently reduced to an absent opt-in.
-
-Planning did not expose scene selection before this migration and still does
-not. The collector inherits the process environment, including scoped fallback
-`WADE_PLAN_DIR`; copied project files and bootstrap setup remain available. A
-required scoped scene/environment override needs an upstream public facility,
-not invented request fields. Ambient settings/hooks need not survive collectors
-that exclude them to enforce command policy (notably Claude). Frozen workflow
-loading is in the managed prompt and required completion gates are parent-side,
-not contingent on those hooks.
+Planning inherits the process environment and scoped fallback `WADE_PLAN_DIR`.
+It does not expose scenes. Frozen workflow loading is in the managed prompt.
+The legacy file-presence Stop nudge is not installed; correctness depends on the
+completion and parent gates, not ambient hooks. Collected transports may exclude
+ambient settings; native terminals use their ordinary launch behavior.
 
 ## Hook Guard Layer
 
@@ -1280,9 +1273,9 @@ exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 The tier values `wade init` writes are **not wade constants** — `init_service/config_io.py::_resolve_models()` seeds them from `crossby.config.defaults.get_defaults(tool)`, so **bumping the crossby pin changes what newly initialized projects get**. The example above shows crossby's `claude` defaults at the currently pinned version; run `get_defaults()` for the authoritative set rather than trusting a doc snapshot, and re-check this block on every crossby bump. A bump does **not** rewrite tiers an existing `.wade.yml` already sets: `wade update` re-resolves the defaults and calls `_patch_config` without `force`, which backfills only *absent* tiers. So a fresh `wade init` picks up the new defaults wholesale, while an existing project changes only where it left a tier unset.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for ordinary launches. Native planning instead defaults to its collector's safe posture and preserves explicit sandbox requirements. Network access is unconditionally on for ordinary launches; native planning exposes an independent default-off request — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for ordinary launches. Native terminal planning uses that same default; Codex collection keeps its safe posture. Both preserve explicit sandbox requirements. Network access is unconditionally on for ordinary non-plan launches; planning exposes an independent default-off request — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
 
-**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. Native planning still follows the `plan_service` → `run_plan_session` flow, but `wade plan` supports only the parent-side `default` and `yolo` permission modes; it rejects `auto` and `accept-edits` before collection and never forwards an editing autonomy flag to the native planner. Ordinary invalid autonomy configuration warns and falls back to `default`. Every ordinary launch command (`implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
+**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a tool without native auto support can downgrade to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. Native terminal planning forwards the requested tier through Crossby's Plan-mode validator and ordinary launch; unsupported combinations fail instead of downgrading. Codex retains `run_plan_session`, with parent-only `default`/`yolo` and separate native approval policy. Ordinary invalid autonomy configuration warns and falls back to `default`. Every ordinary launch command (`implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
@@ -1431,9 +1424,9 @@ Each AI tool adapter must implement the abstract method `capabilities()` (binary
 
 **Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
-## Planning Lifecycle (collected-session contract)
+## Planning Lifecycle (validated plan handoff)
 
-The native collection boundary above supplies validated, reviewed `PlanFile`
+The planning boundaries above supply validated, reviewed `PlanFile`
 members to the existing task lifecycle. The agent authors content; deterministic
 services decide what becomes a task. Collection/import/review errors and
 noninteractive mixed-validity subsets create no tasks.

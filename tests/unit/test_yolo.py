@@ -133,11 +133,11 @@ class TestAdapterYoloArgs:
         result = CursorAdapter().yolo_args()
         assert result == ["--force"]
 
-    def test_opencode_yolo_args_empty(self) -> None:
+    def test_opencode_yolo_uses_native_auto_flag(self) -> None:
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
         result = OpenCodeAdapter().yolo_args()
-        assert result == []
+        assert result == ["--auto"]
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +171,10 @@ class TestAdapterSupportsYolo:
 
         assert CursorAdapter().capabilities().supports_yolo is True
 
-    def test_opencode_does_not_support_yolo(self) -> None:
+    def test_opencode_supports_yolo(self) -> None:
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
-        assert OpenCodeAdapter().capabilities().supports_yolo is False
+        assert OpenCodeAdapter().capabilities().supports_yolo is True
 
 
 # ---------------------------------------------------------------------------
@@ -225,19 +225,20 @@ class TestBuildLaunchCommandYolo:
         assert "--dangerously-skip-permissions" not in cmd
 
     def test_yolo_cannot_displace_plan_mode(self) -> None:
-        """Even the legacy launch API rejects conflicting planning authority."""
-        from crossby.ai_tools import PlanModeConflictError
+        """The published adapter preserves Plan while allowing native bypass."""
         from crossby.ai_tools.claude import ClaudeAdapter
 
-        with pytest.raises(PlanModeConflictError):
-            ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
+        command = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
+        assert command[command.index("--permission-mode") + 1] == "plan"
+        assert "--allow-dangerously-skip-permissions" in command
+        assert "--dangerously-skip-permissions" not in command
 
-    def test_unsupported_yolo_does_not_silently_fall_back(self) -> None:
+    def test_unsupported_plan_auto_does_not_silently_fall_back(self) -> None:
         from crossby.ai_tools import PlanModeConflictError
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
         with pytest.raises(PlanModeConflictError):
-            OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
+            OpenCodeAdapter().build_launch_command(plan_mode=True, auto=True)
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +398,7 @@ class TestConfirmPermissionMode:
         assert "Change permission mode" in menu_items_seen[0]
 
     def test_menu_excludes_permission_mode_for_unsupported_tool(self) -> None:
-        """OpenCode supports no autonomy tier → no permission-mode option."""
+        """A GUI launcher without autonomy tiers has no permission-mode option."""
         from wade.services.ai_resolution import confirm_ai_selection
 
         menu_items_seen: list[list[str]] = []
@@ -409,11 +410,11 @@ class TestConfirmPermissionMode:
         with (
             patch(_IS_TTY, return_value=True),
             patch(_SELECT, side_effect=fake_select),
-            patch(_DETECT, return_value=_make_installed("opencode")),
+            patch(_DETECT, return_value=_make_installed("vscode")),
             patch(_CONSOLE_KV),
         ):
             confirm_ai_selection(
-                "opencode",
+                "vscode",
                 None,
                 tool_explicit=False,
                 model_explicit=False,

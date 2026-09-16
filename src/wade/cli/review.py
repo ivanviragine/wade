@@ -90,6 +90,9 @@ def review_plan_cmd(
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="Review methodology skill ref. Repeat for an ordered binding."
     ),
+    ack_self_review: bool = typer.Option(
+        False, "--ack-self-review", help="Record completion of the emitted plan self-review."
+    ),
 ) -> None:
     """Review a plan file."""
     from wade.services.review_delegation_service import review_plan
@@ -108,11 +111,16 @@ def review_plan_cmd(
         permission_mode_explicit=permission_mode is not None,
         sandbox=sandbox,
         skills=skill,
+        ack_self_review=ack_self_review,
     )
     _finalize_review_result(
         result,
         "REVIEW COMPLETE — address any actionable feedback above, "
         "then proceed to wade plan-session done.",
+        self_review_followup=(
+            f"In a managed interactive planning session, acknowledge with "
+            f"wade review plan {plan_file} --ack-self-review."
+        ),
     )
 
 

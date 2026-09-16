@@ -539,6 +539,7 @@ def review_plan(
     sandbox: bool | None = None,
     skills: list[str] | None = None,
     project_root: Path | None = None,
+    ack_self_review: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
     config, cmd_config = _load_review_config("review_plan", project_root)
@@ -547,6 +548,22 @@ def review_plan(
         return skip
 
     plan_path = Path(plan_file)
+    from wade.services import interactive_plan_service as interactive_plan
+
+    if ack_self_review:
+        try:
+            interactive_plan.acknowledge_self_review(plan_path)
+        except (ValueError, OSError) as exc:
+            console.error(str(exc))
+            return DelegationResult(
+                success=False, feedback=str(exc), mode=DelegationMode.PROMPT, exit_code=1
+            )
+        return DelegationResult(
+            success=True,
+            feedback="Plan self-review recorded",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
     if not plan_path.is_file():
         console.error(f"Plan file not found: {plan_file}")
         return DelegationResult(
@@ -556,7 +573,19 @@ def review_plan(
             exit_code=1,
         )
 
-    plan_content = plan_path.read_text(encoding="utf-8")
+    try:
+        # Managed plans must be safe before their contents reach a reviewer.
+        interactive_plan.invalidate_review(plan_path)
+        plan_content = (
+            interactive_plan.read_artifact(plan_path)
+            if interactive_plan.review_root(plan_path) is not None
+            else plan_path.read_text(encoding="utf-8")
+        )
+    except (ValueError, OSError) as exc:
+        console.error(str(exc), markup=False)
+        return DelegationResult(
+            success=False, feedback=str(exc), mode=DelegationMode.PROMPT, exit_code=1
+        )
     # A PLAN_DIR_ONLY session is not a git worktree, but it still owns a frozen
     # session manifest beside the plan. Walk upward from the reviewed file so a
     # mapped plan-review uses that exact REVIEW binding instead of silently
@@ -610,7 +639,7 @@ def review_plan(
             relaunch_operand=plan_file,
             relaunch_skills=skills,
         )
-    except SkillInvocationError as exc:
+    except (SkillInvocationError, ValueError, OSError) as exc:
         console.error(str(exc))
         return DelegationResult(
             success=False,
@@ -619,6 +648,14 @@ def review_plan(
             exit_code=1,
         )
     cleanup_delegation_bundle(prepared, preserve=not result.success)
+    if result.success and not result.skipped:
+        try:
+            interactive_plan.record_review(
+                plan_path, plan_content, self_review=result.mode is DelegationMode.PROMPT
+            )
+        except (ValueError, OSError) as exc:
+            console.error(str(exc))
+            return result.model_copy(update={"success": False, "exit_code": 1})
     return result
 
 

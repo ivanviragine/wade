@@ -30,7 +30,7 @@ def _skill(root: Path, relative: str, name: str) -> Path:
 
 
 def test_crossby_version_and_skill_root_mapping_contract() -> None:
-    assert version("crossby") == "0.32.0"
+    assert version("crossby") == "0.32.1"
     assert SKILLS_DIR == {
         AIToolID.CLAUDE: ".claude/skills",
         AIToolID.CURSOR: ".cursor/skills",

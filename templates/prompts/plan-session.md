@@ -10,8 +10,11 @@ workflow, the workflow wins.
 Inspect source at `{source_root}` (read-only reference if outside the planning
 workspace; this does not grant additional write access).
 
-Plan the requested feature in the harness's native Plan mode. Return one native
-Markdown artifact using `{session_bundle}/reference/plan-output-contract.md`.
-The trusted parent process imports its members under `{plan_dir}`, runs the fixed
-review and validation, and creates the issue(s) and draft PR(s). Do not write WADE
-plan files, create tasks, approve implementation, or run completion commands.
+Plan in the tool's native Plan mode using
+`{session_bundle}/reference/plan-output-contract.md`. When
+`{plan_dir}/interactive-session.json` exists, submit the reviewed plan through
+`wade plan-session done {plan_dir} --from-file <native-plan-file>` or
+`--from-stdin`. WADE writes its own plan files; use its review commands and revise
+before completing and exiting the native CLI. Otherwise return one native
+artifact for collection. The trusted parent process creates issues and draft
+PRs only after validation. Never approve implementation or create tasks here.

@@ -90,6 +90,41 @@ def _disable_plan_review(repo: Path) -> None:
 class TestPlanCommand:
     """Test `wade plan` deterministic workflow using mocked gh + fake AI."""
 
+    def test_native_cli_submits_plan_through_real_completion_command(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        _init_origin_remote(e2e_repo)
+        _disable_plan_review(e2e_repo)
+        binary = mock_gh_cli["mock_bin"] / "opencode"
+        binary.write_text(
+            """#!/usr/bin/env python3
+import subprocess
+import sys
+if "--version" in sys.argv:
+    print("1.18.29")
+    sys.exit(0)
+assert "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "plan"
+assert "--auto" in sys.argv
+assert "run" not in sys.argv and "serve" not in sys.argv
+assert "WORKFLOW.md" in sys.argv[sys.argv.index("--prompt") + 1]
+plan = "# fix: native CLI handoff\\n\\n## Complexity\\neasy\\n\\n## Tasks\\n- Test it.\\n"
+result = subprocess.run(
+    [sys.executable, "-m", "wade", "plan-session", "done", ".wade/plans", "--from-stdin"],
+    input=plan, text=True, capture_output=True,
+)
+print(result.stdout)
+print(result.stderr, file=sys.stderr)
+sys.exit(result.returncode)
+"""
+        )
+        binary.chmod(0o755)
+        result = _run(["plan", "--ai", "opencode", "--yolo"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert len(state["issues"]) == 1
+        assert state["issues"]["1"]["title"] == "fix: native CLI handoff"
+        assert len(state["prs"]) == 1
+
     def test_plan_creates_issue_and_draft_pr_from_generated_plan(
         self,
         e2e_repo: Path,
@@ -190,16 +225,20 @@ class TestPlanCommand:
         assert state["prs"] == before["prs"]
         assert "Plan files:" in result.stdout + result.stderr
 
-    def test_native_terminal_collection_requires_actual_input(
+    def test_native_terminal_failure_retains_output_without_persisting_tasks(
         self, e2e_repo: Path, mock_gh_cli: MockGhCli
     ) -> None:
         binary = mock_gh_cli["mock_bin"] / "claude"
         binary.write_text('#!/bin/sh\n[ "$1" = "--version" ] || exit 9\necho "2.1.263"\n')
         binary.chmod(0o755)
+        before = json.loads(mock_gh_cli["state_file"].read_text())
         result = _run(["plan", "--ai", "claude", "--model", "claude-sonnet-4.6"], cwd=e2e_repo)
         assert result.returncode == 1
-        assert "attached terminal" in " ".join(result.stderr.split())
-        assert not (e2e_repo.parent / ".worktrees").exists()
+        assert "Native planning CLI exited with code 9" in " ".join(result.stderr.split())
+        assert (e2e_repo.parent / ".worktrees").exists()
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["issues"] == before["issues"]
+        assert state["prs"] == before["prs"]
 
     def test_explicit_no_network_cannot_be_ignored_by_unrestricted_collection(
         self, e2e_repo: Path, mock_gh_cli: MockGhCli

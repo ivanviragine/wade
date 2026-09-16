@@ -985,6 +985,7 @@ class TestNetworkAccessRetirement:
                 if path.name in {"main.py", "plan_service.py"} and stripped in {
                     "network_access=network_access,",
                     "network_access=network_access is True,",
+                    "network_access=request.network_access,",
                 }:
                     # Complete planning requests preserve the explicit independent policy.
                     continue

@@ -1,7 +1,8 @@
 """Plan service — AI-assisted planning session orchestration.
 
-Preflight and collect through Crossby's public native session API, then import,
-review, validate and persist authoritative plans from the parent.
+Launch native planning terminals with an explicit reviewed handoff; preserve
+Crossby's collected-session path for tools without native terminal Plan support.
+The parent validates and persists accepted plans.
 """
 
 from __future__ import annotations
@@ -22,9 +23,11 @@ from crossby.ai_tools import (
     preflight_plan_session,
     terminal_interaction_handler,
 )
+from crossby.ai_tools.plan_mode import PlanModeLaunchError
 from crossby.models.ai import (
     EffortLevel,
     PlanApprovalPolicy,
+    PlanArtifactLocation,
     PlanInteraction,
     PlanInteractionOutcome,
     PlanInteractionResponse,
@@ -35,14 +38,15 @@ from crossby.models.ai import (
 )
 
 from wade.config.loader import load_config
-from wade.models.config import ProjectConfig
+from wade.models.config import ProjectConfig, with_wade_base_pattern
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
-from wade.models.permission import PermissionMode
+from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import interactive_plan_service as interactive_plan
 from wade.services import native_plan_service as native_plan
 from wade.services.ai_resolution import (
     announce_inherited_sandbox,
@@ -359,6 +363,63 @@ def run_ai_planning_session(
     return result
 
 
+def run_interactive_planning_session(
+    ai_tool: str,
+    plan_dir: str,
+    *,
+    request: PlanSessionRequest,
+    permission_mode: PermissionMode,
+    config: ProjectConfig,
+    issue_context: str | None,
+    session_bundle: str,
+    source_root: str,
+) -> tuple[PlanBundle, TokenUsage | None]:
+    """Leave questions and review inside the native terminal; collect an explicit handoff."""
+    prompt = render_plan_prompt(plan_dir, issue_context, session_bundle, source_root)
+    if not exclusive_write_state_file(request.working_dir, ("plans",), "prompt.txt", prompt):
+        raise ValueError("Cannot safely save the interactive planning prompt")
+    interactive_plan.begin(
+        request.working_dir,
+        ai_tool,
+        review_required=config.ai.review_plan.enabled is not False,
+        knowledge_required=config.knowledge.enabled,
+    )
+    console.panel("\n".join(prompt.splitlines()[:5]) + "\n…", title="Planning Prompt (preview)")
+    console.info(f"Plan directory: {plan_dir}")
+    adapter = AbstractAITool.get(ai_tool)
+    transcript = request.working_dir / ".wade/plans/terminal.log"
+    if not exclusive_write_state_file(request.working_dir, ("plans",), "terminal.log", ""):
+        raise ValueError("Cannot safely create the native terminal transcript")
+    native_dir = (
+        request.working_dir / ".wade/plans/native"
+        if adapter.capabilities().plan_mode.artifact_location is PlanArtifactLocation.REQUESTED_PATH
+        else None
+    )
+    if native_dir is not None and not exclusive_write_state_file(
+        request.working_dir, ("plans", "native"), ".wade-owned", ""
+    ):
+        raise ValueError("Cannot safely create the native plan directory")
+    exit_code = adapter.launch(
+        request.working_dir,
+        model=request.model,
+        effort=request.effort,
+        prompt=prompt,
+        plan_mode=True,
+        plan_output_dir=native_dir,
+        transcript_path=transcript,
+        trusted_dirs=[str(path) for path in request.trusted_dirs] or None,
+        allowed_commands=with_wade_base_pattern(config.permissions.allowed_commands),
+        sandbox=request.sandbox,
+        network_access=request.network_access,
+        **permission_mode_launch_kwargs(permission_mode),
+    )
+    if exit_code != 0:
+        raise ValueError(f"Native planning CLI exited with code {exit_code}; output was retained")
+    bundle = interactive_plan.collect(request.working_dir)
+    usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
+    return bundle, usage
+
+
 # ---------------------------------------------------------------------------
 # Post-session processing
 # ---------------------------------------------------------------------------
@@ -393,7 +454,7 @@ def plan(
 ) -> bool:
     """Run an AI-assisted planning session.
 
-    Crossby returns the native Markdown artifact. WADE imports and gates its
+    A native terminal hands off reviewed files, or Crossby collects the artifact. WADE gates its
     members before creating issues and draft PRs.
 
     When ``issue_id`` is provided the session is pre-loaded with that issue's
@@ -420,16 +481,10 @@ def plan(
     except ValueError:
         console.error("Invalid planning effort or permission mode; no session was started.")
         return False
-    if config.ai.plan.mode is not None:
-        console.error(
-            "ai.plan.mode cannot select a native collector transport; remove this override."
-        )
-        return False
-
     # Resolve autonomy / permission mode (yolo is a back-compat alias)
     resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
 
-    # Native planning defaults to the collector's safe posture. Explicit CLI/
+    # Resolve explicit sandbox policy first; the selected transport supplies its default. CLI/
     # project requirements still win; ordinary non-plan launch defaults do not change.
     sandbox_requirement = next(
         (
@@ -439,7 +494,6 @@ def plan(
         ),
         None,
     )
-    resolved_sandbox = sandbox_requirement if sandbox_requirement is not None else True
 
     console.rule("wade plan")
 
@@ -455,7 +509,7 @@ def plan(
         permission_mode_explicit=(
             permission_mode_explicit or permission_mode is not None or yolo is not None
         ),
-        sandbox=resolved_sandbox,
+        sandbox=sandbox_requirement,
         native_plan=True,
     )
     resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
@@ -463,50 +517,94 @@ def plan(
         console.error("No AI tool selected.")
         return False
 
-    if resolved_permission_mode not in {PermissionMode.DEFAULT, PermissionMode.YOLO}:
-        console.error(
-            "Native Plan mode cannot apply auto or accept-edits. Use default or parent-only yolo."
-        )
-        return False
     try:
-        request = native_plan.prepare_request(
-            resolved_tool,
-            PlanSessionRequest(
-                prompt="WADE native planning preflight",
-                working_dir=(project_root or Path.cwd()).resolve(),
-                model=resolved_model,
-                effort=resolved_effort,
-                sandbox=resolved_sandbox,
-                network_access=network_access is True,
-                approval_policy=PlanApprovalPolicy(approval_policy),
-                trusted_dirs=tuple(path.resolve() for path in (trusted_dirs or ())),
-                timeout_seconds=timeout
-                if timeout is not None
-                else (config.ai.plan.timeout if config.ai.plan.timeout is not None else 600),
-            ),
-            allowed_commands=config.permissions.allowed_commands,
-            confinement_required=sandbox_requirement is True,
-            network_restriction_required=network_access is False,
+        adapter = AbstractAITool.get(resolved_tool)
+        interactive = adapter.capabilities().supports_plan_mode
+        resolved_sandbox = (
+            sandbox_requirement if sandbox_requirement is not None else not interactive
         )
-        checked = preflight_plan_session(resolved_tool, request)
-        if (
-            checked.capability.interaction is PlanInteractionSupport.TERMINAL
-            and not prompts.is_tty()
-        ):
-            raise ValueError(
-                "This native collector needs an attached terminal. Run wade plan interactively "
-                "or select a collector with callback interaction."
+        request = PlanSessionRequest(
+            prompt="WADE native planning preflight",
+            working_dir=(project_root or Path.cwd()).resolve(),
+            model=resolved_model,
+            effort=resolved_effort,
+            sandbox=resolved_sandbox,
+            network_access=network_access is True,
+            approval_policy=PlanApprovalPolicy(approval_policy),
+            trusted_dirs=tuple(path.resolve() for path in (trusted_dirs or ())),
+            timeout_seconds=timeout
+            if timeout is not None
+            else (config.ai.plan.timeout if config.ai.plan.timeout is not None else 600),
+        )
+        if interactive:
+            if config.ai.plan.mode not in {None, "interactive"}:
+                raise ValueError(
+                    "Native terminal planning requires ai.plan.mode: interactive or unset"
+                )
+            if approval_policy != "on-request":
+                raise ValueError(
+                    "Use --permission-mode for native terminals; "
+                    "--approval-policy is collector-only"
+                )
+            if timeout is not None or config.ai.plan.timeout is not None:
+                raise ValueError(
+                    "--timeout/ai.plan.timeout applies to collection, not an interactive terminal"
+                )
+            caps = adapter.capabilities()
+            if sandbox_requirement is True and not caps.supports_sandbox_toggle:
+                raise ValueError(f"{resolved_tool} cannot guarantee explicit sandbox confinement")
+            if network_access is not None and not caps.supports_network_access:
+                raise ValueError(
+                    f"{resolved_tool} cannot apply an explicit network restriction or grant"
+                )
+            if trusted_dirs and not caps.supports_trusted_dirs:
+                raise ValueError(f"{resolved_tool} cannot apply explicit trusted directories")
+            adapter.validate_plan_mode_request(
+                plan_mode=True,
+                initial_message=request.prompt,
+                working_dir=request.working_dir,
+                plan_output_dir=(
+                    request.working_dir / ".wade/plans/native"
+                    if caps.plan_mode.artifact_location is PlanArtifactLocation.REQUESTED_PATH
+                    else None
+                ),
+                **permission_mode_launch_kwargs(resolved_permission_mode),
             )
-    except (PlanSessionError, ValueError, OSError) as exc:
+            console.info(f"Native terminal Plan preflight passed: {resolved_tool}")
+        else:
+            if config.ai.plan.mode is not None:
+                raise ValueError(
+                    "ai.plan.mode cannot select a native collector transport; remove this override"
+                )
+            if resolved_permission_mode not in {PermissionMode.DEFAULT, PermissionMode.YOLO}:
+                raise ValueError(
+                    "This collector cannot apply auto or accept-edits; "
+                    "use default or parent-only yolo"
+                )
+            request = native_plan.prepare_request(
+                resolved_tool,
+                request,
+                allowed_commands=config.permissions.allowed_commands,
+                confinement_required=sandbox_requirement is True,
+                network_restriction_required=network_access is False,
+            )
+            checked = preflight_plan_session(resolved_tool, request)
+            if (
+                checked.capability.interaction is PlanInteractionSupport.TERMINAL
+                and not prompts.is_tty()
+            ):
+                raise ValueError(
+                    "This native collector needs an attached terminal; run wade plan interactively"
+                )
+            console.info(
+                f"Native plan preflight passed: {resolved_tool} {checked.detected_version}"
+            )
+    except (PlanSessionError, PlanModeLaunchError, ValueError, OSError) as exc:
         console.error(
             f"Planning preflight failed: {native_plan.failure_message(exc)}", markup=False
         )
         return False
-    console.info(f"Native plan preflight passed: {resolved_tool} {checked.detected_version}")
-    console.hint(
-        "Model availability, authentication, protocol, and artifact collection "
-        "remain runtime checks."
-    )
+    console.hint("Model availability, authentication, and plan handoff remain runtime checks.")
 
     # Pre-load existing issue context when issue_id is supplied
     existing_issue: Task | None = None
@@ -564,6 +662,7 @@ def plan(
                 repo_root,
                 skills=support_skills_for_session(SessionKind.PLAN),
                 plan_mode=True,
+                selected_ai_tool=resolved_tool,
                 session_phase=SessionPhase.PLAN,
                 session_kind=SessionKind.PLAN,
                 task_id=existing_issue.id if existing_issue else None,
@@ -658,25 +757,41 @@ def plan(
                 review_skills=review_skills,
             ),
         )
+    collected: PlanSessionResult | None = None
+    usage: TokenUsage | None = None
     try:
-        request = native_plan.prepare_request(
-            resolved_tool,
-            request.model_copy(update={"working_dir": session_cwd}),
-            allowed_commands=config.permissions.allowed_commands,
-            confinement_required=sandbox_requirement is True,
-            network_restriction_required=network_access is False,
-        )
+        request = request.model_copy(update={"working_dir": session_cwd})
         with _plan_dir_fallback_env(plan_dir, planning_worktree):
-            collected = run_ai_planning_session(
-                ai_tool=resolved_tool,
-                plan_dir=plan_dir,
-                request=request,
-                issue_context=issue_context,
-                session_bundle=session_bundle,
-                source_root=str(planning_worktree or repo_root or cwd),
-            )
-        native_plan.save_artifact(session_cwd, collected)
-        bundle = native_plan.parse_artifact(collected.plan)
+            if interactive:
+                bundle, usage = run_interactive_planning_session(
+                    ai_tool=resolved_tool,
+                    plan_dir=plan_dir,
+                    request=request,
+                    permission_mode=resolved_permission_mode,
+                    config=config,
+                    issue_context=issue_context,
+                    session_bundle=session_bundle,
+                    source_root=str(planning_worktree or repo_root or cwd),
+                )
+            else:
+                request = native_plan.prepare_request(
+                    resolved_tool,
+                    request,
+                    allowed_commands=config.permissions.allowed_commands,
+                    confinement_required=sandbox_requirement is True,
+                    network_restriction_required=network_access is False,
+                )
+                collected = run_ai_planning_session(
+                    ai_tool=resolved_tool,
+                    plan_dir=plan_dir,
+                    request=request,
+                    issue_context=issue_context,
+                    session_bundle=session_bundle,
+                    source_root=str(planning_worktree or repo_root or cwd),
+                )
+                native_plan.save_artifact(session_cwd, collected)
+                bundle = native_plan.parse_artifact(collected.plan)
+                native_plan.materialize(session_cwd, bundle)
         if bundle.knowledge_votes and (not config.knowledge.enabled or planning_worktree is None):
             raise ValueError("Knowledge votes require an enabled, managed planning worktree")
         if (
@@ -687,7 +802,6 @@ def plan(
             raise ValueError(
                 "Knowledge-enabled planning requires the bundle's explicit knowledge_votes handoff"
             )
-        native_plan.materialize(session_cwd, bundle)
         accepted_plans = _select_valid_plans(
             Path(plan_dir), validate_plan_files(Path(plan_dir)), yolo=resolved_yolo
         )
@@ -696,7 +810,7 @@ def plan(
             stop_title_keeper()
             return False
         names = native_plan.validate_selection(bundle, accepted_plans)
-        if not native_plan.review_materialized_plans(
+        if not interactive and not native_plan.review_materialized_plans(
             [plan.path for plan in accepted_plans], project_root or Path.cwd(), yolo=resolved_yolo
         ):
             _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
@@ -732,9 +846,10 @@ def plan(
                 record_rating_for_session(
                     planning_worktree, config.knowledge, vote.entry_id, vote.direction
                 )
-        console.info(
-            "Native session collected; transcript and token usage are unavailable from Crossby."
-        )
+        if not interactive:
+            console.info(
+                "Native session collected; transcript and token usage are unavailable from Crossby."
+            )
         # No provider mutation occurs until collection, validation, and required review succeed.
         ensure_task_label(provider, config.project.issue_label)
     except (Exception, KeyboardInterrupt) as exc:
@@ -749,7 +864,6 @@ def plan(
         _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
         stop_title_keeper()
         return False
-    usage = None
 
     # Existing issue — attach the plan to it, or supersede it if the session
     # decided the work should be split into multiple issues.

@@ -839,6 +839,97 @@ class TestPlanDone:
 
 
 class TestPlanOrchestrator:
+    @pytest.mark.parametrize("tool", ["claude", "cursor", "copilot", "opencode", "antigravity-cli"])
+    def test_native_terminal_launch_hands_off_through_done(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        tool: str,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        config.ai.default_tool = tool
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        def run(argv: list[str], *_args: object, **kwargs: object) -> int:
+            assert kwargs["cwd"] == root
+            assert "plan" in argv or "--plan" in argv
+            assert "app-server" not in argv and "--print" not in argv
+            if tool == "claude":
+                import json
+
+                settings = json.loads(argv[argv.index("--settings") + 1])
+                assert settings["plansDirectory"] == "./.wade/plans/native"
+            interactive.import_artifact(root, "# fix: native terminal\n\n## Complexity\neasy\n")
+            interactive.complete(root)
+            return 0
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run) as launch,
+        ):
+            assert plan(project_root=tmp_path, permission_mode="yolo")
+        launch.assert_called_once()
+        collect.assert_not_called()
+        provider.create_task.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("tool", "kwargs"),
+        [
+            ("claude", {"permission_mode": "accept-edits"}),
+            ("copilot", {"permission_mode": "auto"}),
+            ("opencode", {"sandbox": True}),
+            ("cursor", {"network_access": False}),
+            ("opencode", {"trusted_dirs": [Path("/tmp")]}),
+            ("antigravity-cli", {"timeout": 600}),
+            ("claude", {"approval_policy": "never"}),
+        ],
+    )
+    def test_native_unsupported_policy_fails_before_side_effects(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        tool: str,
+        kwargs: dict[str, object],
+    ) -> None:
+        config, provider, collect, _ = collected_harness
+        config.ai.default_tool = tool
+        with (
+            patch("wade.git.worktree.create_detached_worktree") as create,
+            patch("crossby.utils.process.run_with_transcript") as launch,
+        ):
+            assert not plan(project_root=tmp_path, **kwargs)
+        create.assert_not_called()
+        launch.assert_not_called()
+        collect.assert_not_called()
+        provider.create_task.assert_not_called()
+
+    @pytest.mark.parametrize("exit_code", [0, 1])
+    def test_native_exit_without_completion_cannot_create_tasks(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        exit_code: int,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        config.ai.default_tool = "claude"
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", return_value=exit_code),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+        ):
+            assert not plan(project_root=tmp_path)
+        collect.assert_not_called()
+        provider.create_task.assert_not_called()
+        preserve.assert_called_once()
+
     def test_no_ai_tool(self) -> None:
         with (
             patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
@@ -847,7 +938,7 @@ class TestPlanOrchestrator:
         ):
             assert not plan()
 
-    @pytest.mark.parametrize("selected", ["not-a-tool", "vscode", "copilot", "antigravity-cli"])
+    @pytest.mark.parametrize("selected", ["not-a-tool", "vscode", "antigravity"])
     def test_final_selection_preflight_has_no_side_effects(
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],

@@ -156,7 +156,7 @@ class TestFixedWorkflowRendering:
     @pytest.mark.parametrize(
         ("kind", "review_command", "done_command"),
         (
-            (SessionKind.PLAN, "wade review plan", "Validate (parent)"),
+            (SessionKind.PLAN, "wade review plan", "wade plan-session done"),
             (
                 SessionKind.IMPLEMENTATION,
                 "wade review implementation",

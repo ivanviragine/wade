@@ -191,15 +191,12 @@ def atomic_write_state_file(
     directories: tuple[str, ...],
     filename: str,
     data: bytes,
+    *,
+    max_bytes: int = MAX_STATE_FILE_BYTES,
 ) -> bool:
     """Atomically replace one trusted state file relative to a no-follow dir fd."""
 
-    if (
-        not filename
-        or "/" in filename
-        or filename in {".", ".."}
-        or len(data) > MAX_STATE_FILE_BYTES
-    ):
+    if not filename or "/" in filename or filename in {".", ".."} or len(data) > max_bytes:
         return False
     dir_fd = _open_nested(root, directories, create=True)
     if dir_fd is None:

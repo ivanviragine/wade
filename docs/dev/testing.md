@@ -152,6 +152,33 @@ are covered upstream, not by copied WADE parsers. Record exact CLI versions and
 distinguish these tests from authenticated smoke success or entitlement failures.
 Paid all-tool smoke runs are separate explicit opt-ins in Crossby.
 
+### Native terminal handoff
+
+`test_interactive_plan_service.py` exercises explicit import, review receipts,
+self-review acknowledgement, revisions, safe file handling, and completion.
+`test_plan_service.py` runs the published adapter builders for all five native
+terminals and asserts the Plan selector reaches the real launch boundary.
+The E2E plan contract also launches a fake OpenCode executable that invokes the
+real `wade plan-session done` command and persists through the fake provider.
+
+For an opt-in authenticated native-terminal test, use a disposable workspace:
+
+```bash
+uv run python scripts/probe_native_plan_handoff.py --tool claude
+uv run python scripts/probe_native_plan_handoff.py --tool cursor --model auto
+uv run python scripts/probe_native_plan_handoff.py --tool opencode
+uv run python scripts/probe_native_plan_handoff.py --tool antigravity-cli
+```
+
+The probe uses ordinary native approvals, real workflow/review commands, and no
+GitHub writes. Add `--worktree` to exercise real detached-worktree bootstrap and
+installed guards too. Answer the native planning questions, approve only commands needed
+for the test, and exit without implementing after completion. Success requires
+the actual reviewed handoff, not just launch or a final chat message. Artifacts
+and terminal output remain in the printed temporary directory. Copilot supports
+the same probe but requires working credentials; the current verification omits
+its authenticated model run by explicit request. This does not test OS isolation.
+
 ## Pytest Markers
 
 - `e2e_docker`: deterministic e2e tests executed in docker/CI lanes
