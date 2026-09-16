@@ -368,7 +368,20 @@ def collected_harness(
         Task(id=str(number), title="feat: native test plan") for number in range(1, 10)
     ]
     provider.read_task.return_value = Task(id="330", title="feat: existing", body="Original body")
+    # Exercise the retained collector path independently of Codex's new TUI capability.
+    from crossby.ai_tools.codex import CodexAdapter
+    from crossby.models.ai import PlanModeActivation
+
+    collected_caps = CodexAdapter().capabilities()
+    collected_caps = collected_caps.model_copy(
+        update={
+            "plan_mode": collected_caps.plan_mode.model_copy(
+                update={"activation": PlanModeActivation.UNSUPPORTED}
+            )
+        }
+    )
     with (
+        patch.object(CodexAdapter, "capabilities", return_value=collected_caps),
         patch("wade.services.plan_service.load_config", return_value=config),
         patch("wade.services.review_delegation_service.load_config", return_value=config),
         patch("wade.services.plan_service.get_provider", return_value=provider),

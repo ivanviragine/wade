@@ -19,6 +19,9 @@ from pathlib import Path
 import structlog
 from crossby.ai_tools import (
     AbstractAITool,
+    InteractiveLaunchEvent,
+    InteractiveLaunchEventKind,
+    InteractiveSession,
     PlanSessionError,
     preflight_plan_session,
     terminal_interaction_handler,
@@ -399,11 +402,30 @@ def run_interactive_planning_session(
         request.working_dir, ("plans", "native"), ".wade-owned", ""
     ):
         raise ValueError("Cannot safely create the native plan directory")
+    deferred_input = adapter.capabilities().plan_mode.supports_ready_event
+    ready = False
+    submitted = False
+
+    def on_event(event: InteractiveLaunchEvent, session: InteractiveSession) -> None:
+        nonlocal ready, submitted
+        if event.tool_id != adapter.TOOL_ID:
+            raise ValueError("Planning startup event belongs to another AI tool")
+        if event.kind is InteractiveLaunchEventKind.PLAN_READY:
+            if ready:
+                raise ValueError("Planning CLI reported Plan readiness more than once")
+            ready = True
+            session.send_message(prompt)
+        elif event.kind is InteractiveLaunchEventKind.MESSAGE_SUBMITTED:
+            if not ready or submitted:
+                raise ValueError("Planning CLI reported task submission out of order")
+            submitted = True
+
     exit_code = adapter.launch(
         request.working_dir,
         model=request.model,
         effort=request.effort,
-        prompt=prompt,
+        prompt=None if deferred_input else prompt,
+        on_event=on_event if deferred_input else None,
         plan_mode=True,
         plan_output_dir=native_dir,
         transcript_path=transcript,
@@ -415,6 +437,8 @@ def run_interactive_planning_session(
     )
     if exit_code != 0:
         raise ValueError(f"Native planning CLI exited with code {exit_code}; output was retained")
+    if deferred_input and not submitted:
+        raise ValueError("Native Plan task submission was not confirmed; output was retained")
     bundle = interactive_plan.collect(request.working_dir)
     usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
     return bundle, usage

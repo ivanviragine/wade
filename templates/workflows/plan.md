@@ -16,7 +16,7 @@ Review methodology (loaded only by the bounded review step):
 
 An interactive terminal session has `.wade/plans/interactive-session.json`.
 It keeps questions, review feedback, and revisions inside the native CLI.
-A session without that file uses native collection and parent review (Codex).
+A session without that file uses native collection and parent review.
 
 ## Required steps
 

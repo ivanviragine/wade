@@ -121,7 +121,9 @@ credentials, or binaries are missing.
 Use real public Crossby request/result models in consumer tests, not mocks that
 invent fields. `tests/e2e/test_plan_contract.py` uses a deterministic fake Codex
 app-server with the **published collector** and real WADE CLI/provider handoff;
-this is protocol-contract evidence, not genuine model inference.
+the fixture explicitly selects its collector capability now that production
+Codex prefers the terminal. This is protocol-contract evidence, not genuine
+model inference.
 
 For dependency adoption, also run the release's own focused native suites from
 a disposable checkout of its release tag. Install the published wheel in an
@@ -159,8 +161,11 @@ versions, completed live runs, and their limits.
 
 `test_interactive_plan_service.py` exercises explicit import, review receipts,
 self-review acknowledgement, revisions, safe file handling, and completion.
-`test_plan_service.py` runs the published adapter builders for all five native
+`test_plan_service.py` runs the published adapter builders for the five flag-based native
 terminals and asserts the Plan selector reaches the real launch boundary.
+`test_plan_startup_events.py` verifies Codex deferred prompt delivery and rejects
+missing, duplicate, mismatched, or out-of-order startup events. Crossby's nested
+PTY suite covers the terminal mechanics against the published wheel.
 The E2E plan contract also launches a fake OpenCode executable that invokes the
 real `wade plan-session done` command and persists through the fake provider.
 
@@ -171,6 +176,7 @@ uv run python scripts/probe_native_plan_handoff.py --tool claude
 uv run python scripts/probe_native_plan_handoff.py --tool cursor --model auto
 uv run python scripts/probe_native_plan_handoff.py --tool opencode
 uv run python scripts/probe_native_plan_handoff.py --tool antigravity-cli
+uv run python scripts/probe_native_plan_handoff.py --tool codex --sandbox --worktree --model gpt-5.6-sol
 ```
 
 The probe uses ordinary native approvals, real workflow/review commands, and no

@@ -73,7 +73,7 @@ WADE's canonical copies with `review plan`, and finishes the validated handoff
 before exit. Review receipts bind to exact content, the frozen bundle, and the
 current run. Prompt review requires actual self-review and `--ack-self-review`.
 Revisions require current receipts. The command loads the REVIEW method; WORK
-does not activate it directly. Tools without terminal Plan support (Codex) retain
+does not activate it directly. Tools without terminal Plan support retain
 native artifact collection and parent review, including explicit prompt-review
 acknowledgement. Both paths leave task persistence and implementation decisions
 to the parent. The legacy file-presence Stop hook remains uninstalled.
@@ -327,7 +327,7 @@ plans, including salvage paths. Managed native terminal sessions additionally
 require a completed `plan-session done` handoff and current content/binding review
 receipts. `review plan --ack-self-review` confirms a performed prompt-mode review;
 it cannot acknowledge changed content. Standalone plan review retains its ordinary
-behavior, and Codex collection retains parent-side review.
+behavior; the collector fallback retains parent-side review.
 
 ## Extension rules
 
