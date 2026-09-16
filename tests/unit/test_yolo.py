@@ -228,7 +228,8 @@ class TestBuildLaunchCommandYolo:
         """The published adapter preserves Plan while allowing native bypass."""
         from crossby.ai_tools.claude import ClaudeAdapter
 
-        command = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
+        with patch("crossby.utils.versioning.detect_binary_version", return_value=(2, 1, 263)):
+            command = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
         assert command[command.index("--permission-mode") + 1] == "plan"
         assert "--allow-dangerously-skip-permissions" in command
         assert "--dangerously-skip-permissions" not in command

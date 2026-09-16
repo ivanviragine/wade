@@ -667,8 +667,9 @@ Description body here. Sub-headings, code blocks, anything markdown.
 
 ### Permission modes
 
-These autonomy tiers apply to ordinary launches. Native `wade plan` is the
-exception described above: default/YOLO control the parent, never the child.
+These autonomy tiers apply to ordinary launches and supported native Plan
+terminals. Codex planning retains parent-only default/YOLO with a separate
+collector approval policy, as described above.
 
 `--permission-mode` sets how much autonomy the AI tool is granted — an axis
 independent of the delegation `--mode` (which controls *how* a tool is
@@ -686,9 +687,10 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 `--permission-mode` wins when both are given. The same values are accepted in
 `.wade.yml` as `ai.permission_mode` (global) or `ai.<command>.permission_mode`
 (per-command), with `yolo: true` still honored as the alias. A tier a tool
-doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
-non-Claude tools) with a warning — WADE forwards the requested tier and
-[`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
+doesn't support is downgraded automatically for ordinary launches (for example,
+`auto` → `accept-edits` when classifier auto is unavailable), with a warning — WADE forwards the requested tier and
+[`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder. Native Plan combinations are validated strictly and
+rejected if unsupported.
 **Headless launches are always read-only** — any of `deps` /
 `review_plan` / `review_implementation` / `review_batch` dispatched in headless
 delegation mode runs at `default` regardless of the configured tier, and no

@@ -154,6 +154,9 @@ Paid all-tool smoke runs are separate explicit opt-ins in Crossby.
 
 ### Native terminal handoff
 
+See the [recorded native CLI verification](native-cli-plan-verification.md) for
+versions, completed live runs, and their limits.
+
 `test_interactive_plan_service.py` exercises explicit import, review receipts,
 self-review acknowledgement, revisions, safe file handling, and completion.
 `test_plan_service.py` runs the published adapter builders for all five native

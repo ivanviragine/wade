@@ -2144,6 +2144,27 @@ class TestPreserveGeneratedPlans:
         assert (preserved_dir / "PLAN-2.md").is_file()
         mock_cleanup.assert_called_once_with(str(plan_dir), None, None, None)
 
+    def test_incomplete_native_handoff_keeps_transcript_and_native_file(
+        self, tmp_path: Path
+    ) -> None:
+        plan_dir = tmp_path / "plans"
+        (plan_dir / "native").mkdir(parents=True)
+        (plan_dir / "interactive-session.json").write_text('{"completed":false}')
+        (plan_dir / "terminal.log").write_text("Native session stopped before import")
+        (plan_dir / "native/draft.md").write_text(_GATE_VALID)
+        preserved_dir = tmp_path / "preserved"
+        with (
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(preserved_dir)),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+            patch("wade.services.plan_service.console"),
+        ):
+            _preserve_generated_plans(str(plan_dir), None, None)
+        assert (
+            preserved_dir / "terminal.log"
+        ).read_text() == "Native session stopped before import"
+        assert (preserved_dir / "native/draft.md").read_text() == _GATE_VALID
+        cleanup.assert_called_once()
+
     def test_no_files_skips_copy_but_still_cleans(self, tmp_path: Path) -> None:
         plan_dir = tmp_path / "plans"
         plan_dir.mkdir()  # no PLAN*.md written

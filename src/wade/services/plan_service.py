@@ -1880,9 +1880,10 @@ def _preserve_generated_plans(
     which keeps the worktree/temp dir from lingering.
     """
     generated = discover_plan_files(Path(plan_dir))
-    has_native_output = (Path(plan_dir) / "native-session.json").exists() or (
-        Path(plan_dir) / ".native"
-    ).exists()
+    has_native_output = any(
+        (Path(plan_dir) / name).exists()
+        for name in ("native-session.json", ".native", interactive_plan.STATE)
+    )
     if not generated and not has_native_output:
         # Nothing to salvage — the usual cleanup can run unconditionally.
         return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
