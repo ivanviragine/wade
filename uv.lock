@@ -258,7 +258,7 @@ toml = [
 
 [[package]]
 name = "crossby"
-version = "0.32.0"
+version = "0.32.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -270,9 +270,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/16/c3/6f0bf276c4d414d0b93d7fccb37b50cbc8aab231ed73bcc8cfe3fc3d5cb3/crossby-0.32.0.tar.gz", hash = "sha256:38d352613414e39cd6d3bd576c22d398e22672ee2a20b10d80ab3ac724ed5a81", size = 864474, upload-time = "2026-09-15T11:39:41.175Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/4f/0466c7f4e15384c87716cccc88cebbeed7c5fd5f8fe49306b1325ba8a4ad/crossby-0.32.1.tar.gz", hash = "sha256:09695d72762236518d635a5fc646b7faa87c201188f85de1853bafe2b2e961cc", size = 873126, upload-time = "2026-09-16T00:04:01.792Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/81/a58c68fcaf3099ab5cfd2a7c695d1f32a8edd249b32de1da4a3a25f47fb6/crossby-0.32.0-py3-none-any.whl", hash = "sha256:73f379044fedd4baae80e37ecd6e6ca29220c87d68812fc212dc5fe4619aeddc", size = 507251, upload-time = "2026-09-15T11:39:39.48Z" },
+    { url = "https://files.pythonhosted.org/packages/93/65/a341749aa18554cc8c8a94f70d8f9b9352863048e8027fb95fe173a3697d/crossby-0.32.1-py3-none-any.whl", hash = "sha256:9bc775fc9632bc50233d19dced8c609d1b096a70eba793dc92edc4727eacf821", size = 509214, upload-time = "2026-09-16T00:03:59.945Z" },
 ]
 
 [[package]]
@@ -1075,7 +1075,7 @@ wheels = [
 
 [[package]]
 name = "wade-cli"
-version = "1.2.2"
+version = "1.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "crossby" },
@@ -1101,7 +1101,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crossby", specifier = ">=0.32.0,<0.33.0" },
+    { name = "crossby", specifier = ">=0.32.1,<0.33.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },

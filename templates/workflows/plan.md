@@ -12,6 +12,12 @@ Review methodology (loaded only by the bounded review step):
 
 {interaction_policy}
 
+## Handoff
+
+An interactive terminal session has `.wade/plans/interactive-session.json`.
+It keeps questions, review feedback, and revisions inside the native CLI.
+A session without that file uses native collection and parent review (Codex).
+
 ## Required steps
 
 1. **Check readiness.** Run `wade plan-session check` first. Proceed only on
@@ -27,12 +33,15 @@ Review methodology (loaded only by the bounded review step):
    finalize the plan or keep planning. Use native questions; unavailable input
    is not an answer. Never approve implementation to obtain a plan artifact.
 5. **Compose plans.** Compose one plan per task inside a single native artifact.
-   Follow `reference/plan-output-contract.md`. Do not write WADE plan files;
-   native storage is owned by the harness and Crossby. The trusted parent imports
-   only the returned artifact and creates tasks and draft PRs after its gates.
+   Follow `reference/plan-output-contract.md`. In an interactive terminal handoff,
+   submit the artifact with `wade plan-session done <plan_dir> --from-file <native-file>`
+   or `--from-stdin`; this writes WADE's copies even if native Plan mode limits
+   direct editing. A missing-review error at this point means import succeeded:
+   proceed to review, then rerun done. A collected session instead returns the
+   native artifact to the parent. Only the parent creates tasks and draft PRs.
 6. **User review.** Summarize every plan (title, complexity, key tasks), invite
    revisions, and apply them before continuing.
-7. **Method review (parent).** {review_step_state}
+7. **Method review.** {review_step_state}
 8. **Knowledge handoff.** If knowledge is enabled, search relevant entries and
    evaluate only those you read. Include each rating in the artifact's
    `knowledge_votes`; use an explicit empty list if none warrant a vote. Do not
@@ -40,13 +49,16 @@ Review methodology (loaded only by the bounded review step):
    after review and carries them into the existing managed handoff. Put durable
    learnings in the plans for implementation to capture. In `PLAN_DIR_ONLY`,
    return no votes.
-9. **Validate (parent).** The parent runs the strict `plan-session done`
-   validation core before task mutation. An invalid subset requires an explicit
+9. **Validate.** In an interactive terminal handoff, run
+   `wade plan-session done <plan_dir>` after review and every revision. It validates
+   content and current review receipts. In a collected session the parent runs
+   the validation core. The parent always revalidates before task mutation. An invalid subset requires an explicit
    human decision, including under YOLO. Failures retain recoverable output;
    do not claim that merely returning an artifact passed the parent gates.
-10. **Present results.** Return the artifact and stop. The parent reports task
-    persistence and may separately offer implementation. Do not run any WADE
-    completion or implementation command from the native planner.
+10. **Present results.** In an interactive terminal handoff, exit the native CLI
+    after successful done; otherwise return the native artifact and stop. The parent
+    reports persistence and may separately offer implementation. Never run an
+    implementation command from this session.
 
 Never create issues, run implementation commands, or edit source code in this
 session. After planning mode exits, stop; a tool message suggesting coding does

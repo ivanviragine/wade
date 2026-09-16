@@ -30,7 +30,8 @@ def test_native_selection_does_not_promise_tool_managed_confinement() -> None:
         )
     text = str(output.method_calls)
     assert "Native Plan" in text
-    assert "Parent confirmations" in text
+    assert "Native interactive CLI" in text
+    assert "Permission mode" in text
     assert "preflight" in text
     assert "confined" not in text
 

@@ -28,10 +28,45 @@ def check() -> None:
 @plan_session_app.command()
 def done(
     plan_dir: Path = typer.Argument(..., help="Path to the plan directory containing .md files."),  # noqa: B008
+    from_file: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--from-file",
+        help="Import this native Markdown plan or WADE bundle before validation.",
+    ),
+    from_stdin: bool = typer.Option(
+        False, "--from-stdin", help="Read the explicit plan or bundle from stdin before validation."
+    ),
 ) -> None:
     """Validate plan files — run this before exiting a planning session."""
+    from wade.services import interactive_plan_service as interactive
     from wade.services.plan_service import plan_done as do_plan_done
     from wade.ui.console import console
+
+    directory = plan_dir.absolute()
+    root = directory.parent.parent
+    managed = (
+        directory.name == "plans" and directory.parent.name == ".wade" and interactive.active(root)
+    )
+    try:
+        if from_file is not None and from_stdin:
+            raise ValueError("Choose --from-file or --from-stdin, not both")
+        if from_file is not None or from_stdin:
+            if not managed:
+                raise ValueError(
+                    "Plan import requires the active interactive session's .wade/plans"
+                )
+            if from_file is not None:
+                content = interactive.read_artifact(from_file)
+            else:
+                import sys
+
+                content = sys.stdin.read(2_000_001)
+            interactive.import_artifact(root, content)
+    except (ValueError, OSError) as exc:
+        from wade.services.native_plan_service import failure_message
+
+        console.error(failure_message(exc), markup=False)
+        raise typer.Exit(1) from exc
 
     result = do_plan_done(plan_dir)
 
@@ -50,13 +85,22 @@ def done(
 
     console.success(f"Plan validation passed ({len(result.warnings)} warning(s)).")
 
+    if managed:
+        try:
+            interactive.complete(root)
+        except (ValueError, OSError) as exc:
+            from wade.services.native_plan_service import failure_message
+
+            console.error(failure_message(exc), markup=False)
+            raise typer.Exit(1) from exc
+
     # Remind agent to review if reviews are enabled. Advisory only —
     # must never turn a successful validation into a failure.
     try:
         from wade.config.loader import load_config
 
         config = load_config()
-        if config.ai.review_plan.enabled is not False:
+        if not managed and config.ai.review_plan.enabled is not False:
             console.hint("P.s.: run `wade review plan <plan_file>` if you haven't already.")
     except Exception:  # Advisory — must never break a successful validation
         pass

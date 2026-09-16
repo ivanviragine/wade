@@ -149,7 +149,9 @@ class TestPhaseContent:
         assert "native" in ctx and "parent" in ctx
         assert "Never approve implementation" in ctx
         assert ".wade/session/WORKFLOW.md" in ctx
-        assert "completion commands from the native planner" in ctx
+        assert "plan-session done" in ctx
+        assert "interactive-session.json" in ctx
+        assert "Otherwise return the artifact for parent collection and review" in ctx
 
     def test_plan_reinjects_persisted_issue_ref(self, tmp_path: Path) -> None:
         # A ``wade plan --issue-id`` session persists .wade/plan-issue.md so a

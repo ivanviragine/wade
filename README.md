@@ -237,58 +237,71 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
 | `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
-| `wade plan-session done <plan_dir>` | Validate materialized plans (not native collection or task persistence) |
+| `wade plan-session done <plan_dir>` | Import an optional native plan (`--from-file` / `--from-stdin`), validate, and complete the reviewed handoff |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `review pr-comments` additionally accepts `--effort none` to pin the tool default instead of a configured effort across a later wait/relaunch. `plan`, `implement`, and `review pr-comments` accept repeatable `--skill` and `--review-skill` methodology bindings plus `--refresh-skills` for an existing frozen session; `implement-batch` forwards the same binding request to every child session. Standalone plan/code/batch review and `task deps` accept repeatable `--skill`. `plan`, `implement`, `implement-batch`, standalone reviews (`review plan`, `review implementation`, `review batch`), `review pr-comments`, `task deps`, and the `wade <N>` shorthand also accept `--sandbox` / `--no-sandbox` (see [AI runtime sandbox profile](#ai-runtime-sandbox-profile)); batch and shorthand forward an explicit flag to the child session they launch. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
 ## Planning & base branches
 
-`wade plan` enters the selected tool's **native Plan mode before the first task
-turn**. Crossby collects one authoritative Markdown artifact; WADE imports its
-plans, runs the fixed review and strict validation, then creates a lightweight
-task plus a draft PR per accepted plan. It never substitutes `/plan`, an editing
-session, or a hook for native activation.
+`wade plan` launches **Claude, Cursor, Copilot, OpenCode, and Antigravity CLI**
+in their own interactive terminal, with **native Plan mode active before the
+first task turn**. You keep the tool's UI, questions, and conversation. Crossby
+validates native support and translates approval flags; WADE does not type
+`/plan`, switch to an editing session, or replace the tool's questions.
+
+Use `--permission-mode` (or `--yolo`) for the native approval policy:
+
+| CLI | Supported modes while planning |
+|-----|--------------------------------|
+| Claude | `default`, `auto`, `yolo` |
+| Cursor | `default`, `auto`, `yolo` |
+| Copilot | `default`, `accept-edits`, `yolo` |
+| OpenCode | `default`, `yolo` |
+| Antigravity CLI | `default`, `yolo` |
+
+Unsupported combinations fail before creating a planning worktree. These are
+native approval settings, not permission to implement the plan. The later
+implementation offer still requires an explicit decision.
+
+Where the tool supports a native output-directory setting (Claude), WADE uses
+`.wade/plans/native/`. Other tools can keep their native location. Before exit, the planning
+workflow submits it with `wade plan-session done .wade/plans --from-file <path>`;
+`--from-stdin` accepts explicit Markdown when no file is available. WADE writes
+its canonical copies. `wade review plan <file>` reviews those copies inside the
+session; prompt-mode review emits the frozen method and requires actual
+self-review followed by `--ack-self-review`. Run `done` again after review.
+Changed content requires a current review before completion. A missing-review
+error on the first import means the file was imported and awaits review.
 
 One task can be plain Markdown (`# feat: title`, `## Complexity`, tasks and
 acceptance criteria). Multiple tasks use the explicit versioned
 [plan bundle contract](templates/workflows/reference/plan-output-contract.md),
 with filenames and `depends_on` relationships; headings do not imply task
-boundaries. Knowledge-enabled sessions also use the bundle to return ratings.
-The parent runs the frozen plan-review method; prompt-mode review needs actual
-self-review and explicit acknowledgement, so it cannot complete noninteractively.
-Review failures preserve output instead of creating tasks.
+boundaries. Knowledge-enabled sessions include `knowledge_votes` in that bundle,
+including an explicit empty list when appropriate. The parent revalidates the
+completed handoff after exit, then creates tasks and draft PRs. Failed or missing
+handoffs retain output and create no tasks.
 
-Planning has independent `--sandbox` / `--no-sandbox`,
-`--network-access` / `--no-network-access`,
-`--approval-policy on-request|untrusted|never`, repeatable `--trusted-dir`, and
-`--timeout` (1–3600 seconds; default 600, or `ai.plan.timeout`) requirements.
-Unset sandbox uses the collector's safe default; explicit confinement requires
-public support and tool-managed behavior is not a confinement guarantee.
-Unsupported policies, model/effort combinations, or `ai.plan.mode` transport
-overrides fail clearly. `--yolo` affects only WADE's post-plan confirmations;
-`auto` and `accept-edits` are rejected. The separate implementation offer still
-requires explicit confirmation.
+**Codex keeps the collected-session path** for now: Crossby collects its native
+plan artifact and questions, then WADE runs review and validation in the parent.
+Its `--yolo` affects parent confirmations only; `auto` and `accept-edits` remain
+unsupported. Codex's native session provenance is retained separately from the
+plan; no transcript or token totals are invented from plan text.
 
-Omitting the network flag adds no network grant; it does not promise isolation
-for an unrestricted or tool-managed runtime. Explicit `--no-network-access`
-requires supported sandbox network control (and is rejected with `--no-sandbox`
-in the adopted contract). WADE never drops that explicit restriction to enable
-a collector.
+Interactive terminals use the ordinary sandbox default (off); the Codex collector
+keeps its safe default (on). Explicit `--sandbox`, `--network-access` /
+`--no-network-access`, and `--trusted-dir` require support from the selected tool.
+No network flag adds no network grant and does not promise isolation.
+`--approval-policy on-request|untrusted|never` and `--timeout` are collector
+settings; interactive terminals use `--permission-mode` and have no time limit.
+Set `ai.plan.mode` to `interactive` or leave it unset for native terminals; leave
+it unset for Codex. GUI launchers remain unsupported for planning.
 
-Eligibility follows Crossby's complete-session metadata and bounded version
-preflight after final tool selection, before worktree/provider mutations.
-With the adopted release, Claude (attached terminal), Codex, and OpenCode support
-WADE's required command policy. Cursor and Antigravity CLI are rejected until
-their collectors support that policy; Copilot lacks native-question collection,
-and GUI launchers are unsupported. This is not a permanent tool allowlist.
-Authentication, model availability, protocol negotiation, and artifacts are
-checked at runtime; static preflight does not promise them. Unavailable input
-never supplies a native answer or permission grant.
-
-Session IDs and exact native provenance are retained. The collection API does
-not provide a full transcript or token usage; WADE reports them unavailable,
-without substituting the plan text or fabricated usage totals.
+Authentication, model availability, and successful handoff are runtime checks.
+Native terminal output is retained for recovery; usage is reported only when
+the adapter can extract it from that output. WADE's handoff ID is not a native
+CLI session ID.
 
 `wade plan --issue <N>` re-plans an existing task. If the session produces a
 single plan file, it's attached to `#N` and the task stays open. If the
@@ -505,10 +518,10 @@ The session-completion guard keys on the same fact `done` records — a sha-keye
 when the branch has commits ahead of its base **and** `done` has not finalized
 the current commit. An early "stopping to ask a question" turn (no commits ahead)
 never triggers it. This Stop nudge fails **open**. Native planning does not
-install the old file-based Stop nudge: canonical files exist only after the
-collector returns. Required review and validation now run in the parent.
-Native transports may exclude ambient tool settings/hooks to preserve command
-policy; hooks are defense in depth, not a native collection guarantee.
+install the old file-based Stop nudge. Interactive sessions explicitly import,
+review, and complete their plans before exit; the parent revalidates them. Codex
+retains parent-side collection and review. Native transports may differ in hook
+support; completion does not depend on hooks firing.
 
 Independently of that nudge, `wade plan` now **strictly validates** plan files
 before creating tasks: a `PLAN*.md` missing a valid `## Complexity` or a
@@ -654,8 +667,9 @@ Description body here. Sub-headings, code blocks, anything markdown.
 
 ### Permission modes
 
-These autonomy tiers apply to ordinary launches. Native `wade plan` is the
-exception described above: default/YOLO control the parent, never the child.
+These autonomy tiers apply to ordinary launches and supported native Plan
+terminals. Codex planning retains parent-only default/YOLO with a separate
+collector approval policy, as described above.
 
 `--permission-mode` sets how much autonomy the AI tool is granted — an axis
 independent of the delegation `--mode` (which controls *how* a tool is
@@ -666,16 +680,17 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 |------|----------|
 | `default` | Prompt for every action (no autonomy grant). |
 | `accept-edits` | Auto-apply file edits; still prompt for shell/commands. Claude and Antigravity CLI. |
-| `auto` | Classifier-mediated auto mode (a model reviews each non-read action). Claude only. |
+| `auto` | Classifier-mediated auto mode (a model reviews each non-read action). Claude and Cursor. |
 | `yolo` | Full autonomy — no prompts. |
 
 `--yolo` is a back-compat alias for `--permission-mode yolo`; an explicit
 `--permission-mode` wins when both are given. The same values are accepted in
 `.wade.yml` as `ai.permission_mode` (global) or `ai.<command>.permission_mode`
 (per-command), with `yolo: true` still honored as the alias. A tier a tool
-doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
-non-Claude tools) with a warning — WADE forwards the requested tier and
-[`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
+doesn't support is downgraded automatically for ordinary launches (for example,
+`auto` → `accept-edits` when classifier auto is unavailable), with a warning — WADE forwards the requested tier and
+[`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder. Native Plan combinations are validated strictly and
+rejected if unsupported.
 **Headless launches are always read-only** — any of `deps` /
 `review_plan` / `review_implementation` / `review_batch` dispatched in headless
 delegation mode runs at `default` regardless of the configured tier, and no

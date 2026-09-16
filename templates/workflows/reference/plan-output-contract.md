@@ -1,7 +1,18 @@
 # Plan output contract
 
-Return one authoritative native Markdown artifact, not filesystem instructions
-or a transcript. WADE imports it after Crossby closes the native session.
+Compose one authoritative Markdown artifact, not a transcript.
+
+In an interactive terminal session, pass the exact native file to
+`wade plan-session done <plan_dir> --from-file <native-plan-file>`. If no native
+file exists, supply the complete artifact through `--from-stdin` using a quoted
+heredoc. WADE materializes the named members and reports missing reviews; review
+those files while the native CLI is open, address findings, then run done again.
+Resubmitting an updated artifact replaces only members owned by this session.
+A changed plan requires a new review. Knowledge ratings stay in the envelope.
+Do not leave Plan mode or approve implementation to save a plan.
+
+Without an interactive handoff file, return the artifact; WADE imports it after
+Crossby closes the collected session.
 
 For one task without a knowledge handoff, return its Markdown directly. WADE
 names it `PLAN.md`. Each task needs exactly one H1 conventional-commit title,

@@ -526,9 +526,19 @@ def display_ai_selection(
     if effort:
         console.kv("Effort", effort.value)
     if native_plan:
+        try:
+            native_terminal = AbstractAITool.get(tool).capabilities().supports_plan_mode
+        except (ValueError, KeyError):
+            native_terminal = False
+        if sandbox is None:
+            sandbox = not native_terminal
         console.kv("Planning mode", "Native Plan — active before the first task turn")
-        console.kv("Parent confirmations", permission_mode.value)
-        console.hint("YOLO affects WADE after collection only; auto/accept-edits cannot apply.")
+        if native_terminal:
+            console.kv("Interface", "Native interactive CLI")
+            console.kv("Permission mode", f"{permission_mode.value} — native approval request")
+        else:
+            console.kv("Parent confirmations", permission_mode.value)
+            console.hint("This collector keeps its native approval policy separate from WADE YOLO.")
     else:
         console.kv(
             "Permission mode",
@@ -635,10 +645,12 @@ def confirm_ai_selection(
         # supports the corresponding capability.
         tool_supports_effort = False
         tool_supports_autonomy = False
+        tool_supports_native_plan = False
         try:
             adapter = AbstractAITool.get(AIToolID(tool))
             caps = adapter.capabilities()
             tool_supports_effort = caps.supports_effort
+            tool_supports_native_plan = caps.supports_plan_mode
             tool_supports_autonomy = (
                 caps.supports_accept_edits or caps.supports_auto or caps.supports_yolo
             )
@@ -648,7 +660,9 @@ def confirm_ai_selection(
             menu_items.append("Change effort")
         if not permission_mode_explicit and (tool_supports_autonomy or native_plan):
             menu_items.append(
-                "Change parent confirmations" if native_plan else "Change permission mode"
+                "Change parent confirmations"
+                if native_plan and not tool_supports_native_plan
+                else "Change permission mode"
             )
 
         if len(menu_items) == 1:

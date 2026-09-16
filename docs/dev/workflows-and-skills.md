@@ -67,13 +67,16 @@ REVIEW examines material defects introduced by the planned change,
 review-comment WORK verifies incoming claims before editing, and feedback-fix
 REVIEW checks only those corrections and their directly affected behavior.
 
-Native planning returns one Markdown artifact rather than writing WADE files.
-The parent imports explicit bundle members, invokes each frozen plan REVIEW,
-revalidates, stages returned knowledge votes, and persists tasks. Prompt-mode
-review requires actual self-review plus an explicit acknowledgement; non-TTY
-cannot supply it. The planner never loads REVIEW skills itself or authorizes
-implementation. The plan workflow revision reflects this ownership change;
-the old file-presence Stop hook is not installed for collected sessions.
+Native terminal planning uses the full CLI in Plan mode. Its fixed workflow
+submits explicit native file/stdin content through `plan-session done`, reviews
+WADE's canonical copies with `review plan`, and finishes the validated handoff
+before exit. Review receipts bind to exact content, the frozen bundle, and the
+current run. Prompt review requires actual self-review and `--ack-self-review`.
+Revisions require current receipts. The command loads the REVIEW method; WORK
+does not activate it directly. Tools without terminal Plan support (Codex) retain
+native artifact collection and parent review, including explicit prompt-review
+acknowledgement. Both paths leave task persistence and implementation decisions
+to the parent. The legacy file-presence Stop hook remains uninstalled.
 
 ## Fixed workflow rendering
 
@@ -319,12 +322,12 @@ summary, synchronization, conventional title, resolved threads, current-binding
 review, documentation decision, and knowledge validity according to project
 policy.
 
-Planning remains independently strict: the parent service always parses and
-validates produced plan files, including salvage paths. `plan-session done` is
-helpful session telemetry, not authority over parent consumption.
-`wade review plan` remains an advisory, agent-enforced method-review step: it
-does not persist a binding-aware review receipt or add a plan-review completion
-gate.
+Planning remains independently strict: the parent always parses and validates
+plans, including salvage paths. Managed native terminal sessions additionally
+require a completed `plan-session done` handoff and current content/binding review
+receipts. `review plan --ack-self-review` confirms a performed prompt-mode review;
+it cannot acknowledge changed content. Standalone plan review retains its ordinary
+behavior, and Codex collection retains parent-side review.
 
 ## Extension rules
 
