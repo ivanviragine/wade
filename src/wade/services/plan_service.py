@@ -507,7 +507,7 @@ def _prepare_plan_handoff(
         return None
     native_plan.validate_selection(bundle, accepted_plans)
     if config.knowledge.enabled and planning_worktree is not None:
-        from wade.services.knowledge_service import record_rating_for_session
+        from wade.services.knowledge_service import record_handoff_rating_for_session
         from wade.utils.knowledge_file import parse_entries, resolve_knowledge_path
 
         if bundle.knowledge_votes:
@@ -520,7 +520,7 @@ def _prepare_plan_handoff(
                 raise ValueError("Native plan returned a rating for an unknown knowledge entry")
 
         for vote in bundle.knowledge_votes or ():
-            record_rating_for_session(
+            record_handoff_rating_for_session(
                 planning_worktree, config.knowledge, vote.entry_id, vote.direction
             )
     if not interactive:
@@ -530,6 +530,13 @@ def _prepare_plan_handoff(
     # No provider mutation occurs until collection, validation, and required review succeed.
     ensure_task_label(provider, config.project.issue_label)
     return accepted_plans
+
+
+def _is_filesystem_access_denied(exc: BaseException) -> bool:
+    """Whether *exc* represents an EACCES/EPERM failure retaining a handoff."""
+    return isinstance(exc, (StateFileAccessError, interactive_plan.InteractivePlanAccessError)) or (
+        isinstance(exc, OSError) and exc.errno in {errno.EACCES, errno.EPERM}
+    )
 
 
 def _persist_accepted_plans(
@@ -739,9 +746,7 @@ def _recover_completed_handoff(
             "Cancelled" if isinstance(exc, KeyboardInterrupt) else native_plan.failure_message(exc)
         )
         console.error(f"Planning recovery failed ({category}): {message}", markup=False)
-        access_denied = isinstance(
-            exc, (StateFileAccessError, interactive_plan.InteractivePlanAccessError)
-        )
+        access_denied = _is_filesystem_access_denied(exc)
         _retain_inaccessible_handoff(plan_dir, root, access_denied=access_denied)
         return False
 
@@ -1190,8 +1195,14 @@ def plan(
             for native_path in exc.paths:
                 console.hint(f"Native recovery reference (not imported): {native_path}")
         console.error(f"Planning failed ({category}): {message}", markup=False)
-        if isinstance(exc, (interactive_plan.InteractivePlanAccessError, StateFileIOError)):
-            _retain_inaccessible_handoff(plan_dir, planning_worktree)
+        if isinstance(exc, (interactive_plan.InteractivePlanAccessError, StateFileIOError)) or (
+            _is_filesystem_access_denied(exc)
+        ):
+            _retain_inaccessible_handoff(
+                plan_dir,
+                planning_worktree,
+                access_denied=_is_filesystem_access_denied(exc),
+            )
         else:
             _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
         stop_title_keeper()

@@ -612,15 +612,25 @@ def _append_jsonl_record(
     it must never inspect, migrate, or copy a canonical knowledge file.
     """
     with file_lock(path):
-        if path.exists() and path.is_dir():
-            raise ValueError(f"Ratings path {path!s} points to a directory, not a file")
-        if materialize_legacy:
-            _materialize_migration_locked(path)
-        line = json.dumps(record, sort_keys=True)
-        with path.open("a", encoding="utf-8") as fd:
-            fd.write(f"{line}\n")
-            fd.flush()
-            os.fsync(fd.fileno())
+        _append_jsonl_record_locked(path, record, materialize_legacy=materialize_legacy)
+
+
+def _append_jsonl_record_locked(
+    path: Path,
+    record: dict[str, Any],
+    *,
+    materialize_legacy: bool,
+) -> None:
+    """Append one JSONL record while the caller holds *path*'s lock."""
+    if path.exists() and path.is_dir():
+        raise ValueError(f"Ratings path {path!s} points to a directory, not a file")
+    if materialize_legacy:
+        _materialize_migration_locked(path)
+    line = json.dumps(record, sort_keys=True)
+    with path.open("a", encoding="utf-8") as fd:
+        fd.write(f"{line}\n")
+        fd.flush()
+        os.fsync(fd.fileno())
 
 
 def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
@@ -691,6 +701,42 @@ def record_rating_for_session(
     ratings_path = resolve_ratings_path(resolve_knowledge_path(project_root, config))
     _append_ratings_record(ratings_path, event.to_record())
     return event
+
+
+def record_handoff_rating_for_session(
+    project_root: Path,
+    config: KnowledgeConfig,
+    entry_id: str,
+    direction: str,
+) -> RatingEvent:
+    """Record one completed plan handoff vote exactly once per retained session.
+
+    A completed plan bundle permits one vote per knowledge entry.  Recovery can
+    re-run its parent-side processing after a later provider failure, so reuse
+    the matching staged event rather than turning that retry into another vote.
+    Ordinary interactive ``wade knowledge rate`` calls retain their append-only
+    semantics through :func:`record_rating_for_session`.
+    """
+    if not is_throwaway_knowledge_session(project_root):
+        return record_rating_for_session(project_root, config, entry_id, direction)
+
+    path = staged_ratings_path(project_root)
+    if path_escapes_session(project_root, path):
+        raise ValueError(
+            f"Refusing to stage a knowledge vote outside the session worktree: {path!s}"
+        )
+    with file_lock(path):
+        for record in _load_staged_rating_records(path):
+            if record["id"] == entry_id and record["dir"] == direction:
+                return RatingEvent(
+                    event_id=str(record["event_id"]),
+                    entry_id=entry_id,
+                    direction=direction,
+                    timestamp=str(record["ts"]),
+                )
+        event = create_rating_event(entry_id, direction)
+        _append_jsonl_record_locked(path, event.to_record(), materialize_legacy=False)
+        return event
 
 
 def _load_staged_rating_records(staging_path: Path) -> list[dict[str, Any]]:

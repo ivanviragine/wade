@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from collections.abc import Callable, Iterator
@@ -65,7 +66,7 @@ from wade.services.plan_service import (
     validate_plan_files,
 )
 from wade.utils import safe_state
-from wade.utils.safe_state import StateFileAccessError
+from wade.utils.safe_state import StateFileAccessError, StateFileIOError
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -530,7 +531,7 @@ class TestCollectedSession:
         collect.return_value = native_result(
             BUNDLE_MARKER + "\n```json\n" + json.dumps(payload) + "\n```"
         )
-        with patch("wade.services.knowledge_service.record_rating_for_session") as rate:
+        with patch("wade.services.knowledge_service.record_handoff_rating_for_session") as rate:
             assert plan(project_root=tmp_path) is (vote_id == "known-entry")
         if vote_id == "known-entry":
             rate.assert_called_once_with(root, config.knowledge, vote_id, "up")
@@ -1019,6 +1020,122 @@ class TestPlanOrchestrator:
             assert plan(project_root=tmp_path, recover=root)
         collect.assert_not_called()
         provider.create_task.assert_called_once()
+
+    def test_recovery_deduplicates_staged_handoff_votes_after_provider_retry(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.knowledge_service import staged_ratings_path
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        interactive.begin(root, "claude", review_required=False)
+        bundle = PlanBundle(
+            plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
+            knowledge_votes=({"entry_id": "known-entry", "direction": "up"},),
+        )
+        interactive.import_artifact(
+            root,
+            BUNDLE_MARKER + "\n```json\n" + bundle.model_dump_json() + "\n```",
+        )
+        interactive.complete(root)
+        linked = [Worktree(path=str(root), branch="(detached)")]
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=linked),
+            patch(
+                "wade.services.knowledge_service.is_throwaway_knowledge_session",
+                return_value=True,
+            ),
+            patch(
+                "wade.services.plan_service.ensure_task_label",
+                side_effect=[RuntimeError("provider unavailable"), None],
+            ),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+            first_attempt = [
+                json.loads(line)
+                for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
+            ]
+            assert len(first_attempt) == 1
+
+            assert plan(project_root=tmp_path, recover=root)
+
+        retries = [
+            json.loads(line)
+            for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
+        ]
+        assert retries == first_attempt
+        provider.create_task.assert_called_once()
+
+    def test_plain_permission_error_during_parent_handoff_retains_worktree(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        config, provider, collect, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        collect.return_value = native_result(
+            BUNDLE_MARKER
+            + "\n```json\n"
+            + json.dumps(
+                {
+                    "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+                    "knowledge_votes": [{"entry_id": "known-entry", "direction": "up"}],
+                }
+            )
+            + "\n```"
+        )
+
+        with (
+            patch(
+                "wade.services.knowledge_service.record_handoff_rating_for_session",
+                side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+            ),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        cleanup.assert_not_called()
+        assert root.is_dir()
+        provider.create_task.assert_not_called()
+
+    def test_recovery_state_io_failure_does_not_report_access_denial(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, _, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        interactive.begin(root, "claude", review_required=False)
+
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch(
+                "wade.services.plan_service.interactive_plan.collect_with_state",
+                side_effect=StateFileIOError(root, OSError(errno.EIO, "I/O failed")),
+            ),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        hints = " ".join(str(call) for call in mock_console.hint.call_args_list)
+        assert "Recover the retained handoff" in hints
+        assert "After restoring filesystem access" not in hints
 
     @pytest.mark.parametrize("changed_gate", ["content", "review", "binding"])
     def test_recovery_rejects_changed_completed_handoff_before_provider_mutation(
