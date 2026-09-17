@@ -708,15 +708,18 @@ def record_handoff_rating_for_session(
     config: KnowledgeConfig,
     entry_id: str,
     direction: str,
+    handoff_id: str,
 ) -> RatingEvent:
     """Record one completed plan handoff vote exactly once per retained session.
 
     A completed plan bundle permits one vote per knowledge entry.  Recovery can
     re-run its parent-side processing after a later provider failure, so reuse
     the matching staged event rather than turning that retry into another vote.
-    Ordinary interactive ``wade knowledge rate`` calls retain their append-only
-    semantics through :func:`record_rating_for_session`.
+    ``handoff_id`` distinguishes that retryable event from ordinary detached
+    ``wade knowledge rate`` calls, which retain their append-only semantics.
     """
+    if not handoff_id:
+        raise ValueError("Plan handoff ratings require a stable handoff identity")
     if not is_throwaway_knowledge_session(project_root):
         return record_rating_for_session(project_root, config, entry_id, direction)
 
@@ -727,7 +730,7 @@ def record_handoff_rating_for_session(
         )
     with file_lock(path):
         for record in _load_staged_rating_records(path):
-            if record["id"] == entry_id and record["dir"] == direction:
+            if record["id"] == entry_id and record.get("handoff_id") == handoff_id:
                 return RatingEvent(
                     event_id=str(record["event_id"]),
                     entry_id=entry_id,
@@ -735,7 +738,11 @@ def record_handoff_rating_for_session(
                     timestamp=str(record["ts"]),
                 )
         event = create_rating_event(entry_id, direction)
-        _append_jsonl_record_locked(path, event.to_record(), materialize_legacy=False)
+        _append_jsonl_record_locked(
+            path,
+            event.to_record() | {"handoff_id": handoff_id},
+            materialize_legacy=False,
+        )
         return event
 
 

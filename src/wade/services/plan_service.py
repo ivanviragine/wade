@@ -67,7 +67,10 @@ from wade.services.knowledge_recovery import (
     RETAINED_VOTE_RECOVERY_HINT,
     report_retained_vote_recovery,
 )
-from wade.services.session_composition_service import load_session_manifest_strict
+from wade.services.session_composition_service import (
+    load_session_manifest_strict,
+    validate_frozen_session_bundle,
+)
 from wade.services.task_service import (
     add_complexity_label,
     add_planned_by_labels,
@@ -471,6 +474,7 @@ def _prepare_plan_handoff(
     planning_worktree: Path | None,
     project_root: Path | None,
     interactive: bool,
+    handoff_id: str,
     resolved_yolo: bool,
 ) -> list[PlanFile] | None:
     """Revalidate one collected handoff before any provider mutation."""
@@ -521,7 +525,11 @@ def _prepare_plan_handoff(
 
         for vote in bundle.knowledge_votes or ():
             record_handoff_rating_for_session(
-                planning_worktree, config.knowledge, vote.entry_id, vote.direction
+                planning_worktree,
+                config.knowledge,
+                vote.entry_id,
+                vote.direction,
+                handoff_id,
             )
     if not interactive:
         console.info(
@@ -706,16 +714,37 @@ def _recover_completed_handoff(
     console.kv("Planning worktree", str(root))
     try:
         manifest = load_session_manifest_strict(root)
-        state, bundle = interactive_plan.collect_with_state(root)
-        adapter = AbstractAITool.get(state.tool)
-        transcript = root / ".wade/plans/terminal.log"
-        usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
-        raw_effort = state.effort or config.ai.plan.effort or config.ai.effort
-        resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
-        resolved_sandbox = (
-            state.sandbox
-            if state.sandbox is not None
-            else next(
+        validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
+        collected: PlanSessionResult | None = None
+        if interactive_plan.active(root):
+            state, bundle = interactive_plan.collect_with_state(root)
+            adapter = AbstractAITool.get(state.tool)
+            transcript = root / ".wade/plans/terminal.log"
+            usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
+            resolved_tool = state.tool
+            resolved_model = state.model or config.get_model("plan")
+            raw_effort = state.effort or config.ai.plan.effort or config.ai.effort
+            resolved_sandbox = (
+                state.sandbox
+                if state.sandbox is not None
+                else next(
+                    (
+                        value
+                        for value in (config.ai.plan.sandbox, config.ai.sandbox)
+                        if value is not None
+                    ),
+                    False,
+                )
+            )
+            interactive = True
+            handoff_id = state.session_id
+        else:
+            collected, bundle = native_plan.load_artifact(root)
+            usage = None
+            resolved_tool = str(collected.tool)
+            resolved_model = config.get_model("plan")
+            raw_effort = config.ai.plan.effort or config.ai.effort
+            resolved_sandbox = next(
                 (
                     value
                     for value in (config.ai.plan.sandbox, config.ai.sandbox)
@@ -723,8 +752,9 @@ def _recover_completed_handoff(
                 ),
                 False,
             )
-        )
-        resolved_model = state.model or config.get_model("plan")
+            interactive = False
+            handoff_id = collected.session_id
+        resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
         existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
         accepted_plans = _prepare_plan_handoff(
             bundle=bundle,
@@ -734,7 +764,8 @@ def _recover_completed_handoff(
             provider=provider,
             planning_worktree=root,
             project_root=project_root or repo_root,
-            interactive=True,
+            interactive=interactive,
+            handoff_id=handoff_id,
             resolved_yolo=yolo,
         )
         if not accepted_plans:
@@ -759,13 +790,13 @@ def _recover_completed_handoff(
         plan_dir=plan_dir,
         repo_root=repo_root,
         planning_worktree=root,
-        resolved_tool=state.tool,
+        resolved_tool=resolved_tool,
         resolved_model=resolved_model,
         resolved_effort=resolved_effort,
         resolved_yolo=yolo,
         resolved_sandbox=resolved_sandbox,
         usage=usage,
-        collected=None,
+        collected=collected,
     )
 
 
@@ -1171,6 +1202,11 @@ def plan(
                 native_plan.save_artifact(session_cwd, collected)
                 bundle = native_plan.parse_artifact(collected.plan)
                 native_plan.materialize(session_cwd, bundle)
+        if interactive:
+            handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
+        else:
+            assert collected is not None
+            handoff_id = collected.session_id
         accepted_plans = _prepare_plan_handoff(
             bundle=bundle,
             plan_dir=plan_dir,
@@ -1180,6 +1216,7 @@ def plan(
             planning_worktree=planning_worktree,
             project_root=project_root,
             interactive=interactive,
+            handoff_id=handoff_id,
             resolved_yolo=resolved_yolo,
         )
         if not accepted_plans:

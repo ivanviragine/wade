@@ -659,6 +659,10 @@ def plan_alias(
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,
+        network_access=None,
+        approval_policy="on-request",
+        trusted_dir=None,
+        timeout=None,
     )
 
 

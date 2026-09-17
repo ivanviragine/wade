@@ -534,7 +534,7 @@ class TestCollectedSession:
         with patch("wade.services.knowledge_service.record_handoff_rating_for_session") as rate:
             assert plan(project_root=tmp_path) is (vote_id == "known-entry")
         if vote_id == "known-entry":
-            rate.assert_called_once_with(root, config.knowledge, vote_id, "up")
+            rate.assert_called_once_with(root, config.knowledge, vote_id, "up", "native-session")
         else:
             rate.assert_not_called()
             provider.create_task.assert_not_called()
@@ -1106,6 +1106,48 @@ class TestPlanOrchestrator:
         cleanup.assert_not_called()
         assert root.is_dir()
         provider.create_task.assert_not_called()
+
+    def test_recovery_consumes_retained_collector_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        config, provider, collect, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        collect.return_value = native_result(
+            BUNDLE_MARKER
+            + "\n```json\n"
+            + json.dumps(
+                {
+                    "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+                    "knowledge_votes": [{"entry_id": "known-entry", "direction": "up"}],
+                }
+            )
+            + "\n```"
+        )
+
+        with patch(
+            "wade.services.knowledge_service.record_handoff_rating_for_session",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(project_root=tmp_path)
+
+        assert (root / ".wade/plans/native-session.json").is_file()
+        assert root.is_dir()
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        assert collect.call_count == 1
+        provider.create_task.assert_called_once()
 
     def test_recovery_state_io_failure_does_not_report_access_denial(
         self,
