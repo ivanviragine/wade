@@ -1149,6 +1149,67 @@ class TestPlanOrchestrator:
         assert collect.call_count == 1
         provider.create_task.assert_called_once()
 
+    def test_recovery_reuses_tasks_persisted_before_cleanup_failure(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A retained completed handoff must resume finalization, not recreate tasks."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        with patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=False):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["persisted_issues"] == {"PLAN.md": "1"}
+        provider.create_task.assert_called_once()
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_called_once()
+
+    def test_recovery_uses_collector_model_recorded_with_retained_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Collector recovery keeps the original model for planned-by provenance."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        with patch(
+            "wade.services.plan_service._prepare_plan_handoff",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(
+                project_root=tmp_path,
+                model="gpt-5.2-codex",
+                model_explicit=True,
+            )
+
+        config.ai.default_model = "gpt-5.3-codex"
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.add_planned_by_labels") as add_labels,
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        add_labels.assert_called_once_with(provider, "1", "codex", "gpt-5.2-codex")
+
     def test_recovery_state_io_failure_does_not_report_access_denial(
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],

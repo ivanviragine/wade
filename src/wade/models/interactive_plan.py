@@ -23,6 +23,17 @@ class InteractivePlanState(BaseModel):
     completed: bool = False
 
 
+class PlanHandoffProgress(BaseModel):
+    """Durable parent-side progress for one completed planning handoff."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1] = 1
+    session_id: str
+    model: str | None = None
+    persisted_issues: dict[str, str] = Field(default_factory=dict)
+
+
 class InteractivePlanReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

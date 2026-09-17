@@ -45,6 +45,7 @@ from crossby.models.ai import (
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig, with_wade_base_pattern
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
+from wade.models.interactive_plan import PlanHandoffProgress
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle
 from wade.models.task import CloseReason, PlanFile, Task
@@ -93,8 +94,12 @@ from wade.utils.safe_state import (
     StateFileAccessError,
     StateFileError,
     StateFileIOError,
+    StateFileUnsafeError,
+    atomic_write_state_file,
     exclusive_write_state_file,
     list_state_files_strict,
+    read_state_file_strict,
+    state_file_present,
 )
 from wade.utils.terminal import (
     compose_plan_title,
@@ -111,6 +116,65 @@ class _PlanFinalizationFailure:
 
 
 PLAN_FINALIZATION_FAILED = _PlanFinalizationFailure()
+HANDOFF_PROGRESS_FILE = "handoff-progress.json"
+
+
+def _load_handoff_progress(root: Path, session_id: str) -> PlanHandoffProgress | None:
+    """Load progress only when it belongs to this completed handoff.
+
+    Older retained handoffs have no progress file. They remain recoverable, but
+    cannot recover launch-specific metadata that was not recorded at collection
+    time. Any present progress file must be safe, valid, and tied to the exact
+    completed handoff rather than being silently replaced.
+    """
+
+    if not state_file_present(root, ("plans",), HANDOFF_PROGRESS_FILE):
+        return None
+    try:
+        raw = read_state_file_strict(root, ("plans",), HANDOFF_PROGRESS_FILE)
+    except StateFileUnsafeError as exc:
+        raise ValueError("Planning handoff progress is absent or unsafe") from exc
+    try:
+        progress = PlanHandoffProgress.model_validate_json(raw)
+    except ValueError as exc:
+        raise ValueError("Planning handoff progress is invalid") from exc
+    if progress.session_id != session_id:
+        raise ValueError("Planning handoff progress belongs to a different completed session")
+    return progress
+
+
+def _save_handoff_progress(root: Path, progress: PlanHandoffProgress) -> bool:
+    """Atomically persist retry state without following handoff-path links."""
+
+    return atomic_write_state_file(
+        root,
+        ("plans",),
+        HANDOFF_PROGRESS_FILE,
+        progress.model_dump_json().encode(),
+    )
+
+
+def _ensure_handoff_progress(root: Path, session_id: str, model: str | None) -> PlanHandoffProgress:
+    """Return one handoff's durable metadata, creating it before mutations."""
+
+    progress = _load_handoff_progress(root, session_id)
+    if progress is not None:
+        return progress
+
+    progress = PlanHandoffProgress(session_id=session_id, model=model)
+    if not _save_handoff_progress(root, progress):
+        raise ValueError("Cannot safely save planning handoff progress")
+    return progress
+
+
+def _handoff_progress_saver(
+    root: Path | None, progress: PlanHandoffProgress | None
+) -> Callable[[], bool] | None:
+    """Bind an optional worktree progress record to the issue-creation loop."""
+
+    if root is None or progress is None:
+        return None
+    return lambda: _save_handoff_progress(root, progress)
 
 
 def get_plan_prompt_template() -> str:
@@ -564,11 +628,21 @@ def _persist_accepted_plans(
     resolved_sandbox: bool,
     usage: TokenUsage | None,
     collected: PlanSessionResult | None,
+    handoff_id: str,
 ) -> bool:
     """Persist a fully revalidated handoff and finish its managed lifecycle."""
 
     plan_files = accepted_plans
     console.info(f"Found {len(plan_files)} plan file(s)")
+    progress: PlanHandoffProgress | None = None
+    if planning_worktree is not None:
+        try:
+            progress = _ensure_handoff_progress(planning_worktree, handoff_id, resolved_model)
+        except (StateFileError, ValueError) as exc:
+            console.error(f"Could not record planning recovery progress: {exc}", markup=False)
+            _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+            return False
+
     if existing_issue is not None:
         if len(plan_files) == 1:
             if not _attach_plan_to_existing_issue(
@@ -591,6 +665,8 @@ def _persist_accepted_plans(
                 plan_files=plan_files,
                 repo_root=repo_root,
                 yolo=resolved_yolo,
+                persisted_issues=progress.persisted_issues if progress is not None else None,
+                save_progress=_handoff_progress_saver(planning_worktree, progress),
             )
         stop_title_keeper()
         if not finalize_issue_numbers:
@@ -627,6 +703,8 @@ def _persist_accepted_plans(
         config=config,
         plan_files=plan_files,
         repo_root=repo_root,
+        persisted_issues=progress.persisted_issues if progress is not None else None,
+        save_progress=_handoff_progress_saver(planning_worktree, progress),
     )
     if created_numbers:
         stop_title_keeper()
@@ -742,7 +820,6 @@ def _recover_completed_handoff(
             collected, bundle = native_plan.load_artifact(root)
             usage = None
             resolved_tool = str(collected.tool)
-            resolved_model = config.get_model("plan")
             raw_effort = config.ai.plan.effort or config.ai.effort
             resolved_sandbox = next(
                 (
@@ -754,6 +831,8 @@ def _recover_completed_handoff(
             )
             interactive = False
             handoff_id = collected.session_id
+            progress = _load_handoff_progress(root, handoff_id)
+            resolved_model = progress.model if progress is not None else config.get_model("plan")
         resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
         existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
         accepted_plans = _prepare_plan_handoff(
@@ -797,6 +876,7 @@ def _recover_completed_handoff(
         resolved_sandbox=resolved_sandbox,
         usage=usage,
         collected=collected,
+        handoff_id=handoff_id,
     )
 
 
@@ -1200,6 +1280,10 @@ def plan(
                     source_root=str(planning_worktree or repo_root or cwd),
                 )
                 native_plan.save_artifact(session_cwd, collected)
+                if planning_worktree is not None:
+                    _ensure_handoff_progress(
+                        planning_worktree, collected.session_id, resolved_model
+                    )
                 bundle = native_plan.parse_artifact(collected.plan)
                 native_plan.materialize(session_cwd, bundle)
         if interactive:
@@ -1261,6 +1345,7 @@ def plan(
         resolved_sandbox=resolved_sandbox,
         usage=usage,
         collected=collected,
+        handoff_id=handoff_id,
     )
 
 
@@ -1300,6 +1385,8 @@ def _create_issues_from_plans(
     config: ProjectConfig,
     plan_files: list[PlanFile],
     repo_root: Path | None = None,
+    persisted_issues: dict[str, str] | None = None,
+    save_progress: Callable[[], bool] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Create lightweight GitHub issues + draft PRs from validated plan files.
 
@@ -1325,6 +1412,13 @@ def _create_issues_from_plans(
             repo_root = None
 
     for plan in plan_files:
+        persisted_issue = (
+            persisted_issues.get(plan.path.name) if persisted_issues is not None else None
+        )
+        if persisted_issue is not None:
+            created.append(persisted_issue)
+            continue
+
         # Build lightweight body
         brief_body = _build_lightweight_issue_body(plan)
 
@@ -1392,6 +1486,19 @@ def _create_issues_from_plans(
                     )
                 except Exception as e:
                     logger.warning("plan.orphan_issue_close_failed", issue=task.id, error=str(e))
+                failed.append(plan.path.name)
+                continue
+
+        # A retained handoff may need to retry finalization or worktree cleanup
+        # after this issue and its draft PR are durable. Save the per-plan mapping
+        # first so recovery resumes from this task rather than creating another.
+        if persisted_issues is not None:
+            persisted_issues[plan.path.name] = task.id
+            if save_progress is None or not save_progress():
+                persisted_issues.pop(plan.path.name, None)
+                console.error(
+                    f"Could not save recovery progress for #{task.id}; preserving planning output."
+                )
                 failed.append(plan.path.name)
                 continue
 
@@ -1704,6 +1811,8 @@ def _supersede_issue_with_plans(
     plan_files: list[PlanFile],
     repo_root: Path | None,
     yolo: bool,
+    persisted_issues: dict[str, str] | None = None,
+    save_progress: Callable[[], bool] | None = None,
 ) -> list[str]:
     """Split an existing issue into one new issue per plan file and supersede it.
 
@@ -1720,6 +1829,8 @@ def _supersede_issue_with_plans(
         config=config,
         plan_files=plan_files,
         repo_root=repo_root,
+        persisted_issues=persisted_issues,
+        save_progress=save_progress,
     )
 
     if failed_files:
