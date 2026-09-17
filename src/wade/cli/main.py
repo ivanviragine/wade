@@ -9,6 +9,7 @@ import typer
 
 import wade
 from wade.config.loader import ConfigError
+from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
 
 app = typer.Typer(
     name="wade",
@@ -659,7 +660,7 @@ def plan_alias(
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,
-        network_access=None,
+        network_access=LAUNCH_NETWORK_ACCESS,
         approval_policy="on-request",
         trusted_dir=None,
         timeout=None,
