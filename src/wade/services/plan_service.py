@@ -1775,13 +1775,18 @@ def _attach_plan_to_existing_issue(
             ):
                 return False
 
-            # Preserve the original issue body and append the PR link
+            # Preserve the original issue body and append the PR link. A retained
+            # handoff replays this path after a failed finalization or cleanup, and
+            # bootstrap_draft_pr reuses the same open PR — so only append a link the
+            # body does not already carry instead of stacking duplicates (#516).
             original_body = (issue.body or "").rstrip("\n")
-            updated_body = original_body + f"\n\n**Full plan**: PR #{pr_number}"
-            try:
-                provider.update_task(issue.id, body=updated_body)
-            except Exception as e:
-                logger.warning("plan.pr_link_update_failed", error=str(e))
+            plan_link = f"**Full plan**: PR #{pr_number}"
+            if plan_link not in original_body:
+                updated_body = original_body + f"\n\n{plan_link}"
+                try:
+                    provider.update_task(issue.id, body=updated_body)
+                except Exception as e:
+                    logger.warning("plan.pr_link_update_failed", error=str(e))
         else:
             # Draft-PR bootstrap failed (missing declared base, a failed retarget,
             # or a transient gh error). The plan lives only in the worktree/plan

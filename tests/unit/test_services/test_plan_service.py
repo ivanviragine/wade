@@ -1720,6 +1720,40 @@ class TestAttachPlanToExistingIssue:
         assert "Original body" in updated_body
         assert "PR #99" in updated_body
 
+    def test_replayed_attachment_does_not_duplicate_the_plan_link(self, tmp_path: Path) -> None:
+        # Recovery replays the attachment after a failed finalization or cleanup.
+        # bootstrap_draft_pr reuses the same open PR, so the link the body already
+        # carries must not be appended a second time (#516).
+        provider = MagicMock()
+        issue = Task(
+            id="42",
+            title="Some issue",
+            body="Original body\n\n**Full plan**: PR #99",
+        )
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 99, "url": "https://example.com/pr/99"},
+            ),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+        ):
+            attached = _attach_plan_to_existing_issue(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_file=plan_file,
+                repo_root=tmp_path,
+            )
+
+        assert attached is True
+        provider.update_task.assert_not_called()
+
     def test_returns_false_when_retarget_guard_refuses(self, tmp_path: Path) -> None:
         # When the in-flight retarget guard refuses, the plan must NOT be attached
         # and the caller is told so (False) — the bootstrap is never reached (#376).
