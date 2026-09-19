@@ -308,6 +308,17 @@ Native terminal output is retained for recovery; usage is reported only when
 the adapter can extract it from that output. WADE's handoff ID is not a native
 CLI session ID.
 
+If the OS denies the parent access after the terminal exits, WADE reports the
+permission failure instead of calling the handoff absent, leaves the detached
+planning worktree intact, and prints a recovery command. Restore filesystem
+access, then run `wade plan --recover <planning-worktree>` from the source repo.
+Recovery does not launch an AI or regenerate content: it accepts only a retained
+registered detached worktree, then rechecks the frozen bindings, completed state,
+exact plan content, review receipts, dependencies, and plan validation before any
+task/provider write. If even the plans directory cannot be enumerated, WADE says
+the retained plan count is unknown rather than reporting zero. WADE never changes
+OS privacy or sandbox settings for you.
+
 `wade plan --issue <N>` re-plans an existing task. If the session produces a
 single plan file, it's attached to `#N` and the task stays open. If the
 session decides the work should be split into several independent pieces

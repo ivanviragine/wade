@@ -9,6 +9,7 @@ import typer
 
 import wade
 from wade.config.loader import ConfigError
+from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
 
 app = typer.Typer(
     name="wade",
@@ -233,6 +234,11 @@ _SANDBOX_OPT = typer.Option(
 @app.command("plan", rich_help_panel="Workflow")
 def plan_cmd(
     issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
+    recover: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--recover",
+        help="Revalidate and consume a retained completed planning worktree.",
+    ),
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
     ),
@@ -308,6 +314,7 @@ def plan_cmd(
         approval_policy=approval_policy,
         trusted_dirs=trusted_dir,
         timeout=timeout,
+        recover=recover,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -620,6 +627,7 @@ def smart_start_cmd(
 @app.command("p", hidden=True)
 def plan_alias(
     issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
+    recover: Path | None = typer.Option(None, "--recover"),  # noqa: B008
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
     ),
@@ -642,6 +650,7 @@ def plan_alias(
     """Alias for plan."""
     plan_cmd(
         issue=issue,
+        recover=recover,
         ai=ai,
         model=model,
         effort=effort,
@@ -651,6 +660,10 @@ def plan_alias(
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,
+        network_access=LAUNCH_NETWORK_ACCESS,
+        approval_policy="on-request",
+        trusted_dir=None,
+        timeout=None,
     )
 
 

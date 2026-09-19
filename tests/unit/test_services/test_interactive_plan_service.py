@@ -1,5 +1,7 @@
 """Explicit native-terminal handoff, revision, review, and completion contracts."""
 
+import errno
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +15,7 @@ from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.models.workflow import SessionKind
 from wade.services import interactive_plan_service as interactive
 from wade.services.session_composition_service import compose_session
+from wade.utils import safe_state
 
 PLAN = "# fix: preserve native planning\n\n## Complexity\neasy\n\n## Tasks\n- Test it.\n"
 
@@ -101,6 +104,57 @@ def test_stdin_bundle_preserves_dependencies_and_explicit_knowledge_handoff(sess
 def test_missing_completion_never_treats_draft_as_accepted(session: Path) -> None:
     interactive.import_artifact(session, PLAN)
     with pytest.raises(ValueError, match="No completed plan handoff"):
+        interactive.collect(session)
+
+
+@pytest.mark.parametrize("denied_component", [".wade", "plans", interactive.STATE])
+@pytest.mark.parametrize("error_number", [errno.EACCES, errno.EPERM])
+def test_completed_handoff_reports_permission_denial_at_each_parent_open(
+    session: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    denied_component: str,
+    error_number: int,
+) -> None:
+    interactive.import_artifact(session, PLAN)
+    copied = session / ".wade/plans/PLAN.md"
+    interactive.record_review(copied, PLAN, self_review=False)
+    interactive.complete(session)
+    original_open = os.open
+
+    def denied_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if Path(path).name == denied_component:
+            raise OSError(error_number, os.strerror(error_number), os.fspath(path))
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(safe_state.os, "open", denied_open)
+    with pytest.raises(interactive.InteractivePlanAccessError, match="permission denied"):
+        interactive.collect(session)
+
+
+@pytest.mark.parametrize(
+    "unsafe_kind", ["missing", "symlink", "directory", "oversized", "malformed"]
+)
+def test_unsafe_handoff_state_remains_rejected(session: Path, unsafe_kind: str) -> None:
+    state = session / ".wade/plans" / interactive.STATE
+    state.unlink()
+    if unsafe_kind == "symlink":
+        outside = session / "outside-state.json"
+        outside.write_text("{}")
+        state.symlink_to(outside)
+    elif unsafe_kind == "directory":
+        state.mkdir()
+    elif unsafe_kind == "oversized":
+        state.write_bytes(b"x" * (interactive.MAX_HANDOFF_BYTES + 1))
+    elif unsafe_kind == "malformed":
+        state.write_text("not-json")
+
+    with pytest.raises(ValueError):
         interactive.collect(session)
 
 

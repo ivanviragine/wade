@@ -2,31 +2,73 @@
 
 Every operation opens ``.wade`` and its requested child directories through
 directory descriptors. Unsupported platforms and any unsafe or malformed path
-fail closed; callers interpret ``None``/``False`` as absent state.
+fail closed. Compatibility callers interpret ``None``/``False`` as absent state;
+strict callers receive typed unsafe, permission, or I/O failures.
 """
 
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import stat
 import uuid
 from pathlib import Path
 
 MAX_STATE_FILE_BYTES = 256 * 1024
+_OPEN_SUPPORTS_DIR_FD = os.open in os.supports_dir_fd
+_STAT_SUPPORTS_DIR_FD = os.stat in os.supports_dir_fd
+_MKDIR_SUPPORTS_DIR_FD = os.mkdir in os.supports_dir_fd
+_REPLACE_SUPPORTS_DIR_FD = os.replace in os.supports_dir_fd
+_RENAME_SUPPORTS_DIR_FD = os.rename in os.supports_dir_fd
+
+
+class StateFileError(ValueError):
+    """A strict state operation could not prove that its target was safe."""
+
+
+class StateFileAccessError(StateFileError):
+    """The OS denied access to an otherwise requested state path."""
+
+    def __init__(self, path: Path, cause: OSError) -> None:
+        self.path = path
+        self.errno = cause.errno
+        detail = os.strerror(cause.errno) if cause.errno is not None else str(cause)
+        super().__init__(f"Filesystem access denied for WADE state at {path}: {detail}")
+
+
+class StateFileIOError(StateFileError):
+    """The OS failed a state operation for a reason other than path safety."""
+
+    def __init__(self, path: Path, cause: OSError) -> None:
+        self.path = path
+        self.errno = cause.errno
+        super().__init__(f"Filesystem I/O failed for WADE state at {path}: {cause}")
+
+
+class StateFileUnsafeError(StateFileError):
+    """State is absent, structurally unsafe, unsupported, or outside its bounds."""
+
+
+def _strict_error(path: Path, exc: OSError) -> StateFileError:
+    if exc.errno in {errno.EACCES, errno.EPERM}:
+        return StateFileAccessError(path, exc)
+    if exc.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EINVAL}:
+        return StateFileUnsafeError(f"WADE state is absent or unsafe at {path}: {exc}")
+    return StateFileIOError(path, exc)
 
 
 def _supported(*, write: bool = False) -> bool:
     base = (
         hasattr(os, "O_DIRECTORY")
         and hasattr(os, "O_NOFOLLOW")
-        and os.open in os.supports_dir_fd
-        and os.stat in os.supports_dir_fd
+        and _OPEN_SUPPORTS_DIR_FD
+        and _STAT_SUPPORTS_DIR_FD
     )
     if not write:
         return base
-    replace_supported = os.replace in os.supports_dir_fd or os.rename in os.supports_dir_fd
-    return base and os.mkdir in os.supports_dir_fd and replace_supported
+    replace_supported = _REPLACE_SUPPORTS_DIR_FD or _RENAME_SUPPORTS_DIR_FD
+    return base and _MKDIR_SUPPORTS_DIR_FD and replace_supported
 
 
 def _close(fd: int | None) -> None:
@@ -70,6 +112,35 @@ def _open_nested(root: Path, directories: tuple[str, ...], *, create: bool) -> i
         return None
 
 
+def _open_nested_strict(root: Path, directories: tuple[str, ...]) -> int:
+    """Open a state directory while preserving permission-denied failures."""
+
+    if any(not name or "/" in name or name in {".", ".."} for name in directories):
+        raise StateFileUnsafeError("WADE state contains an invalid directory component")
+    if not _supported():
+        raise StateFileUnsafeError("Safe descriptor-relative state reads are unsupported")
+    current_path = root / ".wade"
+    fd: int | None = None
+    try:
+        try:
+            fd = os.open(current_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise _strict_error(current_path, exc) from exc
+        for name in directories:
+            current_path /= name
+            try:
+                child = _open_directory(fd, name, create=False)
+            except OSError as exc:
+                raise _strict_error(current_path, exc) from exc
+            os.close(fd)
+            fd = child
+        result = fd
+        fd = None
+        return result
+    finally:
+        _close(fd)
+
+
 def read_state_file(
     root: Path,
     directories: tuple[str, ...],
@@ -107,6 +178,56 @@ def read_state_file(
         _close(dir_fd)
 
 
+def read_state_file_strict(
+    root: Path,
+    directories: tuple[str, ...],
+    filename: str,
+    *,
+    max_bytes: int = MAX_STATE_FILE_BYTES,
+) -> bytes:
+    """Read trusted state and distinguish OS access denial from unsafe state.
+
+    This is intentionally additive.  Most state consumers retain the historical
+    fail-closed ``None`` contract from :func:`read_state_file`; trusted parent
+    handoffs use this strict form when an access denial is recoverable and must
+    not be misreported as an absent artifact.
+    """
+
+    if not filename or "/" in filename or filename in {".", ".."}:
+        raise StateFileUnsafeError("WADE state contains an invalid filename")
+    dir_fd = _open_nested_strict(root, directories)
+    path = root / ".wade" / Path(*directories) / filename
+    file_fd: int | None = None
+    try:
+        try:
+            file_fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            file_stat = os.fstat(file_fd)
+        except OSError as exc:
+            raise _strict_error(path, exc) from exc
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise StateFileUnsafeError(f"WADE state is not a regular file: {path}")
+        if file_stat.st_size > max_bytes:
+            raise StateFileUnsafeError(f"WADE state exceeds its {max_bytes}-byte limit: {path}")
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            try:
+                chunk = os.read(file_fd, min(65_536, remaining))
+            except OSError as exc:
+                raise _strict_error(path, exc) from exc
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > max_bytes:
+            raise StateFileUnsafeError(f"WADE state exceeds its {max_bytes}-byte limit: {path}")
+        return data
+    finally:
+        _close(file_fd)
+        _close(dir_fd)
+
+
 def list_state_files(root: Path, directories: tuple[str, ...]) -> tuple[str, ...] | None:
     """List a trusted state directory, failing closed when fd listing is unavailable."""
 
@@ -119,6 +240,22 @@ def list_state_files(root: Path, directories: tuple[str, ...]) -> tuple[str, ...
         return tuple(sorted(os.listdir(dir_fd)))
     except OSError:
         return None
+    finally:
+        _close(dir_fd)
+
+
+def list_state_files_strict(root: Path, directories: tuple[str, ...]) -> tuple[str, ...]:
+    """List trusted state while preserving permission-denied failures."""
+
+    if os.listdir not in os.supports_fd:
+        raise StateFileUnsafeError("Safe descriptor-relative state listing is unsupported")
+    dir_fd = _open_nested_strict(root, directories)
+    path = root / ".wade" / Path(*directories)
+    try:
+        try:
+            return tuple(sorted(os.listdir(dir_fd)))
+        except OSError as exc:
+            raise _strict_error(path, exc) from exc
     finally:
         _close(dir_fd)
 

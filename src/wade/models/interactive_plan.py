@@ -13,11 +13,25 @@ class InteractivePlanState(BaseModel):
     version: Literal[1] = 1
     session_id: str
     tool: str
+    model: str | None = None
+    effort: str | None = None
+    sandbox: bool | None = None
     review_required: bool
     knowledge_required: bool = False
     bundle_digest: str
     bundle: PlanBundle | None = None
     completed: bool = False
+
+
+class PlanHandoffProgress(BaseModel):
+    """Durable parent-side progress for one completed planning handoff."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1] = 1
+    session_id: str
+    model: str | None = None
+    persisted_issues: dict[str, str] = Field(default_factory=dict)
 
 
 class InteractivePlanReview(BaseModel):

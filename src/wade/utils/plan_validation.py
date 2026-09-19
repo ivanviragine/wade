@@ -34,13 +34,14 @@ from wade.utils.conventional import (
     conventional_title_error,
 )
 from wade.utils.gitref import is_valid_git_ref
-from wade.utils.safe_state import read_state_file
+from wade.utils.safe_state import read_state_file, read_state_file_strict
 
 
-def load_plan_file(path: Path) -> PlanFile:
+def load_plan_file(path: Path, *, strict: bool = False) -> PlanFile:
     """Read canonical artifacts without following links; require one task title."""
     if path.parent.name == "plans" and path.parent.parent.name == ".wade":
-        data = read_state_file(path.parent.parent.parent, ("plans",), path.name)
+        reader = read_state_file_strict if strict else read_state_file
+        data = reader(path.parent.parent.parent, ("plans",), path.name)
         if data is None:
             raise ValueError("Plan artifact is unsafe, unreadable, or too large")
         content = data.decode("utf-8")

@@ -24,7 +24,15 @@ from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.models.task import PlanFile
 from wade.ui import prompts
 from wade.ui.console import console
-from wade.utils.safe_state import exclusive_write_state_file, list_state_files
+from wade.utils.safe_state import (
+    StateFileAccessError,
+    StateFileUnsafeError,
+    exclusive_write_state_file,
+    list_state_files,
+    read_state_file_strict,
+)
+
+MAX_ARTIFACT_BYTES = 4_000_000
 
 
 def failure_message(exc: BaseException) -> str:
@@ -115,6 +123,22 @@ def save_artifact(root: Path, result: PlanSessionResult) -> None:
         raise ValueError(
             "Cannot safely save native provenance; existing artifacts were not replaced"
         )
+
+
+def load_artifact(root: Path) -> tuple[PlanSessionResult, PlanBundle]:
+    """Load one retained collector result and verify its imported plan members."""
+    try:
+        raw = read_state_file_strict(
+            root, ("plans",), "native-session.json", max_bytes=MAX_ARTIFACT_BYTES
+        )
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        raise ValueError("Native planning handoff is absent or unsafe") from exc
+    result = PlanSessionResult.model_validate_json(raw)
+    bundle = parse_artifact(result.plan)
+    validate_imported_set(root, bundle)
+    return result, bundle
 
 
 def materialize(root: Path, bundle: PlanBundle) -> None:
