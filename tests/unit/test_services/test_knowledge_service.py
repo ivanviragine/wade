@@ -1666,6 +1666,31 @@ class TestStagedRatingEvents:
         assert records[1]["handoff_id"] == "interactive-session-a"
         assert records[2]["handoff_id"] == "native-session-b"
 
+    def test_handoff_rating_keeps_its_identity_after_staging_is_flushed(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retained handoff retry must not vote again after cleanup fails."""
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+
+        first = record_handoff_rating_for_session(
+            worktree, config, "entry", "up", "completed-handoff"
+        )
+        assert flush_staged_ratings(worktree, main, config).appended_count == 1
+        assert not staged_ratings_path(worktree).exists()
+
+        retry = record_handoff_rating_for_session(
+            worktree, config, "entry", "up", "completed-handoff"
+        )
+        assert retry.event_id == first.event_id
+        assert flush_staged_ratings(worktree, main, config).appended_count == 0
+        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["entry"].up == 1
+
     def test_flush_hands_off_once_and_retry_only_cleans_staging(
         self, tmp_path: Path, config: KnowledgeConfig
     ) -> None:

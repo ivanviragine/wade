@@ -748,7 +748,14 @@ def _persist_accepted_plans(
             sandbox=resolved_sandbox,
         )
         if offer_result is PLAN_FINALIZATION_FAILED:
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            _retain_finalization_failed_handoff(
+                plan_dir,
+                repo_root,
+                planning_worktree,
+                config,
+                issue_numbers=finalize_issue_numbers,
+                plan_files=plan_files,
+            )
             return False
         if not _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config):
             return False
@@ -792,7 +799,14 @@ def _persist_accepted_plans(
             sandbox=resolved_sandbox,
         )
         if offer_result is PLAN_FINALIZATION_FAILED:
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            _retain_finalization_failed_handoff(
+                plan_dir,
+                repo_root,
+                planning_worktree,
+                config,
+                issue_numbers=created_numbers,
+                plan_files=plan_files,
+            )
             return False
         if failed_files or (progress is not None and progress.pending_issue_markers):
             console.warn(
@@ -1520,60 +1534,50 @@ def _create_issues_from_plans(
         marker = (
             pending_issue_markers.get(plan.path.name) if pending_issue_markers is not None else None
         )
+        reconciled: Task | None = None
         if marker is not None:
             reconciled = _find_pending_handoff_issue(provider, config, marker)
-            if reconciled is not None:
-                if (
-                    persisted_issues is None
-                    or pending_issue_markers is None
-                    or save_progress is None
-                ):
+        if reconciled is not None:
+            # The marker proves the lightweight issue was created before a
+            # process or progress-write failure. It still needs the same
+            # complexity label and full-plan draft PR as a newly created task.
+            task = reconciled
+            brief_body = task.body
+        else:
+            # Build lightweight body
+            brief_body = _build_lightweight_issue_body(plan)
+
+            # Write the durable intent before provider mutation.  A task created
+            # before a process or state-write failure carries this hidden marker, so
+            # recovery can reconcile it without guessing from its title or creating
+            # another task.
+            if pending_issue_markers is not None:
+                if persisted_issues is None or save_progress is None or handoff_id is None:
                     raise HandoffProgressSaveError(
-                        "Cannot safely record a reconciled planning task; output was retained"
+                        "Cannot safely record planning task intent; output was retained"
                     )
-                persisted_issues[plan.path.name] = reconciled.id
-                pending_issue_markers.pop(plan.path.name, None)
+                marker = _handoff_issue_marker(handoff_id, plan.path.name)
+                pending_issue_markers[plan.path.name] = marker
                 if not save_progress():
                     raise HandoffProgressSaveError(
-                        f"Could not save recovery progress for #{reconciled.id}; "
+                        "Cannot safely save planning task intent before creation; "
                         "output was retained"
                     )
-                created.append(reconciled.id)
+                brief_body = f"{brief_body.rstrip()}\n\n{marker}".lstrip()
+
+            # Create the issue with lightweight body
+            console.step(f"Creating issue: {plan.title}")
+            try:
+                task = provider.create_task(
+                    title=plan.title,
+                    body=brief_body,
+                    labels=[config.project.issue_label],
+                )
+                console.success(f"Created {console.issue_ref(task.id, task.title)}")
+            except Exception as e:
+                console.error(f"Failed to create issue: {e}")
+                failed.append(plan.path.name)
                 continue
-
-        # Build lightweight body
-        brief_body = _build_lightweight_issue_body(plan)
-
-        # Write the durable intent before provider mutation.  A task created
-        # before a process or state-write failure carries this hidden marker, so
-        # recovery can reconcile it without guessing from its title or creating
-        # another task.
-        if pending_issue_markers is not None:
-            if persisted_issues is None or save_progress is None or handoff_id is None:
-                raise HandoffProgressSaveError(
-                    "Cannot safely record planning task intent; output was retained"
-                )
-            marker = _handoff_issue_marker(handoff_id, plan.path.name)
-            pending_issue_markers[plan.path.name] = marker
-            if not save_progress():
-                raise HandoffProgressSaveError(
-                    "Cannot safely save planning task intent before creation; output was retained"
-                )
-            brief_body = f"{brief_body.rstrip()}\n\n{marker}".lstrip()
-
-        # Create the issue with lightweight body
-        console.step(f"Creating issue: {plan.title}")
-        try:
-            task = provider.create_task(
-                title=plan.title,
-                body=brief_body,
-                labels=[config.project.issue_label],
-            )
-            console.success(f"Created {console.issue_ref(task.id, task.title)}")
-        except Exception as e:
-            console.error(f"Failed to create issue: {e}")
-            failed.append(plan.path.name)
-            continue
 
         # Add complexity label
         if plan.complexity:
@@ -2400,6 +2404,22 @@ def _preserve_generated_plans(
     # so the normal cleanup can remove the worktree/temp dir.
     _report_preserved_plans(len(generated), preserved)
     return _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config)
+
+
+def _retain_finalization_failed_handoff(
+    plan_dir: str,
+    repo_root: Path | None,
+    planning_worktree: Path | None,
+    config: ProjectConfig,
+    *,
+    issue_numbers: list[str],
+    plan_files: list[PlanFile],
+) -> None:
+    """Keep a fully durable handoff recoverable after finalization fails."""
+    if planning_worktree is not None and len(issue_numbers) == len(plan_files):
+        _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+        return
+    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
 
 
 def _report_preserved_plans(count: int, location: Path) -> None:

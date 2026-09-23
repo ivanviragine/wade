@@ -712,11 +712,12 @@ def record_handoff_rating_for_session(
 ) -> RatingEvent:
     """Record one completed plan handoff vote exactly once per retained session.
 
-    A completed plan bundle permits one vote per knowledge entry.  Recovery can
-    re-run its parent-side processing after a later provider failure, so reuse
-    the matching staged event rather than turning that retry into another vote.
-    ``handoff_id`` distinguishes that retryable event from ordinary detached
-    ``wade knowledge rate`` calls, which retain their append-only semantics.
+    A completed plan bundle permits one vote per knowledge entry.  Its event ID
+    is derived from that stable handoff identity, so a retry remains idempotent
+    even after the staging file was flushed before a later worktree-cleanup
+    failure.  ``handoff_id`` distinguishes that retryable event from ordinary
+    detached ``wade knowledge rate`` calls, which retain their append-only
+    semantics.
     """
     if not handoff_id:
         raise ValueError("Plan handoff ratings require a stable handoff identity")
@@ -737,7 +738,17 @@ def record_handoff_rating_for_session(
                     direction=direction,
                     timestamp=str(record["ts"]),
                 )
-        event = create_rating_event(entry_id, direction)
+        event = RatingEvent(
+            event_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"wade:plan-handoff-rating:{handoff_id}:{entry_id}",
+                )
+            ),
+            entry_id=entry_id,
+            direction=direction,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+        )
         _append_jsonl_record_locked(
             path,
             event.to_record() | {"handoff_id": handoff_id},
