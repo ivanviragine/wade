@@ -445,18 +445,17 @@ class TestCliParsing:
         assert result.exit_code == 0
         assert mock_plan.call_args.kwargs["recover"] == worktree
 
-    def test_plan_alias_recovery_forwards_concrete_defaults(self, tmp_path: Path) -> None:
+    def test_plan_alias_recovery_forwards_recovery_safe_defaults(self, tmp_path: Path) -> None:
         from typer.testing import CliRunner
 
         from wade.cli.main import app
-        from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
 
         worktree = tmp_path / "retained-plan"
         with patch("wade.services.plan_service.plan", return_value=True) as mock_plan:
             result = CliRunner().invoke(app, ["p", "--recover", str(worktree)])
 
         assert result.exit_code == 0
-        assert mock_plan.call_args.kwargs["network_access"] is LAUNCH_NETWORK_ACCESS
+        assert mock_plan.call_args.kwargs["network_access"] is None
         assert mock_plan.call_args.kwargs["approval_policy"] == "on-request"
         assert mock_plan.call_args.kwargs["trusted_dirs"] is None
         assert mock_plan.call_args.kwargs["timeout"] is None

@@ -959,10 +959,10 @@ class TestNetworkAccessRetirement:
     ``sandbox_workspace_write.network_access=false`` on every sandboxed launch and
     take the network away from the lifecycle that requires it. The criterion's
     intent — that network is no longer a wade-managed, per-command axis — is
-    therefore enforced as: the only value wade ever passes is the
-    :data:`LAUNCH_NETWORK_ACCESS` constant, and no config/resolver surface for it
-    remains. This is a source scan, so it catches a missed call site that no
-    behavioural test happens to cover.
+    therefore enforced as: every launch uses the :data:`LAUNCH_NETWORK_ACCESS`
+    constant, except recovery, which must pass no policy option at all. No
+    config/resolver surface for it remains. This is a source scan, so it catches
+    a missed call site that no behavioural test happens to cover.
     """
 
     @staticmethod
@@ -975,7 +975,7 @@ class TestNetworkAccessRetirement:
     def test_launch_network_access_is_unconditionally_on(self) -> None:
         assert LAUNCH_NETWORK_ACCESS is True
 
-    def test_every_network_access_argument_is_the_constant(self) -> None:
+    def test_network_access_arguments_are_constant_or_recovery_absent(self) -> None:
         offenders: list[str] = []
         for path in self._wade_sources():
             for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -989,11 +989,18 @@ class TestNetworkAccessRetirement:
                 }:
                     # Complete planning requests preserve the explicit independent policy.
                     continue
+                if (
+                    path.name == "main.py"
+                    and stripped
+                    == "network_access=None if recover is not None else LAUNCH_NETWORK_ACCESS,"
+                ):
+                    # Recovery consumes a frozen handoff, so it cannot accept launch policy.
+                    continue
                 if stripped != "network_access=LAUNCH_NETWORK_ACCESS,":
                     offenders.append(f"{path.name}:{lineno}: {stripped}")
         assert not offenders, (
-            "network_access must only ever be passed as the LAUNCH_NETWORK_ACCESS "
-            f"constant — found: {offenders}"
+            "network_access must use the LAUNCH_NETWORK_ACCESS constant except when "
+            f"recovery passes no policy — found: {offenders}"
         )
 
     def test_no_network_access_config_or_resolver_surface_remains(self) -> None:

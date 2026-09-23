@@ -660,7 +660,7 @@ def plan_alias(
         skill=skill,
         review_skill=review_skill,
         refresh_skills=refresh_skills,
-        network_access=LAUNCH_NETWORK_ACCESS,
+        network_access=None if recover is not None else LAUNCH_NETWORK_ACCESS,
         approval_policy="on-request",
         trusted_dir=None,
         timeout=None,

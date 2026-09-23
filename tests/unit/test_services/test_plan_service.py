@@ -947,6 +947,40 @@ class TestPlanOrchestrator:
         assert "permission denied" in error.lower()
         assert "--recover" in hints
 
+    def test_interactive_handoff_progress_precedes_preparation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A failed preparation still leaves the completed interactive handoff retryable."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.complete(root)
+            return 0
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+            patch(
+                "wade.services.plan_service._prepare_plan_handoff",
+                side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+            ) as prepare,
+        ):
+            assert not plan(project_root=tmp_path, model="claude-sonnet-4-6")
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["session_id"] == prepare.call_args.kwargs["handoff_id"]
+        assert progress["model"] == "claude-sonnet-4-6"
+        provider.create_label.assert_not_called()
+
     def test_recovery_reruns_strict_plan_validation_before_provider_mutation(
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],

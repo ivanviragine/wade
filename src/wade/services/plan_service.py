@@ -1288,6 +1288,8 @@ def plan(
                 native_plan.materialize(session_cwd, bundle)
         if interactive:
             handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
+            if planning_worktree is not None:
+                _ensure_handoff_progress(planning_worktree, handoff_id, resolved_model)
         else:
             assert collected is not None
             handoff_id = collected.session_id
