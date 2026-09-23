@@ -273,8 +273,11 @@ path; WADE does not invoke platform privacy tools or weaken sandbox policy.
 Recovery is idempotent because persistence is recorded as it happens. Before any
 provider mutation the planning worktree gets `.wade/plans/handoff-progress.json`
 (`PlanHandoffProgress`), keyed to the completed handoff's session id; it carries
-the collector's resolved model and a per-plan-file to task-id mapping written
-after each issue and draft PR become durable. A later finalization or cleanup
+the collector's resolved model, a pending per-plan marker, and a per-plan-file
+to task-id mapping written after each issue and draft PR become durable. The
+pending marker is placed in the task's initial hidden body before creation, so a
+post-creation progress-write failure can recover the exact task instead of
+guessing from its title or creating a duplicate. A later finalization or cleanup
 failure therefore leaves a retry reusing those tasks — and the original model for
 `planned-by` provenance — instead of creating duplicates. Attaching a plan to an
 existing issue is idempotent for the same reason: `bootstrap_draft_pr` reuses the

@@ -32,6 +32,10 @@ class PlanHandoffProgress(BaseModel):
     session_id: str
     model: str | None = None
     persisted_issues: dict[str, str] = Field(default_factory=dict)
+    # A task body carries each marker before its external creation.  If the
+    # following local progress write fails, recovery can find that exact task
+    # instead of creating a duplicate.
+    pending_issue_markers: dict[str, str] = Field(default_factory=dict)
 
 
 class InteractivePlanReview(BaseModel):

@@ -981,6 +981,119 @@ class TestPlanOrchestrator:
         assert progress["model"] == "claude-sonnet-4-6"
         provider.create_label.assert_not_called()
 
+    def test_collector_network_default_does_not_become_a_native_requirement(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """The short alias policy must not reject native tools without a network toggle."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.complete(root)
+            return 0
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+        ):
+            assert plan(project_root=tmp_path, collector_network_access=True)
+
+        provider.create_task.assert_called_once()
+
+    def test_collector_network_override_reaches_collector_launch(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """The alias-only override still pins collector network access on."""
+        _, _, collect, _ = collected_harness
+
+        assert plan(project_root=tmp_path, collector_network_access=True)
+
+        assert collect.call_args.args[1].network_access is True
+
+    def test_progress_write_failure_retains_a_materialized_completed_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Recovery can consume a handoff after its initial progress write is retried."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        with (
+            patch("wade.services.plan_service._save_handoff_progress", return_value=False),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        cleanup.assert_not_called()
+        assert (root / ".wade/plans/native-session.json").is_file()
+        assert (root / ".wade/plans/PLAN.md").is_file()
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_called_once()
+
+    def test_recovery_reconciles_task_when_post_creation_progress_write_fails(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A retained task marker prevents a retry from creating the task twice."""
+        from wade.models.workflow import SessionKind
+        from wade.services import plan_service
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        original_save = plan_service._save_handoff_progress
+        writes = 0
+
+        def fail_post_creation_write(path: Path, progress: object) -> bool:
+            nonlocal writes
+            writes += 1
+            if writes == 3:
+                return False
+            return original_save(path, progress)  # type: ignore[arg-type]
+
+        with patch(
+            "wade.services.plan_service._save_handoff_progress",
+            side_effect=fail_post_creation_write,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        assert provider.create_task.call_count == 1
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        marker = progress["pending_issue_markers"]["PLAN.md"]
+        assert marker in provider.create_task.call_args.kwargs["body"]
+        provider.list_tasks.return_value = [
+            Task(id="1", title="feat: native test plan", body=marker)
+        ]
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        assert provider.create_task.call_count == 1
+
     def test_recovery_reruns_strict_plan_validation_before_provider_mutation(
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],

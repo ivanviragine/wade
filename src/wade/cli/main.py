@@ -648,23 +648,32 @@ def plan_alias(
     refresh_skills: bool = typer.Option(False, "--refresh-skills"),
 ) -> None:
     """Alias for plan."""
-    plan_cmd(
-        issue=issue,
-        recover=recover,
-        ai=ai,
+    from wade.services.plan_service import plan as do_plan
+
+    success = do_plan(
+        ai_tool=ai,
         model=model,
+        issue_id=issue,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
         effort=effort,
-        yolo=yolo,
+        effort_explicit=effort is not None,
+        yolo=yolo or None,
         permission_mode=permission_mode,
         sandbox=sandbox,
-        skill=skill,
-        review_skill=review_skill,
+        work_skills=skill,
+        review_skills=review_skill,
         refresh_skills=refresh_skills,
-        network_access=None if recover is not None else LAUNCH_NETWORK_ACCESS,
+        recover=recover,
+        # The short alias preserves the retired collector launch default, but
+        # must not turn it into an unsupported native-terminal requirement.
+        network_access=None,
+        collector_network_access=None if recover is not None else LAUNCH_NETWORK_ACCESS,
         approval_policy="on-request",
-        trusted_dir=None,
+        trusted_dirs=None,
         timeout=None,
     )
+    raise typer.Exit(0 if success else 1)
 
 
 @app.command("i", hidden=True)

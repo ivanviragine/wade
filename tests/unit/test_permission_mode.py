@@ -456,9 +456,23 @@ class TestCliParsing:
 
         assert result.exit_code == 0
         assert mock_plan.call_args.kwargs["network_access"] is None
+        assert mock_plan.call_args.kwargs["collector_network_access"] is None
         assert mock_plan.call_args.kwargs["approval_policy"] == "on-request"
         assert mock_plan.call_args.kwargs["trusted_dirs"] is None
         assert mock_plan.call_args.kwargs["timeout"] is None
+
+    def test_plan_alias_keeps_collector_network_policy_out_of_native_preflight(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+        from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
+
+        with patch("wade.services.plan_service.plan", return_value=True) as mock_plan:
+            result = CliRunner().invoke(app, ["p"])
+
+        assert result.exit_code == 0
+        assert mock_plan.call_args.kwargs["network_access"] is None
+        assert mock_plan.call_args.kwargs["collector_network_access"] is LAUNCH_NETWORK_ACCESS
 
     def test_review_pr_comments_permission_mode_forwarded(self) -> None:
         from typer.testing import CliRunner

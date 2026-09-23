@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import os
 import re
 import shlex
@@ -48,7 +49,7 @@ from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 from wade.models.interactive_plan import PlanHandoffProgress
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle
-from wade.models.task import CloseReason, PlanFile, Task
+from wade.models.task import CloseReason, PlanFile, Task, TaskState
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -119,6 +120,10 @@ PLAN_FINALIZATION_FAILED = _PlanFinalizationFailure()
 HANDOFF_PROGRESS_FILE = "handoff-progress.json"
 
 
+class HandoffProgressSaveError(ValueError):
+    """A completed handoff could not durably record its recoverable state."""
+
+
 def _load_handoff_progress(root: Path, session_id: str) -> PlanHandoffProgress | None:
     """Load progress only when it belongs to this completed handoff.
 
@@ -163,7 +168,7 @@ def _ensure_handoff_progress(root: Path, session_id: str, model: str | None) -> 
 
     progress = PlanHandoffProgress(session_id=session_id, model=model)
     if not _save_handoff_progress(root, progress):
-        raise ValueError("Cannot safely save planning handoff progress")
+        raise HandoffProgressSaveError("Cannot safely save planning handoff progress")
     return progress
 
 
@@ -175,6 +180,46 @@ def _handoff_progress_saver(
     if root is None or progress is None:
         return None
     return lambda: _save_handoff_progress(root, progress)
+
+
+def _handoff_issue_marker(session_id: str, plan_name: str) -> str:
+    """Return a stable, hidden external identity for one handoff plan member."""
+
+    digest = hashlib.sha256(f"{session_id}\0{plan_name}".encode()).hexdigest()
+    return f"<!-- wade:plan-handoff:{digest} -->"
+
+
+def _find_pending_handoff_issue(
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+    marker: str,
+) -> Task | None:
+    """Find the one open task created for a pending handoff marker.
+
+    The marker is written in the task's initial body before the provider call
+    returns.  A failed local progress update can therefore be reconciled without
+    relying on titles or on a best-effort process-local mapping.
+    """
+
+    try:
+        matches = [
+            task
+            for task in provider.list_tasks(
+                label=config.project.issue_label,
+                state=TaskState.OPEN,
+                limit=1000,
+            )
+            if marker in task.body
+        ]
+    except Exception as exc:
+        raise HandoffProgressSaveError(
+            "Cannot safely reconcile a pending planning task; output was retained"
+        ) from exc
+    if len(matches) > 1:
+        raise HandoffProgressSaveError(
+            "Multiple open tasks match one pending planning handoff; output was retained"
+        )
+    return matches[0] if matches else None
 
 
 def get_plan_prompt_template() -> str:
@@ -658,20 +703,33 @@ def _persist_accepted_plans(
                 return False
             finalize_issue_numbers = [existing_issue.id]
         else:
-            finalize_issue_numbers = _supersede_issue_with_plans(
-                provider=provider,
-                config=config,
-                issue=existing_issue,
-                plan_files=plan_files,
-                repo_root=repo_root,
-                yolo=resolved_yolo,
-                persisted_issues=progress.persisted_issues if progress is not None else None,
-                save_progress=_handoff_progress_saver(planning_worktree, progress),
-            )
+            try:
+                finalize_issue_numbers = _supersede_issue_with_plans(
+                    provider=provider,
+                    config=config,
+                    issue=existing_issue,
+                    plan_files=plan_files,
+                    repo_root=repo_root,
+                    yolo=resolved_yolo,
+                    persisted_issues=progress.persisted_issues if progress is not None else None,
+                    pending_issue_markers=(
+                        progress.pending_issue_markers if progress is not None else None
+                    ),
+                    handoff_id=progress.session_id if progress is not None else None,
+                    save_progress=_handoff_progress_saver(planning_worktree, progress),
+                )
+            except HandoffProgressSaveError as exc:
+                console.error(f"Could not record planning recovery progress: {exc}", markup=False)
+                _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+                stop_title_keeper()
+                return False
         stop_title_keeper()
         if not finalize_issue_numbers:
             console.warn("No issues were created from plan files.")
-            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+            if progress is not None and progress.pending_issue_markers:
+                _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+            else:
+                _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             return False
         offer_result = _finalize_issues(
             provider=provider,
@@ -698,14 +756,23 @@ def _persist_accepted_plans(
             return offer_result
         return True
 
-    created_numbers, failed_files = _create_issues_from_plans(
-        provider=provider,
-        config=config,
-        plan_files=plan_files,
-        repo_root=repo_root,
-        persisted_issues=progress.persisted_issues if progress is not None else None,
-        save_progress=_handoff_progress_saver(planning_worktree, progress),
-    )
+    try:
+        created_numbers, failed_files = _create_issues_from_plans(
+            provider=provider,
+            config=config,
+            plan_files=plan_files,
+            repo_root=repo_root,
+            persisted_issues=progress.persisted_issues if progress is not None else None,
+            pending_issue_markers=(
+                progress.pending_issue_markers if progress is not None else None
+            ),
+            handoff_id=progress.session_id if progress is not None else None,
+            save_progress=_handoff_progress_saver(planning_worktree, progress),
+        )
+    except HandoffProgressSaveError as exc:
+        console.error(f"Could not record planning recovery progress: {exc}", markup=False)
+        _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+        return False
     if created_numbers:
         stop_title_keeper()
         offer_result = _finalize_issues(
@@ -727,14 +794,22 @@ def _persist_accepted_plans(
         if offer_result is PLAN_FINALIZATION_FAILED:
             _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             return False
-        if failed_files:
+        if failed_files or (progress is not None and progress.pending_issue_markers):
             console.warn(
                 f"{len(failed_files)} plan(s) could not be persisted to a draft "
                 f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
             )
-            cleanup_succeeded = _preserve_generated_plans(
-                plan_dir, repo_root, planning_worktree, config
-            )
+            # A pending marker may identify a task created just before a local
+            # state write or provider response failed.  Keep the registered
+            # worktree so --recover can reconcile it rather than discard that
+            # identity along with the output copy.
+            if progress is not None and progress.pending_issue_markers:
+                _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+                cleanup_succeeded = False
+            else:
+                cleanup_succeeded = _preserve_generated_plans(
+                    plan_dir, repo_root, planning_worktree, config
+                )
         else:
             cleanup_succeeded = _cleanup_plan_dir_or_worktree(
                 plan_dir, repo_root, planning_worktree, config
@@ -749,7 +824,10 @@ def _persist_accepted_plans(
             f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
             f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
         )
-        _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+        if progress is not None and progress.pending_issue_markers:
+            _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+        else:
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
         stop_title_keeper()
         return False
     console.warn("No issues were created from plan files.")
@@ -903,6 +981,7 @@ def plan(
     review_skills: list[str] | None = None,
     refresh_skills: bool = False,
     network_access: bool | None = None,
+    collector_network_access: bool | None = None,
     approval_policy: str = "on-request",
     trusted_dirs: list[Path] | None = None,
     timeout: int | None = None,
@@ -933,6 +1012,7 @@ def plan(
                     work_skills,
                     review_skills,
                     network_access,
+                    collector_network_access,
                     trusted_dirs,
                     timeout,
                 )
@@ -1010,6 +1090,9 @@ def plan(
     try:
         adapter = AbstractAITool.get(resolved_tool)
         interactive = adapter.capabilities().supports_plan_mode
+        effective_collector_network_access = (
+            collector_network_access if collector_network_access is not None else network_access
+        )
         resolved_sandbox = (
             sandbox_requirement if sandbox_requirement is not None else not interactive
         )
@@ -1071,12 +1154,15 @@ def plan(
                     "This collector cannot apply auto or accept-edits; "
                     "use default or parent-only yolo"
                 )
+            request = request.model_copy(
+                update={"network_access": effective_collector_network_access is True}
+            )
             request = native_plan.prepare_request(
                 resolved_tool,
                 request,
                 allowed_commands=config.permissions.allowed_commands,
                 confinement_required=sandbox_requirement is True,
-                network_restriction_required=network_access is False,
+                network_restriction_required=effective_collector_network_access is False,
             )
             checked = preflight_plan_session(resolved_tool, request)
             if (
@@ -1264,12 +1350,15 @@ def plan(
                     source_root=str(planning_worktree or repo_root or cwd),
                 )
             else:
+                request = request.model_copy(
+                    update={"network_access": effective_collector_network_access is True}
+                )
                 request = native_plan.prepare_request(
                     resolved_tool,
                     request,
                     allowed_commands=config.permissions.allowed_commands,
                     confinement_required=sandbox_requirement is True,
-                    network_restriction_required=network_access is False,
+                    network_restriction_required=effective_collector_network_access is False,
                 )
                 collected = run_ai_planning_session(
                     ai_tool=resolved_tool,
@@ -1280,12 +1369,12 @@ def plan(
                     source_root=str(planning_worktree or repo_root or cwd),
                 )
                 native_plan.save_artifact(session_cwd, collected)
+                bundle = native_plan.parse_artifact(collected.plan)
+                native_plan.materialize(session_cwd, bundle)
                 if planning_worktree is not None:
                     _ensure_handoff_progress(
                         planning_worktree, collected.session_id, resolved_model
                     )
-                bundle = native_plan.parse_artifact(collected.plan)
-                native_plan.materialize(session_cwd, bundle)
         if interactive:
             handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
             if planning_worktree is not None:
@@ -1318,9 +1407,14 @@ def plan(
             for native_path in exc.paths:
                 console.hint(f"Native recovery reference (not imported): {native_path}")
         console.error(f"Planning failed ({category}): {message}", markup=False)
-        if isinstance(exc, (interactive_plan.InteractivePlanAccessError, StateFileIOError)) or (
-            _is_filesystem_access_denied(exc)
-        ):
+        if isinstance(
+            exc,
+            (
+                interactive_plan.InteractivePlanAccessError,
+                StateFileIOError,
+                HandoffProgressSaveError,
+            ),
+        ) or (_is_filesystem_access_denied(exc)):
             _retain_inaccessible_handoff(
                 plan_dir,
                 planning_worktree,
@@ -1388,6 +1482,8 @@ def _create_issues_from_plans(
     plan_files: list[PlanFile],
     repo_root: Path | None = None,
     persisted_issues: dict[str, str] | None = None,
+    pending_issue_markers: dict[str, str] | None = None,
+    handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Create lightweight GitHub issues + draft PRs from validated plan files.
@@ -1421,8 +1517,49 @@ def _create_issues_from_plans(
             created.append(persisted_issue)
             continue
 
+        marker = (
+            pending_issue_markers.get(plan.path.name) if pending_issue_markers is not None else None
+        )
+        if marker is not None:
+            reconciled = _find_pending_handoff_issue(provider, config, marker)
+            if reconciled is not None:
+                if (
+                    persisted_issues is None
+                    or pending_issue_markers is None
+                    or save_progress is None
+                ):
+                    raise HandoffProgressSaveError(
+                        "Cannot safely record a reconciled planning task; output was retained"
+                    )
+                persisted_issues[plan.path.name] = reconciled.id
+                pending_issue_markers.pop(plan.path.name, None)
+                if not save_progress():
+                    raise HandoffProgressSaveError(
+                        f"Could not save recovery progress for #{reconciled.id}; "
+                        "output was retained"
+                    )
+                created.append(reconciled.id)
+                continue
+
         # Build lightweight body
         brief_body = _build_lightweight_issue_body(plan)
+
+        # Write the durable intent before provider mutation.  A task created
+        # before a process or state-write failure carries this hidden marker, so
+        # recovery can reconcile it without guessing from its title or creating
+        # another task.
+        if pending_issue_markers is not None:
+            if persisted_issues is None or save_progress is None or handoff_id is None:
+                raise HandoffProgressSaveError(
+                    "Cannot safely record planning task intent; output was retained"
+                )
+            marker = _handoff_issue_marker(handoff_id, plan.path.name)
+            pending_issue_markers[plan.path.name] = marker
+            if not save_progress():
+                raise HandoffProgressSaveError(
+                    "Cannot safely save planning task intent before creation; output was retained"
+                )
+            brief_body = f"{brief_body.rstrip()}\n\n{marker}".lstrip()
 
         # Create the issue with lightweight body
         console.step(f"Creating issue: {plan.title}")
@@ -1496,13 +1633,12 @@ def _create_issues_from_plans(
         # first so recovery resumes from this task rather than creating another.
         if persisted_issues is not None:
             persisted_issues[plan.path.name] = task.id
+            if pending_issue_markers is not None:
+                pending_issue_markers.pop(plan.path.name, None)
             if save_progress is None or not save_progress():
-                persisted_issues.pop(plan.path.name, None)
-                console.error(
-                    f"Could not save recovery progress for #{task.id}; preserving planning output."
+                raise HandoffProgressSaveError(
+                    f"Could not save recovery progress for #{task.id}; output was retained"
                 )
-                failed.append(plan.path.name)
-                continue
 
         created.append(task.id)
 
@@ -1819,6 +1955,8 @@ def _supersede_issue_with_plans(
     repo_root: Path | None,
     yolo: bool,
     persisted_issues: dict[str, str] | None = None,
+    pending_issue_markers: dict[str, str] | None = None,
+    handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
 ) -> list[str]:
     """Split an existing issue into one new issue per plan file and supersede it.
@@ -1837,6 +1975,8 @@ def _supersede_issue_with_plans(
         plan_files=plan_files,
         repo_root=repo_root,
         persisted_issues=persisted_issues,
+        pending_issue_markers=pending_issue_markers,
+        handoff_id=handoff_id,
         save_progress=save_progress,
     )
 

@@ -989,12 +989,8 @@ class TestNetworkAccessRetirement:
                 }:
                     # Complete planning requests preserve the explicit independent policy.
                     continue
-                if (
-                    path.name == "main.py"
-                    and stripped
-                    == "network_access=None if recover is not None else LAUNCH_NETWORK_ACCESS,"
-                ):
-                    # Recovery consumes a frozen handoff, so it cannot accept launch policy.
+                if path.name == "main.py" and stripped == "network_access=None,":
+                    # The short alias keeps its collector default separate from native policy.
                     continue
                 if stripped != "network_access=LAUNCH_NETWORK_ACCESS,":
                     offenders.append(f"{path.name}:{lineno}: {stripped}")
