@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.6] — 2026-09-23
+
+### Chores
+
+- adopt Crossby 0.36 model catalogs and defaults (#517) (cc9ae47)
+
 ## [v1.2.5] — 2026-09-16
 
 ### Bug Fixes
