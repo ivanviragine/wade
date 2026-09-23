@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from wade.models.config import ProviderConfig
 from wade.models.plan_bundle import PlanBundle
 
 
@@ -31,6 +32,11 @@ class PlanHandoffProgress(BaseModel):
     version: Literal[1] = 1
     session_id: str
     model: str | None = None
+    # The external task identities below are meaningful only for this exact
+    # provider configuration. Optional fields let old retained files parse so
+    # recovery can reject their missing binding with a clear, safe error.
+    provider: ProviderConfig | None = None
+    knowledge_required: bool | None = None
     persisted_issues: dict[str, str] = Field(default_factory=dict)
     # A task body carries each marker before its external creation.  If the
     # following local progress write fails, recovery can find that exact task

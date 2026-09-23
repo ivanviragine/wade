@@ -36,6 +36,8 @@ from wade.models.config import (
     PermissionMode,
     ProjectConfig,
     ProjectSettings,
+    ProviderConfig,
+    ProviderID,
 )
 from wade.models.interactive_plan import InteractivePlanState
 from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
@@ -1207,7 +1209,7 @@ class TestPlanOrchestrator:
         config.knowledge.enabled = True
         (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
-        interactive.begin(root, "claude", review_required=False)
+        interactive.begin(root, "claude", review_required=False, knowledge_required=True)
         bundle = PlanBundle(
             plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
             knowledge_votes=({"entry_id": "known-entry", "direction": "up"},),
@@ -1381,6 +1383,96 @@ class TestPlanOrchestrator:
             assert plan(project_root=tmp_path, recover=root)
 
         add_labels.assert_called_once_with(provider, "1", "codex", "gpt-5.2-codex")
+
+    def test_recovery_rejects_changed_provider_before_provider_instantiation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Retained task IDs must never be replayed through a different backend."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        with patch(
+            "wade.services.plan_service._prepare_plan_handoff",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["provider"]["name"] == ProviderID.GITHUB
+
+        config.provider = ProviderConfig(name=ProviderID.MARKDOWN)
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.get_provider") as get_provider,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        get_provider.assert_not_called()
+        provider.create_task.assert_not_called()
+        assert root.is_dir()
+
+    @pytest.mark.parametrize(
+        ("initial_enabled", "recovery_enabled", "votes"),
+        [
+            (False, True, None),
+            (True, False, [{"entry_id": "known-entry", "direction": "up"}]),
+        ],
+    )
+    def test_recovery_uses_the_handoff_knowledge_requirement(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        initial_enabled: bool,
+        recovery_enabled: bool,
+        votes: list[dict[str, str]] | None,
+    ) -> None:
+        """A setting toggle must not invalidate an otherwise completed handoff."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        config.knowledge.enabled = initial_enabled
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        if votes is not None:
+            (root / "KNOWLEDGE.md").write_text(
+                "## known-entry | 2026-09-15 | plan\nA useful fact.\n"
+            )
+            collect.return_value = native_result(
+                BUNDLE_MARKER
+                + "\n```json\n"
+                + json.dumps(
+                    {
+                        "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+                        "knowledge_votes": votes,
+                    }
+                )
+                + "\n```"
+            )
+
+        with patch(
+            "wade.services.plan_service._prepare_plan_handoff",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["knowledge_required"] is initial_enabled
+        config.knowledge.enabled = recovery_enabled
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_called_once()
 
     def test_recovery_state_io_failure_does_not_report_access_denial(
         self,

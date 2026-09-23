@@ -159,14 +159,43 @@ def _save_handoff_progress(root: Path, progress: PlanHandoffProgress) -> bool:
     )
 
 
-def _ensure_handoff_progress(root: Path, session_id: str, model: str | None) -> PlanHandoffProgress:
+def _validate_handoff_progress_binding(
+    progress: PlanHandoffProgress, config: ProjectConfig
+) -> None:
+    """Reject recovery when its durable external bindings no longer match."""
+
+    if progress.provider is None:
+        raise ValueError(
+            "Planning handoff progress lacks its original provider binding; cannot safely recover"
+        )
+    if progress.provider != config.provider:
+        raise ValueError(
+            "Planning handoff belongs to a different provider configuration; "
+            "restore the original provider before recovering"
+        )
+    if progress.knowledge_required is None:
+        raise ValueError(
+            "Planning handoff progress lacks its original knowledge requirement; "
+            "cannot safely recover"
+        )
+
+
+def _ensure_handoff_progress(
+    root: Path, session_id: str, model: str | None, config: ProjectConfig
+) -> PlanHandoffProgress:
     """Return one handoff's durable metadata, creating it before mutations."""
 
     progress = _load_handoff_progress(root, session_id)
     if progress is not None:
+        _validate_handoff_progress_binding(progress, config)
         return progress
 
-    progress = PlanHandoffProgress(session_id=session_id, model=model)
+    progress = PlanHandoffProgress(
+        session_id=session_id,
+        model=model,
+        provider=config.provider.model_copy(deep=True),
+        knowledge_required=config.knowledge.enabled,
+    )
     if not _save_handoff_progress(root, progress):
         raise HandoffProgressSaveError("Cannot safely save planning handoff progress")
     return progress
@@ -584,17 +613,14 @@ def _prepare_plan_handoff(
     project_root: Path | None,
     interactive: bool,
     handoff_id: str,
+    knowledge_required: bool,
     resolved_yolo: bool,
 ) -> list[PlanFile] | None:
     """Revalidate one collected handoff before any provider mutation."""
 
-    if bundle.knowledge_votes and (not config.knowledge.enabled or planning_worktree is None):
+    if bundle.knowledge_votes and (not knowledge_required or planning_worktree is None):
         raise ValueError("Knowledge votes require an enabled, managed planning worktree")
-    if (
-        config.knowledge.enabled
-        and planning_worktree is not None
-        and bundle.knowledge_votes is None
-    ):
+    if knowledge_required and planning_worktree is not None and bundle.knowledge_votes is None:
         raise ValueError(
             "Knowledge-enabled planning requires the bundle's explicit knowledge_votes handoff"
         )
@@ -619,7 +645,7 @@ def _prepare_plan_handoff(
     if not accepted_plans:
         return None
     native_plan.validate_selection(bundle, accepted_plans)
-    if config.knowledge.enabled and planning_worktree is not None:
+    if knowledge_required and planning_worktree is not None:
         from wade.services.knowledge_service import record_handoff_rating_for_session
         from wade.utils.knowledge_file import parse_entries, resolve_knowledge_path
 
@@ -682,7 +708,9 @@ def _persist_accepted_plans(
     progress: PlanHandoffProgress | None = None
     if planning_worktree is not None:
         try:
-            progress = _ensure_handoff_progress(planning_worktree, handoff_id, resolved_model)
+            progress = _ensure_handoff_progress(
+                planning_worktree, handoff_id, resolved_model, config
+            )
         except (StateFileError, ValueError) as exc:
             console.error(f"Could not record planning recovery progress: {exc}", markup=False)
             _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
@@ -855,7 +883,6 @@ def _recover_completed_handoff(
     recovery_root: Path,
     project_root: Path | None,
     config: ProjectConfig,
-    provider: AbstractTaskProvider,
     yolo: bool,
 ) -> bool:
     """Revalidate and consume one retained managed planning handoff."""
@@ -908,6 +935,7 @@ def _recover_completed_handoff(
             )
             interactive = True
             handoff_id = state.session_id
+            frozen_knowledge_required = state.knowledge_required
         else:
             collected, bundle = native_plan.load_artifact(root)
             usage = None
@@ -923,9 +951,17 @@ def _recover_completed_handoff(
             )
             interactive = False
             handoff_id = collected.session_id
-            progress = _load_handoff_progress(root, handoff_id)
-            resolved_model = progress.model if progress is not None else config.get_model("plan")
+            resolved_model = config.get_model("plan")
+            frozen_knowledge_required = config.knowledge.enabled
+        progress = _load_handoff_progress(root, handoff_id)
+        if progress is not None:
+            _validate_handoff_progress_binding(progress, config)
+            assert progress.knowledge_required is not None
+            if not interactive:
+                resolved_model = progress.model
+            frozen_knowledge_required = progress.knowledge_required
         resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
+        provider = get_provider(config)
         existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
         accepted_plans = _prepare_plan_handoff(
             bundle=bundle,
@@ -937,6 +973,7 @@ def _recover_completed_handoff(
             project_root=project_root or repo_root,
             interactive=interactive,
             handoff_id=handoff_id,
+            knowledge_required=frozen_knowledge_required,
             resolved_yolo=yolo,
         )
         if not accepted_plans:
@@ -1010,7 +1047,6 @@ def plan(
     context and the resulting plan is attached to it via draft PR (no new issue).
     """
     config = load_config(project_root)
-    provider = get_provider(config)
 
     if recover is not None:
         if (
@@ -1043,9 +1079,10 @@ def plan(
             recovery_root=recover,
             project_root=project_root,
             config=config,
-            provider=provider,
             yolo=bool(yolo),
         )
+
+    provider = get_provider(config)
 
     # Resolve AI tool and model
     resolved_tool = resolve_ai_tool(ai_tool, config, "plan")
@@ -1387,12 +1424,12 @@ def plan(
                 native_plan.materialize(session_cwd, bundle)
                 if planning_worktree is not None:
                     _ensure_handoff_progress(
-                        planning_worktree, collected.session_id, resolved_model
+                        planning_worktree, collected.session_id, resolved_model, config
                     )
         if interactive:
             handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
             if planning_worktree is not None:
-                _ensure_handoff_progress(planning_worktree, handoff_id, resolved_model)
+                _ensure_handoff_progress(planning_worktree, handoff_id, resolved_model, config)
         else:
             assert collected is not None
             handoff_id = collected.session_id
@@ -1406,6 +1443,7 @@ def plan(
             project_root=project_root,
             interactive=interactive,
             handoff_id=handoff_id,
+            knowledge_required=config.knowledge.enabled,
             resolved_yolo=resolved_yolo,
         )
         if not accepted_plans:
