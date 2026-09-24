@@ -56,6 +56,7 @@ from wade.services.plan_service import (
     _persist_plan_issue_ref,
     _preserve_generated_plans,
     _reconcile_inflight_worktree_base,
+    _save_handoff_binding,
     _select_valid_plans,
     _supersede_issue_with_plans,
     _with_supersede_banner,
@@ -357,6 +358,11 @@ def native_result(markdown: str = PLAN_TEXT) -> PlanSessionResult:
 def bundle_text(*members: tuple[str, str]) -> str:
     payload = {"plans": [{"filename": name, "markdown": body} for name, body in members]}
     return BUNDLE_MARKER + "\n\x60\x60\x60json\n" + json.dumps(payload) + "\n\x60\x60\x60\n"
+
+
+def save_handoff_binding(root: Path, config: ProjectConfig, model: str | None = None) -> None:
+    """Make direct retained-handoff fixtures match the pre-launch production state."""
+    _save_handoff_binding(root, model, config)
 
 
 @pytest.fixture
@@ -1107,6 +1113,9 @@ class TestPlanOrchestrator:
         cleanup.assert_not_called()
         assert (root / ".wade/plans/native-session.json").is_file()
         assert (root / ".wade/plans/PLAN.md").is_file()
+        binding = json.loads((root / ".wade/plans/handoff-binding.json").read_text())
+        assert binding["provider"] == config.provider.model_dump(mode="json")
+        assert binding["project"] == config.project.model_dump(mode="json")
 
         with patch(
             "wade.git.worktree.list_worktrees",
@@ -1115,6 +1124,33 @@ class TestPlanOrchestrator:
             assert plan(project_root=tmp_path, recover=root)
 
         provider.create_task.assert_called_once()
+
+    def test_recovery_rejects_changed_provider_when_initial_progress_write_failed(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A missing progress file cannot replace the launch provider binding."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        with patch("wade.services.plan_service._save_handoff_progress", return_value=False):
+            assert not plan(project_root=tmp_path)
+
+        config.provider = ProviderConfig(name=ProviderID.MARKDOWN)
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.get_provider") as get_recovery_provider,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        get_recovery_provider.assert_not_called()
+        provider.create_task.assert_not_called()
 
     def test_recovery_reconciles_task_when_post_creation_progress_write_fails(
         self,
@@ -1192,6 +1228,7 @@ class TestPlanOrchestrator:
 
         config, provider, _, root = collected_harness
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
         interactive.begin(root, "claude", review_required=False)
         interactive.import_artifact(root, PLAN_TEXT)
         interactive.complete(root)
@@ -1224,6 +1261,7 @@ class TestPlanOrchestrator:
 
         config, provider, collect, root = collected_harness
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
         interactive.begin(root, "claude", review_required=False)
         interactive.import_artifact(root, PLAN_TEXT)
         interactive.complete(root)
@@ -1269,6 +1307,7 @@ class TestPlanOrchestrator:
         config.knowledge.enabled = True
         (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
         interactive.begin(root, "claude", review_required=False, knowledge_required=True)
         bundle = PlanBundle(
             plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
@@ -1322,6 +1361,7 @@ class TestPlanOrchestrator:
         config.knowledge = KnowledgeConfig(enabled=True)
         (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
         interactive.begin(root, "claude", review_required=False, knowledge_required=True)
         bundle = PlanBundle(
             plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
@@ -1466,6 +1506,40 @@ class TestPlanOrchestrator:
             assert plan(project_root=tmp_path, recover=root)
 
         provider.create_task.assert_called_once()
+
+    def test_recovery_refreshes_plan_for_an_existing_issue(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A recovered review cannot discard an edit behind a reused draft PR body."""
+        from wade.models.workflow import SessionKind
+        from wade.services import plan_service
+        from wade.services.session_composition_service import compose_session
+
+        config, _, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
+        with (
+            patch(
+                "wade.services.plan_service._finalize_issues",
+                return_value=PLAN_FINALIZATION_FAILED,
+            ),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330")
+
+        plan_service.bootstrap_draft_pr.reset_mock()
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service._finalize_issues", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        assert plan_service.bootstrap_draft_pr.call_args.kwargs["refresh_existing_plan"] is True
 
     @pytest.mark.parametrize(
         "reviewed_plan",
@@ -1664,6 +1738,7 @@ class TestPlanOrchestrator:
         config, provider, _, root = collected_harness
         config.knowledge = KnowledgeConfig(enabled=initial_enabled)
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
         if votes is not None:
             (root / "KNOWLEDGE.md").write_text(
                 "## known-entry | 2026-09-15 | plan\nA useful fact.\n"
@@ -1757,6 +1832,7 @@ class TestPlanOrchestrator:
 
         config, provider, _, root = collected_harness
         compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
         interactive.begin(root, "claude", review_required=True)
         interactive.import_artifact(root, PLAN_TEXT)
         plan_path = root / ".wade/plans/PLAN.md"

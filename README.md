@@ -315,7 +315,8 @@ access, then run `wade plan --recover <planning-worktree>` from the source repo.
 Recovery does not launch an AI or regenerate content: it accepts only a retained
 registered detached worktree, then rechecks the frozen bindings, completed state,
 exact plan content, review receipts, dependencies, and plan validation before any
-task/provider write. If even the plans directory cannot be enumerated, WADE says
+task/provider write. It rejects a handoff whose original launch binding was never
+durably recorded rather than applying settings changed after collection. If even the plans directory cannot be enumerated, WADE says
 the retained plan count is unknown rather than reporting zero. WADE never changes
 OS privacy or sandbox settings for you.
 

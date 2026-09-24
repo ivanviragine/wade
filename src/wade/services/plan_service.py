@@ -46,7 +46,7 @@ from crossby.models.ai import (
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig, with_wade_base_pattern
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
-from wade.models.interactive_plan import PlanHandoffProgress
+from wade.models.interactive_plan import PlanHandoffBinding, PlanHandoffProgress
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle, PlanKnowledgeVote
 from wade.models.task import CloseReason, PlanFile, Task, TaskState
@@ -118,10 +118,57 @@ class _PlanFinalizationFailure:
 
 PLAN_FINALIZATION_FAILED = _PlanFinalizationFailure()
 HANDOFF_PROGRESS_FILE = "handoff-progress.json"
+HANDOFF_BINDING_FILE = "handoff-binding.json"
 
 
 class HandoffProgressSaveError(ValueError):
     """A completed handoff could not durably record its recoverable state."""
+
+
+def _save_handoff_binding(
+    root: Path, model: str | None, config: ProjectConfig
+) -> PlanHandoffBinding:
+    """Persist launch settings before an AI session can produce a recoverable handoff."""
+
+    binding = PlanHandoffBinding(
+        model=model,
+        provider=config.provider.model_copy(deep=True),
+        project=config.project.model_copy(deep=True),
+        knowledge=config.knowledge.model_copy(deep=True),
+        knowledge_required=config.knowledge.enabled,
+    )
+    if not exclusive_write_state_file(
+        root, ("plans",), HANDOFF_BINDING_FILE, binding.model_dump_json()
+    ):
+        raise HandoffProgressSaveError("Cannot safely save planning handoff binding before launch")
+    return binding
+
+
+def _load_handoff_binding(root: Path) -> PlanHandoffBinding:
+    """Load the launch settings that identify a recoverable handoff's backend."""
+
+    if not state_file_present(root, ("plans",), HANDOFF_BINDING_FILE):
+        raise ValueError("Planning handoff binding was never recorded; cannot safely recover")
+    try:
+        raw = read_state_file_strict(root, ("plans",), HANDOFF_BINDING_FILE)
+    except StateFileUnsafeError as exc:
+        raise ValueError("Planning handoff binding is absent or unsafe") from exc
+    try:
+        return PlanHandoffBinding.model_validate_json(raw)
+    except ValueError as exc:
+        raise ValueError("Planning handoff binding is invalid") from exc
+
+
+def _validate_handoff_binding(binding: PlanHandoffBinding, config: ProjectConfig) -> None:
+    """Reject recovery through a provider other than the one selected at launch."""
+
+    if binding.provider != config.provider:
+        raise ValueError(
+            "Planning handoff belongs to a different provider configuration; "
+            "restore the original provider before recovering"
+        )
+    if binding.knowledge.enabled != binding.knowledge_required:
+        raise ValueError("Planning handoff binding has inconsistent knowledge settings")
 
 
 def _load_handoff_progress(root: Path, session_id: str) -> PlanHandoffProgress | None:
@@ -197,18 +244,25 @@ def _validate_handoff_progress_binding(
 
 
 def _config_for_handoff_recovery(
-    config: ProjectConfig, progress: PlanHandoffProgress
+    config: ProjectConfig, progress: PlanHandoffProgress | PlanHandoffBinding
 ) -> ProjectConfig:
     """Reuse the task and knowledge settings that created a retained handoff."""
 
-    _validate_handoff_progress_binding(progress, config)
-    assert progress.project is not None
-    assert progress.knowledge is not None
+    if isinstance(progress, PlanHandoffProgress):
+        _validate_handoff_progress_binding(progress, config)
+        assert progress.project is not None
+        assert progress.knowledge is not None
+        project = progress.project
+        knowledge = progress.knowledge
+    else:
+        _validate_handoff_binding(progress, config)
+        project = progress.project
+        knowledge = progress.knowledge
     return config.model_copy(
         deep=True,
         update={
-            "project": progress.project.model_copy(deep=True),
-            "knowledge": progress.knowledge.model_copy(deep=True),
+            "project": project.model_copy(deep=True),
+            "knowledge": knowledge.model_copy(deep=True),
         },
     )
 
@@ -222,19 +276,37 @@ def _ensure_handoff_progress(
 ) -> PlanHandoffProgress:
     """Return one handoff's durable metadata, creating it before mutations."""
 
+    binding = _load_handoff_binding(root)
+    _validate_handoff_binding(binding, config)
+    if binding.model != model:
+        raise ValueError(
+            "Planning handoff model does not match its original launch binding; "
+            "cannot safely recover"
+        )
     progress = _load_handoff_progress(root, session_id)
     if progress is not None:
         _validate_handoff_progress_binding(progress, config)
+        if (
+            progress.model != binding.model
+            or progress.provider != binding.provider
+            or progress.project != binding.project
+            or progress.knowledge != binding.knowledge
+            or progress.knowledge_required != binding.knowledge_required
+        ):
+            raise ValueError(
+                "Planning handoff progress does not match its original launch binding; "
+                "cannot safely recover"
+            )
         return progress
 
     progress = PlanHandoffProgress(
         session_id=session_id,
-        model=model,
-        provider=config.provider.model_copy(deep=True),
-        project=config.project.model_copy(deep=True),
-        knowledge=config.knowledge.model_copy(deep=True),
-        knowledge_required=config.knowledge.enabled,
-        knowledge_votes=knowledge_votes if config.knowledge.enabled else None,
+        model=binding.model,
+        provider=binding.provider.model_copy(deep=True),
+        project=binding.project.model_copy(deep=True),
+        knowledge=binding.knowledge.model_copy(deep=True),
+        knowledge_required=binding.knowledge_required,
+        knowledge_votes=knowledge_votes if binding.knowledge_required else None,
     )
     if not _save_handoff_progress(root, progress):
         raise HandoffProgressSaveError("Cannot safely save planning handoff progress")
@@ -790,6 +862,7 @@ def _persist_accepted_plans(
     usage: TokenUsage | None,
     collected: PlanSessionResult | None,
     handoff_id: str,
+    refresh_existing_plan: bool = False,
 ) -> bool:
     """Persist a fully revalidated handoff and finish its managed lifecycle."""
 
@@ -819,6 +892,7 @@ def _persist_accepted_plans(
                 plan_file=plan_files[0],
                 repo_root=repo_root,
                 yolo=resolved_yolo,
+                refresh_existing_plan=refresh_existing_plan,
             ):
                 _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                 stop_title_keeper()
@@ -1055,29 +1129,35 @@ def _recover_completed_handoff(
             handoff_id = collected.session_id
             resolved_model = config.get_model("plan")
             frozen_knowledge_required = config.knowledge.enabled
+        binding = _load_handoff_binding(root)
+        config = _config_for_handoff_recovery(config, binding)
+        resolved_model = binding.model
+        frozen_knowledge_required = binding.knowledge_required
         progress = _load_handoff_progress(root, handoff_id)
         if progress is not None:
             config = _config_for_handoff_recovery(config, progress)
             assert progress.knowledge_required is not None
+            if (
+                progress.model != binding.model
+                or progress.provider != binding.provider
+                or progress.project != binding.project
+                or progress.knowledge != binding.knowledge
+                or progress.knowledge_required != binding.knowledge_required
+            ):
+                raise ValueError(
+                    "Planning handoff progress does not match its original launch binding; "
+                    "cannot safely recover"
+                )
             if not interactive:
                 resolved_model = progress.model
             frozen_knowledge_required = progress.knowledge_required
         else:
-            # Retained handoffs created before a progress write are still
-            # recoverable. Create their binding before re-staging votes or
-            # touching the provider, not later during finalization.
-            frozen_config = config.model_copy(
-                deep=True,
-                update={
-                    "knowledge": config.knowledge.model_copy(
-                        update={"enabled": frozen_knowledge_required}
-                    )
-                },
-            )
+            # The launch binding was saved before the planner started, so a
+            # failed initial progress write cannot substitute current project
+            # settings before re-staging votes or touching the provider.
             progress = _ensure_handoff_progress(
-                root, handoff_id, resolved_model, frozen_config, bundle.knowledge_votes
+                root, handoff_id, resolved_model, config, bundle.knowledge_votes
             )
-            config = _config_for_handoff_recovery(config, progress)
         resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
         provider = get_provider(config)
         existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
@@ -1125,6 +1205,7 @@ def _recover_completed_handoff(
         usage=usage,
         collected=collected,
         handoff_id=handoff_id,
+        refresh_existing_plan=True,
     )
 
 
@@ -1480,6 +1561,14 @@ def plan(
     session_bundle = (
         ".wade/session" if planning_worktree is not None else str(session_cwd / ".wade/session")
     )
+    if planning_worktree is not None:
+        try:
+            _save_handoff_binding(planning_worktree, resolved_model, config)
+        except HandoffProgressSaveError as exc:
+            console.error(f"Cannot start planning: {exc}", markup=False)
+            _remove_planning_worktree(repo_root, planning_worktree, config)
+            stop_title_keeper()
+            return False
     # Unlike implement and pr-comment review, planning has no nested-AI guard: it
     # launches a runtime unconditionally, so an inherited parent sandbox reaches
     # the planner silently. Say so before the launch rather than letting the
@@ -2039,6 +2128,7 @@ def _attach_plan_to_existing_issue(
     repo_root: Path | None,
     *,
     yolo: bool = False,
+    refresh_existing_plan: bool = False,
 ) -> bool:
     """Attach a single plan file to an existing issue via a draft PR.
 
@@ -2077,6 +2167,7 @@ def _attach_plan_to_existing_issue(
             config=config,
             repo_root=repo_root,
             base_branch=plan_file.base_branch,
+            refresh_existing_plan=refresh_existing_plan,
         )
         if pr_info:
             pr_number = pr_info.get("number", "?")

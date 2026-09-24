@@ -29,6 +29,7 @@ from wade.utils.safe_state import (
     StateFileUnsafeError,
     exclusive_write_state_file,
     list_state_files,
+    list_state_files_strict,
     read_state_file_strict,
 )
 
@@ -157,10 +158,10 @@ def materialize(root: Path, bundle: PlanBundle) -> None:
 
 def validate_imported_set(root: Path, bundle: PlanBundle) -> None:
     """Review cannot add unrelated task files or silently delete bundle members."""
-    files = list_state_files(root, ("plans",))
-    if files is None or {
-        name for name in files if name.startswith("PLAN") and name.endswith(".md")
-    } != {member.filename for member in bundle.plans}:
+    files = list_state_files_strict(root, ("plans",))
+    if {name for name in files if name.startswith("PLAN") and name.endswith(".md")} != {
+        member.filename for member in bundle.plans
+    }:
         raise ValueError("Imported plan members changed; recover the retained native artifact")
 
 

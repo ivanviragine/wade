@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -26,6 +27,7 @@ from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.services import native_plan_service as native
 from wade.utils.plan_validation import load_plan_file
+from wade.utils.safe_state import StateFileAccessError
 
 MARKDOWN = "# feat: collected plan\n\n## Complexity\neasy\n"
 
@@ -83,6 +85,25 @@ def test_materialization_never_overwrites_or_duplicates(tmp_path: Path) -> None:
     assert (tmp_path / ".wade/plans/PLAN.md").read_text() == MARKDOWN
     with pytest.raises(ValueError, match="provenance"):
         native.save_artifact(tmp_path, result)
+
+
+def test_loading_preserves_plan_directory_access_denial(tmp_path: Path) -> None:
+    """Recovery must tell users to restore access instead of calling plans changed."""
+    result = result_for(PlanArtifactSource.PROTOCOL_EVENT, tmp_path)
+    native.save_artifact(tmp_path, result)
+    native.materialize(tmp_path, native.parse_artifact(result.plan))
+    plan_dir = tmp_path / ".wade/plans"
+
+    with (
+        patch(
+            "wade.services.native_plan_service.list_state_files_strict",
+            side_effect=StateFileAccessError(
+                plan_dir, PermissionError(errno.EACCES, "denied", str(plan_dir))
+            ),
+        ),
+        pytest.raises(StateFileAccessError, match="access denied"),
+    ):
+        native.load_artifact(tmp_path)
 
 
 @pytest.mark.parametrize("location", [".wade", ".wade/plans"])

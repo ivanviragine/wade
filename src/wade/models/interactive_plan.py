@@ -53,6 +53,19 @@ class PlanHandoffProgress(BaseModel):
     pending_issue_markers: dict[str, str] = Field(default_factory=dict)
 
 
+class PlanHandoffBinding(BaseModel):
+    """Immutable launch settings required to safely recover a completed handoff."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1] = 1
+    model: str | None = None
+    provider: ProviderConfig
+    project: ProjectSettings
+    knowledge: KnowledgeConfig
+    knowledge_required: bool
+
+
 class InteractivePlanReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
