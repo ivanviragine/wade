@@ -914,6 +914,9 @@ def _persist_accepted_plans(
                     pending_issue_markers=(
                         progress.pending_issue_markers if progress is not None else None
                     ),
+                    pending_issue_branch_titles=(
+                        progress.pending_issue_branch_titles if progress is not None else None
+                    ),
                     handoff_id=progress.session_id if progress is not None else None,
                     save_progress=_handoff_progress_saver(planning_worktree, progress),
                 )
@@ -975,6 +978,9 @@ def _persist_accepted_plans(
             ),
             pending_issue_markers=(
                 progress.pending_issue_markers if progress is not None else None
+            ),
+            pending_issue_branch_titles=(
+                progress.pending_issue_branch_titles if progress is not None else None
             ),
             handoff_id=progress.session_id if progress is not None else None,
             save_progress=_handoff_progress_saver(planning_worktree, progress),
@@ -1756,6 +1762,7 @@ def _create_issues_from_plans(
     persisted_issues: dict[str, str] | None = None,
     persisted_plan_digests: dict[str, str] | None = None,
     pending_issue_markers: dict[str, str] | None = None,
+    pending_issue_branch_titles: dict[str, str] | None = None,
     handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
 ) -> tuple[list[str], list[str]]:
@@ -1845,11 +1852,28 @@ def _create_issues_from_plans(
             except Exception as e:
                 logger.warning("plan.complexity_label_failed", error=str(e))
 
+        # The task title selects the deterministic branch name. A reviewed plan
+        # can rename a reconciled task after its draft PR exists, so persist the
+        # original title before that remote mutation. If the mutation succeeds
+        # but its caller gets an error (or the later progress write fails), a
+        # retry still finds and refreshes the original branch/PR rather than
+        # creating one from the reviewed title.
+        branch_title = task.title
+        if reconciled is not None and pending_issue_branch_titles is not None:
+            branch_title = pending_issue_branch_titles.get(plan.path.name, task.title)
+            if plan.path.name not in pending_issue_branch_titles:
+                pending_issue_branch_titles[plan.path.name] = branch_title
+                if save_progress is None or not save_progress():
+                    raise HandoffProgressSaveError(
+                        "Cannot safely save recovered task branch identity before title update; "
+                        "output was retained"
+                    )
+
         # Bootstrap draft PR with full plan content
         if repo_root is not None:
             pr_info = bootstrap_draft_pr(
                 issue_number=task.id,
-                issue_title=task.title,
+                issue_title=branch_title,
                 plan_body=plan.body,
                 config=config,
                 repo_root=repo_root,
@@ -1921,6 +1945,8 @@ def _create_issues_from_plans(
                 persisted_plan_digests[plan.path.name] = _plan_content_digest(plan)
             if pending_issue_markers is not None:
                 pending_issue_markers.pop(plan.path.name, None)
+            if pending_issue_branch_titles is not None:
+                pending_issue_branch_titles.pop(plan.path.name, None)
             if save_progress is None or not save_progress():
                 raise HandoffProgressSaveError(
                     f"Could not save recovery progress for #{task.id}; output was retained"
@@ -2245,6 +2271,7 @@ def _supersede_issue_with_plans(
     persisted_issues: dict[str, str] | None = None,
     persisted_plan_digests: dict[str, str] | None = None,
     pending_issue_markers: dict[str, str] | None = None,
+    pending_issue_branch_titles: dict[str, str] | None = None,
     handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
 ) -> list[str]:
@@ -2266,6 +2293,7 @@ def _supersede_issue_with_plans(
         persisted_issues=persisted_issues,
         persisted_plan_digests=persisted_plan_digests,
         pending_issue_markers=pending_issue_markers,
+        pending_issue_branch_titles=pending_issue_branch_titles,
         handoff_id=handoff_id,
         save_progress=save_progress,
     )

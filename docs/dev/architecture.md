@@ -289,7 +289,11 @@ vote set is bound before staging, so a revised retained artifact cannot reuse a
 previously delivered event ID with a different direction. The pending marker is
 placed in the task's initial hidden body before creation, so a post-creation
 progress-write failure can recover the exact task instead of guessing from its
-title or creating a duplicate. A later finalization or cleanup failure therefore
+title or creating a duplicate. Before recovery renames a task to its reviewed
+plan title, it also records the original branch-forming title, so a rename whose
+response or later progress write fails still refreshes the existing draft PR
+instead of creating one from the new title. A later finalization or cleanup
+failure therefore
 leaves a retry reusing those tasks — and the original model for `planned-by`
 provenance — instead of creating duplicates; a partial finalization with a
 pending marker retains the original worktree for the same reconciliation path.

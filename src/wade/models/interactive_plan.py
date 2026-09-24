@@ -51,6 +51,11 @@ class PlanHandoffProgress(BaseModel):
     # following local progress write fails, recovery can find that exact task
     # instead of creating a duplicate.
     pending_issue_markers: dict[str, str] = Field(default_factory=dict)
+    # A recovered task may be renamed to match a reviewed plan after its draft
+    # PR has been created. Retain the pre-rename title that identifies that PR's
+    # branch until the task/PR mapping is durably persisted, so a retry does not
+    # derive a second branch from the new task title.
+    pending_issue_branch_titles: dict[str, str] = Field(default_factory=dict)
 
 
 class PlanHandoffBinding(BaseModel):

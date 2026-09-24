@@ -2652,6 +2652,71 @@ class TestCreateIssuesFromPlansBaseBranch:
             for call in provider.update_task.call_args_list
         )
 
+    def test_reconciled_title_rename_retry_reuses_original_branch(self, tmp_path: Path) -> None:
+        """A rename applied before its error cannot make recovery create a second PR."""
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text(
+            "# fix: reviewed thing\n\n## Complexity\nmedium\n\n## Tasks\n- Do it\n"
+        )
+        plan_file = PlanFile.from_markdown(plan_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        original_task = Task(
+            id="7", title="feat: original thing", body=f"Existing body\n\n{marker}"
+        )
+        renamed_task = Task(id="7", title="fix: reviewed thing", body=f"Existing body\n\n{marker}")
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.side_effect = [[original_task], [renamed_task]]
+        provider.update_task.side_effect = [None, RuntimeError("response lost after rename"), None]
+        persisted: dict[str, str] = {}
+        pending = {"PLAN.md": marker}
+        branch_titles: dict[str, str] = {}
+        save_progress = MagicMock(return_value=True)
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                pending_issue_branch_titles=branch_titles,
+                handoff_id="completed-handoff",
+                save_progress=save_progress,
+            )
+            assert created == []
+            assert failed == ["PLAN.md"]
+            assert branch_titles == {"PLAN.md": "feat: original thing"}
+
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                pending_issue_branch_titles=branch_titles,
+                handoff_id="completed-handoff",
+                save_progress=save_progress,
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        assert [call.kwargs["issue_title"] for call in bootstrap.call_args_list] == [
+            "feat: original thing",
+            "feat: original thing",
+        ]
+        assert persisted == {"PLAN.md": "7"}
+        assert pending == {}
+        assert branch_titles == {}
+
     def test_bootstrap_failure_records_plan_as_failed(self, tmp_path: Path) -> None:
         # An unresolvable declared base makes bootstrap_draft_pr return None. The plan
         # was never persisted to a PR, so it must be recorded as failed (not created) —
