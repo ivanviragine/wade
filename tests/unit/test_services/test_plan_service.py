@@ -2579,6 +2579,79 @@ class TestCreateIssuesFromPlansBaseBranch:
         assert failed == []
         provider.update_task.assert_not_called()
 
+    def test_reconciled_issue_is_retained_when_plan_refresh_fails(self, tmp_path: Path) -> None:
+        """A failed recovered PR refresh must leave its marker task open for retry."""
+        plan_file = self._make_plan(tmp_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="7", title="feat: thing", body=f"Existing lightweight body\n\n{marker}")
+        ]
+        persisted: dict[str, str] = {}
+        pending = {"PLAN.md": marker}
+
+        with (
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                handoff_id="completed-handoff",
+                save_progress=MagicMock(return_value=True),
+            )
+
+        assert created == []
+        assert failed == ["PLAN.md"]
+        assert pending == {"PLAN.md": marker}
+        provider.close_task.assert_not_called()
+
+    def test_reconciled_issue_applies_a_reviewed_plan_title(self, tmp_path: Path) -> None:
+        """Recovery retains a reviewed H1 on the issue and its existing draft PR."""
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text(
+            "# fix: reviewed thing\n\n## Complexity\nmedium\n\n## Tasks\n- Do it\n"
+        )
+        plan_file = PlanFile.from_markdown(plan_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="7", title="feat: original thing", body=f"Existing body\n\n{marker}")
+        ]
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues={},
+                pending_issue_markers={"PLAN.md": marker},
+                handoff_id="completed-handoff",
+                save_progress=MagicMock(return_value=True),
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        assert bootstrap.call_args.kwargs["issue_title"] == "feat: original thing"
+        assert bootstrap.call_args.kwargs["refresh_title"] == "fix: reviewed thing"
+        assert any(
+            call.kwargs == {"title": "fix: reviewed thing"}
+            for call in provider.update_task.call_args_list
+        )
+
     def test_bootstrap_failure_records_plan_as_failed(self, tmp_path: Path) -> None:
         # An unresolvable declared base makes bootstrap_draft_pr return None. The plan
         # was never persisted to a PR, so it must be recorded as failed (not created) —

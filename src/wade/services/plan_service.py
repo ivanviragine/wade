@@ -1855,6 +1855,7 @@ def _create_issues_from_plans(
                 repo_root=repo_root,
                 base_branch=plan.base_branch,
                 refresh_existing_plan=reconciled is not None,
+                refresh_title=plan.title if reconciled is not None else None,
             )
             if pr_info:
                 pr_number = pr_info.get("number", "?")
@@ -1877,21 +1878,37 @@ def _create_issues_from_plans(
                 # force-remove the worktree, discarding the plan. Record it as failed so
                 # the caller preserves the planning output instead (#376 review).
                 #
-                # The lightweight issue already exists on GitHub, though. Leaving it open
-                # would orphan an issue with no full plan, and re-running the no-issue
-                # planning flow would create a *second* issue for the same plan. Close it
-                # (best-effort) so retries don't accumulate duplicates (#376 review).
+                # A fresh lightweight issue has no durable progress mapping yet. Leaving
+                # it open would orphan an issue with no full plan, and re-running the
+                # no-issue planning flow would create a second issue for the same plan.
+                # A reconciled issue, however, is the durable identity named by the
+                # pending marker: retain it so a later recovery retries its PR refresh
+                # instead of missing a closed marker and creating a duplicate.
                 console.warn(
                     f"Could not create draft PR for #{task.id} — the plan was not "
                     "persisted; preserving planning output."
                 )
-                try:
-                    provider.close_task(task.id, reason=CloseReason.NOT_PLANNED)
-                    console.detail(
-                        f"Closed #{task.id} (no plan persisted) to avoid an orphaned issue"
-                    )
-                except Exception as e:
-                    logger.warning("plan.orphan_issue_close_failed", issue=task.id, error=str(e))
+                if reconciled is None:
+                    try:
+                        provider.close_task(task.id, reason=CloseReason.NOT_PLANNED)
+                        console.detail(
+                            f"Closed #{task.id} (no plan persisted) to avoid an orphaned issue"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "plan.orphan_issue_close_failed", issue=task.id, error=str(e)
+                        )
+                failed.append(plan.path.name)
+                continue
+
+        if reconciled is not None and task.title != plan.title:
+            # Locate any existing PR via the original task title first, then
+            # update the durable task title. Saving progress only after this
+            # succeeds ensures a retry cannot silently discard a reviewed H1.
+            try:
+                provider.update_task(task.id, title=plan.title)
+            except Exception as e:
+                logger.warning("plan.reconciled_title_update_failed", issue=task.id, error=str(e))
                 failed.append(plan.path.name)
                 continue
 

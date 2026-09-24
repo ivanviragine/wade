@@ -37,10 +37,10 @@ def _cfg() -> MagicMock:
     return cfg
 
 
-def _open_pr(base: str) -> PRLookup:
+def _open_pr(base: str, *, title: str = "Title") -> PRLookup:
     return PRLookup(
         found=True,
-        pr=PRRef(number=5, url="http://x/5", state="OPEN", baseRefName=base),
+        pr=PRRef(number=5, url="http://x/5", title=title, state="OPEN", baseRefName=base),
     )
 
 
@@ -364,6 +364,31 @@ class TestBootstrapRetargetReroots:
             "Implements #42\n\n<!-- wade:plan:start -->\n\n"
             "revised plan body\n\n<!-- wade:plan:end -->",
         )
+
+    @patch(f"{_D}.git_pr.update_pr_title", return_value=True)
+    @patch(f"{_D}.git_pr.update_pr_body", return_value=True)
+    @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+    def test_refreshes_existing_pr_title_for_a_recovered_plan(
+        self,
+        _make_branch: MagicMock,
+        _update_body: MagicMock,
+        update_title: MagicMock,
+    ) -> None:
+        with patch(
+            f"{_D}.git_pr.get_pr_for_branch", return_value=_open_pr("main", title="Old title")
+        ):
+            result = bootstrap_draft_pr(
+                "42",
+                "Old title",
+                "revised plan body",
+                _cfg(),
+                Path("/repo"),
+                refresh_existing_plan=True,
+                refresh_title="fix: reviewed title",
+            )
+
+        assert result == {"number": 5, "url": "http://x/5"}
+        update_title.assert_called_once_with(Path("/repo"), 5, "fix: reviewed title")
 
     @patch(f"{_D}.git_pr.update_pr_body", return_value=False)
     @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
