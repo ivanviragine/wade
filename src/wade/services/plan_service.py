@@ -48,7 +48,7 @@ from wade.models.config import ProjectConfig, with_wade_base_pattern
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 from wade.models.interactive_plan import PlanHandoffProgress
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
-from wade.models.plan_bundle import PlanBundle
+from wade.models.plan_bundle import PlanBundle, PlanKnowledgeVote
 from wade.models.task import CloseReason, PlanFile, Task, TaskState
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
@@ -173,15 +173,52 @@ def _validate_handoff_progress_binding(
             "Planning handoff belongs to a different provider configuration; "
             "restore the original provider before recovering"
         )
+    if progress.project is None:
+        raise ValueError(
+            "Planning handoff progress lacks its original task settings; cannot safely recover"
+        )
+    if progress.knowledge is None:
+        raise ValueError(
+            "Planning handoff progress lacks its original knowledge configuration; "
+            "cannot safely recover"
+        )
     if progress.knowledge_required is None:
         raise ValueError(
             "Planning handoff progress lacks its original knowledge requirement; "
             "cannot safely recover"
         )
+    if progress.knowledge.enabled != progress.knowledge_required:
+        raise ValueError("Planning handoff progress has inconsistent knowledge settings")
+    if progress.knowledge_required and progress.knowledge_votes is None:
+        raise ValueError(
+            "Planning handoff progress lacks its original knowledge vote binding; "
+            "cannot safely recover"
+        )
+
+
+def _config_for_handoff_recovery(
+    config: ProjectConfig, progress: PlanHandoffProgress
+) -> ProjectConfig:
+    """Reuse the task and knowledge settings that created a retained handoff."""
+
+    _validate_handoff_progress_binding(progress, config)
+    assert progress.project is not None
+    assert progress.knowledge is not None
+    return config.model_copy(
+        deep=True,
+        update={
+            "project": progress.project.model_copy(deep=True),
+            "knowledge": progress.knowledge.model_copy(deep=True),
+        },
+    )
 
 
 def _ensure_handoff_progress(
-    root: Path, session_id: str, model: str | None, config: ProjectConfig
+    root: Path,
+    session_id: str,
+    model: str | None,
+    config: ProjectConfig,
+    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
 ) -> PlanHandoffProgress:
     """Return one handoff's durable metadata, creating it before mutations."""
 
@@ -194,7 +231,10 @@ def _ensure_handoff_progress(
         session_id=session_id,
         model=model,
         provider=config.provider.model_copy(deep=True),
+        project=config.project.model_copy(deep=True),
+        knowledge=config.knowledge.model_copy(deep=True),
         knowledge_required=config.knowledge.enabled,
+        knowledge_votes=knowledge_votes if config.knowledge.enabled else None,
     )
     if not _save_handoff_progress(root, progress):
         raise HandoffProgressSaveError("Cannot safely save planning handoff progress")
@@ -209,6 +249,23 @@ def _handoff_progress_saver(
     if root is None or progress is None:
         return None
     return lambda: _save_handoff_progress(root, progress)
+
+
+def _bind_handoff_knowledge_votes(
+    progress: PlanHandoffProgress | None,
+    votes: tuple[PlanKnowledgeVote, ...] | None,
+) -> None:
+    """Reject a recovered bundle whose votes differ from its durable binding."""
+
+    if progress is None:
+        return
+    if progress.knowledge_votes is None:
+        raise ValueError(
+            "Planning handoff progress lacks its original knowledge vote binding; "
+            "cannot safely recover"
+        )
+    if progress.knowledge_votes != votes:
+        raise ValueError("Planning handoff knowledge votes changed; cannot safely recover")
 
 
 def _handoff_issue_marker(session_id: str, plan_name: str) -> str:
@@ -613,6 +670,7 @@ def _prepare_plan_handoff(
     project_root: Path | None,
     interactive: bool,
     handoff_id: str,
+    handoff_progress: PlanHandoffProgress | None,
     knowledge_required: bool,
     resolved_yolo: bool,
 ) -> list[PlanFile] | None:
@@ -658,6 +716,7 @@ def _prepare_plan_handoff(
             if any(vote.entry_id not in known_ids for vote in bundle.knowledge_votes):
                 raise ValueError("Native plan returned a rating for an unknown knowledge entry")
 
+        _bind_handoff_knowledge_votes(handoff_progress, bundle.knowledge_votes)
         for vote in bundle.knowledge_votes or ():
             record_handoff_rating_for_session(
                 planning_worktree,
@@ -709,7 +768,11 @@ def _persist_accepted_plans(
     if planning_worktree is not None:
         try:
             progress = _ensure_handoff_progress(
-                planning_worktree, handoff_id, resolved_model, config
+                planning_worktree,
+                handoff_id,
+                resolved_model,
+                config,
+                bundle.knowledge_votes,
             )
         except (StateFileError, ValueError) as exc:
             console.error(f"Could not record planning recovery progress: {exc}", markup=False)
@@ -783,6 +846,7 @@ def _persist_accepted_plans(
                 config,
                 issue_numbers=finalize_issue_numbers,
                 plan_files=plan_files,
+                progress=progress,
             )
             return False
         if not _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree, config):
@@ -834,6 +898,7 @@ def _persist_accepted_plans(
                 config,
                 issue_numbers=created_numbers,
                 plan_files=plan_files,
+                progress=progress,
             )
             return False
         if failed_files or (progress is not None and progress.pending_issue_markers):
@@ -955,11 +1020,18 @@ def _recover_completed_handoff(
             frozen_knowledge_required = config.knowledge.enabled
         progress = _load_handoff_progress(root, handoff_id)
         if progress is not None:
-            _validate_handoff_progress_binding(progress, config)
+            config = _config_for_handoff_recovery(config, progress)
             assert progress.knowledge_required is not None
             if not interactive:
                 resolved_model = progress.model
             frozen_knowledge_required = progress.knowledge_required
+        else:
+            # Retained handoffs created before a progress write are still
+            # recoverable. Create their binding before re-staging votes or
+            # touching the provider, not later during finalization.
+            progress = _ensure_handoff_progress(
+                root, handoff_id, resolved_model, config, bundle.knowledge_votes
+            )
         resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
         provider = get_provider(config)
         existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
@@ -973,6 +1045,7 @@ def _recover_completed_handoff(
             project_root=project_root or repo_root,
             interactive=interactive,
             handoff_id=handoff_id,
+            handoff_progress=progress,
             knowledge_required=frozen_knowledge_required,
             resolved_yolo=yolo,
         )
@@ -1386,6 +1459,7 @@ def plan(
         )
     collected: PlanSessionResult | None = None
     usage: TokenUsage | None = None
+    handoff_progress: PlanHandoffProgress | None = None
     try:
         request = request.model_copy(update={"working_dir": session_cwd})
         with _plan_dir_fallback_env(plan_dir, planning_worktree):
@@ -1423,13 +1497,23 @@ def plan(
                 bundle = native_plan.parse_artifact(collected.plan)
                 native_plan.materialize(session_cwd, bundle)
                 if planning_worktree is not None:
-                    _ensure_handoff_progress(
-                        planning_worktree, collected.session_id, resolved_model, config
+                    handoff_progress = _ensure_handoff_progress(
+                        planning_worktree,
+                        collected.session_id,
+                        resolved_model,
+                        config,
+                        bundle.knowledge_votes,
                     )
         if interactive:
             handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
             if planning_worktree is not None:
-                _ensure_handoff_progress(planning_worktree, handoff_id, resolved_model, config)
+                handoff_progress = _ensure_handoff_progress(
+                    planning_worktree,
+                    handoff_id,
+                    resolved_model,
+                    config,
+                    bundle.knowledge_votes,
+                )
         else:
             assert collected is not None
             handoff_id = collected.session_id
@@ -1443,6 +1527,7 @@ def plan(
             project_root=project_root,
             interactive=interactive,
             handoff_id=handoff_id,
+            handoff_progress=handoff_progress,
             knowledge_required=config.knowledge.enabled,
             resolved_yolo=resolved_yolo,
         )
@@ -1639,12 +1724,15 @@ def _create_issues_from_plans(
                 pr_url = pr_info.get("url", "")
                 console.success(f"Draft PR #{pr_number}: {pr_url}")
 
-                # Update issue body with PR link
-                updated_body = brief_body.rstrip("\n") + f"\n\n**Full plan**: PR #{pr_number}"
-                try:
-                    provider.update_task(task.id, body=updated_body)
-                except Exception as e:
-                    logger.warning("plan.pr_link_update_failed", error=str(e))
+                # Recovery can reuse the same draft PR after the prior body
+                # update succeeded but progress persistence failed.
+                plan_link = f"**Full plan**: PR #{pr_number}"
+                if plan_link not in brief_body:
+                    updated_body = brief_body.rstrip("\n") + f"\n\n{plan_link}"
+                    try:
+                        provider.update_task(task.id, body=updated_body)
+                    except Exception as e:
+                        logger.warning("plan.pr_link_update_failed", error=str(e))
             else:
                 # The draft PR never got created (e.g. a plan-declared base that can't
                 # be resolved). The full plan lives only in the planning worktree — if
@@ -2452,9 +2540,11 @@ def _retain_finalization_failed_handoff(
     *,
     issue_numbers: list[str],
     plan_files: list[PlanFile],
+    progress: PlanHandoffProgress | None,
 ) -> None:
-    """Keep a fully durable handoff recoverable after finalization fails."""
-    if planning_worktree is not None and len(issue_numbers) == len(plan_files):
+    """Keep durable or still-reconcilable handoffs recoverable after finalization fails."""
+    pending_markers = progress is not None and bool(progress.pending_issue_markers)
+    if planning_worktree is not None and (pending_markers or len(issue_numbers) == len(plan_files)):
         _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
         return
     _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
