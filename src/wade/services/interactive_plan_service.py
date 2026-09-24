@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shlex
@@ -71,6 +72,26 @@ def active(root: Path) -> bool:
     return state_file_present(root, ("plans",), STATE)
 
 
+def _frozen_bundle_access_error(
+    root: Path, error: SessionCompositionError
+) -> StateFileAccessError | None:
+    """Recover a permission denial wrapped by frozen-bundle validation."""
+
+    current = error.__cause__
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, OSError) and current.errno in {errno.EACCES, errno.EPERM}:
+            path = (
+                Path(os.fsdecode(current.filename))
+                if current.filename is not None
+                else root / ".wade" / "session"
+            )
+            return StateFileAccessError(path, current)
+        current = current.__cause__
+    return None
+
+
 def _binding_digest(root: Path) -> str:
     try:
         manifest = load_session_manifest_strict(root)
@@ -81,6 +102,8 @@ def _binding_digest(root: Path) -> str:
     try:
         validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
     except SessionCompositionError as exc:
+        if access_error := _frozen_bundle_access_error(root, exc):
+            raise access_error from exc
         raise ValueError(str(exc)) from exc
     return manifest.bundle_digest
 
