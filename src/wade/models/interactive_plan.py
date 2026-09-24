@@ -44,6 +44,9 @@ class PlanHandoffProgress(BaseModel):
     # retaining its already-delivered event identity.
     knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None
     persisted_issues: dict[str, str] = Field(default_factory=dict)
+    # Each persisted task's draft PR contains this exact plan content. Recovery
+    # must reject a reviewed edit rather than reusing the task with a stale PR.
+    persisted_plan_digests: dict[str, str] = Field(default_factory=dict)
     # A task body carries each marker before its external creation.  If the
     # following local progress write fails, recovery can find that exact task
     # instead of creating a duplicate.

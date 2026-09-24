@@ -268,6 +268,40 @@ def _bind_handoff_knowledge_votes(
         raise ValueError("Planning handoff knowledge votes changed; cannot safely recover")
 
 
+def _plan_content_digest(plan: PlanFile) -> str:
+    """Return the exact plan content binding for one persisted task."""
+
+    return hashlib.sha256(plan.body.encode()).hexdigest()
+
+
+def _validate_persisted_plan_bindings(
+    progress: PlanHandoffProgress | None, plans: list[PlanFile]
+) -> None:
+    """Reject recovery when a persisted task no longer matches its draft PR plan."""
+
+    if progress is None or not progress.persisted_issues:
+        return
+    if set(progress.persisted_plan_digests) != set(progress.persisted_issues):
+        raise ValueError(
+            "Planning handoff progress lacks its original plan content binding; "
+            "cannot safely recover"
+        )
+
+    plans_by_name = {plan.path.name: plan for plan in plans}
+    for name, digest in progress.persisted_plan_digests.items():
+        plan = plans_by_name.get(name)
+        if plan is None:
+            raise ValueError(
+                "Planning handoff progress references a plan that is no longer accepted; "
+                "cannot safely recover"
+            )
+        if _plan_content_digest(plan) != digest:
+            raise ValueError(
+                "Planning handoff plan content changed after its task and draft PR were "
+                "persisted; cannot safely recover"
+            )
+
+
 def _handoff_issue_marker(session_id: str, plan_name: str) -> str:
     """Return a stable, hidden external identity for one handoff plan member."""
 
@@ -703,6 +737,7 @@ def _prepare_plan_handoff(
     if not accepted_plans:
         return None
     native_plan.validate_selection(bundle, accepted_plans)
+    _validate_persisted_plan_bindings(handoff_progress, accepted_plans)
     if knowledge_required and planning_worktree is not None:
         from wade.services.knowledge_service import record_handoff_rating_for_session
         from wade.utils.knowledge_file import parse_entries, resolve_knowledge_path
@@ -803,6 +838,9 @@ def _persist_accepted_plans(
                     repo_root=repo_root,
                     yolo=resolved_yolo,
                     persisted_issues=progress.persisted_issues if progress is not None else None,
+                    persisted_plan_digests=(
+                        progress.persisted_plan_digests if progress is not None else None
+                    ),
                     pending_issue_markers=(
                         progress.pending_issue_markers if progress is not None else None
                     ),
@@ -862,6 +900,9 @@ def _persist_accepted_plans(
             plan_files=plan_files,
             repo_root=repo_root,
             persisted_issues=progress.persisted_issues if progress is not None else None,
+            persisted_plan_digests=(
+                progress.persisted_plan_digests if progress is not None else None
+            ),
             pending_issue_markers=(
                 progress.pending_issue_markers if progress is not None else None
             ),
@@ -1029,9 +1070,18 @@ def _recover_completed_handoff(
             # Retained handoffs created before a progress write are still
             # recoverable. Create their binding before re-staging votes or
             # touching the provider, not later during finalization.
-            progress = _ensure_handoff_progress(
-                root, handoff_id, resolved_model, config, bundle.knowledge_votes
+            frozen_config = config.model_copy(
+                deep=True,
+                update={
+                    "knowledge": config.knowledge.model_copy(
+                        update={"enabled": frozen_knowledge_required}
+                    )
+                },
             )
+            progress = _ensure_handoff_progress(
+                root, handoff_id, resolved_model, frozen_config, bundle.knowledge_votes
+            )
+            config = _config_for_handoff_recovery(config, progress)
         resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
         provider = get_provider(config)
         existing_issue = provider.read_task(manifest.task_id) if manifest.task_id else None
@@ -1619,6 +1669,7 @@ def _create_issues_from_plans(
     plan_files: list[PlanFile],
     repo_root: Path | None = None,
     persisted_issues: dict[str, str] | None = None,
+    persisted_plan_digests: dict[str, str] | None = None,
     pending_issue_markers: dict[str, str] | None = None,
     handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
@@ -1763,6 +1814,8 @@ def _create_issues_from_plans(
         # first so recovery resumes from this task rather than creating another.
         if persisted_issues is not None:
             persisted_issues[plan.path.name] = task.id
+            if persisted_plan_digests is not None:
+                persisted_plan_digests[plan.path.name] = _plan_content_digest(plan)
             if pending_issue_markers is not None:
                 pending_issue_markers.pop(plan.path.name, None)
             if save_progress is None or not save_progress():
@@ -2085,6 +2138,7 @@ def _supersede_issue_with_plans(
     repo_root: Path | None,
     yolo: bool,
     persisted_issues: dict[str, str] | None = None,
+    persisted_plan_digests: dict[str, str] | None = None,
     pending_issue_markers: dict[str, str] | None = None,
     handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
@@ -2105,6 +2159,7 @@ def _supersede_issue_with_plans(
         plan_files=plan_files,
         repo_root=repo_root,
         persisted_issues=persisted_issues,
+        persisted_plan_digests=persisted_plan_digests,
         pending_issue_markers=pending_issue_markers,
         handoff_id=handoff_id,
         save_progress=save_progress,

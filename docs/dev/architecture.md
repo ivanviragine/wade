@@ -276,7 +276,9 @@ provider mutation the planning worktree gets `.wade/plans/handoff-progress.json`
 the collector's resolved model, the complete provider configuration, project
 task-persistence settings, complete knowledge configuration and vote set, a
 pending per-plan marker, and a per-plan-file to task-id mapping written after
-each issue and draft PR become durable. Recovery validates the provider
+each issue and draft PR become durable. Each persisted mapping also records a
+digest of the exact plan content in its draft PR, so a later review edit rejects
+reuse instead of letting task metadata and the retained PR diverge. Recovery validates the provider
 configuration before it instantiates or uses a provider, and reuses the original
 project and knowledge settings rather than silently applying changed values. The
 vote set is bound before staging, so a revised retained artifact cannot reuse a
