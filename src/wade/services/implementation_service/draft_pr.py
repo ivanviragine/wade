@@ -318,6 +318,7 @@ def bootstrap_draft_pr(
     config: ProjectConfig,
     repo_root: Path,
     base_branch: str | None = None,
+    refresh_existing_plan: bool = False,
 ) -> dict[str, str | int] | None:
     """Create branch + push + draft PR for an issue.
 
@@ -332,6 +333,8 @@ def bootstrap_draft_pr(
         repo_root: Repository root directory.
         base_branch: When set, branch from this instead of main and target
             the PR at it (stacked PR for chain execution).
+        refresh_existing_plan: Rewrite an existing PR's managed plan body before
+            accepting a recovered task as persisted.
 
     Returns:
         Dict with "number" (int) and "url" (str) keys, or None on failure.
@@ -387,6 +390,13 @@ def bootstrap_draft_pr(
                     _restore_scaffold_head(repo_root, branch_name, pre_reroot_sha, existing.number)
                 return None
             console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
+        if refresh_existing_plan and not git_pr.update_pr_body(
+            repo_root,
+            existing.number,
+            _build_draft_pr_body(plan_body, issue_number),
+        ):
+            console.error(f"Failed to refresh the plan in draft PR #{existing.number}.")
+            return None
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,

@@ -276,6 +276,24 @@ class TestListTasks:
         provider = config_factory(SAMPLE_FILE)
         assert provider.list_tasks(state=None, limit=-3) == []
 
+    def test_finds_marker_after_more_than_one_thousand_matching_tasks(self, config_factory) -> None:
+        marker = "<!-- wade:plan-handoff:recovery -->"
+        tasks = "\n".join(
+            f"## #{number} Task {number}\n\n<!-- wade\nstate: open\nlabels: feature\n-->\n\nbody"
+            for number in range(1, 1002)
+        )
+        provider = config_factory(
+            "# Wade Issues\n\n"
+            + tasks
+            + "\n\n## #1002 Recovered task\n\n<!-- wade\nstate: open\nlabels: feature\n-->\n\n"
+            + marker
+            + "\n"
+        )
+
+        matches = provider.find_tasks_by_body_marker(marker, label="feature")
+
+        assert [task.id for task in matches] == ["1002"]
+
     def test_complexity_parsed_from_label(self, config_factory) -> None:
         provider = config_factory(SAMPLE_FILE)
         task = next(t for t in provider.list_tasks() if t.id == "1")

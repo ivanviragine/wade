@@ -1157,6 +1157,9 @@ class TestPlanOrchestrator:
         provider.list_tasks.return_value = [
             Task(id="1", title="feat: native test plan", body=marker)
         ]
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="1", title="feat: native test plan", body=marker)
+        ]
         config.project = ProjectSettings(
             issue_label="changed-plan",
             branch_prefix="changed",
@@ -1170,8 +1173,10 @@ class TestPlanOrchestrator:
             assert plan(project_root=tmp_path, recover=root)
 
         assert provider.create_task.call_count == 1
-        provider.list_tasks.assert_called_once_with(
-            label="original-plan", state=TaskState.OPEN, limit=1000
+        provider.find_tasks_by_body_marker.assert_called_once_with(
+            marker,
+            label="original-plan",
+            state=TaskState.OPEN,
         )
         recovered_config = plan_service.bootstrap_draft_pr.call_args.kwargs["config"]
         assert recovered_config.project == original_settings
@@ -1462,10 +1467,19 @@ class TestPlanOrchestrator:
 
         provider.create_task.assert_called_once()
 
+    @pytest.mark.parametrize(
+        "reviewed_plan",
+        [
+            PLAN_TEXT + "\n## Notes\n- Edited during review\n",
+            PLAN_TEXT.replace("# feat: native test plan", "# fix: native test plan"),
+        ],
+        ids=["body", "title"],
+    )
     def test_recovery_rejects_reviewed_plan_changed_after_task_pr_persistence(
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
+        reviewed_plan: str,
     ) -> None:
         """A retained task cannot be reused when review changes its draft-PR plan."""
         from wade.models.workflow import SessionKind
@@ -1484,7 +1498,7 @@ class TestPlanOrchestrator:
         plan_service.bootstrap_draft_pr.reset_mock()
 
         def review_and_edit(paths: list[Path], *_args: object, **_kwargs: object) -> bool:
-            paths[0].write_text(PLAN_TEXT + "\n## Notes\n- Edited during review\n")
+            paths[0].write_text(reviewed_plan)
             return True
 
         with (
@@ -2411,7 +2425,7 @@ class TestCreateIssuesFromPlansBaseBranch:
         plan_file = self._make_plan(tmp_path)
         marker = "<!-- wade:plan-handoff:reconciled -->"
         provider = MagicMock()
-        provider.list_tasks.return_value = [
+        provider.find_tasks_by_body_marker.return_value = [
             Task(id="7", title="feat: thing", body=f"Existing lightweight body\n\n{marker}")
         ]
         persisted: dict[str, str] = {}
@@ -2443,6 +2457,7 @@ class TestCreateIssuesFromPlansBaseBranch:
         add_complexity.assert_called_once_with(provider, "7", plan_file.complexity)
         bootstrap.assert_called_once()
         assert bootstrap.call_args.kwargs["issue_number"] == "7"
+        assert bootstrap.call_args.kwargs["refresh_existing_plan"] is True
         assert persisted == {"PLAN.md": "7"}
         assert pending == {}
         save_progress.assert_called_once()
@@ -2455,7 +2470,7 @@ class TestCreateIssuesFromPlansBaseBranch:
         plan_file = self._make_plan(tmp_path)
         marker = "<!-- wade:plan-handoff:reconciled -->"
         provider = MagicMock()
-        provider.list_tasks.return_value = [
+        provider.find_tasks_by_body_marker.return_value = [
             Task(
                 id="7",
                 title="feat: thing",

@@ -43,6 +43,11 @@ The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py
 3. Add the provider ID to `ProviderID` enum in `models/config.py`
 4. Register the provider in `providers/__init__.py` via `register_provider(ProviderID.YOUR_ID, YourProvider)` (use a lazy loader for optional dependencies)
 
+Providers that support planning handoff recovery must also implement
+`find_tasks_by_body_marker`. It must exhaustively search the provider's open
+tasks for the exact durable marker; a bounded task-list page can miss a task
+created before a local recovery-progress write failed, causing a duplicate.
+
 Non-GitHub providers (ClickUp, Markdown) still need PRs and PR-review APIs, which are GitHub-only. They get these by composing `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), which routes PR/review calls through `gh` while task CRUD stays on the provider's own backend.
 
 ## Version Bumping

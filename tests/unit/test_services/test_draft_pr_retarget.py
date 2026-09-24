@@ -342,6 +342,47 @@ class TestBranchWorkSignals:
 
 
 class TestBootstrapRetargetReroots:
+    @patch(f"{_D}.git_pr.update_pr_body", return_value=True)
+    @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+    def test_refreshes_existing_pr_plan_before_recovery_succeeds(
+        self, _make_branch: MagicMock, update_body: MagicMock
+    ) -> None:
+        with patch(f"{_D}.git_pr.get_pr_for_branch", return_value=_open_pr("main")):
+            result = bootstrap_draft_pr(
+                "42",
+                "Title",
+                "revised plan body",
+                _cfg(),
+                Path("/repo"),
+                refresh_existing_plan=True,
+            )
+
+        assert result == {"number": 5, "url": "http://x/5"}
+        update_body.assert_called_once_with(
+            Path("/repo"),
+            5,
+            "Implements #42\n\n<!-- wade:plan:start -->\n\n"
+            "revised plan body\n\n<!-- wade:plan:end -->",
+        )
+
+    @patch(f"{_D}.git_pr.update_pr_body", return_value=False)
+    @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+    def test_preserves_handoff_when_existing_pr_plan_refresh_fails(
+        self, _make_branch: MagicMock, update_body: MagicMock
+    ) -> None:
+        with patch(f"{_D}.git_pr.get_pr_for_branch", return_value=_open_pr("main")):
+            result = bootstrap_draft_pr(
+                "42",
+                "Title",
+                "revised plan body",
+                _cfg(),
+                Path("/repo"),
+                refresh_existing_plan=True,
+            )
+
+        assert result is None
+        update_body.assert_called_once()
+
     @patch(f"{_D}.reroot_scaffold_branch_for_retarget", return_value=True)
     @patch(f"{_D}.git_pr.update_pr_base", return_value=True)
     @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")

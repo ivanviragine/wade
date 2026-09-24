@@ -165,6 +165,46 @@ class TestListTasks:
         assert "-label:in-progress" in cmd[search_idx + 1]
         assert "-label:blocked" in cmd[search_idx + 1]
 
+    @patch("wade.providers.github.run")
+    def test_finds_marker_across_paginated_issue_results(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        marker = "<!-- wade:plan-handoff:recovery -->"
+        provider._repo_nwo = "owner/repo"
+        mock_run.return_value = _make_completed(
+            json.dumps(
+                [
+                    [
+                        {
+                            "number": 7,
+                            "title": "Recovered issue",
+                            "state": "open",
+                            "labels": [{"name": "feature", "color": "ffffff"}],
+                            "body": marker,
+                            "html_url": "https://github.test/owner/repo/issues/7",
+                        },
+                        {
+                            "number": 8,
+                            "title": "Pull request",
+                            "state": "open",
+                            "labels": [{"name": "feature", "color": "ffffff"}],
+                            "body": marker,
+                            "pull_request": {},
+                        },
+                    ],
+                    [],
+                ]
+            )
+        )
+
+        matches = provider.find_tasks_by_body_marker(marker, label="feature")
+
+        assert [task.id for task in matches] == ["7"]
+        command = mock_run.call_args.args[0]
+        assert "--paginate" in command
+        assert "--slurp" in command
+        assert "labels=feature" in command[-1]
+
 
 class TestCreateTask:
     @patch("wade.providers.github.run")

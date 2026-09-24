@@ -271,7 +271,7 @@ def _bind_handoff_knowledge_votes(
 def _plan_content_digest(plan: PlanFile) -> str:
     """Return the exact plan content binding for one persisted task."""
 
-    return hashlib.sha256(plan.body.encode()).hexdigest()
+    return hashlib.sha256(f"{plan.title}\0{plan.body}".encode()).hexdigest()
 
 
 def _validate_persisted_plan_bindings(
@@ -322,15 +322,11 @@ def _find_pending_handoff_issue(
     """
 
     try:
-        matches = [
-            task
-            for task in provider.list_tasks(
-                label=config.project.issue_label,
-                state=TaskState.OPEN,
-                limit=1000,
-            )
-            if marker in task.body
-        ]
+        matches = provider.find_tasks_by_body_marker(
+            marker,
+            label=config.project.issue_label,
+            state=TaskState.OPEN,
+        )
     except Exception as exc:
         raise HandoffProgressSaveError(
             "Cannot safely reconcile a pending planning task; output was retained"
@@ -1769,6 +1765,7 @@ def _create_issues_from_plans(
                 config=config,
                 repo_root=repo_root,
                 base_branch=plan.base_branch,
+                refresh_existing_plan=reconciled is not None,
             )
             if pr_info:
                 pr_number = pr_info.get("number", "?")
