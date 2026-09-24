@@ -17,6 +17,7 @@ from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.task import Task
 from wade.ui.console import console
+from wade.utils.body_markers import upsert_marked_block
 
 logger = structlog.get_logger()
 
@@ -394,13 +395,19 @@ def bootstrap_draft_pr(
                     _restore_scaffold_head(repo_root, branch_name, pre_reroot_sha, existing.number)
                 return None
             console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
-        if refresh_existing_plan and not git_pr.update_pr_body(
-            repo_root,
-            existing.number,
-            _build_draft_pr_body(plan_body, issue_number),
-        ):
-            console.error(f"Failed to refresh the plan in draft PR #{existing.number}.")
-            return None
+        if refresh_existing_plan:
+            current_body = git_pr.get_pr_body(repo_root, existing.number)
+            if current_body is None:
+                console.error(f"Failed to read the body of draft PR #{existing.number}.")
+                return None
+            refreshed_body = (
+                upsert_marked_block(current_body, PLAN_MARKER_START, PLAN_MARKER_END, plan_body)
+                if current_body
+                else _build_draft_pr_body(plan_body, issue_number)
+            )
+            if not git_pr.update_pr_body(repo_root, existing.number, refreshed_body):
+                console.error(f"Failed to refresh the plan in draft PR #{existing.number}.")
+                return None
         if (
             refresh_title is not None
             and existing.title != refresh_title
