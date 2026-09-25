@@ -256,6 +256,54 @@ The legacy file-presence Stop nudge is not installed; correctness depends on the
 completion and parent gates, not ambient hooks. Collected transports may exclude
 ambient settings; native terminals use their ordinary launch behavior.
 
+Parent collection uses the additive strict `safe_state` read/list API. The
+legacy API continues to collapse unsafe or unreadable state to `None` for review
+receipts, review cycles, documentation receipts, and other established callers;
+the strict path preserves `EACCES`/`EPERM` as `StateFileAccessError` while keeping
+the same descriptor-relative `O_NOFOLLOW`, regular-file, and byte-limit checks.
+An access denial after native exit causes no provider mutation and never enters
+normal worktree cleanup. Enumeration denial reports an unknown plan count and
+retains the original detached worktree. `wade plan --recover <worktree>` accepts
+only a detached worktree still registered with the current repo, skips launch,
+reloads its frozen plan manifest and explicit completed handoff, and reruns
+binding, content, review, dependency, and strict plan-validation gates before
+persistence. Successful recovery resumes the ordinary finalization and cleanup
+path; WADE does not invoke platform privacy tools or weaken sandbox policy.
+
+Recovery is idempotent because its launch binding and persistence are recorded as
+they happen. Before a managed planner launches, its worktree gets
+`.wade/plans/handoff-binding.json` (`PlanHandoffBinding`) with the resolved
+model, complete provider configuration, project task-persistence settings, and
+complete knowledge configuration. Recovery rejects a retained handoff without
+that binding rather than synthesizing one from settings that may have changed
+after collection. After collection and before any provider mutation, the worktree
+gets `.wade/plans/handoff-progress.json` (`PlanHandoffProgress`), keyed to the
+completed handoff's session id; it binds the vote set, a pending per-plan marker,
+and a per-plan-file to task-id mapping written after each issue and draft PR
+become durable. Each persisted mapping also records a digest of the exact plan
+content in its draft PR, so a later review edit rejects reuse instead of letting
+task metadata and the retained PR diverge. Recovery validates the provider
+configuration before it instantiates or uses a provider, and reuses the original
+project and knowledge settings rather than silently applying changed values. The
+vote set is bound before staging, so a revised retained artifact cannot reuse a
+previously delivered event ID with a different direction. The pending marker is
+placed in the task's initial hidden body before creation, so a post-creation
+progress-write failure can recover the exact task instead of guessing from its
+title or creating a duplicate. Before recovery renames a task to its reviewed
+plan title, it also records the original branch-forming title, so a rename whose
+response or later progress write fails still refreshes the existing draft PR
+instead of creating one from the new title. A later finalization or cleanup
+failure therefore
+leaves a retry reusing those tasks — and the original model for `planned-by`
+provenance — instead of creating duplicates; a partial finalization with a
+pending marker retains the original worktree for the same reconciliation path.
+Attaching a plan to an existing issue is idempotent for the same reason:
+`bootstrap_draft_pr` reuses the open PR, and the plan link is appended only when
+the issue body lacks it. Recovery refreshes that PR's managed plan body before
+accepting the attachment, so an approved recovery edit cannot be lost. A binding
+or progress file that is unsafe, invalid, missing required data, or bound to
+another session aborts recovery rather than being silently replaced.
+
 ## Hook Guard Layer
 
 wade installs AI-tool hooks that enforce session rules in *code* rather than

@@ -34,6 +34,7 @@ from wade.services.knowledge_service import (
     parse_entries,
     read_knowledge,
     read_ratings,
+    record_handoff_rating_for_session,
     record_rating,
     record_rating_for_session,
     record_supersede,
@@ -1632,6 +1633,63 @@ class TestStagedRatingEvents:
         assert staged.is_file()
         assert event.event_id in staged.read_text(encoding="utf-8")
         assert not (tmp_path / "KNOWLEDGE.ratings.jsonl").exists()
+
+    def test_handoff_ratings_are_distinct_from_ordinary_and_other_handoffs(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+
+        ordinary = record_rating_for_session(tmp_path, config, "entry", "up")
+        first = record_handoff_rating_for_session(
+            tmp_path, config, "entry", "up", "interactive-session-a"
+        )
+        retry = record_handoff_rating_for_session(
+            tmp_path, config, "entry", "up", "interactive-session-a"
+        )
+        second = record_handoff_rating_for_session(
+            tmp_path, config, "entry", "up", "native-session-b"
+        )
+
+        records = [
+            json.loads(line)
+            for line in staged_ratings_path(tmp_path).read_text(encoding="utf-8").splitlines()
+        ]
+        assert [record["event_id"] for record in records] == [
+            ordinary.event_id,
+            first.event_id,
+            second.event_id,
+        ]
+        assert retry == first
+        assert records[0].get("handoff_id") is None
+        assert records[1]["handoff_id"] == "interactive-session-a"
+        assert records[2]["handoff_id"] == "native-session-b"
+
+    def test_handoff_rating_keeps_its_identity_after_staging_is_flushed(
+        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retained handoff retry must not vote again after cleanup fails."""
+        monkeypatch.setattr(
+            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
+        )
+        main = tmp_path / "main"
+        worktree = tmp_path / "plan-worktree"
+        main.mkdir()
+        worktree.mkdir()
+
+        first = record_handoff_rating_for_session(
+            worktree, config, "entry", "up", "completed-handoff"
+        )
+        assert flush_staged_ratings(worktree, main, config).appended_count == 1
+        assert not staged_ratings_path(worktree).exists()
+
+        retry = record_handoff_rating_for_session(
+            worktree, config, "entry", "up", "completed-handoff"
+        )
+        assert retry.event_id == first.event_id
+        assert flush_staged_ratings(worktree, main, config).appended_count == 0
+        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["entry"].up == 1
 
     def test_flush_hands_off_once_and_retry_only_cleans_staging(
         self, tmp_path: Path, config: KnowledgeConfig

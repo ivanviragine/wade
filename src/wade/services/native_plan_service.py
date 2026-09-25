@@ -24,7 +24,16 @@ from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.models.task import PlanFile
 from wade.ui import prompts
 from wade.ui.console import console
-from wade.utils.safe_state import exclusive_write_state_file, list_state_files
+from wade.utils.safe_state import (
+    StateFileAccessError,
+    StateFileUnsafeError,
+    exclusive_write_state_file,
+    list_state_files,
+    list_state_files_strict,
+    read_state_file_strict,
+)
+
+MAX_ARTIFACT_BYTES = 4_000_000
 
 
 def failure_message(exc: BaseException) -> str:
@@ -117,6 +126,22 @@ def save_artifact(root: Path, result: PlanSessionResult) -> None:
         )
 
 
+def load_artifact(root: Path) -> tuple[PlanSessionResult, PlanBundle]:
+    """Load one retained collector result and verify its imported plan members."""
+    try:
+        raw = read_state_file_strict(
+            root, ("plans",), "native-session.json", max_bytes=MAX_ARTIFACT_BYTES
+        )
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        raise ValueError("Native planning handoff is absent or unsafe") from exc
+    result = PlanSessionResult.model_validate_json(raw)
+    bundle = parse_artifact(result.plan)
+    validate_imported_set(root, bundle)
+    return result, bundle
+
+
 def materialize(root: Path, bundle: PlanBundle) -> None:
     """Import only named members, once; native source paths are never enumerated."""
     existing = list_state_files(root, ("plans",))
@@ -133,10 +158,10 @@ def materialize(root: Path, bundle: PlanBundle) -> None:
 
 def validate_imported_set(root: Path, bundle: PlanBundle) -> None:
     """Review cannot add unrelated task files or silently delete bundle members."""
-    files = list_state_files(root, ("plans",))
-    if files is None or {
-        name for name in files if name.startswith("PLAN") and name.endswith(".md")
-    } != {member.filename for member in bundle.plans}:
+    files = list_state_files_strict(root, ("plans",))
+    if {name for name in files if name.startswith("PLAN") and name.endswith(".md")} != {
+        member.filename for member in bundle.plans
+    }:
         raise ValueError("Imported plan members changed; recover the retained native artifact")
 
 

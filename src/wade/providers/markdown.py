@@ -466,6 +466,25 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
         return tasks
 
+    def find_tasks_by_body_marker(
+        self,
+        marker: str,
+        label: str | None = None,
+        state: TaskState | None = TaskState.OPEN,
+    ) -> list[Task]:
+        """Exhaustively scan the central Markdown file for one recovery marker."""
+        _, sections = self._load_sections()
+        matches: list[Task] = []
+        for section in sections:
+            task = _section_to_task(section)
+            if state is not None and task.state != state:
+                continue
+            if label and label not in {item.name for item in task.labels}:
+                continue
+            if marker in task.body:
+                matches.append(task)
+        return matches
+
     def create_task(
         self,
         title: str,

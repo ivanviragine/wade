@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -31,12 +33,16 @@ from wade.git.pr import PRLookup, PRRef
 from wade.models.config import (
     AICommandConfig,
     AIConfig,
+    KnowledgeConfig,
     PermissionMode,
     ProjectConfig,
     ProjectSettings,
+    ProviderConfig,
+    ProviderID,
 )
-from wade.models.plan_bundle import BUNDLE_MARKER
-from wade.models.task import CloseReason, PlanFile, Task
+from wade.models.interactive_plan import InteractivePlanState
+from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanKnowledgeVote, PlanMember
+from wade.models.task import CloseReason, PlanFile, Task, TaskState
 from wade.models.worktree import Worktree
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
@@ -50,6 +56,7 @@ from wade.services.plan_service import (
     _persist_plan_issue_ref,
     _preserve_generated_plans,
     _reconcile_inflight_worktree_base,
+    _save_handoff_binding,
     _select_valid_plans,
     _supersede_issue_with_plans,
     _with_supersede_banner,
@@ -62,6 +69,8 @@ from wade.services.plan_service import (
     validate_plan_dir,
     validate_plan_files,
 )
+from wade.utils import safe_state
+from wade.utils.safe_state import StateFileAccessError, StateFileIOError
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -351,6 +360,11 @@ def bundle_text(*members: tuple[str, str]) -> str:
     return BUNDLE_MARKER + "\n\x60\x60\x60json\n" + json.dumps(payload) + "\n\x60\x60\x60\n"
 
 
+def save_handoff_binding(root: Path, config: ProjectConfig, model: str | None = None) -> None:
+    """Make direct retained-handoff fixtures match the pre-launch production state."""
+    _save_handoff_binding(root, model, config)
+
+
 @pytest.fixture
 def collected_harness(
     tmp_path: Path,
@@ -452,6 +466,69 @@ class TestCollectedSession:
         preserve.assert_not_called()
         cleanup.assert_called_once()
 
+    def test_finalization_failure_retains_registered_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Recovery state survives a failure after the issue and draft PR persist."""
+        _, provider, _, root = collected_harness
+
+        with (
+            patch(
+                "wade.services.plan_service._finalize_issues",
+                return_value=PLAN_FINALIZATION_FAILED,
+            ),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+            patch("wade.services.plan_service._retain_inaccessible_handoff") as retain,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        assert root.is_dir()
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["persisted_issues"] == {"PLAN.md": "1"}
+        retain.assert_called_once_with(str(root / ".wade/plans"), root, access_denied=False)
+        preserve.assert_not_called()
+        provider.create_task.assert_called_once()
+
+    def test_partial_finalization_with_pending_marker_retains_registered_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A marker can still reconcile an externally created task after a partial batch."""
+        _, _, collect, root = collected_harness
+        collect.return_value = native_result(
+            bundle_text(("PLAN-a.md", PLAN_TEXT), ("PLAN-b.md", PLAN_TEXT))
+        )
+
+        def partially_persist(
+            **kwargs: object,
+        ) -> tuple[list[str], list[str]]:
+            pending = kwargs["pending_issue_markers"]
+            assert isinstance(pending, dict)
+            pending["PLAN-b.md"] = "<!-- wade:plan-handoff:pending -->"
+            return ["1"], ["PLAN-b.md"]
+
+        with (
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                side_effect=partially_persist,
+            ),
+            patch(
+                "wade.services.plan_service._finalize_issues",
+                return_value=PLAN_FINALIZATION_FAILED,
+            ),
+            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+            patch("wade.services.plan_service._retain_inaccessible_handoff") as retain,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        assert root.is_dir()
+        retain.assert_called_once()
+        assert retain.call_args.kwargs["access_denied"] is False
+        preserve.assert_not_called()
+
     def test_terminal_collector_receives_public_identity_bearing_consent(
         self, tmp_path: Path
     ) -> None:
@@ -526,10 +603,10 @@ class TestCollectedSession:
         collect.return_value = native_result(
             BUNDLE_MARKER + "\n```json\n" + json.dumps(payload) + "\n```"
         )
-        with patch("wade.services.knowledge_service.record_rating_for_session") as rate:
+        with patch("wade.services.knowledge_service.record_handoff_rating_for_session") as rate:
             assert plan(project_root=tmp_path) is (vote_id == "known-entry")
         if vote_id == "known-entry":
-            rate.assert_called_once_with(root, config.knowledge, vote_id, "up")
+            rate.assert_called_once_with(root, config.knowledge, vote_id, "up", "native-session")
         else:
             rate.assert_not_called()
             provider.create_task.assert_not_called()
@@ -888,6 +965,1023 @@ class TestPlanOrchestrator:
         launch.assert_called_once()
         collect.assert_not_called()
         provider.create_task.assert_called_once()
+
+    def test_parent_permission_denial_retains_completed_native_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        config.ai.review_plan.enabled = True
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        deny_parent = False
+        original_open = os.open
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            nonlocal deny_parent
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.record_review(root / ".wade/plans/PLAN.md", PLAN_TEXT, self_review=False)
+            interactive.complete(root)
+            deny_parent = True
+            return 0
+
+        def denied_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if deny_parent and Path(path).name == interactive.STATE:
+                raise PermissionError(13, "denied", os.fspath(path))
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+            patch.object(safe_state.os, "open", side_effect=denied_open),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not plan(project_root=tmp_path, permission_mode="yolo")
+
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        cleanup.assert_not_called()
+        assert root.is_dir()
+        error = " ".join(str(call) for call in mock_console.error.call_args_list)
+        hints = " ".join(str(call) for call in mock_console.hint.call_args_list)
+        assert "permission denied" in error.lower()
+        assert "--recover" in hints
+
+    @pytest.mark.parametrize("error_number", [errno.EACCES, errno.EIO])
+    def test_frozen_bundle_io_failure_retains_completed_native_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        error_number: int,
+    ) -> None:
+        """A validation-time I/O failure must retain the completed handoff for recovery."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        config.ai.review_plan.enabled = True
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        deny_bundle = False
+        original_open = os.open
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            nonlocal deny_bundle
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.record_review(root / ".wade/plans/PLAN.md", PLAN_TEXT, self_review=False)
+            interactive.complete(root)
+            deny_bundle = True
+            return 0
+
+        def denied_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if deny_bundle and Path(path).name == "WORKFLOW.md":
+                raise OSError(error_number, os.strerror(error_number), os.fspath(path))
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+            patch.object(safe_state.os, "open", side_effect=denied_open),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not plan(project_root=tmp_path, permission_mode="yolo")
+
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        cleanup.assert_not_called()
+        assert root.is_dir()
+        error = " ".join(str(call) for call in mock_console.error.call_args_list)
+        hints = " ".join(str(call) for call in mock_console.hint.call_args_list)
+        if error_number == errno.EACCES:
+            assert "permission denied" in error.lower()
+        else:
+            assert "i/o" in error.lower()
+        assert "--recover" in hints
+
+    def test_interactive_handoff_progress_precedes_preparation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A failed preparation still leaves the completed interactive handoff retryable."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.complete(root)
+            return 0
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+            patch(
+                "wade.services.plan_service._prepare_plan_handoff",
+                side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+            ) as prepare,
+        ):
+            assert not plan(project_root=tmp_path, model="claude-sonnet-4-6")
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["session_id"] == prepare.call_args.kwargs["handoff_id"]
+        assert progress["model"] == "claude-sonnet-4-6"
+        provider.create_label.assert_not_called()
+
+    def test_collector_network_default_does_not_become_a_native_requirement(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """The short alias policy must not reject native tools without a network toggle."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.ai.default_tool = "claude"
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        def run(*_args: object, **_kwargs: object) -> int:
+            interactive.import_artifact(root, PLAN_TEXT)
+            interactive.complete(root)
+            return 0
+
+        with (
+            patch("crossby.utils.versioning.detect_binary_version", return_value=(9999, 0, 0)),
+            patch("crossby.utils.process.run_with_transcript", side_effect=run),
+        ):
+            assert plan(project_root=tmp_path, collector_network_access=True)
+
+        provider.create_task.assert_called_once()
+
+    def test_collector_network_override_reaches_collector_launch(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """The alias-only override still pins collector network access on."""
+        _, _, collect, _ = collected_harness
+
+        assert plan(project_root=tmp_path, collector_network_access=True)
+
+        assert collect.call_args.args[1].network_access is True
+
+    def test_progress_write_failure_retains_a_materialized_completed_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Recovery can consume a handoff after its initial progress write is retried."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        with (
+            patch("wade.services.plan_service._save_handoff_progress", return_value=False),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        cleanup.assert_not_called()
+        assert (root / ".wade/plans/native-session.json").is_file()
+        assert (root / ".wade/plans/PLAN.md").is_file()
+        binding = json.loads((root / ".wade/plans/handoff-binding.json").read_text())
+        assert binding["provider"] == config.provider.model_dump(mode="json")
+        assert binding["project"] == config.project.model_dump(mode="json")
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_called_once()
+
+    def test_recovery_rejects_changed_provider_when_initial_progress_write_failed(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A missing progress file cannot replace the launch provider binding."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        with patch("wade.services.plan_service._save_handoff_progress", return_value=False):
+            assert not plan(project_root=tmp_path)
+
+        config.provider = ProviderConfig(name=ProviderID.MARKDOWN)
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.get_provider") as get_recovery_provider,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        get_recovery_provider.assert_not_called()
+        provider.create_task.assert_not_called()
+
+    def test_recovery_reconciles_task_when_post_creation_progress_write_fails(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A retained task marker prevents a retry from creating the task twice."""
+        from wade.models.workflow import SessionKind
+        from wade.services import plan_service
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        original_settings = ProjectSettings(
+            issue_label="original-plan",
+            branch_prefix="original",
+            main_branch="original-main",
+        )
+        config.project = original_settings
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        original_save = plan_service._save_handoff_progress
+        writes = 0
+
+        def fail_post_creation_write(path: Path, progress: object) -> bool:
+            nonlocal writes
+            writes += 1
+            if writes == 3:
+                return False
+            return original_save(path, progress)  # type: ignore[arg-type]
+
+        with patch(
+            "wade.services.plan_service._save_handoff_progress",
+            side_effect=fail_post_creation_write,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        assert provider.create_task.call_count == 1
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        marker = progress["pending_issue_markers"]["PLAN.md"]
+        assert marker in provider.create_task.call_args.kwargs["body"]
+        provider.list_tasks.return_value = [
+            Task(id="1", title="feat: native test plan", body=marker)
+        ]
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="1", title="feat: native test plan", body=marker)
+        ]
+        config.project = ProjectSettings(
+            issue_label="changed-plan",
+            branch_prefix="changed",
+            main_branch="changed-main",
+        )
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        assert provider.create_task.call_count == 1
+        provider.find_tasks_by_body_marker.assert_called_once_with(
+            marker,
+            label="original-plan",
+            state=TaskState.OPEN,
+        )
+        recovered_config = plan_service.bootstrap_draft_pr.call_args.kwargs["config"]
+        assert recovered_config.project == original_settings
+
+    def test_recovery_reruns_strict_plan_validation_before_provider_mutation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
+        interactive.begin(root, "claude", review_required=False)
+        interactive.import_artifact(root, PLAN_TEXT)
+        interactive.complete(root)
+
+        invalid_plan = PLAN_TEXT.replace("## Complexity\neasy\n\n", "")
+        plan_path = root / ".wade/plans/PLAN.md"
+        plan_path.write_text(invalid_plan)
+        state_path = root / ".wade/plans" / interactive.STATE
+        state = InteractivePlanState.model_validate_json(state_path.read_text())
+        state.bundle = PlanBundle(plans=(PlanMember(filename="PLAN.md", markdown=invalid_plan),))
+        state_path.write_text(state.model_dump_json())
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        provider.ensure_label.assert_not_called()
+
+    def test_recovery_revalidates_retained_handoff_then_consumes_it(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
+        interactive.begin(root, "claude", review_required=False)
+        interactive.import_artifact(root, PLAN_TEXT)
+        interactive.complete(root)
+        linked = [Worktree(path=str(root), branch="(detached)")]
+        original_open = os.open
+
+        def denied_state_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if Path(path).name == interactive.STATE:
+                raise PermissionError(13, "denied", os.fspath(path))
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=linked),
+            patch.object(safe_state.os, "open", side_effect=denied_state_open),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
+        assert root.is_dir()
+
+        with patch("wade.git.worktree.list_worktrees", return_value=linked):
+            assert plan(project_root=tmp_path, recover=root)
+        collect.assert_not_called()
+        provider.create_task.assert_called_once()
+
+    def test_recovery_deduplicates_staged_handoff_votes_after_provider_retry(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.knowledge_service import staged_ratings_path
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
+        interactive.begin(root, "claude", review_required=False, knowledge_required=True)
+        bundle = PlanBundle(
+            plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
+            knowledge_votes=({"entry_id": "known-entry", "direction": "up"},),
+        )
+        interactive.import_artifact(
+            root,
+            BUNDLE_MARKER + "\n```json\n" + bundle.model_dump_json() + "\n```",
+        )
+        interactive.complete(root)
+        linked = [Worktree(path=str(root), branch="(detached)")]
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=linked),
+            patch(
+                "wade.services.knowledge_service.is_throwaway_knowledge_session",
+                return_value=True,
+            ),
+            patch(
+                "wade.services.plan_service.ensure_task_label",
+                side_effect=[RuntimeError("provider unavailable"), None],
+            ),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+            first_attempt = [
+                json.loads(line)
+                for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
+            ]
+            assert len(first_attempt) == 1
+
+            assert plan(project_root=tmp_path, recover=root)
+
+        retries = [
+            json.loads(line)
+            for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
+        ]
+        assert retries == first_attempt
+        provider.create_task.assert_called_once()
+
+    def test_recovery_rejects_changed_handoff_votes_before_provider_mutation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A revised retained bundle cannot reuse an already staged vote identity."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.knowledge = KnowledgeConfig(enabled=True)
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
+        interactive.begin(root, "claude", review_required=False, knowledge_required=True)
+        bundle = PlanBundle(
+            plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
+            knowledge_votes=({"entry_id": "known-entry", "direction": "up"},),
+        )
+        interactive.import_artifact(
+            root,
+            BUNDLE_MARKER + "\n```json\n" + bundle.model_dump_json() + "\n```",
+        )
+        interactive.complete(root)
+        linked = [Worktree(path=str(root), branch="(detached)")]
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=linked),
+            patch(
+                "wade.services.knowledge_service.is_throwaway_knowledge_session",
+                return_value=True,
+            ),
+            patch(
+                "wade.services.plan_service.ensure_task_label",
+                side_effect=RuntimeError("provider unavailable"),
+            ),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["knowledge_votes"] == [{"entry_id": "known-entry", "direction": "up"}]
+        state_path = root / ".wade/plans" / interactive.STATE
+        state = InteractivePlanState.model_validate_json(state_path.read_text())
+        assert state.bundle is not None
+        state.bundle = state.bundle.model_copy(
+            update={
+                "knowledge_votes": (PlanKnowledgeVote(entry_id="known-entry", direction="down"),)
+            }
+        )
+        state_path.write_text(state.model_dump_json())
+
+        with patch("wade.git.worktree.list_worktrees", return_value=linked):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_not_called()
+
+    def test_plain_permission_error_during_parent_handoff_retains_worktree(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        config, provider, collect, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        collect.return_value = native_result(
+            BUNDLE_MARKER
+            + "\n```json\n"
+            + json.dumps(
+                {
+                    "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+                    "knowledge_votes": [{"entry_id": "known-entry", "direction": "up"}],
+                }
+            )
+            + "\n```"
+        )
+
+        with (
+            patch(
+                "wade.services.knowledge_service.record_handoff_rating_for_session",
+                side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+            ),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+        ):
+            assert not plan(project_root=tmp_path)
+
+        cleanup.assert_not_called()
+        assert root.is_dir()
+        provider.create_task.assert_not_called()
+
+    def test_recovery_consumes_retained_collector_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        config, provider, collect, root = collected_harness
+        config.knowledge.enabled = True
+        (root / "KNOWLEDGE.md").write_text("## known-entry | 2026-09-15 | plan\nA useful fact.\n")
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        collect.return_value = native_result(
+            BUNDLE_MARKER
+            + "\n```json\n"
+            + json.dumps(
+                {
+                    "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+                    "knowledge_votes": [{"entry_id": "known-entry", "direction": "up"}],
+                }
+            )
+            + "\n```"
+        )
+
+        with patch(
+            "wade.services.knowledge_service.record_handoff_rating_for_session",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(project_root=tmp_path)
+
+        assert (root / ".wade/plans/native-session.json").is_file()
+        assert root.is_dir()
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        assert collect.call_count == 1
+        provider.create_task.assert_called_once()
+
+    def test_recovery_reuses_tasks_persisted_before_cleanup_failure(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A retained completed handoff must resume finalization, not recreate tasks."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        with patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=False):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["persisted_issues"] == {"PLAN.md": "1"}
+        assert progress["persisted_plan_digests"]
+        provider.create_task.assert_called_once()
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_called_once()
+
+    def test_recovery_does_not_repeat_completed_original_issue_supersede(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A finalization retry must not duplicate the original issue's comment or close."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
+        collect.return_value = native_result(
+            bundle_text(
+                ("PLAN-one.md", PLAN_TEXT),
+                ("PLAN-two.md", PLAN_TEXT.replace("test plan", "second plan")),
+            )
+        )
+
+        with (
+            patch(
+                "wade.services.plan_service._finalize_issues",
+                side_effect=[PLAN_FINALIZATION_FAILED, None],
+            ),
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330", yolo=True)
+            assert plan(project_root=tmp_path, recover=root, yolo=True)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["superseded_issue_ids"] == ["330"]
+        provider.comment_on_task.assert_called_once()
+        provider.close_task.assert_called_once_with("330", reason=CloseReason.NOT_PLANNED)
+        assert provider.create_task.call_count == 2
+
+    def test_recovery_refreshes_plan_for_an_existing_issue(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A recovered review cannot discard an edit behind a reused draft PR body."""
+        from wade.models.workflow import SessionKind
+        from wade.services import plan_service
+        from wade.services.session_composition_service import compose_session
+
+        config, _, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
+        with (
+            patch(
+                "wade.services.plan_service._finalize_issues",
+                return_value=PLAN_FINALIZATION_FAILED,
+            ),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330")
+
+        plan_service.bootstrap_draft_pr.reset_mock()
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service._finalize_issues", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        assert plan_service.bootstrap_draft_pr.call_args.kwargs["refresh_existing_plan"] is True
+
+    def test_recovery_retains_handoff_when_existing_pr_refresh_fails(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A failed recovered PR refresh leaves its binding state retryable."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, _, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
+
+        # First retain the completed handoff after the plan reached its draft PR.
+        with patch(
+            "wade.services.plan_service._finalize_issues",
+            return_value=PLAN_FINALIZATION_FAILED,
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330")
+
+        # A provider outage during the retry must retain the worktree, rather
+        # than copying PLAN.md and deleting the frozen recovery state.
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        cleanup.assert_not_called()
+        assert root.is_dir()
+
+    @pytest.mark.parametrize(
+        "reviewed_plan",
+        [
+            PLAN_TEXT + "\n## Notes\n- Edited during review\n",
+            PLAN_TEXT.replace("# feat: native test plan", "# fix: native test plan"),
+        ],
+        ids=["body", "title"],
+    )
+    def test_recovery_rejects_reviewed_plan_changed_after_task_pr_persistence(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        reviewed_plan: str,
+    ) -> None:
+        """A retained task cannot be reused when review changes its draft-PR plan."""
+        from wade.models.workflow import SessionKind
+        from wade.services import plan_service
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        with patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=False):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["persisted_issues"] == {"PLAN.md": "1"}
+        assert progress["persisted_plan_digests"]
+        provider.reset_mock()
+        plan_service.bootstrap_draft_pr.reset_mock()
+
+        def review_and_edit(paths: list[Path], *_args: object, **_kwargs: object) -> bool:
+            paths[0].write_text(reviewed_plan)
+            return True
+
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch(
+                "wade.services.plan_service.native_plan.review_materialized_plans",
+                side_effect=review_and_edit,
+            ),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        assert provider.mock_calls == []
+        plan_service.bootstrap_draft_pr.assert_not_called()
+
+    def test_recovery_uses_collector_model_recorded_with_retained_handoff(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Collector recovery keeps the original model for planned-by provenance."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+
+        with patch(
+            "wade.services.plan_service._prepare_plan_handoff",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(
+                project_root=tmp_path,
+                model="gpt-5.2-codex",
+                model_explicit=True,
+            )
+
+        config.ai.default_model = "gpt-5.3-codex"
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.add_planned_by_labels") as add_labels,
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        add_labels.assert_called_once_with(provider, "1", "codex", "gpt-5.2-codex")
+
+    def test_recovery_rejects_changed_provider_before_provider_instantiation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """Retained task IDs must never be replayed through a different backend."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        with patch(
+            "wade.services.plan_service._prepare_plan_handoff",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["provider"]["name"] == ProviderID.GITHUB
+
+        config.provider = ProviderConfig(name=ProviderID.MARKDOWN)
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.get_provider") as get_provider,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        get_provider.assert_not_called()
+        provider.create_task.assert_not_called()
+        assert root.is_dir()
+
+    @pytest.mark.parametrize(
+        ("initial_enabled", "recovery_enabled", "votes"),
+        [
+            (False, True, None),
+            (True, False, [{"entry_id": "known-entry", "direction": "up"}]),
+        ],
+    )
+    def test_recovery_uses_the_handoff_knowledge_requirement(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        initial_enabled: bool,
+        recovery_enabled: bool,
+        votes: list[dict[str, str]] | None,
+    ) -> None:
+        """A setting toggle must not invalidate an otherwise completed handoff."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        config.knowledge = KnowledgeConfig(enabled=initial_enabled)
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        if votes is not None:
+            (root / "KNOWLEDGE.md").write_text(
+                "## known-entry | 2026-09-15 | plan\nA useful fact.\n"
+            )
+            collect.return_value = native_result(
+                BUNDLE_MARKER
+                + "\n```json\n"
+                + json.dumps(
+                    {
+                        "plans": [{"filename": "PLAN.md", "markdown": PLAN_TEXT}],
+                        "knowledge_votes": votes,
+                    }
+                )
+                + "\n```"
+            )
+
+        with patch(
+            "wade.services.plan_service._prepare_plan_handoff",
+            side_effect=PermissionError(errno.EACCES, "denied", str(root)),
+        ):
+            assert not plan(project_root=tmp_path)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["knowledge_required"] is initial_enabled
+        assert progress["knowledge"] == {"enabled": initial_enabled, "path": "KNOWLEDGE.md"}
+        config.knowledge = KnowledgeConfig(enabled=recovery_enabled, path="RECOVERY-KNOWLEDGE.md")
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert plan(project_root=tmp_path, recover=root)
+
+        provider.create_task.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("initial_enabled", "recovery_enabled", "votes"),
+        [
+            (False, True, None),
+            (True, False, [{"entry_id": "known-entry", "direction": "up"}]),
+        ],
+    )
+    def test_recovery_uses_frozen_knowledge_requirement_when_state_denial_precedes_progress(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        initial_enabled: bool,
+        recovery_enabled: bool,
+        votes: list[dict[str, str]] | None,
+    ) -> None:
+        """The interactive state, rather than changed settings, binds first recovery."""
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        config.knowledge = KnowledgeConfig(enabled=initial_enabled)
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
+        if votes is not None:
+            (root / "KNOWLEDGE.md").write_text(
+                "## known-entry | 2026-09-15 | plan\nA useful fact.\n"
+            )
+        bundle = PlanBundle(
+            plans=(PlanMember(filename="PLAN.md", markdown=PLAN_TEXT),),
+            knowledge_votes=tuple(PlanKnowledgeVote(**vote) for vote in votes) if votes else None,
+        )
+        interactive.begin(
+            root,
+            "claude",
+            review_required=False,
+            knowledge_required=initial_enabled,
+        )
+        interactive.import_artifact(
+            root,
+            BUNDLE_MARKER + "\n```json\n" + bundle.model_dump_json() + "\n```",
+        )
+        interactive.complete(root)
+        linked = [Worktree(path=str(root), branch="(detached)")]
+        original_open = os.open
+
+        def deny_state_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if Path(path).name == interactive.STATE:
+                raise PermissionError(errno.EACCES, "denied", os.fspath(path))
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=linked),
+            patch.object(safe_state.os, "open", side_effect=deny_state_open),
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        assert not (root / ".wade/plans/handoff-progress.json").exists()
+        config.knowledge.enabled = recovery_enabled
+
+        with patch("wade.git.worktree.list_worktrees", return_value=linked):
+            assert plan(project_root=tmp_path, recover=root)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["knowledge_required"] is initial_enabled
+        assert progress["knowledge_votes"] == votes
+        provider.create_task.assert_called_once()
+
+    def test_recovery_state_io_failure_does_not_report_access_denial(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, _, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        interactive.begin(root, "claude", review_required=False)
+
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch(
+                "wade.services.plan_service.interactive_plan.collect_with_state",
+                side_effect=StateFileIOError(root, OSError(errno.EIO, "I/O failed")),
+            ),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        hints = " ".join(str(call) for call in mock_console.hint.call_args_list)
+        assert "Recover the retained handoff" in hints
+        assert "After restoring filesystem access" not in hints
+
+    @pytest.mark.parametrize("changed_gate", ["content", "review", "binding"])
+    def test_recovery_rejects_changed_completed_handoff_before_provider_mutation(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+        changed_gate: str,
+    ) -> None:
+        from wade.models.workflow import SessionKind
+        from wade.services import interactive_plan_service as interactive
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id=None)
+        save_handoff_binding(root, config)
+        interactive.begin(root, "claude", review_required=True)
+        interactive.import_artifact(root, PLAN_TEXT)
+        plan_path = root / ".wade/plans/PLAN.md"
+        interactive.record_review(plan_path, PLAN_TEXT, self_review=False)
+        interactive.complete(root)
+        if changed_gate == "content":
+            plan_path.write_text(PLAN_TEXT + "\nchanged\n")
+        elif changed_gate == "review":
+            (root / ".wade/plans" / interactive.REVIEWS).unlink()
+        else:
+            (root / ".wade/session/WORKFLOW.md").write_text("changed")
+
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[Worktree(path=str(root), branch="(detached)")],
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+        provider.create_task.assert_not_called()
+        provider.create_label.assert_not_called()
 
     @pytest.mark.parametrize(
         ("tool", "kwargs"),
@@ -1336,6 +2430,40 @@ class TestAttachPlanToExistingIssue:
         assert "Original body" in updated_body
         assert "PR #99" in updated_body
 
+    def test_replayed_attachment_does_not_duplicate_the_plan_link(self, tmp_path: Path) -> None:
+        # Recovery replays the attachment after a failed finalization or cleanup.
+        # bootstrap_draft_pr reuses the same open PR, so the link the body already
+        # carries must not be appended a second time (#516).
+        provider = MagicMock()
+        issue = Task(
+            id="42",
+            title="Some issue",
+            body="Original body\n\n**Full plan**: PR #99",
+        )
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 99, "url": "https://example.com/pr/99"},
+            ),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
+        ):
+            attached = _attach_plan_to_existing_issue(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_file=plan_file,
+                repo_root=tmp_path,
+            )
+
+        assert attached is True
+        provider.update_task.assert_not_called()
+
     def test_returns_false_when_retarget_guard_refuses(self, tmp_path: Path) -> None:
         # When the in-flight retarget guard refuses, the plan must NOT be attached
         # and the caller is told so (False) — the bootstrap is never reached (#376).
@@ -1497,6 +2625,227 @@ class TestCreateIssuesFromPlansBaseBranch:
             )
 
         assert mock_bootstrap.call_args.kwargs["base_branch"] is None
+
+    def test_reconciled_issue_finishes_draft_pr_persistence(self, tmp_path: Path) -> None:
+        """A recovered marker task follows the ordinary label and PR path."""
+        plan_file = self._make_plan(tmp_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="7", title="feat: thing", body=f"Existing lightweight body\n\n{marker}")
+        ]
+        persisted: dict[str, str] = {}
+        pending = {"PLAN.md": marker}
+        save_progress = MagicMock(return_value=True)
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as bootstrap,
+            patch("wade.services.plan_service.add_complexity_label") as add_complexity,
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                handoff_id="completed-handoff",
+                save_progress=save_progress,
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        provider.create_task.assert_not_called()
+        add_complexity.assert_called_once_with(provider, "7", plan_file.complexity)
+        bootstrap.assert_called_once()
+        assert bootstrap.call_args.kwargs["issue_number"] == "7"
+        assert bootstrap.call_args.kwargs["refresh_existing_plan"] is True
+        assert persisted == {"PLAN.md": "7"}
+        assert pending == {}
+        save_progress.assert_called_once()
+        assert "**Full plan**: PR #5" in provider.update_task.call_args.kwargs["body"]
+
+    def test_reconciled_issue_does_not_duplicate_an_existing_plan_link(
+        self, tmp_path: Path
+    ) -> None:
+        """Replaying after a failed progress write reuses, rather than repeats, the link."""
+        plan_file = self._make_plan(tmp_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(
+                id="7",
+                title="feat: thing",
+                body=f"Existing lightweight body\n\n{marker}\n\n**Full plan**: PR #5",
+            )
+        ]
+        persisted: dict[str, str] = {}
+        pending = {"PLAN.md": marker}
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                handoff_id="completed-handoff",
+                save_progress=MagicMock(return_value=True),
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        provider.update_task.assert_not_called()
+
+    def test_reconciled_issue_is_retained_when_plan_refresh_fails(self, tmp_path: Path) -> None:
+        """A failed recovered PR refresh must leave its marker task open for retry."""
+        plan_file = self._make_plan(tmp_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="7", title="feat: thing", body=f"Existing lightweight body\n\n{marker}")
+        ]
+        persisted: dict[str, str] = {}
+        pending = {"PLAN.md": marker}
+
+        with (
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                handoff_id="completed-handoff",
+                save_progress=MagicMock(return_value=True),
+            )
+
+        assert created == []
+        assert failed == ["PLAN.md"]
+        assert pending == {"PLAN.md": marker}
+        provider.close_task.assert_not_called()
+
+    def test_reconciled_issue_applies_a_reviewed_plan_title(self, tmp_path: Path) -> None:
+        """Recovery retains a reviewed H1 on the issue and its existing draft PR."""
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text(
+            "# fix: reviewed thing\n\n## Complexity\nmedium\n\n## Tasks\n- Do it\n"
+        )
+        plan_file = PlanFile.from_markdown(plan_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.return_value = [
+            Task(id="7", title="feat: original thing", body=f"Existing body\n\n{marker}")
+        ]
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues={},
+                pending_issue_markers={"PLAN.md": marker},
+                handoff_id="completed-handoff",
+                save_progress=MagicMock(return_value=True),
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        assert bootstrap.call_args.kwargs["issue_title"] == "feat: original thing"
+        assert bootstrap.call_args.kwargs["refresh_title"] == "fix: reviewed thing"
+        assert any(
+            call.kwargs == {"title": "fix: reviewed thing"}
+            for call in provider.update_task.call_args_list
+        )
+
+    def test_reconciled_title_rename_retry_reuses_original_branch(self, tmp_path: Path) -> None:
+        """A rename applied before its error cannot make recovery create a second PR."""
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text(
+            "# fix: reviewed thing\n\n## Complexity\nmedium\n\n## Tasks\n- Do it\n"
+        )
+        plan_file = PlanFile.from_markdown(plan_path)
+        marker = "<!-- wade:plan-handoff:reconciled -->"
+        original_task = Task(
+            id="7", title="feat: original thing", body=f"Existing body\n\n{marker}"
+        )
+        renamed_task = Task(id="7", title="fix: reviewed thing", body=f"Existing body\n\n{marker}")
+        provider = MagicMock()
+        provider.find_tasks_by_body_marker.side_effect = [[original_task], [renamed_task]]
+        provider.update_task.side_effect = [None, RuntimeError("response lost after rename"), None]
+        persisted: dict[str, str] = {}
+        pending = {"PLAN.md": marker}
+        branch_titles: dict[str, str] = {}
+        save_progress = MagicMock(return_value=True)
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                pending_issue_branch_titles=branch_titles,
+                handoff_id="completed-handoff",
+                save_progress=save_progress,
+            )
+            assert created == []
+            assert failed == ["PLAN.md"]
+            assert branch_titles == {"PLAN.md": "feat: original thing"}
+
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+                persisted_issues=persisted,
+                pending_issue_markers=pending,
+                pending_issue_branch_titles=branch_titles,
+                handoff_id="completed-handoff",
+                save_progress=save_progress,
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        assert [call.kwargs["issue_title"] for call in bootstrap.call_args_list] == [
+            "feat: original thing",
+            "feat: original thing",
+        ]
+        assert persisted == {"PLAN.md": "7"}
+        assert pending == {}
+        assert branch_titles == {}
 
     def test_bootstrap_failure_records_plan_as_failed(self, tmp_path: Path) -> None:
         # An unresolvable declared base makes bootstrap_draft_pr return None. The plan
@@ -2236,6 +3585,37 @@ class TestPreserveGeneratedPlans:
         assert (plan_dir / "PLAN-2.md").is_file()
         # ...and the user is pointed at where they still live, not the temp dir.
         mock_console.hint.assert_called_once_with(f"Plan files: {plan_dir}")
+
+    def test_inaccessible_directory_reports_unknown_count_and_retains_worktree(
+        self, tmp_path: Path
+    ) -> None:
+        worktree = tmp_path / "plan-worktree"
+        plan_dir = worktree / ".wade/plans"
+        plan_dir.mkdir(parents=True)
+        denied = PermissionError(13, "denied", str(plan_dir))
+
+        with (
+            patch(
+                "wade.services.plan_service.list_state_files_strict",
+                side_effect=StateFileAccessError(plan_dir, denied),
+            ),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert not _preserve_generated_plans(str(plan_dir), tmp_path, worktree, ProjectConfig())
+
+        cleanup.assert_not_called()
+        output = " ".join(
+            str(call)
+            for call in [
+                *mock_console.info.call_args_list,
+                *mock_console.warn.call_args_list,
+            ]
+        )
+        assert "count is unknown" in output
+        assert "Preserved 0" not in output
+        assert worktree.is_dir()
+        assert any("--recover" in str(call) for call in mock_console.hint.call_args_list)
 
 
 class TestStrictValidationGateWiring:
