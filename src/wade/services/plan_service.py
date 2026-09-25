@@ -894,7 +894,15 @@ def _persist_accepted_plans(
                 yolo=resolved_yolo,
                 refresh_existing_plan=refresh_existing_plan,
             ):
-                _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
+                # A recovered handoff needs its original detached worktree: the
+                # frozen session, handoff binding, and persistence progress there
+                # are what make a later ``wade plan --recover`` retry safe. A
+                # copied plan alone cannot restore that state after a transient
+                # draft-PR refresh failure.
+                if refresh_existing_plan and planning_worktree is not None:
+                    _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
+                else:
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
                 stop_title_keeper()
                 return False
             finalize_issue_numbers = [existing_issue.id]

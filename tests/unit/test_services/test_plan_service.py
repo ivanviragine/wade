@@ -1637,6 +1637,40 @@ class TestPlanOrchestrator:
 
         assert plan_service.bootstrap_draft_pr.call_args.kwargs["refresh_existing_plan"] is True
 
+    def test_recovery_retains_handoff_when_existing_pr_refresh_fails(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A failed recovered PR refresh leaves its binding state retryable."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, _, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
+
+        # First retain the completed handoff after the plan reached its draft PR.
+        with patch(
+            "wade.services.plan_service._finalize_issues",
+            return_value=PLAN_FINALIZATION_FAILED,
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330")
+
+        # A provider outage during the retry must retain the worktree, rather
+        # than copying PLAN.md and deleting the frozen recovery state.
+        with (
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
+        ):
+            assert not plan(project_root=tmp_path, recover=root)
+
+        cleanup.assert_not_called()
+        assert root.is_dir()
+
     @pytest.mark.parametrize(
         "reviewed_plan",
         [
