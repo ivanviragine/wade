@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.9] — 2026-09-25
+
+### Chores
+
+- prepare Crossby 0.37.2 Plan handoff bump (#519) (304f5df)
+
 ## [v1.2.8] — 2026-09-25
 
 ### Chores
