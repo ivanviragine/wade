@@ -1019,12 +1019,14 @@ class TestPlanOrchestrator:
         assert "permission denied" in error.lower()
         assert "--recover" in hints
 
-    def test_frozen_bundle_permission_denial_retains_completed_native_handoff(
+    @pytest.mark.parametrize("error_number", [errno.EACCES, errno.EIO])
+    def test_frozen_bundle_io_failure_retains_completed_native_handoff(
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
+        error_number: int,
     ) -> None:
-        """A validation-time denial must retain the completed handoff for recovery."""
+        """A validation-time I/O failure must retain the completed handoff for recovery."""
         from wade.models.workflow import SessionKind
         from wade.services import interactive_plan_service as interactive
         from wade.services.session_composition_service import compose_session
@@ -1052,7 +1054,7 @@ class TestPlanOrchestrator:
             dir_fd: int | None = None,
         ) -> int:
             if deny_bundle and Path(path).name == "WORKFLOW.md":
-                raise PermissionError(13, "denied", os.fspath(path))
+                raise OSError(error_number, os.strerror(error_number), os.fspath(path))
             return original_open(path, flags, mode, dir_fd=dir_fd)
 
         with (
@@ -1070,7 +1072,10 @@ class TestPlanOrchestrator:
         assert root.is_dir()
         error = " ".join(str(call) for call in mock_console.error.call_args_list)
         hints = " ".join(str(call) for call in mock_console.hint.call_args_list)
-        assert "permission denied" in error.lower()
+        if error_number == errno.EACCES:
+            assert "permission denied" in error.lower()
+        else:
+            assert "i/o" in error.lower()
         assert "--recover" in hints
 
     def test_interactive_handoff_progress_precedes_preparation(
@@ -1560,6 +1565,43 @@ class TestPlanOrchestrator:
             assert plan(project_root=tmp_path, recover=root)
 
         provider.create_task.assert_called_once()
+
+    def test_recovery_does_not_repeat_completed_original_issue_supersede(
+        self,
+        collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
+        tmp_path: Path,
+    ) -> None:
+        """A finalization retry must not duplicate the original issue's comment or close."""
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, collect, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
+        collect.return_value = native_result(
+            bundle_text(
+                ("PLAN-one.md", PLAN_TEXT),
+                ("PLAN-two.md", PLAN_TEXT.replace("test plan", "second plan")),
+            )
+        )
+
+        with (
+            patch(
+                "wade.services.plan_service._finalize_issues",
+                side_effect=[PLAN_FINALIZATION_FAILED, None],
+            ),
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(root), branch="(detached)")],
+            ),
+        ):
+            assert not plan(project_root=tmp_path, issue_id="330", yolo=True)
+            assert plan(project_root=tmp_path, recover=root, yolo=True)
+
+        progress = json.loads((root / ".wade/plans/handoff-progress.json").read_text())
+        assert progress["superseded_issue_ids"] == ["330"]
+        provider.comment_on_task.assert_called_once()
+        provider.close_task.assert_called_once_with("330", reason=CloseReason.NOT_PLANNED)
+        assert provider.create_task.call_count == 2
 
     def test_recovery_refreshes_plan_for_an_existing_issue(
         self,

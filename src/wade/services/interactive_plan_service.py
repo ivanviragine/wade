@@ -26,6 +26,7 @@ from wade.services.session_composition_service import (
 from wade.utils.plan_validation import load_plan_file, plan_done
 from wade.utils.safe_state import (
     StateFileAccessError,
+    StateFileIOError,
     StateFileUnsafeError,
     atomic_write_state_file,
     delete_state_file,
@@ -72,22 +73,27 @@ def active(root: Path) -> bool:
     return state_file_present(root, ("plans",), STATE)
 
 
-def _frozen_bundle_access_error(
+def _frozen_bundle_state_error(
     root: Path, error: SessionCompositionError
-) -> StateFileAccessError | None:
-    """Recover a permission denial wrapped by frozen-bundle validation."""
+) -> StateFileAccessError | StateFileIOError | None:
+    """Recover an I/O failure wrapped by frozen-bundle validation."""
 
     current = error.__cause__
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, OSError) and current.errno in {errno.EACCES, errno.EPERM}:
+        if isinstance(current, (StateFileAccessError, StateFileIOError)):
+            return current
+        if isinstance(current, OSError):
             path = (
                 Path(os.fsdecode(current.filename))
                 if current.filename is not None
                 else root / ".wade" / "session"
             )
-            return StateFileAccessError(path, current)
+            if current.errno in {errno.EACCES, errno.EPERM}:
+                return StateFileAccessError(path, current)
+            if current.errno not in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EINVAL}:
+                return StateFileIOError(path, current)
         current = current.__cause__
     return None
 
@@ -102,8 +108,8 @@ def _binding_digest(root: Path) -> str:
     try:
         validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
     except SessionCompositionError as exc:
-        if access_error := _frozen_bundle_access_error(root, exc):
-            raise access_error from exc
+        if state_error := _frozen_bundle_state_error(root, exc):
+            raise state_error from exc
         raise ValueError(str(exc)) from exc
     return manifest.bundle_digest
 

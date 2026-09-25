@@ -56,6 +56,10 @@ class PlanHandoffProgress(BaseModel):
     # branch until the task/PR mapping is durably persisted, so a retry does not
     # derive a second branch from the new task title.
     pending_issue_branch_titles: dict[str, str] = Field(default_factory=dict)
+    # Once every split-plan task is durable, the original task's visible
+    # supersede actions are recorded before finalization. Recovery can then
+    # resume finalization without posting the comment or closing it again.
+    superseded_issue_ids: list[str] = Field(default_factory=list)
 
 
 class PlanHandoffBinding(BaseModel):

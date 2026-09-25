@@ -917,6 +917,9 @@ def _persist_accepted_plans(
                     pending_issue_branch_titles=(
                         progress.pending_issue_branch_titles if progress is not None else None
                     ),
+                    superseded_issue_ids=(
+                        progress.superseded_issue_ids if progress is not None else None
+                    ),
                     handoff_id=progress.session_id if progress is not None else None,
                     save_progress=_handoff_progress_saver(planning_worktree, progress),
                 )
@@ -2272,6 +2275,7 @@ def _supersede_issue_with_plans(
     persisted_plan_digests: dict[str, str] | None = None,
     pending_issue_markers: dict[str, str] | None = None,
     pending_issue_branch_titles: dict[str, str] | None = None,
+    superseded_issue_ids: list[str] | None = None,
     handoff_id: str | None = None,
     save_progress: Callable[[], bool] | None = None,
 ) -> list[str]:
@@ -2311,6 +2315,10 @@ def _supersede_issue_with_plans(
         )
         return created_numbers
 
+    if superseded_issue_ids is not None and issue.id in superseded_issue_ids:
+        console.info(f"#{issue.id} was already superseded during this planning handoff.")
+        return created_numbers
+
     issue_refs = ", ".join(f"#{n}" for n in created_numbers)
 
     try:
@@ -2336,14 +2344,21 @@ def _supersede_issue_with_plans(
     )
     if not proceed:
         console.info(f"Leaving #{issue.id} open — superseded by {issue_refs}.")
-        return created_numbers
+    else:
+        try:
+            provider.close_task(issue.id, reason=CloseReason.NOT_PLANNED)
+            console.success(f"Closed #{issue.id} as not planned — superseded by {issue_refs}")
+        except Exception as e:
+            logger.warning("plan.supersede_close_failed", issue=issue.id, error=str(e))
+            console.warn(f"Could not close #{issue.id}: {e}")
+            return created_numbers
 
-    try:
-        provider.close_task(issue.id, reason=CloseReason.NOT_PLANNED)
-        console.success(f"Closed #{issue.id} as not planned — superseded by {issue_refs}")
-    except Exception as e:
-        logger.warning("plan.supersede_close_failed", issue=issue.id, error=str(e))
-        console.warn(f"Could not close #{issue.id}: {e}")
+    if superseded_issue_ids is not None:
+        superseded_issue_ids.append(issue.id)
+        if save_progress is None or not save_progress():
+            raise HandoffProgressSaveError(
+                f"Could not save supersede progress for #{issue.id}; output was retained"
+            )
 
     return created_numbers
 
