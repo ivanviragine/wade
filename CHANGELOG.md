@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.8] — 2026-09-25
+
+### Chores
+
+- bump Crossby dependency to 0.37.1 (#518) (d1253ff)
+
 ## [v1.2.7] — 2026-09-25
 
 ### Bug Fixes
