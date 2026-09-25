@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.7] — 2026-09-25
+
+### Bug Fixes
+
+- preserve and recover completed handoffs after filesystem access denial (#516) (dc83f62)
+
 ## [v1.2.6] — 2026-09-23
 
 ### Chores
