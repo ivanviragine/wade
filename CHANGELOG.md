@@ -248,13 +248,6 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Bug Fixes
 
 - propagate Codex worktree launch context through sessions (#429) (032daa2)
-- resolve branch by issue number so retitled issues resume their PR/plan (#428) (c840b5e)
-
-## [v0.46.0] — 2026-08-16
-
-### Bug Fixes
-
-- propagate Codex worktree launch context through sessions (3967453)
 
 ## [v0.45.10] — 2026-08-16
 
@@ -345,12 +338,6 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Features
 
 - make WADE session output report-by-exception (terse on success) (#402) (9f96c94)
-
-## [v0.43.1] — 2026-08-12
-
-### Bug Fixes
-
-- surface stale base loudly and reconcile migration collisions at catchup (68150ef)
 
 ## [v0.43.0] — 2026-08-11
 
@@ -502,16 +489,6 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Chores
 
 - bump crossby to v0.11.0 and adopt newer models (Opus 5) (#345) (d9ac8a5)
-
-## [v0.35.2] — 2026-07-24
-
-### Bug Fixes
-
-- exclude scaffold-branch commits from generated changelog (c40a9ca)
-
-### Chores
-
-- bump crossby to v0.11.0 and adopt newer models (Opus 5) (ff0ab48)
 
 ## [v0.35.1] — 2026-07-24
 
