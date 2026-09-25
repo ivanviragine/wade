@@ -8,7 +8,7 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 ### Chores
 
-- prepare Crossby 0.37.2 Plan handoff bump (8171154)
+- prepare Crossby 0.37.2 Plan handoff bump (#519) (304f5df)
 
 ## [v1.2.8] — 2026-09-25
 
