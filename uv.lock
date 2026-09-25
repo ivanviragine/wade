@@ -267,7 +267,7 @@ toml = [
 
 [[package]]
 name = "crossby"
-version = "0.36.0"
+version = "0.37.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -282,9 +282,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/ad/56e0ad781bea52bfc1ead03a8746a4419df80a9cb54b29e021598602e42f/crossby-0.36.0.tar.gz", hash = "sha256:33ecb10b120337b070fd737fd17aea5d103666f5e0d37f410730e5376d9a1465", size = 1080656, upload-time = "2026-09-23T13:35:35.066Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/75/e89b6ea476f2027818039e611e93c4947e1321256feca8c7212d2aab9eb6/crossby-0.37.0.tar.gz", hash = "sha256:200667fb1810db11df325bff8cab561175d21efc8d69ca69877f7b2ea8767b37", size = 1125753, upload-time = "2026-09-25T18:33:02.9Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/9b/f538fd1931bb0be02ef34017ebffd86440da995e850f72fcde687e4baa5d/crossby-0.36.0-py3-none-any.whl", hash = "sha256:b371ae41f65c40fe5859a8ab0ad4f1339a296d8c6d7ee94143cb075f46de4c39", size = 659268, upload-time = "2026-09-23T13:35:33.302Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/8a/bfc5ab25e30e541c5d26befa1c6bd2b2565f1376e7defd3c87bec87f2ba5/crossby-0.37.0-py3-none-any.whl", hash = "sha256:5946d6c8366e38319cf61cc3d04089085852d6fe34e5f89aae70f705521a2ca5", size = 686122, upload-time = "2026-09-25T18:33:00.87Z" },
 ]
 
 [[package]]
@@ -1284,7 +1284,7 @@ wheels = [
 
 [[package]]
 name = "wade-cli"
-version = "1.2.6"
+version = "1.2.7"
 source = { editable = "." }
 dependencies = [
     { name = "crossby" },
@@ -1310,7 +1310,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crossby", specifier = ">=0.36.0,<0.37.0" },
+    { name = "crossby", specifier = ">=0.37.0,<0.38.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
