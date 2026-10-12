@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.11] — 2026-10-12
+
+### Chores
+
+- bump Crossby to 0.38.1 for GPT-6.1 Sol and Claude 5.5 models (#522) (39f24a3)
+
 ## [v1.2.10] — 2026-09-25
 
 ### Chores
