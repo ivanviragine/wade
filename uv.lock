@@ -267,7 +267,7 @@ toml = [
 
 [[package]]
 name = "crossby"
-version = "0.37.2"
+version = "0.38.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -282,9 +282,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/0b/323d9d9ba7a650e72d75272550f51c109a51c44f9332ad57dee259811b4f/crossby-0.37.2.tar.gz", hash = "sha256:9e90e39338806dcc6af388fe9baf3ea6914085df29ce4c034a7533795447a23f", size = 1126921, upload-time = "2026-09-25T21:25:07.038Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/84/101eb3292b809d9cec6165b147592a776c0a4a2a84a54f04649e0bb8f0d4/crossby-0.38.1.tar.gz", hash = "sha256:57e1ab420c3e2e21b1710adddb54630aa0bd615ad69f152bdcfed2a6d2a5c11b", size = 1127846, upload-time = "2026-10-12T20:12:35.861Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/b4/f7a479890ea2dd6b3119c5a8eb93f82d4324073a0eda6471c846e2bfa69c/crossby-0.37.2-py3-none-any.whl", hash = "sha256:5aa4717c65c66678059f6e521fac4ddd2441f7d2fd59fa26d9fe03c1f3493e53", size = 686392, upload-time = "2026-09-25T21:25:05.27Z" },
+    { url = "https://files.pythonhosted.org/packages/83/18/a24ba20d9f96ce505bc7fb4ba2044024fb542d04656db67f2124be5790d1/crossby-0.38.1-py3-none-any.whl", hash = "sha256:59c59a4bf0c50e7571bdffcac7d42e312807e1358c446d5f788b0de9b476dae8", size = 686636, upload-time = "2026-10-12T20:12:33.593Z" },
 ]
 
 [[package]]
@@ -1284,7 +1284,7 @@ wheels = [
 
 [[package]]
 name = "wade-cli"
-version = "1.2.9"
+version = "1.2.10"
 source = { editable = "." }
 dependencies = [
     { name = "crossby" },
@@ -1310,7 +1310,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crossby", specifier = ">=0.37.2,<0.38.0" },
+    { name = "crossby", specifier = ">=0.38.1,<0.39.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
