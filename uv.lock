@@ -267,7 +267,7 @@ toml = [
 
 [[package]]
 name = "crossby"
-version = "0.38.0"
+version = "0.38.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -282,9 +282,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/27/88eae76b23ecfd57babc08fcc91b0a9f1827e8530638e227235f69607cec/crossby-0.38.0.tar.gz", hash = "sha256:bffb5b9ac3bce541ca8a173cebe354381221cc58c861f31f2a0c20dd835d1637", size = 1127596, upload-time = "2026-10-12T19:55:00.317Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/84/101eb3292b809d9cec6165b147592a776c0a4a2a84a54f04649e0bb8f0d4/crossby-0.38.1.tar.gz", hash = "sha256:57e1ab420c3e2e21b1710adddb54630aa0bd615ad69f152bdcfed2a6d2a5c11b", size = 1127846, upload-time = "2026-10-12T20:12:35.861Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/fb/809bdf2b29c61efda81db2db3f9500787125dfaa0608422d2e4dc595b4f1/crossby-0.38.0-py3-none-any.whl", hash = "sha256:58bb397039541873ada8f9c2d0a2666e34b8454644d0960621f57ff5af496859", size = 686595, upload-time = "2026-10-12T19:54:58.502Z" },
+    { url = "https://files.pythonhosted.org/packages/83/18/a24ba20d9f96ce505bc7fb4ba2044024fb542d04656db67f2124be5790d1/crossby-0.38.1-py3-none-any.whl", hash = "sha256:59c59a4bf0c50e7571bdffcac7d42e312807e1358c446d5f788b0de9b476dae8", size = 686636, upload-time = "2026-10-12T20:12:33.593Z" },
 ]
 
 [[package]]
@@ -1310,7 +1310,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crossby", specifier = ">=0.38.0,<0.39.0" },
+    { name = "crossby", specifier = ">=0.38.1,<0.39.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
