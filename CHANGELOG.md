@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.12] — 2026-10-13
+
+### Chores
+
+- bump Crossby to 0.38.2 for unpinned Codex Plan startup (#523) (a9bc7b8)
+
 ## [v1.2.11] — 2026-10-12
 
 ### Chores
