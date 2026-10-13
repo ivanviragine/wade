@@ -267,7 +267,7 @@ toml = [
 
 [[package]]
 name = "crossby"
-version = "0.38.1"
+version = "0.38.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -282,9 +282,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/84/101eb3292b809d9cec6165b147592a776c0a4a2a84a54f04649e0bb8f0d4/crossby-0.38.1.tar.gz", hash = "sha256:57e1ab420c3e2e21b1710adddb54630aa0bd615ad69f152bdcfed2a6d2a5c11b", size = 1127846, upload-time = "2026-10-12T20:12:35.861Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/64/cab715a56f5cf9cfecc9ca3b27919d9453d6710b37f47868d0590df7da4d/crossby-0.38.2.tar.gz", hash = "sha256:74c01670d380251545a6de7af88c187c17d85634c3bd389e64ad8b3edc4c6c6e", size = 1127887, upload-time = "2026-10-13T01:36:22.642Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/18/a24ba20d9f96ce505bc7fb4ba2044024fb542d04656db67f2124be5790d1/crossby-0.38.1-py3-none-any.whl", hash = "sha256:59c59a4bf0c50e7571bdffcac7d42e312807e1358c446d5f788b0de9b476dae8", size = 686636, upload-time = "2026-10-12T20:12:33.593Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/74/11999a657e3a0c0c30432abc9facdad5d393cec897e36f5c2464e1db281a/crossby-0.38.2-py3-none-any.whl", hash = "sha256:2382a2cab2acf5f55f13f8ce4889cc3d7fac11ba52edea6a1080ecd9d90f3e32", size = 686689, upload-time = "2026-10-13T01:36:20.91Z" },
 ]
 
 [[package]]
@@ -1284,7 +1284,7 @@ wheels = [
 
 [[package]]
 name = "wade-cli"
-version = "1.2.10"
+version = "1.2.11"
 source = { editable = "." }
 dependencies = [
     { name = "crossby" },
@@ -1310,7 +1310,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crossby", specifier = ">=0.38.1,<0.39.0" },
+    { name = "crossby", specifier = ">=0.38.2,<0.39.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
