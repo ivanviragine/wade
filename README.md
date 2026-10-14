@@ -341,7 +341,8 @@ receipt authority: use a fresh `wade plan --issue <N>` session with archived
 content as input, then complete new review/done gates and verify the PR-backed
 plan before implementing. The next implementation reads the same structurally
 owned plan; fenced marker examples cannot redirect or truncate it. Generic
-implementation resume keeps the existing plan.
+implementation resume keeps the existing plan. Fresh PR creation rejects unsafe
+plan ownership before branch or PR creation.
 
 If the session decides the work should be split into several independent pieces
 (2+ plan files), `#N` is **superseded**: a new task + draft PR is created

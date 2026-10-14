@@ -2330,7 +2330,7 @@ def _attach_plan_to_existing_issue(
                 current_issue = provider.read_task(issue.id)
                 original_body = current_issue.body or ""
                 plan_link = f"**Full plan**: PR #{pr_number}"
-                if re.search(rf"(?m)^{re.escape(plan_link)}[ \t]*$", original_body) is None:
+                if re.search(rf"(?m)^{re.escape(plan_link)}[ \t]*\r?$", original_body) is None:
                     provider.update_task(issue.id, body=original_body + f"\n\n{plan_link}")
             except Exception as exc:
                 console.error(

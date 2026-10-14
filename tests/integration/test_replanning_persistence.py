@@ -41,6 +41,8 @@ class RemoteState(BaseModel):
     pr_body: str = "User PR introduction.\n\n" + _PLAN_BLOCK + "\n\n## Requirements\nKeep this."
     issue_body: str = "Original issue body."
     pr_writes: int = 0
+    fresh_pr: bool = False
+    pr_creates: int = 0
     planning_root: Path | None = None
     failure: str | None = None
     native_runs: int = 0
@@ -101,6 +103,8 @@ def replanning(
                     "read failed",
                 )
             state.lookups.append(args[2])
+            if state.fresh_pr and state.pr_creates == 0:
+                return subprocess.CompletedProcess(args, 1, "", "no pull requests found for branch")
             if state.failure == "lookup":
                 return subprocess.CompletedProcess(args, 1, "", "not authorized")
             if state.stale_state is not None and args[2] == _BRANCH:
@@ -135,7 +139,15 @@ def replanning(
                 ),
                 "",
             )
+        if args[:2] == ("pr", "create"):
+            state.pr_creates += 1
+            state.pr_body = args[args.index("--body") + 1]
+            state.base = args[args.index("--base") + 1]
+            state.pr_title = args[args.index("--title") + 1]
+            return subprocess.CompletedProcess(args, 0, "https://example.test/pull/7\n", "")
         if args[:2] == ("pr", "list"):
+            if state.fresh_pr and state.pr_creates == 0:
+                return subprocess.CompletedProcess(args, 0, "[]", "")
             return subprocess.CompletedProcess(
                 args,
                 int(state.failure == "listing"),
@@ -564,3 +576,73 @@ def test_generic_bootstrap_resume_keeps_existing_plan_without_refresh(
     assert result == {"number": 7, "url": "https://example.test/pull/7"}
     assert state.pr_body == original
     assert state.pr_writes == 0
+
+
+@pytest.mark.parametrize("failure", ["pr-read", "pr-write", "pr-title", "malformed"])
+def test_failed_refresh_cannot_leave_retarget_and_worktree_pin_divergent(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState], failure: str
+) -> None:
+    repo, _config, _provider, state = replanning
+    state.title = "fix: renamed task"
+    state.base = "develop"
+    state.failure = failure
+    state.plan_markdown += "\n## Base Branch\nrelease\n"
+    if failure == "malformed":
+        state.pr_body += "\n<!-- wade:plan:end -->"
+    _git(repo, "branch", "develop")
+    _git(repo, "branch", "release")
+    feature = repo.parent / "inflight"
+    _git(repo, "worktree", "add", str(feature), _BRANCH)
+    (feature / ".wade").mkdir()
+    pin = feature / ".wade/base_branch"
+    pin.write_text("develop\n")
+    with (
+        patch("wade.services.plan_service.prompts.is_tty", return_value=True),
+        patch("wade.services.plan_service.prompts.confirm", return_value=True),
+        patch("wade.services.plan_service.prompts.select", return_value=0),
+        patch("wade.git.repo.push_branch"),
+    ):
+        assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+    assert state.base == pin.read_text().strip()
+    assert state.base == "develop"
+    assert state.planning_root is not None and state.planning_root.exists()
+    assert str(state.planning_root) in _git(repo, "worktree", "list", "--porcelain")
+    assert (state.planning_root / ".wade/plans/interactive-reviews.json").read_bytes() == (
+        state.original_review
+    )
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_fresh_pr_creation_accepts_only_extractable_plan_ownership(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState], fenced: bool
+) -> None:
+    repo, _config, _provider, state = replanning
+    state.fresh_pr = True
+    example = "<!-- wade:future:start -->\nExample.\n<!-- wade:future:end -->"
+    state.plan_markdown += "\n\n" + ("```markdown\n" + example + "\n```" if fenced else example)
+    with patch("wade.git.repo.push_branch") as push:
+        assert plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude") is fenced
+    if fenced:
+        assert state.pr_creates == 1
+        expected = state.plan_markdown.split("\n", 1)[1].strip()
+        assert extract_plan_from_pr_body(state.pr_body) == expected
+        assert state.planning_root is not None and not state.planning_root.exists()
+        push.assert_called_once()
+    else:
+        assert state.pr_creates == 0
+        push.assert_not_called()
+        assert state.planning_root is not None and state.planning_root.exists()
+        assert str(state.planning_root) in _git(repo, "worktree", "list", "--porcelain")
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_existing_full_plan_link_with_crlf_is_preserved_without_duplicates(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState], newline: str
+) -> None:
+    repo, _config, _provider, state = replanning
+    state.issue_body = "User body." + newline + "**Full plan**: PR #7 \t" + newline
+    original = state.issue_body
+    for _ in range(2):
+        assert plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+        assert state.issue_body.startswith(original)
+        assert state.issue_body.count("**Full plan**: PR #7") == 1

@@ -389,36 +389,6 @@ def bootstrap_draft_pr(
         return None
     if lookup.is_open and lookup.pr is not None:
         existing = lookup.pr
-        # If a base was requested and differs from the PR's current base, retarget
-        # it (stacked chain, or a plan-declared base). Skip the gh call when the
-        # base already matches, and report success so the change is visible.
-        if base_branch and base_branch != existing.base_ref_name:
-            # Editing the PR base alone does NOT rewrite the head branch's ancestry:
-            # a scaffold branch cut from the old base still carries that base's
-            # commits, which would then merge into the new base (the later startup
-            # catchup merge cannot remove them). Re-root a scaffold-only branch on
-            # the new base first — loss-free — before retargeting (#376 review).
-            #
-            # The reroot force-pushes the rewritten head *before* the base edit, so
-            # capture the pre-reroot head first: if the edit then fails, the remote
-            # branch (now on the new base) and the PR (still on the old base) would
-            # diverge. Roll the head back to keep them consistent (#376 review).
-            head_ref = git_branch.resolve_start_point(repo_root, branch_name)
-            pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
-            if not reroot_scaffold_branch_for_retarget(
-                repo_root, branch_name, existing.base_ref_name, base_branch, issue_number
-            ):
-                return None
-            if not git_pr.update_pr_base(repo_root, existing.number, base_branch):
-                console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
-                # Only roll back when the reroot actually rewrote the head (SHA changed).
-                # A real-work branch is left untouched by the reroot, so a restore would
-                # be a needless hard reset that could discard uncommitted work (#376).
-                post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
-                if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
-                    _restore_scaffold_head(repo_root, branch_name, pre_reroot_sha, existing.number)
-                return None
-            console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
         if refresh_existing_plan:
 
             def transform(current: str) -> str:
@@ -459,12 +429,57 @@ def bootstrap_draft_pr(
         ):
             console.error(f"Failed to refresh the title in draft PR #{existing.number}.")
             return None
+        # Required content/title writes precede retargeting. Once the PR base
+        # changes, attachment must reach pin reconciliation without an earlier
+        # refresh failure leaving the in-flight worktree on its old merge target.
+        # If a base was requested and differs from the PR's current base, retarget
+        # it (stacked chain, or a plan-declared base). Skip the gh call when the
+        # base already matches, and report success so the change is visible.
+        if base_branch and base_branch != existing.base_ref_name:
+            # Editing the PR base alone does NOT rewrite the head branch's ancestry:
+            # a scaffold branch cut from the old base still carries that base's
+            # commits, which would then merge into the new base (the later startup
+            # catchup merge cannot remove them). Re-root a scaffold-only branch on
+            # the new base first — loss-free — before retargeting (#376 review).
+            #
+            # The reroot force-pushes the rewritten head *before* the base edit, so
+            # capture the pre-reroot head first: if the edit then fails, the remote
+            # branch (now on the new base) and the PR (still on the old base) would
+            # diverge. Roll the head back to keep them consistent (#376 review).
+            head_ref = git_branch.resolve_start_point(repo_root, branch_name)
+            pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
+            if not reroot_scaffold_branch_for_retarget(
+                repo_root, branch_name, existing.base_ref_name, base_branch, issue_number
+            ):
+                return None
+            if not git_pr.update_pr_base(repo_root, existing.number, base_branch):
+                console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
+                # Only roll back when the reroot actually rewrote the head (SHA changed).
+                # A real-work branch is left untouched by the reroot, so a restore would
+                # be a needless hard reset that could discard uncommitted work (#376).
+                post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
+                if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
+                    _restore_scaffold_head(repo_root, branch_name, pre_reroot_sha, existing.number)
+                return None
+            console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,
             pr=existing.number,
         )
         return {"number": existing.number, "url": existing.url}
+
+    # Creation must satisfy the same owned-plan contract as extraction and
+    # refresh before any branch/push side effect can outlive a rejected handoff.
+    body = _build_draft_pr_body(plan_body, issue_number)
+    try:
+        if scan_markdown_structure(body).owned("plan") is None:
+            raise MarkdownStructureError("composed draft PR has no owned plan")
+        if len(body) > GITHUB_BODY_MAX:
+            raise ValueError("plan exceeds the PR body limit; shorten it and retry")
+    except (MarkdownStructureError, ValueError) as exc:
+        console.error(f"Could not compose draft PR for #{issue_number}: {exc}", markup=False)
+        return None
 
     # Resolve the effective base for branch creation and PR target
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -495,9 +510,6 @@ def bootstrap_draft_pr(
     except GitError as e:
         console.error(f"Failed to push branch: {e}")
         return None
-
-    # Build draft PR body with plan markers
-    body = _build_draft_pr_body(plan_body, issue_number)
 
     # Create draft PR targeting the effective base (parent branch for stacked PRs)
     try:

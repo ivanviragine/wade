@@ -300,7 +300,9 @@ provenance — instead of creating duplicates; a partial finalization with a
 pending marker retains the original worktree for the same reconciliation path.
 Ordinary single-plan replanning and retained-handoff recovery explicitly refresh
 the existing PR before accepting attachment. Generic bootstrap/resume still
-defaults to reuse without replacing its plan. `DraftPRTarget` fixes the stable
+defaults to reuse without replacing its plan. Required content/title persistence
+precedes a base retarget, so refresh failures cannot bypass worktree-pin
+reconciliation after a successful base edit. `DraftPRTarget` fixes the stable
 task-number branch and verified open PR once, using the existing branch policy
 and complete open-PR fallback. Lookup/listing errors, incomplete fallback results,
 or an unverifiable selected PR fail closed. Retarget safety, bootstrap and pin
@@ -318,9 +320,12 @@ source slices/owners remain intact, including unknown and legacyPlan blocks; no 
 plan migration occurs. Empty-body reads are valid; unreadable bodies, malformed
 ownership/fences and oversized composition refuse before a body write. The size
 check runs before budget trimming so replacement cannot discard unrelated usage.
+Fresh creation validates the complete owned-plan composition and body limit
+before creating or pushing a branch, so next startup can consume every accepted
+PR-backed plan.
 The task is reread after required PR work; an exact plain Full plan link is
 appended only if absent, preserving current edits and distinguishing PR #7 from
-PR #70. Required issue read/link-write failures propagate even after partial PR
+PR #70, including CRLF issue lines. Required issue read/link-write failures propagate even after partial PR
 success. All explicit-refresh attachment failures retain the original registered
 worktree, frozen bundle, native state, binding/progress, and plan files; filesystem
 fallback output stays at its original path. Supported recovery reruns the gates
