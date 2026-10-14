@@ -202,6 +202,10 @@ class MarkdownStructure(BaseModel):
         return matches[0] if matches else None
 
 
+_PARAGRAPH_INTERRUPT_RE = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)")
+_THEMATIC_BREAK_RE = re.compile(r" {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})")
+
+
 def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tuple[str, bool, bool]:
     """Track list content columns without treating contained examples as owners.
 
@@ -213,10 +217,16 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
     if not visual.strip():
         return visual, bool(indents), False
     indent = len(visual) - len(visual.lstrip(" "))
-    thematic = re.fullmatch(r" {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})", visual)
+    thematic = _THEMATIC_BREAK_RE.fullmatch(visual)
     if thematic and (not indents or indent < indents[-1]):
         indents.clear()
         return text, False, False
+    if indents and paragraph and indent >= indents[-1]:
+        content = visual[indents[-1] :]
+        if re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", content):
+            # A setext underline completes the list paragraph; a following
+            # dedented paragraph cannot be its lazy continuation.
+            return content, True, False
     item = re.fullmatch(r"( *)([-+*]|[0-9]{1,9}[.)])(?:( +)(.*)|$)", visual)
     # Only a nonempty bullet or an ordered item starting at 1 can interrupt
     # an existing paragraph. Otherwise its following HTML is still top-level.
@@ -234,7 +244,9 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
         content_column = indent + len(item[2]) + padding
         indents.append(content_column)
         content = visual[content_column:]
-        starts_block = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", content)
+        starts_block = _PARAGRAPH_INTERRUPT_RE.match(content) or _THEMATIC_BREAK_RE.fullmatch(
+            content
+        )
         return (
             content,
             True,
@@ -245,7 +257,9 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
     if indents:
         if indent >= indents[-1]:
             content = visual[indents[-1] :]
-            starts_block = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", content)
+            starts_block = _PARAGRAPH_INTERRUPT_RE.match(content) or _THEMATIC_BREAK_RE.fullmatch(
+                content
+            )
             return (
                 content,
                 True,
@@ -253,12 +267,12 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
                 and (paragraph or not content.startswith("    "))
                 and not bool(starts_block),
             )
-        interrupts = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", visual)
+        interrupts = _PARAGRAPH_INTERRUPT_RE.match(visual)
         if not paragraph or interrupts or thematic:
             indents.clear()
         else:
             return visual, True, True
-    starts_block = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", visual)
+    starts_block = _PARAGRAPH_INTERRUPT_RE.match(visual)
     return (
         text,
         False,

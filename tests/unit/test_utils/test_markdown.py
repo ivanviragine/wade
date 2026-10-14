@@ -425,3 +425,15 @@ def test_noninterrupting_list_lookalikes_do_not_hide_owned_blocks(lookalike: str
         replace_owned_section(prefix + old, name="summary", heading=None, content="New.")
         == expected
     )
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+@pytest.mark.parametrize("underline", ["=======", "---", "-"])
+@pytest.mark.parametrize("payload_indent", ["", "  "])
+def test_setext_heading_ends_lazy_list_paragraph(
+    name: str, underline: str, payload_indent: str
+) -> None:
+    prefix = "- Example\n  " + underline + "\nHuman text.\n"
+    old = f"  <!-- wade:{name}:start -->\n{payload_indent}Old.\n  <!-- wade:{name}:end -->"
+    expected = prefix + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    assert replace_owned_section(prefix + old, name=name, heading=None, content="New.") == expected

@@ -399,3 +399,43 @@ def test_finalizer_preserves_list_contained_marker_examples(tmp_path: Path, exam
         calls.read.return_value = expected
         assert run() is True
         assert calls.write.call_args.args[2] == expected
+
+
+@pytest.mark.parametrize("owner", ["summary", "review-status", "legacy"])
+def test_reference_in_outgoing_projection_does_not_suppress_real_closing_ref(
+    tmp_path: Path, owner: str
+) -> None:
+    prefix = "User description.\n\n"
+    tail = "## Requirements\nKeep."
+    if owner == "legacy":
+        old = "## Summary\nCloses #42\n\n"
+    else:
+        old = f"<!-- wade:{owner}:start -->\nCloses #42\n<!-- wade:{owner}:end -->\n\n"
+    summary = "<!-- wade:summary:start -->\n## Summary\n\nNew implementation summary.\n<!-- wade:summary:end -->"
+    body = prefix + old + tail
+    if owner == "summary":
+        expected = "Closes #42\n\n" + prefix + summary + "\n\n" + tail
+    elif owner == "review-status":
+        expected = "Closes #42\n\n" + prefix + summary + "\n\n\n\n" + tail
+    else:
+        expected = "Closes #42\n\n" + prefix + tail + "\n\n" + summary
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = body
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        calls.read.return_value = expected
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+
+
+def test_finalizer_preserves_owned_summary_after_list_setext_heading(tmp_path: Path) -> None:
+    prefix = "Closes #42\n\n- Example\n  =======\nHuman text.\n"
+    old = "  <!-- wade:summary:start -->\n  Old.\n  <!-- wade:summary:end -->"
+    expected = (
+        prefix
+        + "<!-- wade:summary:start -->\n## Summary\n\nNew implementation summary.\n<!-- wade:summary:end -->"
+    )
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = prefix + old
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected

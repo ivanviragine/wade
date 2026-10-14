@@ -1354,8 +1354,22 @@ def _done_via_pr(
                 structure.owned("review-status")
             except MarkdownStructureError as exc:
                 raise MarkdownStructureError(f"current PR body: {exc}") from exc
-            # Preserve the established reference update order: new projection
-            # examples must never participate in reference detection/removal.
+            # Exclude outgoing projection payloads from reference detection,
+            # while retaining owned pairs as positional insertion anchors. These
+            # empty comments are replaced/removed below and are never written.
+            body = replace_owned_section(
+                body,
+                name="summary",
+                heading="Summary",
+                content="<!-- -->" if structure.owned("summary") is not None else "",
+            )
+            body = replace_owned_section(
+                body,
+                name="review-status",
+                heading=None,
+                content="<!-- -->" if structure.owned("review-status") is not None else "",
+            )
+            # New projection examples must not participate in reference edits.
             body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
             if summary_content:
                 try:

@@ -1073,7 +1073,8 @@ original string so unrelated content, including CRLF slices, remains unchanged.
 Backtick/tilde fences accept zero-to-three-space indentation and matching longer
 closing runs, including fences in list items. List-contained marker examples
 cannot supply owned pairs; fence contents cannot supply pairs or insertion
-anchors.
+anchors. Setext underlines finish list paragraphs, so later dedented prose and
+owned projections are not mistaken for lazy list continuations.
 
 Each owned pair is authoritative and replaced in place. Without a pair, a unique
 exact legacy H2 may migrate only up to the first H1/H2, managed range, fence, or
@@ -1081,6 +1082,11 @@ EOF. Unmarked lookalikes elsewhere remain untouched when a pair exists. Missing
 Summary/review projections use real managed anchors: Summary precedes existing
 review status or the first implementation usage; missing review status follows
 Summary, otherwise precedes usage. Repeated unrelated blocks remain opaque.
+Before applying the existing reference helper, remove legacy Summary text and
+clear outgoing owned projection payloads while retaining their positional
+anchors. Only surviving body content participates in reference detection; new
+projection examples are inserted afterward. Temporary cleared payloads are
+never written.
 
 Validate the original, rendered candidate, and post-budget write payload.
 Unmatched, reversed, nested/crossed markers, duplicate owned pairs, ambiguous
