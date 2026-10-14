@@ -220,6 +220,7 @@
 {"dir": "up", "event_id": "dc3d8621-5dec-5be3-94e4-3d3474e1af8f", "handoff_id": "6fcf98cd-2ee1-4cba-b97f-594241cb642e", "id": "20772eaadc78", "ts": "2026-10-14T14:47:54.387969+00:00"}
 {"dir": "up", "event_id": "e83900f4860f4265a009bc9d11f7db0e", "id": "caa4604d0d03", "ts": "2026-10-14T14:59:01.886618+00:00"}
 {"dir": "up", "event_id": "b4024e75ec794cabbbc5d12e9bb1020f", "id": "fde883286787", "ts": "2026-10-14T14:59:02.126619+00:00"}
+{"dir": "up", "event_id": "c739e55b-32b3-5001-8815-eeb2b0376311", "handoff_id": "6da39461-4191-41f0-9551-3063ce3658d3", "id": "4d419ec6629c", "ts": "2026-10-14T15:55:07.537073+00:00"}
 {"dir": "stale", "event_id": "5f9c1b3f-4b15-5778-bddd-a6f3710271c1", "handoff_id": "f77d8a4f-5f3f-4e63-b3cc-eeb96cda560e", "id": "2112b028ab73", "ts": "2026-10-14T15:57:44.981795+00:00"}
 {"dir": "stale", "event_id": "9758a4ab-ad76-57a3-803b-7535b9edd8ac", "handoff_id": "f77d8a4f-5f3f-4e63-b3cc-eeb96cda560e", "id": "c55057c13ebb", "ts": "2026-10-14T15:57:45.003223+00:00"}
 {"dir": "up", "event_id": "9c26c375-7d6f-5deb-a5f5-6c8e3eb4a4d9", "handoff_id": "f77d8a4f-5f3f-4e63-b3cc-eeb96cda560e", "id": "ace2eb931e5e", "ts": "2026-10-14T15:57:45.024518+00:00"}

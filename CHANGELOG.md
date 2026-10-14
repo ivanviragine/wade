@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.20] — 2026-10-14
+
+### Bug Fixes
+
+- preserve embedded plan sections during PR summary replacement (#533) (0756c6a)
+
 ## [v1.2.19] — 2026-10-14
 
 ### Bug Fixes

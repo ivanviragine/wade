@@ -1068,6 +1068,74 @@ HEAD, so any sha-keyed check must precede it):
    documentation, bot, and feedback-cycle state stays intact; the successful
    push and any earlier title synchronization are not rolled back.
 
+**Structural body replacement (#495).** The leaf `utils/markdown.py` owns an
+offset-preserving scanner for standalone `wade:<name>:start/end` pairs, code
+fences, and column-zero ATX headings. The direct `markdown-it-py` dependency
+supplies CommonMark token nesting and source line maps; WADE retains original
+CR/LF offsets and never renders parsed content. Standalone marker lines within
+multiline top-level raw HTML spans remain visible; list/quote/code containers
+still exclude literal marker examples. Only Summary finalization and
+dependency updates adopt it; existing extraction, session-list, usage, and budget helpers
+retain their own contracts. Pydantic range models carry offsets into the
+original string so unrelated content, including CRLF slices, remains unchanged.
+Backtick/tilde fences accept zero-to-three-space indentation and matching longer
+closing runs, including fences in nested list/quote containers. List/quote/code
+contents cannot supply owned pairs or legacy headings. The parser decides
+paragraph, setext, lazy-continuation, blank-line and indentation boundaries;
+WADE does not maintain a second container state machine. The locked parser's
+fence rule includes a real closing line in its source map and excludes it from
+content. WADE checks that contract explicitly to reject auto-closed fences;
+regressions cover empty/content/marker payloads, containers, CR/LF/CRLF and EOF.
+If token nesting reaches the configured parser limit (100), refuse instead of
+trusting an incomplete parse. This evidence-driven parser adoption replaces
+manual container tracking after reproduced preservation failures; it does not
+change the scanner/edit API or adopt it in other Markdown consumers.
+
+Each owned pair is authoritative and replaced in place. Without a pair, a unique
+column-zero ATX legacy H2 may migrate only up to the first actual top-level
+H1/H2, managed range, fence, or EOF. All top-level headings are recorded as
+boundaries, including indented ATX and setext; `legacy_candidate` separately
+marks eligible migration starts. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
+empty update removes a pair or legacy section while a same-named human H2
+remains, retain an empty owned pair. Determine this using a provisional cleared
+projection, because removing old HTML can expose previously hidden headings.
+An existing owned pair retains its original offset. This is necessary ownership evidence:
+without it, an identical retry misclassifies that human section as legacy. Empty
+pairs remain idempotent and accept later nonempty replacement; when no such
+human heading remains, removal still deletes the owned pair. This evidence-driven
+exception to the original plan's literal pair-removal wording satisfies its
+stronger human-content preservation and repeated-update acceptance criteria.
+Select ownership and at most one legacy range from the original body before
+rendering. The finalizer selects Summary and review-status together and assembles
+their complete replacements atomically; no temporary cleared projection can
+authorize another deletion or reject an otherwise valid final context. Validate
+that unrelated managed block names and exact source slices still have the same
+multiplicity in the rendered scan. If an edit reclassifies one as literal text
+(or exposes a previously literal block as an owner), refuse rather than change
+ownership across parser contexts.
+Missing Summary/review projections use real managed anchors: Summary precedes existing
+review status or the first implementation usage; missing review status follows
+Summary, otherwise precedes usage. An outgoing projection whose final content
+and retained ownership evidence are both absent cannot serve as an insertion
+anchor. Retained empty ownership pairs remain valid anchors. Repeated unrelated
+blocks remain opaque.
+Internal source slots retain original positional anchors while excluding selected
+outgoing Summary/review text from the existing reference helper. New projection
+examples are inserted afterward. No slot-bearing body is parsed for ownership or
+written remotely. Empty-pair retention considers both final projections together;
+missing pairs use the same required anchors even when retained only as ownership
+evidence. Final managed ownership and exact unrelated source slices are checked
+after the complete composition.
+
+Validate the original, rendered candidate, and post-budget write payload.
+Unmatched, reversed, nested/crossed markers, duplicate owned pairs, ambiguous
+legacy headings, and unclosed fences raise `MarkdownStructureError`. The shared
+finalizer catches this before the remote body write and follows the failed-body
+completion path above, including revoking only done markers; diagnostics name
+the current body or new summary input. Dependency updates report a skipped issue,
+do not count it as updated, and continue the batch. This is conservative
+migration, not a general Markdown parser or a concurrent-write compare-and-swap.
+
 **Review status is legible in the PR body (#367).** `_classify_review()` is the
 single source for the gate and the `wade:review-status` PR-body block. It records
 reviewed-at-`<sha>`, reviewer changed, skipped, gate disabled, or cap reached and
