@@ -780,6 +780,7 @@ from wade.cli.hook import hook_command  # noqa: E402
 from wade.cli.implementation_session import implementation_session_app  # noqa: E402
 from wade.cli.knowledge import knowledge_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
+from wade.cli.project import project_app  # noqa: E402
 from wade.cli.review import review_app  # noqa: E402
 from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
 from wade.cli.session import session_app  # noqa: E402
@@ -794,6 +795,7 @@ app.add_typer(
     rich_help_panel="Task Management",
 )
 app.add_typer(task_app, name="tasks", hidden=True)  # alias
+app.add_typer(project_app, name="project", rich_help_panel="Task Management")
 app.add_typer(
     worktree_app,
     name="worktree",

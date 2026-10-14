@@ -821,3 +821,9 @@ Rich can insert literal newlines inside correctly shell-quoted arguments; shell 
 Python str.splitlines() treats U+000B, U+000C, U+001C through U+001E, U+0085, U+2028, and U+2029 as line boundaries, but Markdown source lines end only at CR/LF. A fence scanner using splitlines() can therefore turn inline delimiters into openers or closers and hide real tasks or expose example headings. Use CR/LF-only source-line boundaries and preserve original offsets and the other separator characters literally.
 
 ---
+
+## 1608530f9164 | 2026-10-14 | implementation | tags: github, graphql, providers | Issue #39
+
+gh api -F converts integer-looking values but leaves fractional values as strings; GraphQL Float variables therefore need a JSON request body through --input - rather than -F number=33.333333. Audit the serialized stdin JSON type, not just a provider's Python argument, when testing numeric Projects mutations.
+
+---

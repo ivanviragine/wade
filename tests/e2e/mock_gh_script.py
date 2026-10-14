@@ -517,6 +517,66 @@ def _has_form_values(args: list[str], *keys: str) -> bool:
     return all(bool((_find_form_value(args, key) or "").strip()) for key in keys)
 
 
+
+def _handle_projects_body(args, state):
+    payload = json.load(sys.stdin)
+    query = payload["query"]
+    variables = payload["variables"]
+    log = os.environ.get("WADE_MOCK_PROJECTS_LOG")
+    if log:
+        with Path(log).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload) + "\\n")
+    board = state.get("projects")
+    if not isinstance(board, dict):
+        print(json.dumps({"errors": [{"message": "No project fixture"}]}))
+        return 0
+    def page(nodes):
+        start = int(variables.get("after") or 0)
+        end = start + 100
+        return {
+            "nodes": nodes[start:end],
+            "pageInfo": {
+                "hasNextPage": end < len(nodes),
+                "endCursor": str(end) if end < len(nodes) else None,
+            },
+        }
+    node_id = variables.get("id")
+    if query.startswith("mutation"):
+        number = variables.get("number")
+        assert type(number) in (int, float), "fractional mutation must use JSON number"
+        fields = {field["id"]: field for field in board["fields"]}
+        assert fields[variables["field"]]["dataType"] == "NUMBER"
+        writes = board.setdefault("writes", [])
+        if board.get("fail_write_at") == len(writes):
+            print("HTTP 503: ambiguous simulated transport outcome", file=sys.stderr)
+            return 1
+        writes.append(variables)
+        values = board["values"].setdefault(variables["item"], [])
+        values[:] = [value for value in values if value["field"]["id"] != variables["field"]]
+        values.append({
+            "__typename": "ProjectV2ItemFieldNumberValue",
+            "field": {"id": variables["field"]}, "number": number,
+        })
+        _save_state(state)
+        data = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": variables["item"]}}}
+    elif "projectV2(number:" in query:
+        owner_kind = "organization" if "organization(login:" in query else "user"
+        data = {owner_kind: {"projectV2": board["project"]}}
+    elif "fields(first:" in query:
+        data = {"node": {"id": board["project"]["id"], "fields": page(board["fields"])}}
+    elif "items(first:" in query:
+        board["reads"] = board.get("reads", 0) + 1
+        if board.get("drift_before_apply") and board["reads"] == 2:
+            board["items"][0]["content"]["title"] = "Concurrent edit"
+        _save_state(state)
+        data = {"node": {"id": board["project"]["id"], "items": page(board["items"])}}
+    elif "fieldValues(first:" in query:
+        data = {"node": {"id": node_id, "fieldValues": page(board["values"].get(node_id, []))}}
+    else:
+        data = {"node": next((item for item in board["items"] if item["id"] == node_id), None)}
+    print(json.dumps({"data": data}))
+    return 0
+
 def _handle_api(args: list[str], state: dict[str, object]) -> int:
     if not args:
         return 1
@@ -526,6 +586,9 @@ def _handle_api(args: list[str], state: dict[str, object]) -> int:
         return 0
     if args[0] != "graphql":
         return 1
+
+    if _find_flag(args, "--input") == "-":
+        return _handle_projects_body(args, state)
 
     query = _find_form_value(args, "query") or ""
     if not query:

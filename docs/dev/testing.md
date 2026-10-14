@@ -370,3 +370,32 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - Replaced it with WADE-behavior live tests (`test_wade_live_gh.py`) and a gated live AI smoke (`test_wade_live_ai.py`).
 
 **When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+
+
+## Projects v2 fixtures
+
+`test_config/test_github_projects.py` proves optional config load/check/init
+patch preservation without network; `test_models/test_project.py` covers strict
+operation/config shapes. Provider tests exhaust independent connections beyond
+100 fields, items, field values, labels and assignees; reject malformed cursors,
+resource limits, partial GraphQL data, unsupported unions, auth/rate failures and
+ambiguous writes. Service expectations hard-code scores/half-even ties, null
+ordering, qualified identities, complete WIP denominators and drift/partial/
+idempotent sync results. The existing startup Status-move tests stay unchanged.
+
+`tests/e2e/test_project_contract.py` invokes the real CLI with stateful fake gh.
+`WADE_MOCK_PROJECTS_LOG` records parsed JSON request bodies separately from the
+existing gh argument log; the fake mutation rejects string numeric variables.
+All read/default/explicit-dry-run/invalid paths are audited for zero mutations.
+Run the prescribed focused script, full suite, static checks and Docker contract
+lane; no provider credentials are needed.
+
+`tests/live/test_wade_live_projects.py` is skipped unless RUN_LIVE_GH_TESTS=1 and
+WADE_LIVE_PROJECT_REPO identifies a configured, authorized disposable board.
+Actual numeric writes additionally require WADE_LIVE_PROJECT_WRITES=1 and an
+exact WADE_LIVE_PROJECT_ITEM. Its configured output fields must already contain
+numeric values and require a change. Cleanup restores only those prior numeric
+values when the fields still match this test's expected writes, preserving
+concurrent edits and every pre-existing resource. Use the existing prescribed
+live-gh script only with these explicit opt-ins; ordinary CI must never execute
+live writes.

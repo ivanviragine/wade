@@ -231,3 +231,7 @@
 {"dir": "up", "event_id": "cbbe0dd54e1a4bcd808c5fcc7f8eeae4", "id": "b7e8aa32094f", "ts": "2026-10-14T19:20:08.864523+00:00"}
 {"dir": "up", "event_id": "19226c5879f1417ea7c893da81d083e1", "id": "cce7d3161157", "ts": "2026-10-14T19:20:09.077893+00:00"}
 {"dir": "up", "event_id": "5044edfd71e14593aebbe7350a9c6147", "id": "5f47827434b9", "ts": "2026-10-14T19:20:09.291368+00:00"}
+{"dir": "up", "event_id": "63a7f5a9-0cdf-5872-8121-8818f30ce93b", "handoff_id": "fb26f96f-bd59-4f3f-b7bb-aeadc6160244", "id": "5b61c9c6", "ts": "2026-10-14T21:23:06.253342+00:00"}
+{"dir": "up", "event_id": "31e0b913-66be-574a-b2e5-ed5bf279e6c5", "handoff_id": "fb26f96f-bd59-4f3f-b7bb-aeadc6160244", "id": "129ab9bd", "ts": "2026-10-14T21:23:06.278601+00:00"}
+{"dir": "stale", "event_id": "f69c9356f45c4c13b0235817478decb1", "id": "ca245d6a", "ts": "2026-10-14T22:05:16.697877+00:00"}
+{"dir": "up", "event_id": "8d132579bb8d4cbdbd92696b2edba3d4", "id": "5b61c9c6", "ts": "2026-10-14T22:05:16.882183+00:00"}
