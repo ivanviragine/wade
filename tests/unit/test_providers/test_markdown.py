@@ -763,7 +763,8 @@ class TestPRReviewDelegation:
     ],
 )
 def test_close_metadata_preserves_raw_format(original: str, expected: str) -> None:
-    assert _close_metadata(original, _parse_sections(original)[0]) == expected
+    normalized = original.replace("\r\n", "\n").replace("\r", "\n")
+    assert _close_metadata(original, _parse_sections(normalized)[0]) == expected
 
 
 def test_close_probe_exception_still_closes(config_factory, monkeypatch) -> None:

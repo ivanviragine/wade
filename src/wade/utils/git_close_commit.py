@@ -56,7 +56,9 @@ class _HookState(BaseModel):
 def _git(
     root: Path, *args: str, data: bytes | None = None, check: bool = True
 ) -> subprocess.CompletedProcess[bytes]:
-    result = subprocess.run(["git", *args], cwd=root, input=data, capture_output=True)
+    result = subprocess.run(
+        ["git", "--no-replace-objects", *args], cwd=root, input=data, capture_output=True
+    )
     if check and result.returncode:
         raise CloseCommitError(result.stderr.decode("utf-8", errors="replace").strip()[:2000])
     return result
@@ -104,7 +106,13 @@ def _ref(root: Path) -> str:
     return os.fsdecode(result.stdout.removesuffix(b"\n")) if result.returncode == 0 else "HEAD"
 
 
+def _check_replacements(root: Path) -> None:
+    if _git(root, "replace", "--list").stdout.strip():
+        raise CloseCommitError("replacement objects make auto-commit ineligible")
+
+
 def _check_operation(root: Path) -> None:
+    _check_replacements(root)
     for marker in (
         "MERGE_HEAD",
         "CHERRY_PICK_HEAD",
@@ -192,6 +200,7 @@ def _check_current(baseline: CloseCommitBaseline, closed: bytes) -> None:
 
 def _validate_candidate(state: _HookState, candidate: str) -> None:
     baseline = state.baseline
+    _check_replacements(baseline.root)
     header = _git(baseline.root, "cat-file", "-p", candidate).stdout.split(b"\n\n", 1)[0]
     parents = [line[7:] for line in header.splitlines() if line.startswith(b"parent ")]
     if parents != [baseline.head.encode("ascii")]:
@@ -201,6 +210,7 @@ def _validate_candidate(state: _HookState, candidate: str) -> None:
         "diff-tree",
         "--no-commit-id",
         "--no-renames",
+        "--ignore-submodules=none",
         "-r",
         "--name-only",
         "-z",

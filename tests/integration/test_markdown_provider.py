@@ -610,3 +610,97 @@ def test_index_change_after_eligibility_skips_commit_without_restoring_user_work
     assert _git_bytes(main, "rev-parse", "HEAD") == head
     assert _git_bytes(main, "ls-files", "--stage", "-z") == new_index[0]
     assert _git_bytes(main, "show", ":ISSUES.md") == b"concurrent staged task data\n"
+
+
+def test_ignored_submodule_cannot_expand_close_commit(md_repo, tmp_path: Path) -> None:
+    main, _ = md_repo
+    provider = _auto_provider(main)
+    source = tmp_path / "submodule-source"
+    source.mkdir()
+    _init_repo(source)
+    _git_bytes(main, "-c", "protocol.file.allow=always", "submodule", "add", str(source), "sub")
+    _git_bytes(main, "commit", "-am", "track submodule")
+    sub = main / "sub"
+    _git_bytes(sub, "config", "user.name", "test")
+    _git_bytes(sub, "config", "user.email", "test@example.com")
+    (sub / "README").write_text("new submodule commit")
+    _git_bytes(sub, "commit", "-am", "advance submodule")
+    _git_bytes(main, "config", "submodule.sub.ignore", "all")
+    hook = main / ".git/hooks/pre-commit"
+    hook.write_text("#!/bin/sh\ngit add -- sub\n")
+    hook.chmod(0o755)
+    head = _git_bytes(main, "rev-parse", "HEAD")
+    index = _git_bytes(main, "ls-files", "--stage", "-z")
+    provider.close_task("42")
+    assert provider.read_task("42").state == TaskState.CLOSED
+    assert _git_bytes(main, "rev-parse", "HEAD") == head
+    assert _git_bytes(main, "ls-files", "--stage", "-z") == index
+    assert (sub / "README").read_text() == "new submodule commit"
+
+
+def test_replacement_objects_skip_auto_commit_without_consuming_index(md_repo) -> None:
+    main, _ = md_repo
+    provider = _auto_provider(main)
+    (main / "user.txt").write_bytes(b"original user bytes\n")
+    _git_bytes(main, "add", "user.txt")
+    _git_bytes(main, "commit", "-m", "user baseline")
+    head = _git_bytes(main, "rev-parse", "HEAD").decode().strip()
+    (main / "user.txt").write_bytes(b"replacement user bytes\n")
+    _git_bytes(main, "add", "user.txt")
+    tree = _git_bytes(main, "write-tree").decode().strip()
+    replacement = _git_bytes(main, "commit-tree", tree, data=b"replacement\n").decode().strip()
+    _git_bytes(main, "replace", head, replacement)
+    index = _git_bytes(main, "ls-files", "--stage", "-z")
+    provider.close_task("42")
+    assert provider.read_task("42").state == TaskState.CLOSED
+    assert _git_bytes(main, "rev-parse", "HEAD").decode().strip() == head
+    assert _git_bytes(main, "ls-files", "--stage", "-z") == index
+    assert (
+        _git_bytes(main, "--no-replace-objects", "show", "HEAD:user.txt")
+        == b"original user bytes\n"
+    )
+    assert (main / "user.txt").read_bytes() == b"replacement user bytes\n"
+
+
+@pytest.mark.parametrize("auto_commit", [False, True])
+@pytest.mark.parametrize("metadata", [False, True])
+def test_cr_only_close_preserves_raw_bytes_and_read_semantics(
+    md_repo, auto_commit: bool, metadata: bool
+) -> None:
+    main, _ = md_repo
+    provider = _auto_provider(main)
+    provider._auto_commit = auto_commit
+    block = b"<!-- wade\rstate: open\rlabels: one,in-progress,two\r-->\r\r" if metadata else b""
+    original = (
+        b"# untouched\r\r## #42 Seed task\r\r"
+        + block
+        + b"Body bytes  \r\r## #99 Other task\r\rUnchanged other body\r"
+    )
+    task = main / "ISSUES.md"
+    task.write_bytes(original)
+    _git_bytes(main, "add", "ISSUES.md")
+    _git_bytes(main, "commit", "-m", "CR-only tasks")
+    _stage_unrelated(main)
+    index = _git_bytes(main, "ls-files", "--stage", "-z")
+    before_other = original[original.index(b"## #99") :]
+    result = provider.close_task("42")
+    assert result.state == TaskState.CLOSED
+    assert provider.read_task("42").state == TaskState.CLOSED
+    assert "in-progress" not in {label.name for label in provider.read_task("42").labels}
+    closed = task.read_bytes()
+    assert b"\n" not in closed
+    assert closed[closed.index(b"## #99") :] == before_other
+    assert b"Body bytes  \r\r" in closed
+    if metadata:
+        assert closed == original.replace(b"state: open", b"state: closed", 1).replace(
+            b"labels: one,in-progress,two", b"labels: one,two", 1
+        )
+    if auto_commit:
+        assert _git_bytes(main, "show", "HEAD:ISSUES.md") == closed
+        assert (
+            _git_bytes(main, "diff-tree", "--no-commit-id", "-r", "--name-only", "HEAD")
+            == b"ISSUES.md\n"
+        )
+    else:
+        assert _git_bytes(main, "ls-files", "--stage", "-z") == index
+    assert _git_bytes(main, "show", ":unrelated.txt") == b"staged user content\n"

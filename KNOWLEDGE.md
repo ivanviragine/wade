@@ -800,3 +800,15 @@ Git's path-limited `commit --only` can still admit unrelated paths staged by a p
 `drop_stash_by_sha` verifies a positional stash ref before deleting it in a separate Git command; a competing push after verification can still shift that ref. Callers that must never delete another worktree's entry need to retain the owned stash after applying its captured SHA rather than assume verification makes deletion atomic. Inspect SHA/ref/message pairs and verify the chosen entry before manual cleanup.
 
 ---
+
+## 7645fa43928e | 2026-10-14 | implementation | tags: git, hooks | Issue #489
+
+Git diff-tree can omit changed gitlinks because submodule.<name>.ignore=all or diff.ignoreSubmodules affects its output. Exact candidate-tree guards must explicitly use --ignore-submodules=none; a pre-commit hook can otherwise stage a hidden gitlink change into a path-limited commit.
+
+---
+
+## 64533e9c9e7f | 2026-10-14 | implementation | tags: git, data-integrity | Issue #489
+
+Git replacement refs alter object reads without changing the reported HEAD object ID, so a guard can compare against a different tree than the real commit parent. Treat replacement-object state as ineligible for conservative auto-commits and disable replacement interpretation consistently in object inspection and commit validation.
+
+---

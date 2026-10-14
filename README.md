@@ -701,8 +701,8 @@ Description body here. Sub-headings, code blocks, anything markdown.
   remain intact, and unrelated staged or unstaged work stays untouched.
 - Auto-commit requires the task file to be a clean tracked regular file with
   matching HEAD, index, and disk contents. Preexisting staged, partially staged,
-  or unstaged task-file edits, hidden index flags, and uncertain repository
-  state cause a warning and skip the commit. The task still closes on disk;
+  or unstaged task-file edits, hidden index flags, replacement objects, and
+  uncertain repository state cause a warning and skip the commit. The task still closes on disk;
   its original staged version and flags remain intact. Optional task comments
   are separate edits and follow this same skip policy.
 - Ordinary hooks and signing remain enabled. An invocation-local guard rejects

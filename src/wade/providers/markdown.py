@@ -216,27 +216,35 @@ def _parse_sections(text: str) -> list[_Section]:
 
 
 def _close_metadata(text: str, section: _Section) -> str:
-    """Apply only the effective state/label delta inside a parsed raw span."""
-    start, end = section.span
+    """Map the ordinary universal-newline parse back to unchanged raw bytes."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Each normalized character has one raw boundary; CRLF consumes two characters
+    # of decoded text while lone CR/LF consume one. No general parser change.
+    offsets = [0, *(match.end() for match in re.finditer(r"\r\n|[\s\S]", text))]
+    section_start, section_end = section.span
+    start, end = offsets[section_start], offsets[section_end]
     chunk = text[start:end]
-    heading = _HEADING_RE.match(chunk)
+    view = normalized[section_start:section_end]
+    heading = _HEADING_RE.match(view)
     if heading is None:
         raise MarkdownProviderError("Parsed task heading could not be located")
     after_heading = heading.end()
-    while after_heading < len(chunk) and chunk[after_heading] == "\n":
+    while after_heading < len(view) and view[after_heading] == "\n":
         after_heading += 1
-    metadata = _META_RE.match(chunk, after_heading)
-    newline = "\r\n" if "\r\n" in chunk else "\n"
+    metadata = _META_RE.match(view, after_heading)
+    line_ending = re.search(r"\r\n|\r|\n", chunk)
+    newline = line_ending.group() if line_ending else "\n"
     if metadata is None:
-        first_newline = chunk.find("\n")
-        position = first_newline + 1 if first_newline >= 0 else len(chunk)
-        prefix = "" if first_newline >= 0 else newline
+        position = line_ending.end() if line_ending else len(chunk)
+        prefix = "" if line_ending else newline
         insertion = (
             prefix + newline + "<!-- wade" + newline + "state: closed" + newline + "-->" + newline
         )
         changed = chunk[:position] + insertion + chunk[position:]
     else:
-        lines = metadata.group("body").splitlines(keepends=True)
+        body_start = offsets[section_start + metadata.start("body")] - start
+        body_end = offsets[section_start + metadata.end("body")] - start
+        lines = chunk[body_start:body_end].splitlines(keepends=True)
         keys: dict[str, int] = {}
         for index, line in enumerate(lines):
             if ":" in line:
@@ -273,7 +281,7 @@ def _close_metadata(text: str, section: _Section) -> str:
                 )
                 # The value's outer spacing is retained by replace_value.
                 replace_value(index, kept.strip(" \t"))
-        changed = chunk[: metadata.start("body")] + "".join(lines) + chunk[metadata.end("body") :]
+        changed = chunk[:body_start] + "".join(lines) + chunk[body_end:]
     return text[:start] + changed + text[end:]
 
 
@@ -615,7 +623,8 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         with self._lock():
             original = self._path.read_bytes() if self._path.exists() else b""
             text = original.decode("utf-8")
-            section = self._find_section(_parse_sections(text), task_id)
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            section = self._find_section(_parse_sections(normalized), task_id)
             if _section_to_task(
                 section
             ).state == TaskState.CLOSED and "in-progress" not in _split_labels(
@@ -631,12 +640,17 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
                     eligibility = CloseCommitEligibility(reason=f"eligibility probe failed: {exc}")
             closed_text = _close_metadata(text, section)
             closed = closed_text.encode("utf-8")
-            # newline="" preserves existing CRLF and noncanonical raw content.
+            # newline="" preserves CRLF, lone CR and noncanonical raw content.
             _atomic_write(self._path, closed_text, newline="")
             logger.info("markdown.task_closed", task_id=task_id, path=str(self._path))
             if self._auto_commit:
                 self._git_commit_close(task_id, eligibility, closed)
-            return _section_to_task(self._find_section(_parse_sections(closed_text), task_id))
+            return _section_to_task(
+                self._find_section(
+                    _parse_sections(closed_text.replace("\r\n", "\n").replace("\r", "\n")),
+                    task_id,
+                )
+            )
 
     def _git_commit_close(
         self, task_id: str, eligibility: CloseCommitEligibility, closed: bytes
