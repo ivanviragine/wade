@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.18] — 2026-10-14
+
+### Bug Fixes
+
+- isolate Markdown task auto-commits from unrelated staged work (#529) (b9f6658)
+
 ## [v1.2.17] — 2026-10-14
 
 ### Bug Fixes
