@@ -218,7 +218,16 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
         indents.clear()
         return text, False, False
     item = re.fullmatch(r"( *)([-+*]|[0-9]{1,9}[.)])(?:( +)(.*)|$)", visual)
-    if item and (indent <= 3 or (indents and indent >= indents[-1])):
+    # Only a nonempty bullet or an ordered item starting at 1 can interrupt
+    # an existing paragraph. Otherwise its following HTML is still top-level.
+    interrupts_paragraph = (
+        item and bool(item[4] and item[4].strip()) and (item[2] in {"-", "+", "*", "1.", "1)"})
+    )
+    if (
+        item
+        and (indent <= 3 or (indents and indent >= indents[-1]))
+        and (indents or not paragraph or interrupts_paragraph)
+    ):
         while indents and indent < indents[-1]:
             indents.pop()
         padding = len(item[3]) if item[3] and len(item[3]) <= 4 else 1
@@ -249,7 +258,14 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
             indents.clear()
         else:
             return visual, True, True
-    return text, False, False
+    starts_block = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", visual)
+    return (
+        text,
+        False,
+        bool(text.strip())
+        and (paragraph or not visual.startswith("    "))
+        and not bool(starts_block),
+    )
 
 
 def scan_markdown_structure(body: str) -> MarkdownStructure:
@@ -264,7 +280,7 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
     active: tuple[str, int] | None = None
     fence: tuple[str, int, int, int] | None = None
     list_indents: list[int] = []
-    list_paragraph = False
+    paragraph_open = False
     offset = 0
     # Markdown lines end at CR/LF, not Python's broader Unicode separators.
     for match in re.finditer(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z", body):
@@ -281,13 +297,13 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
                 fence = None
             offset += len(line)
             continue
-        container_text, in_list, list_paragraph = _list_container_line(
-            text, list_indents, list_paragraph
+        container_text, in_list, paragraph_open = _list_container_line(
+            text, list_indents, paragraph_open
         )
         opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", container_text)
         if opening and not (opening[1][0] == "`" and "`" in opening[2]):
             fence = (opening[1][0], len(opening[1]), offset, list_indents[-1] if in_list else 0)
-            list_paragraph = False
+            paragraph_open = False
             offset += len(line)
             continue
         if in_list:

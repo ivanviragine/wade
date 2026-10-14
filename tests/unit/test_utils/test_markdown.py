@@ -414,3 +414,14 @@ def test_dedented_paragraph_after_nonparagraph_list_content_ends_container(prefi
         replace_owned_section(prefix + old, name="summary", heading=None, content="New.")
         == expected
     )
+
+
+@pytest.mark.parametrize("lookalike", ["2. Not a list", "-"])
+def test_noninterrupting_list_lookalikes_do_not_hide_owned_blocks(lookalike: str) -> None:
+    prefix = "Paragraph.\n" + lookalike + "\n"
+    old = "   <!-- wade:summary:start -->\nOld.\n   <!-- wade:summary:end -->"
+    expected = prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    assert (
+        replace_owned_section(prefix + old, name="summary", heading=None, content="New.")
+        == expected
+    )
