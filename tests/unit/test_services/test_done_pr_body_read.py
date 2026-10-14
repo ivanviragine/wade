@@ -52,6 +52,8 @@ def _finalizer(
 
     with ExitStack() as stack:
         stack.enter_context(patch(f"{_DONE}.get_provider", return_value=provider))
+        # This finalizer unit fakes Git; real late-clean/knowledge gates are integration-tested.
+        stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
         stack.enter_context(patch(f"{_DONE}.git_repo.rev_parse", return_value=_SHA))
         stack.enter_context(patch(f"{_DONE}.git_repo.push_branch", side_effect=push))
         stack.enter_context(patch(f"{_DONE}.git_pr.get_pr_for_branch", return_value=lookup))

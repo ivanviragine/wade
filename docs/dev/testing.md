@@ -408,3 +408,10 @@ values when the fields still match this test's expected writes, preserving
 concurrent edits and every pre-existing resource. Use the existing prescribed
 live-gh script only with these explicit opt-ins; ordinary CI must never execute
 live writes.
+
+Knowledge evidence coverage uses disposable real-Git source/receipt commits,
+linked owned sessions composed through the public composition service, changed
+source/path/body, missing historical objects, main publication and exact-duplicate
+normalization. Pure model/fold tests cover append-order independence and durable
+ID conflicts; ownership tests preserve main/index/foreign worktree bytes. These
+fixtures use no paid inference or network. Run the prescribed test scripts.

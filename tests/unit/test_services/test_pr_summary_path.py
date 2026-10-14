@@ -37,6 +37,7 @@ class TestPrSummaryPathResolution:
         with (
             patch("wade.services.implementation_service.done.get_provider") as mock_get_provider,
             patch("wade.services.implementation_service.done.git_repo._run_git"),
+            patch("wade.services.implementation_service.done.git_repo.is_clean", return_value=True),
             patch("wade.services.implementation_service.done.git_pr.create_pr") as mock_create_pr,
             patch(
                 "wade.services.implementation_service.done.git_pr.get_pr_for_branch",
@@ -89,6 +90,7 @@ class TestPrSummaryPathResolution:
         with (
             patch("wade.services.implementation_service.done.get_provider") as mock_get_provider,
             patch("wade.services.implementation_service.done.git_repo._run_git"),
+            patch("wade.services.implementation_service.done.git_repo.is_clean", return_value=True),
             patch("wade.services.implementation_service.done.git_pr.create_pr") as mock_create_pr,
             patch(
                 "wade.services.implementation_service.done.git_pr.get_pr_for_branch",
