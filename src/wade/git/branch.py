@@ -177,13 +177,16 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
     """
     indexed = _reset_inventory(worktree, "ls-files", "-z")
     target = _reset_inventory(worktree, "ls-tree", "-r", "-z", destination)
-    directories: dict[Path, tuple[Path, ...]] = {}
+    # Path equality case-folds on Windows even in case-sensitive directories.
+    # Use exact actual spellings for cache and tracked identity on every host.
+    directories: dict[str, tuple[Path, ...]] = {}
 
     def children(directory: Path) -> tuple[Path, ...]:
-        if directory not in directories:
+        key = os.fspath(directory)
+        if key not in directories:
             with os.scandir(directory) as entries:
-                directories[directory] = tuple(sorted(Path(e.path) for e in entries))
-        return directories[directory]
+                directories[key] = tuple(sorted(Path(e.path) for e in entries))
+        return directories[key]
 
     def entry(directory: Path, name: str) -> Path | None:
         requested = directory / name
@@ -192,8 +195,9 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
         except FileNotFoundError:
             return None
         entries = children(directory)
-        if requested in entries:
-            return requested
+        exact = next((path for path in entries if path.name == name), None)
+        if exact is not None:
+            return exact
         # The requested spelling exists, but isn't the actual entry spelling.
         # This can happen with case/Unicode aliases. Multiple inode matches are
         # ambiguous (hard links); refusing is safer than treating user data as tracked.
@@ -220,7 +224,9 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
 
     collisions: set[str] = set()
     try:
-        tracked = {path for name in indexed if (path := existing_index_path(name)) is not None}
+        tracked = {
+            os.fspath(path) for name in indexed if (path := existing_index_path(name)) is not None
+        }
 
         def inspect_replaced_directory(directory: Path) -> None:
             contents = children(directory)
@@ -229,7 +235,7 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
             for child in contents:
                 if stat.S_ISDIR(child.lstat().st_mode):
                     inspect_replaced_directory(child)
-                elif child not in tracked:
+                elif os.fspath(child) not in tracked:
                     collisions.add(child.relative_to(worktree).as_posix())
 
         for record in target:
@@ -245,7 +251,7 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
                     break
                 node = found
                 if not stat.S_ISDIR(node.lstat().st_mode):
-                    if node not in tracked:
+                    if os.fspath(node) not in tracked:
                         collisions.add(node.relative_to(worktree).as_posix())
                     break
                 if position == len(parts) - 1 and mode != "160000":
