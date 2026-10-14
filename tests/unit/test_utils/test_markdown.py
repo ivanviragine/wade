@@ -233,6 +233,8 @@ def test_structural_migration_preserves_managed_slices(name: str, newline: str) 
     "barrier",
     [
         "# Tasks\nKeep.",
+        "#\nKeep.",
+        "##\nKeep.",
         "## Tasks\nKeep.",
         "<!-- wade:future:start -->\nKeep.\n<!-- wade:future:end -->",
         "```text\nKeep.\n```",
@@ -356,3 +358,59 @@ def test_legacy_crlf_removal_preserves_unrelated_tail_without_final_newline() ->
 def test_non_markdown_line_separators_do_not_create_legacy_headings(separator: str) -> None:
     body = "User text." + separator + "## Summary\nKeep this paragraph."
     assert strip_legacy_section(body, "Summary") == body
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+@pytest.mark.parametrize(
+    "example",
+    [
+        "- Example:\n  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n",
+        "-\n  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n",
+        "-\t```markdown\n\t<!-- wade:{name}:end -->\n\t```\n",
+        "1. Example:\n   <!-- wade:{name}:start -->\n   Keep.\n   <!-- wade:{name}:end -->\n",
+        "- ```markdown\n  <!-- wade:{name}:end -->\n  ```\n",
+        "1. ~~~markdown\n   <!-- wade:{name}:end -->\n   ~~~~\n",
+        "- Outer\n  - ```markdown\n    <!-- wade:{name}:end -->\n    ```\n"
+        "  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n",
+        "- Paragraph\nlazy continuation\n  <!-- wade:{name}:start -->\n"
+        "  Keep.\n  <!-- wade:{name}:end -->\n",
+    ],
+)
+def test_list_examples_are_not_owned_blocks(name: str, example: str) -> None:
+    prefix = example.format(name=name) + "\n"
+    old = f"<!-- wade:{name}:start -->\nOld.\n<!-- wade:{name}:end -->"
+    expected = prefix + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    assert replace_owned_section(prefix + old, name=name, heading=None, content="New.") == expected
+
+
+def test_unclosed_list_fence_refuses_mutation() -> None:
+    with pytest.raises(MarkdownStructureError, match="unclosed code fence"):
+        replace_owned_section(
+            "- ```markdown\n  Keep.", name="summary", heading=None, content="New."
+        )
+
+
+@pytest.mark.parametrize("separator", ["- - -", "* * *", "_ _ _"])
+def test_thematic_break_is_not_a_list_container(separator: str) -> None:
+    body = separator + "\n  <!-- wade:summary:start -->\nOld.\n  <!-- wade:summary:end -->"
+    assert replace_owned_section(body, name="summary", heading=None, content="New.") == (
+        separator + "\n<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    )
+
+
+def test_dedented_fence_cannot_close_a_list_fence() -> None:
+    with pytest.raises(MarkdownStructureError, match="unclosed code fence"):
+        replace_owned_section("- ```\n```", name="summary", heading=None, content="New.")
+
+
+@pytest.mark.parametrize(
+    "prefix", ["-\n", "- ```\n  Code.\n  ```\n", "- Paragraph.\n\n      Code.\n"]
+)
+def test_dedented_paragraph_after_nonparagraph_list_content_ends_container(prefix: str) -> None:
+    prefix += "Human text.\n"
+    old = "  <!-- wade:summary:start -->\nOld.\n  <!-- wade:summary:end -->"
+    expected = prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    assert (
+        replace_owned_section(prefix + old, name="summary", heading=None, content="New.")
+        == expected
+    )

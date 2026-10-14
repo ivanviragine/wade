@@ -202,6 +202,56 @@ class MarkdownStructure(BaseModel):
         return matches[0] if matches else None
 
 
+def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tuple[str, bool, bool]:
+    """Track list content columns without treating contained examples as owners.
+
+    Blank-separated dedents and interrupting blocks leave the list; plain lazy
+    paragraph continuations retain it. Expand tabs only for detection, never for
+    offsets or replacements. Nested item columns survive a return to the parent.
+    """
+    visual = text.expandtabs(4)
+    if not visual.strip():
+        return visual, bool(indents), False
+    indent = len(visual) - len(visual.lstrip(" "))
+    thematic = re.fullmatch(r" {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})", visual)
+    if thematic and (not indents or indent < indents[-1]):
+        indents.clear()
+        return text, False, False
+    item = re.fullmatch(r"( *)([-+*]|[0-9]{1,9}[.)])(?:( +)(.*)|$)", visual)
+    if item and (indent <= 3 or (indents and indent >= indents[-1])):
+        while indents and indent < indents[-1]:
+            indents.pop()
+        padding = len(item[3]) if item[3] and len(item[3]) <= 4 else 1
+        content_column = indent + len(item[2]) + padding
+        indents.append(content_column)
+        content = visual[content_column:]
+        starts_block = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", content)
+        return (
+            content,
+            True,
+            bool(content.strip()) and not content.startswith("    ") and not bool(starts_block),
+        )
+    while len(indents) > 1 and indents[-2] <= indent < indents[-1]:
+        indents.pop()
+    if indents:
+        if indent >= indents[-1]:
+            content = visual[indents[-1] :]
+            starts_block = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", content)
+            return (
+                content,
+                True,
+                bool(content.strip())
+                and (paragraph or not content.startswith("    "))
+                and not bool(starts_block),
+            )
+        interrupts = re.match(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)", visual)
+        if not paragraph or interrupts or thematic:
+            indents.clear()
+        else:
+            return visual, True, True
+    return text, False, False
+
+
 def scan_markdown_structure(body: str) -> MarkdownStructure:
     """Scan standalone markers, column-zero headings and Markdown code fences.
 
@@ -212,22 +262,35 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
     """
     result = MarkdownStructure()
     active: tuple[str, int] | None = None
-    fence: tuple[str, int, int] | None = None
+    fence: tuple[str, int, int, int] | None = None
+    list_indents: list[int] = []
+    list_paragraph = False
     offset = 0
     # Markdown lines end at CR/LF, not Python's broader Unicode separators.
     for match in re.finditer(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z", body):
         line = match.group()
         text = line.rstrip("\r\n")
         if fence is not None:
-            char, length, start = fence
-            if re.fullmatch(r" {0,3}" + re.escape(char) + "{" + str(length) + r",}[ \t]*", text):
+            char, length, start, container_indent = fence
+            visual = text.expandtabs(4)
+            if visual.startswith(" " * container_indent) and re.fullmatch(
+                r" {0,3}" + re.escape(char) + "{" + str(length) + r",}[ \t]*",
+                visual[container_indent:],
+            ):
                 result.fences.append(MarkdownRange(start=start, end=offset + len(line)))
                 fence = None
             offset += len(line)
             continue
-        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", text)
+        container_text, in_list, list_paragraph = _list_container_line(
+            text, list_indents, list_paragraph
+        )
+        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", container_text)
         if opening and not (opening[1][0] == "`" and "`" in opening[2]):
-            fence = (opening[1][0], len(opening[1]), offset)
+            fence = (opening[1][0], len(opening[1]), offset, list_indents[-1] if in_list else 0)
+            list_paragraph = False
+            offset += len(line)
+            continue
+        if in_list:
             offset += len(line)
             continue
         marker = re.fullmatch(r" {0,3}<!-- wade:([a-zA-Z0-9_-]+):(start|end) -->[ \t]*", text)
@@ -245,14 +308,14 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
                 )
                 active = None
         elif active is None:
-            heading = re.fullmatch(r"(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*", text)
+            heading = re.fullmatch(r"(#{1,6})(?:[ \t]+(.*?)(?:[ \t]+#+)?)?[ \t]*", text)
             if heading:
                 result.headings.append(
                     MarkdownHeading(
                         start=offset,
                         end=offset + len(line),
                         level=len(heading[1]),
-                        title=heading[2],
+                        title=heading[2] or "",
                     )
                 )
         offset += len(line)

@@ -360,3 +360,42 @@ def test_finalizer_bounds_legacy_summary_and_replaces_changed_projection(tmp_pat
         calls.read.return_value = changed
         assert run() is True
         assert calls.write.call_args.args[2] == changed
+
+
+@pytest.mark.parametrize("reference", ["Implements #42", "Closes #42"])
+def test_new_summary_reference_examples_survive_first_done_and_repeat(
+    tmp_path: Path, reference: str
+) -> None:
+    payload = "Description.\n```markdown\n" + reference + "\n```"
+    expected = (
+        "Closes #42\n\nUser description.\n\n"
+        "<!-- wade:summary:start -->\n## Summary\n\n" + payload + "\n<!-- wade:summary:end -->"
+    )
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        (tmp_path / "worktree" / "PR-SUMMARY.md").write_text(payload, encoding="utf-8")
+        calls.read.return_value = "User description.\n"
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        calls.read.return_value = expected
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "- Example:\n  <!-- wade:summary:start -->\n  Keep.\n  <!-- wade:summary:end -->\n",
+        "- ```markdown\n  <!-- wade:summary:end -->\n  ```\n",
+    ],
+)
+def test_finalizer_preserves_list_contained_marker_examples(tmp_path: Path, example: str) -> None:
+    old = "<!-- wade:summary:start -->\nOld.\n<!-- wade:summary:end -->"
+    body = "Closes #42\n" + example + "\n" + old
+    expected = body.replace("\nOld.\n", "\n## Summary\n\nNew implementation summary.\n")
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = body
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        calls.read.return_value = expected
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected

@@ -1071,7 +1071,9 @@ updates adopt it; existing extraction, session-list, usage, and budget helpers
 retain their own contracts. Pydantic range models carry offsets into the
 original string so unrelated content, including CRLF slices, remains unchanged.
 Backtick/tilde fences accept zero-to-three-space indentation and matching longer
-closing runs; their contents cannot supply marker pairs or insertion anchors.
+closing runs, including fences in list items. List-contained marker examples
+cannot supply owned pairs; fence contents cannot supply pairs or insertion
+anchors.
 
 Each owned pair is authoritative and replaced in place. Without a pair, a unique
 exact legacy H2 may migrate only up to the first H1/H2, managed range, fence, or

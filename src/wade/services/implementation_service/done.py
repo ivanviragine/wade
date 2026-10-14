@@ -1354,6 +1354,9 @@ def _done_via_pr(
                 structure.owned("review-status")
             except MarkdownStructureError as exc:
                 raise MarkdownStructureError(f"current PR body: {exc}") from exc
+            # Preserve the established reference update order: new projection
+            # examples must never participate in reference detection/removal.
+            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
             if summary_content:
                 try:
                     projection_structure = scan_markdown_structure(
@@ -1379,7 +1382,6 @@ def _done_via_pr(
                 after=("summary",),
                 before=("impl-usage",),
             )
-            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
             scan_markdown_structure(body)
             return body
 
