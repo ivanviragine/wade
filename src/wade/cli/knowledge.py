@@ -1,4 +1,4 @@
-"""Knowledge subcommands — add, get, rate, and tag project learnings."""
+"""Knowledge evidence, usefulness, proposal ownership, and snapshot commands."""
 
 from __future__ import annotations
 
@@ -140,7 +140,9 @@ def add(
 @knowledge_app.command()
 def get(
     min_score: int | None = typer.Option(
-        None, "--min-score", help="Minimum net score (up - down) to include. Bypasses auto-filter."
+        None,
+        "--min-score",
+        help="Explicit minimum historical utility score (up - down); never an assessment.",
     ),
     search: str | None = typer.Option(
         None, "--search", help="Boolean search query (AND, OR, NOT, quotes, parens)."
@@ -154,7 +156,9 @@ def get(
         False, "--all-history", help="Include every duplicate member and its own history."
     ),
     no_filter: bool = typer.Option(
-        False, "--no-filter", help="Disable all score filtering (auto-filter and min-score)."
+        False,
+        "--no-filter",
+        help="Ignore explicit minimum utility filtering; no default correctness filtering.",
     ),
 ) -> None:
     """Print the project knowledge file to stdout."""

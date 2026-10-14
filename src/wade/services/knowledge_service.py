@@ -48,10 +48,9 @@ _TAG_MAX_LEN = 30
 # observations persist directly in the ignored Git-common-dir proposal queue.
 STAGED_RATINGS_RELATIVE_PATH = ".wade/knowledge-ratings-staged.jsonl"
 
-# Written by the parent that creates a throwaway plan/deps worktree, and read by
-# :func:`is_throwaway_knowledge_session`.  Staging only makes sense when such a
-# parent exists to flush it, so the marker — not a bare detached HEAD — is what
-# authorizes it (#462 review).  Lives under the worktree-gitignored ``.wade/``.
+# Compatibility identity for retained parent-created plan/deps worktrees. It
+# never grants tracked-write authority or permission to deliver legacy records;
+# new observations use the ignored common-directory owner-bound proposal queue.
 THROWAWAY_SESSION_MARKER_RELATIVE_PATH = ".wade/throwaway-session"
 
 
@@ -193,11 +192,11 @@ def throwaway_session_marker_path(worktree_path: Path) -> Path:
 
 
 def mark_throwaway_knowledge_session(worktree_path: Path) -> Path:
-    """Declare *worktree_path* a WADE throwaway session with a flushing parent.
+    """Identify a parent-created throwaway session for compatibility/recovery.
 
-    Called by ``wade plan`` / ``wade task deps`` right after they create their
-    detached worktree, before the agent is launched — those are exactly the two
-    lifecycles that call :func:`flush_staged_ratings` on the way out.
+    Called by planning/dependency parents before launch. New observations persist
+    directly in the common-directory queue; legacy logs require explicit verified
+    owner recovery and are never delivered by a generic parent flush.
 
     Raises ``ValueError`` when the marker would land outside *worktree_path*: it
     lives under the same repo-controlled ``.wade/`` as the staging log, so a
@@ -211,24 +210,19 @@ def mark_throwaway_knowledge_session(worktree_path: Path) -> Path:
         raise ValueError(f"Refusing to mark a throwaway session outside the worktree: {marker!s}")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(
-        "wade throwaway session — knowledge votes stage here and are flushed by "
-        "the parent `wade plan` / `wade task deps` process.\n",
+        "wade throwaway session — observations use the owner-bound proposal queue; "
+        "legacy feedback requires explicit original-owner recovery.\n",
         encoding="utf-8",
     )
     return marker
 
 
 def is_throwaway_knowledge_session(project_root: Path) -> bool:
-    """Whether *project_root* is a WADE-created detached plan/deps worktree.
+    """Recognize a marked parent-created detached plan/deps worktree.
 
-    Detached HEAD alone is **not** enough: a primary checkout parked on a
-    detached HEAD (a CI checkout, ``git checkout <sha>``, a bisect) and a
-    hand-made ``git worktree add --detach`` both satisfy it, yet neither has a
-    WADE parent that would ever flush ``.wade/knowledge-ratings-staged.jsonl``
-    — a vote staged there would be stranded forever (#462 review). So require
-    all three: the marker its parent writes
-    (:func:`mark_throwaway_knowledge_session`), a **linked** worktree, and a
-    detached HEAD.
+    A detached primary or hand-made worktree is not a managed parent session.
+    This legacy identity check does not grant author authority; every tracked
+    write independently verifies the frozen task/session and Git ownership.
     """
     from wade.git.repo import is_head_attached, is_worktree
 
@@ -241,7 +235,7 @@ def is_throwaway_knowledge_session(project_root: Path) -> bool:
 
 
 def staged_ratings_path(project_root: Path) -> Path:
-    """Return the untracked, worktree-local rating staging artefact path."""
+    """Return the recognizable legacy transport path for explicit recovery."""
     return project_root / STAGED_RATINGS_RELATIVE_PATH
 
 
@@ -275,9 +269,9 @@ def path_escapes_session(project_root: Path, path: Path) -> bool:
 def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
     """Resolve the knowledge path for the current session's resolved root.
 
-    In a branch-backed worktree (or the main checkout) this is the local file; in a
-    throwaway detached-HEAD (plan / task deps) worktree it redirects to main. See
-    :func:`_resolve_knowledge_root`.
+    Reads and author writes always use the observed checkout's local snapshot.
+    Detached/main/bounded observers stage proposals rather than redirect tracked
+    writes into main or another author's branch.
     """
     return resolve_knowledge_path(_resolve_knowledge_root(project_root), config)
 
@@ -501,9 +495,9 @@ def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
        so a ``get``/``status`` in the main checkout can never dirty main.
     3. Neither present → empty dict.
 
-    Return type (``dict[str, EntryRating]``) is unchanged, so
-    ``compute_auto_filter_threshold`` and ``get_annotated_knowledge`` consume it as
-    before.
+    Return type (``dict[str, EntryRating]``) is unchanged. These totals describe
+    historical usefulness only; they do not assess correctness or hide entries
+    by default.
     """
     if ratings_path.is_dir():
         raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
