@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.14] — 2026-10-14
+
+### Bug Fixes
+
+- commit synchronized uv.lock with automatic version bumps (#534) (3ff2e97)
+- refuse PR body updates when the current body cannot be read (#525) (d3e3be5)
+
+## [v1.2.13] — 2026-10-14
+
+### Bug Fixes
+
+- adopt Crossby native planning startup repair for Codex 0.162.1 (#527) (dd74170)
+
 ## [v1.2.12] — 2026-10-13
 
 ### Chores

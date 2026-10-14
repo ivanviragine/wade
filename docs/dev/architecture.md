@@ -1056,6 +1056,13 @@ HEAD, so any sha-keyed check must precede it):
    corruption cannot ship.
 8. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing
    and projects the review outcome into the PR body.
+   The existing-PR body callback preserves `None` for a failed read; the shared
+   body helper refuses to transform or write it, while an empty string remains
+   a valid read. A failed body read or write clears the active marker root's
+   `done` marker family and returns before ready promotion, label removal, or
+   bot-review actions. Retry reads the current remote body again. Other review,
+   documentation, bot, and feedback-cycle state stays intact; the successful
+   push and any earlier title synchronization are not rolled back.
 
 **Review status is legible in the PR body (#367).** `_classify_review()` is the
 single source for the gate and the `wade:review-status` PR-body block. It records

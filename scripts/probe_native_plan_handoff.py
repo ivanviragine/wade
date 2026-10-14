@@ -15,7 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from crossby.models.ai import PlanSessionRequest
+import yaml
+from crossby.models.ai import EffortLevel, PlanSessionRequest
 
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.hooks import SessionPhase
@@ -33,15 +34,31 @@ def main() -> int:
         choices=["claude", "cursor", "opencode", "antigravity-cli", "copilot", "codex"],
     )
     parser.add_argument("--model")
+    parser.add_argument("--effort", choices=[level.value for level in EffortLevel])
+    parser.add_argument("--review-ai", help="Independent review tool override")
+    parser.add_argument("--review-model", help="Independent review model override")
+    parser.add_argument("--review-effort", choices=[level.value for level in EffortLevel])
+    parser.add_argument(
+        "--review-mode", choices=["prompt", "headless", "interactive"], default="prompt"
+    )
     parser.add_argument("--sandbox", action="store_true", help="Enable the native runtime sandbox")
     parser.add_argument(
         "--worktree", action="store_true", help="Also exercise actual worktree bootstrap and hooks"
     )
     args = parser.parse_args()
     root = Path(tempfile.mkdtemp(prefix=f"wade-native-handoff-{args.tool}-")).resolve()
-    config = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True)))
+    review_config = AICommandConfig(
+        tool=args.review_ai,
+        model=args.review_model,
+        effort=args.review_effort,
+        mode=args.review_mode,
+        enabled=True,
+    )
+    config = ProjectConfig(ai=AIConfig(review_plan=review_config))
     (root / ".wade.yml").write_text(
-        "version: 2\nai:\n  review_plan:\n    enabled: true\n    mode: prompt\n"
+        yaml.safe_dump(
+            {"version": 2, "ai": {"review_plan": review_config.model_dump(exclude_none=True)}}
+        )
     )
     (root / "greeting.py").write_text('print("Hello")\n')
     if args.worktree:
@@ -85,7 +102,12 @@ def main() -> int:
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
     plan_dir = str(root / ".wade/plans")
     print(f"Probe workspace: {root}", flush=True)
-    print("Complete planning and self-review, then exit the CLI without implementing.", flush=True)
+    review_instructions = (
+        "Perform the configured prompt self-review and acknowledge it explicitly. "
+        if args.review_mode == "prompt"
+        else "Run the configured independent review; address findings and re-review revisions. "
+    )
+    print("Complete planning and review, then exit the CLI without implementing.", flush=True)
     with _plan_dir_fallback_env(plan_dir, root if args.worktree else None):
         bundle, _ = run_interactive_planning_session(
             args.tool,
@@ -94,6 +116,7 @@ def main() -> int:
                 prompt="Plan handoff probe",
                 working_dir=root,
                 model=args.model,
+                effort=EffortLevel(args.effort) if args.effort else None,
                 sandbox=args.sandbox,
             ),
             permission_mode=PermissionMode.DEFAULT,
@@ -102,8 +125,9 @@ def main() -> int:
                 "# Bounded native planning integration test\n\n"
                 "Plan one small task: change greeting.py from Hello to Hi and verify its output. "
                 "Do not implement. Use the fixed planning workflow, including readiness, "
-                "native user interaction, plan submission, actual self-review, and done. "
-                "The parent only checks the handoff; it creates no issues or PRs. "
+                "native user interaction, plan submission, review, and done. "
+                + review_instructions
+                + "The parent only checks the handoff; it creates no issues or PRs. "
                 "This is a development build: invoke every workflow wade command using "
                 f"{shlex.quote(str(Path(sys.executable).parent / 'wade'))} as the executable. "
                 "Native login shells may reset PATH to an older installed WADE."
@@ -111,6 +135,8 @@ def main() -> int:
             session_bundle=str(root / ".wade/session"),
             source_root=str(root),
         )
+    if (root / "greeting.py").read_text() != 'print("Hello")\n':
+        raise ValueError("Native planning changed the fixture source")
     print(f"PASS: received {len(bundle.plans)} completed, reviewed plan(s). Artifacts: {plan_dir}")
     return 0
 
