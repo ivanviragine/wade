@@ -125,24 +125,45 @@ the fixture explicitly selects its collector capability now that production
 Codex prefers the terminal. This is protocol-contract evidence, not genuine
 model inference.
 
-For dependency adoption, also run the release's own focused native suites from
-a disposable checkout of its release tag. Install the published wheel in an
-isolated environment and disable the checkout's pytest `pythonpath=src` so tests
-exercise the wheel. Using Crossby's script (not raw pytest):
+For dependency adoption, synchronize a fresh environment from the updated WADE
+lock. Pin `UV_PROJECT` to this WADE checkout as well as selecting its environment:
+child commands and test fixtures may change directory. Do not inject a sibling
+Crossby checkout through `PYTHONPATH`, editable installs, or source overrides.
 
 ```bash
-UV_PROJECT_ENVIRONMENT=/absolute/isolated/.venv UV_NO_SYNC=1 \
-./scripts/test.sh tests/unit/test_ai_tools/test_plan_sessions.py \
-  tests/unit/test_ai_tools/test_plan_permission_responses.py \
-  tests/unit/test_ai_tools/test_opencode_plan_server.py \
-  tests/unit/test_ai_tools/test_plan_mode_contract.py \
-  tests/unit/test_ai_tools/test_plan_command_policy.py \
-  tests/unit/test_ai_tools/test_plan_preflight.py -o pythonpath=
+export UV_PROJECT="$PWD"
+export UV_PROJECT_ENVIRONMENT=/absolute/isolated/.venv
+unset UV_NO_SYNC PYTHONPATH
+uv sync --all-extras --locked
+uv run python -c 'import crossby, importlib.metadata; print(crossby.__file__); print(importlib.metadata.version("crossby")); print(importlib.metadata.distribution("crossby").read_text("direct_url.json"))'
+```
 
-UV_PROJECT_ENVIRONMENT=/absolute/isolated/.venv UV_NO_SYNC=1 \
+Crossby's module must resolve inside the selected environment, its version must
+match the tracked contract, and `direct_url.json` must be absent for the registry
+wheel. Recheck provenance after the prescribed scripts. Ordinary `uv run` must
+retain the selected release; an unsynchronized editable environment does not
+establish adoption.
+
+Also run the release's focused native suites from a disposable checkout of its
+exact tag. Treat that checkout only as test data. Invoke its script from the
+WADE root, with absolute test paths and checkout `pythonpath` disabled, so uv
+continues to consume WADE's lock and tests import the published wheel:
+
+```bash
+/absolute/crossby-release/scripts/test.sh \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_codex_terminal.py \
+  /absolute/crossby-release/tests/integration/test_codex_terminal.py \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_plan_sessions.py \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_plan_permission_responses.py \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_opencode_plan_server.py \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_plan_mode_contract.py \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_plan_command_policy.py \
+  /absolute/crossby-release/tests/unit/test_ai_tools/test_plan_preflight.py -o pythonpath=
+
 CROSSBY_CODEX_LOCAL_SMOKE=1 CROSSBY_OPENCODE_LOCAL_SMOKE=1 \
-./scripts/test.sh tests/integration/test_codex_plan_policy.py \
-  tests/integration/test_opencode_plan_http.py -o pythonpath=
+/absolute/crossby-release/scripts/test.sh \
+  /absolute/crossby-release/tests/integration/test_codex_plan_policy.py \
+  /absolute/crossby-release/tests/integration/test_opencode_plan_http.py -o pythonpath=
 ```
 
 These opt-ins use real native binaries without paid inference: Codex verifies
@@ -176,11 +197,18 @@ uv run python scripts/probe_native_plan_handoff.py --tool claude
 uv run python scripts/probe_native_plan_handoff.py --tool cursor --model auto
 uv run python scripts/probe_native_plan_handoff.py --tool opencode
 uv run python scripts/probe_native_plan_handoff.py --tool antigravity-cli
-uv run python scripts/probe_native_plan_handoff.py --tool codex --sandbox --worktree --model gpt-5.6-sol
+uv run python scripts/probe_native_plan_handoff.py --tool codex --worktree \
+  --model gpt-6.1-sol --effort high --review-mode headless \
+  --review-ai codex --review-model gpt-6.1-sol --review-effort high
 ```
 
 The probe uses ordinary native approvals, real workflow/review commands, and no
-GitHub writes. Add `--worktree` to exercise real detached-worktree bootstrap and
+GitHub writes. `--effort` pins the planner; `--review-ai`, `--review-model`,
+`--review-effort`, and `--review-mode` configure the fixture's reviewer. Defaults
+retain prompt self-review. With headless review selected, run the actual
+independent command with the same explicit selection, for example
+`wade review plan <canonical-plan-file> --ai codex --model gpt-6.1-sol --effort high --mode headless`.
+The probe rejects a changed greeting source before reporting success. Add `--worktree` to exercise real detached-worktree bootstrap and
 installed guards too. Answer the native planning questions, approve only commands needed
 for the test, and exit without implementing after completion. Success requires
 the actual reviewed handoff, not just launch or a final chat message. Artifacts

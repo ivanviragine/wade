@@ -285,11 +285,14 @@ including an explicit empty list when appropriate. The parent revalidates the
 completed handoff after exit, then creates tasks and draft PRs. Failed or missing
 handoffs retain output and create no tasks.
 
-**Codex requires CLI 0.154.x and a POSIX terminal (macOS/Linux).** Crossby's
-current startup adapter waits for the rendered Plan indicator before WADE sends
-the initial task; unknown versions or an unrecognized startup screen fail
-without retrying the task. This temporary terminal adapter can be replaced by a
-native launch flag when Codex provides one. WADE requires the task-submitted
+**Codex requires CLI 0.154.0 or newer and a POSIX terminal (macOS/Linux).**
+Crossby 0.43.2 repairs startup with CLI 0.162.1, including its Folder access
+prompt and transient Plan footer. Explicitly trust the intended folder when
+Codex asks; WADE never supplies that consent. Crossby observes native Plan
+activation before WADE sends the initial task, then confirms its submission
+across terminal redraws. Unrecognized startup screens fail closed without
+retrying the task. This temporary terminal adapter can be replaced by a native
+launch flag when Codex provides one. WADE requires the task-submitted
 event before collecting the explicit reviewed handoff. Codex can submit plan
 Markdown through `--from-stdin`; no native file destination is assumed.
 
@@ -605,6 +608,14 @@ Decision and integrity gates deliberately require an explicit valid outcome:
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
+
+Finalizing an existing PR requires reading its current body successfully. If
+that read or the body update fails, completion stops, clears the local done
+marker, and leaves ready promotion, label removal, and bot-review triggers
+pending. Re-run the session's `done` command after resolving access; it reads the
+body again and preserves existing plan and user content. A successfully read
+empty body remains valid. The branch may already have been pushed before this
+retryable failure.
 
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is
