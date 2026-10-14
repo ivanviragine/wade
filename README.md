@@ -607,6 +607,14 @@ Decision and integrity gates deliberately require an explicit valid outcome:
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
 
+Finalizing an existing PR requires reading its current body successfully. If
+that read or the body update fails, completion stops, clears the local done
+marker, and leaves ready promotion, label removal, and bot-review triggers
+pending. Re-run the session's `done` command after resolving access; it reads the
+body again and preserves existing plan and user content. A successfully read
+empty body remains valid. The branch may already have been pushed before this
+retryable failure.
+
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is
 refused, so committing-and-pushing straight past `done` doesn't work. It is
