@@ -156,8 +156,8 @@ def reset_branch(
     _run_git_with_retry("branch", "-f", branch_name, start_point, cwd=repo_root)
 
 
-def _reset_path_inventory(worktree: Path, *args: str) -> tuple[str, ...]:
-    """Read NUL-delimited paths without newline conversion or quoted-path parsing."""
+def _reset_inventory(worktree: Path, *args: str) -> tuple[str, ...]:
+    """Read a NUL-delimited Git inventory without newline or quoted-path conversion."""
     try:
         result = subprocess.run(["git", *args], cwd=worktree, capture_output=True, check=True)
     except (OSError, subprocess.CalledProcessError) as exc:
@@ -175,8 +175,8 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
     symlink. Resolve actual directory-entry spellings to handle case aliases on
     filesystems that permit them, without conflating distinct hard-linked paths.
     """
-    indexed = _reset_path_inventory(worktree, "ls-files", "-z")
-    target = _reset_path_inventory(worktree, "ls-tree", "-r", "-z", "--name-only", destination)
+    indexed = _reset_inventory(worktree, "ls-files", "-z")
+    target = _reset_inventory(worktree, "ls-tree", "-r", "-z", destination)
     directories: dict[Path, tuple[Path, ...]] = {}
 
     def children(directory: Path) -> tuple[Path, ...]:
@@ -232,7 +232,11 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
                 elif child not in tracked:
                     collisions.add(child.relative_to(worktree).as_posix())
 
-        for name in target:
+        for record in target:
+            header, delimiter, name = record.partition("\t")
+            mode = header.split(" ", 1)[0]
+            if not delimiter or mode not in {"100644", "100755", "120000", "160000"}:
+                raise GitError(f"Invalid reset tree inventory in {worktree}")
             node = worktree
             parts = name.split("/")
             for position, part in enumerate(parts):
@@ -244,7 +248,9 @@ def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
                     if node not in tracked:
                         collisions.add(node.relative_to(worktree).as_posix())
                     break
-                if position == len(parts) - 1:
+                if position == len(parts) - 1 and mode != "160000":
+                    # A default (non-recursive) reset leaves submodule directories
+                    # and their contents in place. Gitlinks aren't file replacements.
                     inspect_replaced_directory(node)
     except OSError as exc:
         raise GitError(f"Cannot safely inspect reset paths in {worktree}: {exc}") from exc

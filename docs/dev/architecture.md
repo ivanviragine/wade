@@ -1540,7 +1540,9 @@ When wade installs skills into a target project (per session, via worktree boots
 Scaffold hard resets pin the destination commit and inspect its complete tree against
 the index and filesystem before mutation. The git-layer guard includes ignored
 files, empty/nested directories, symlinks without following them, and filesystem
-case aliases; inspection errors refuse. The same guard applies to scaffold
+case aliases; inspection errors refuse. Tree-entry modes distinguish gitlinks:
+non-recursive resets leave submodule directories and their contents alone.
+The same guard applies to scaffold
 rollback after a failed PR-base edit. An obstructed rollback preserves the new
 user data and reports the existing branch/PR divergence for manual recovery.
 This preflight does not provide isolation from concurrent filesystem writers.

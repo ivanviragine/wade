@@ -216,7 +216,7 @@ def test_inspection_failure_refuses_without_mutation(
     worktree = _setup(tmp_git_repo, tmp_path, "new-file")
     head = _git(worktree, "rev-parse", "HEAD")
     operation = (
-        "wade.git.branch._reset_path_inventory"
+        "wade.git.branch._reset_inventory"
         if failure == "inventory"
         else "wade.git.branch.os.scandir"
     )
@@ -266,3 +266,30 @@ def test_rollback_guards_its_own_destination(
         assert _git(worktree, "rev-parse", "HEAD") == old
         assert (worktree / "README.md").read_text() == "# Test Repo\n"
         push.assert_called_once()
+
+
+@pytest.mark.parametrize("initialized", [False, True])
+def test_unchanged_submodule_does_not_block_safe_retarget(
+    tmp_git_repo: Path, tmp_path: Path, initialized: bool
+) -> None:
+    module = tmp_path / "module-source"
+    module.mkdir()
+    _git(module, "init")
+    _git(module, "config", "user.email", "test@example.com")
+    _git(module, "config", "user.name", "Test User")
+    (module / "tracked").write_bytes(b"submodule tracked bytes\n")
+    _git(module, "add", "tracked")
+    _git(module, "commit", "-m", "submodule content")
+    _git(
+        tmp_git_repo, "-c", "protocol.file.allow=always", "submodule", "add", str(module), "module"
+    )
+    _git(tmp_git_repo, "commit", "-am", "track submodule")
+    worktree = _setup(tmp_git_repo, tmp_path, "new-base-file")
+    if initialized:
+        _git(worktree, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+    before = _snapshot(worktree / "module")
+    with patch(f"{_D}.git_repo.push_branch") as push:
+        assert reroot_scaffold_branch_for_retarget(tmp_git_repo, _BRANCH, "main", "develop", "488")
+    assert _snapshot(worktree / "module") == before
+    assert _git(worktree, "rev-parse", "HEAD^") == _git(tmp_git_repo, "rev-parse", "develop")
+    push.assert_called_once()
