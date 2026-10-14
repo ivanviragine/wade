@@ -2393,7 +2393,7 @@ class TestPullMainAfterMerge:
         """The combined scenario MAX_RESOLVE_ATTEMPTS keeps a spare for:
         untracked collision -> move aside -> retry fails with a *local-changes*
         error -> stash -> retry succeeds. Both classes handled; final tree state
-        correct (untracked files backed up, stash applyped)."""
+        correct (untracked files backed up, stash applied)."""
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text("{}")
@@ -2480,7 +2480,7 @@ class TestPullMainAfterMerge:
 
         # Exactly the entry pull + 3 retries — the cap stopped a 4th resolution.
         assert mock_pull.call_count == 4
-        # Both moved files restored, stash applyped, and the user warned.
+        # Both moved files restored, stash applied, and the user warned.
         assert file_a.read_text() == "A"
         assert file_b.read_text() == "B"
         mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)

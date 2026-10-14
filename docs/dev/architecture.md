@@ -1522,8 +1522,8 @@ bounded pull-recovery loop to the main checkout. It stashes tracked changes
 once with `git.stash.create_named_stash`, using the main checkout's actual
 branch, and carries the returned SHA/message through success and rollback.
 Restoration applies that exact SHA once; it never pops the shared stack or
-falls back to another entry. Successful apply preserves any remaining owned entry for
-manual cleanup: the shared `drop_stash_by_sha` helper verifies a positional ref
+falls back to another entry. Successful apply preserves any remaining owned
+entry for manual cleanup: the shared `drop_stash_by_sha` helper verifies a positional ref
 before a separate drop, leaving a concurrent-push window this caller avoids by
 not deleting. Conflicts, unavailable identities, and stash-creation failures
 report recovery while preserving any remaining entries. Untracked move-aside
