@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+import pytest
+
 from wade.utils.markdown import (
+    MarkdownStructureError,
     append_session_to_body,
     build_sessions_block,
     extract_all_sections,
@@ -14,6 +17,9 @@ from wade.utils.markdown import (
     has_marker_block,
     parse_sessions_from_body,
     remove_marker_block,
+    replace_owned_section,
+    scan_markdown_structure,
+    strip_legacy_section,
 )
 
 
@@ -204,3 +210,143 @@ class TestSessionsBlock:
         assert "Original description." in result
         assert "More text." in result
         assert "Session ID: 123" in result
+
+
+@pytest.mark.parametrize(
+    "name", ["plan", "sessions", "deps", "impl-usage", "review-usage", "future-block"]
+)
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_structural_migration_preserves_managed_slices(name: str, newline: str) -> None:
+    body = newline.join(
+        [
+            f"<!-- wade:{name}:start -->",
+            "## Summary",
+            "Keep requirements.",
+            f"<!-- wade:{name}:end -->",
+            "Tail without final newline",
+        ]
+    )
+    assert strip_legacy_section(body, "Summary") == body
+
+
+@pytest.mark.parametrize(
+    "barrier",
+    [
+        "# Tasks\nKeep.",
+        "## Tasks\nKeep.",
+        "<!-- wade:future:start -->\nKeep.\n<!-- wade:future:end -->",
+        "```text\nKeep.\n```",
+        "~~~text\nKeep.\n~~~~",
+    ],
+)
+def test_legacy_migration_stops_at_first_barrier(barrier: str) -> None:
+    body = "Intro.\n\n## Summary\nOld.\n### Old detail\nRemove.\n" + barrier + "\nTail."
+    assert strip_legacy_section(body, "Summary") == "Intro.\n\n" + barrier + "\nTail."
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "> ## Summary\nQuoted.",
+        "- ## Summary\nList.",
+        "  ## Summary\nList continuation.",
+        "    ## Summary\nIndented code.",
+        "## Summary Notes\nKeep.",
+        "```markdown\n## Summary\n<!-- wade:plan:end -->\n```",
+        "   ~~~~markdown\n## Summary\n~~~\n   ~~~~~",
+    ],
+)
+def test_lookalikes_do_not_migrate(example: str) -> None:
+    assert strip_legacy_section(example, "Summary") == example
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!-- wade:plan:end -->",
+        "<!-- wade:plan:start -->",
+        "<!-- wade:a:start -->\n<!-- wade:b:end -->",
+        "<!-- wade:a:start -->\n<!-- wade:b:start -->\n<!-- wade:b:end -->\n<!-- wade:a:end -->",
+        "```\n~~~",
+        "~~~~\n~~~",
+        "## Summary\nA.\n## Summary\nB.",
+    ],
+)
+def test_unsafe_structure_refuses_legacy_migration(body: str) -> None:
+    with pytest.raises(MarkdownStructureError):
+        strip_legacy_section(body, "Summary")
+
+
+def test_owned_pair_is_authoritative_and_stays_in_place() -> None:
+    body = (
+        "## Summary\n"
+        "User section.\n"
+        "<!-- wade:summary:start -->\n"
+        "Old.\n"
+        "<!-- wade:summary:end -->\n"
+        "## Tasks\n"
+        "Keep."
+    )
+    expected = (
+        "## Summary\n"
+        "User section.\n"
+        "<!-- wade:summary:start -->\n"
+        "New.\n"
+        "<!-- wade:summary:end -->\n"
+        "## Tasks\n"
+        "Keep."
+    )
+    assert (
+        replace_owned_section(body, name="summary", heading="Summary", content="New.") == expected
+    )
+    assert (
+        replace_owned_section(body, name="summary", heading="Summary", content="")
+        == "## Summary\nUser section.\n\n## Tasks\nKeep."
+    )
+
+
+def test_duplicate_owned_pairs_refused_but_unrelated_repeats_opaque() -> None:
+    block = "<!-- wade:future:start -->\n## Summary\nKeep.\n<!-- wade:future:end -->\n"
+    assert strip_legacy_section(block + block, "Summary") == block + block
+    owned = block.replace("future", "summary")
+    with pytest.raises(MarkdownStructureError, match="duplicate"):
+        replace_owned_section(owned + owned, name="summary", heading="Summary", content="New.")
+
+
+def test_owned_insertion_ignores_fenced_anchor_and_preserves_crlf() -> None:
+    prefix = (
+        "```\r\n"
+        "<!-- wade:impl-usage:start -->\r\n"
+        "example\r\n"
+        "<!-- wade:impl-usage:end -->\r\n"
+        "```\r\n"
+        "Tail.\r\n"
+    )
+    real = "<!-- wade:impl-usage:start -->\r\nReal usage.\r\n<!-- wade:impl-usage:end -->"
+    result = replace_owned_section(
+        prefix + real, name="summary", heading="Summary", content="New.", before=("impl-usage",)
+    )
+    assert (
+        result
+        == prefix
+        + "\r\n<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->\r\n\r\n"
+        + real
+    )
+    assert (
+        replace_owned_section(
+            result, name="summary", heading="Summary", content="New.", before=("impl-usage",)
+        )
+        == result
+    )
+
+
+def test_scanner_supports_matching_longer_fences_and_opaque_marker_examples() -> None:
+    body = "```text\n<!-- wade:plan:start -->\n````\n  ~~~text\n<!-- wade:plan:end -->\n  ~~~~"
+    structure = scan_markdown_structure(body)
+    assert len(structure.fences) == 2
+    assert structure.blocks == []
+
+
+def test_legacy_crlf_removal_preserves_unrelated_tail_without_final_newline() -> None:
+    body = "Prefix.\r\n\r\n## Summary\r\nOld.\r\n## Tasks\r\nKeep."
+    assert strip_legacy_section(body, "Summary") == "Prefix.\r\n\r\n## Tasks\r\nKeep."

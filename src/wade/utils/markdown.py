@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import re
+
+from pydantic import BaseModel, Field
+
 
 def extract_title(content: str) -> str | None:
     """Extract the first # heading from markdown content."""
@@ -164,3 +168,178 @@ def append_session_to_body(body: str, phase: str, ai_tool: str, session_id: str)
     new_block = build_sessions_block(new_rows)
     cleaned = remove_marker_block(body, SESSIONS_MARKER_START, SESSIONS_MARKER_END)
     return cleaned.rstrip("\n") + "\n\n" + new_block + "\n"
+
+
+class MarkdownStructureError(ValueError):
+    """A body cannot be safely edited without repairing its structure."""
+
+
+class MarkdownRange(BaseModel):
+    """Offsets into the original string; never normalized Markdown."""
+
+    start: int
+    end: int
+
+
+class ManagedBlock(MarkdownRange):
+    name: str
+
+
+class MarkdownHeading(MarkdownRange):
+    level: int
+    title: str
+
+
+class MarkdownStructure(BaseModel):
+    blocks: list[ManagedBlock] = Field(default_factory=list)
+    headings: list[MarkdownHeading] = Field(default_factory=list)
+    fences: list[MarkdownRange] = Field(default_factory=list)
+
+    def owned(self, name: str) -> ManagedBlock | None:
+        matches = [block for block in self.blocks if block.name == name]
+        if len(matches) > 1:
+            raise MarkdownStructureError(f"duplicate wade:{name} blocks")
+        return matches[0] if matches else None
+
+
+def scan_markdown_structure(body: str) -> MarkdownStructure:
+    """Scan standalone markers, column-zero headings and Markdown code fences.
+
+    Heading migration deliberately accepts only column-zero ATX headings.
+    Quoted, list-prefixed and indented examples are not migration candidates.
+    Fences may have Markdown's zero-to-three-space indentation. Marker-looking
+    text inside a fence is opaque, including examples with unbalanced markers.
+    """
+    result = MarkdownStructure()
+    active: tuple[str, int] | None = None
+    fence: tuple[str, int, int] | None = None
+    offset = 0
+    for line in body.splitlines(keepends=True):
+        text = line.rstrip("\r\n")
+        if fence is not None:
+            char, length, start = fence
+            if re.fullmatch(r" {0,3}" + re.escape(char) + "{" + str(length) + r",}[ \t]*", text):
+                result.fences.append(MarkdownRange(start=start, end=offset + len(line)))
+                fence = None
+            offset += len(line)
+            continue
+        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", text)
+        if opening and not (opening[1][0] == "`" and "`" in opening[2]):
+            fence = (opening[1][0], len(opening[1]), offset)
+            offset += len(line)
+            continue
+        marker = re.fullmatch(r" {0,3}<!-- wade:([a-zA-Z0-9_-]+):(start|end) -->[ \t]*", text)
+        if marker:
+            name, kind = marker.groups()
+            if kind == "start":
+                if active is not None:
+                    raise MarkdownStructureError(f"nested wade:{name} inside wade:{active[0]}")
+                active = (name, offset)
+            else:
+                if active is None or active[0] != name:
+                    raise MarkdownStructureError(f"unmatched wade:{name}:end marker")
+                result.blocks.append(
+                    ManagedBlock(name=name, start=active[1], end=offset + len(text))
+                )
+                active = None
+        elif active is None:
+            heading = re.fullmatch(r"(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*", text)
+            if heading:
+                result.headings.append(
+                    MarkdownHeading(
+                        start=offset,
+                        end=offset + len(line),
+                        level=len(heading[1]),
+                        title=heading[2],
+                    )
+                )
+        offset += len(line)
+    if fence is not None:
+        raise MarkdownStructureError("unclosed code fence")
+    if active is not None:
+        raise MarkdownStructureError(f"unclosed wade:{active[0]}:start marker")
+    return result
+
+
+def legacy_section_range(
+    body: str, heading: str, structure: MarkdownStructure
+) -> MarkdownRange | None:
+    """Identify at most one legacy H2 section without crossing protected ranges."""
+    matches = [item for item in structure.headings if item.level == 2 and item.title == heading]
+    if len(matches) > 1:
+        raise MarkdownStructureError(f"multiple legacy {heading} sections")
+    if not matches:
+        return None
+    selected = matches[0]
+    boundaries = [len(body)]
+    boundaries.extend(
+        item.start for item in structure.headings if item.level <= 2 and item.start > selected.start
+    )
+    boundaries.extend(item.start for item in structure.blocks if item.start > selected.start)
+    boundaries.extend(item.start for item in structure.fences if item.start > selected.start)
+    return MarkdownRange(start=selected.start, end=min(boundaries))
+
+
+def strip_legacy_section(body: str, heading: str) -> str:
+    """Remove a uniquely verified unowned section, preserving all other slices."""
+    structure = scan_markdown_structure(body)
+    section = legacy_section_range(body, heading, structure)
+    return body if section is None else body[: section.start] + body[section.end :]
+
+
+def replace_owned_section(
+    body: str,
+    *,
+    name: str,
+    heading: str | None,
+    content: str,
+    before: tuple[str, ...] = (),
+    after: tuple[str, ...] = (),
+) -> str:
+    """Replace an authoritative pair, or migrate bounded legacy text and insert.
+
+    Existing owned pairs keep their original position. Missing projections use
+    real managed anchors from the scanner; fenced examples cannot be anchors.
+    Both the input and complete output must be structurally valid.
+    """
+    structure = scan_markdown_structure(body)
+    owned = structure.owned(name)
+    projection = (
+        f"<!-- wade:{name}:start -->\n{content}\n<!-- wade:{name}:end -->" if content else ""
+    )
+    if owned is not None:
+        candidate = body[: owned.start] + projection + body[owned.end :]
+    else:
+        section = legacy_section_range(body, heading, structure) if heading is not None else None
+        candidate = body if section is None else body[: section.start] + body[section.end :]
+        if projection:
+            structure = scan_markdown_structure(candidate)
+            position = len(candidate)
+            for anchor in after:
+                block = next((item for item in structure.blocks if item.name == anchor), None)
+                if block is not None:
+                    position = block.end
+                    break
+            else:
+                for anchor in before:
+                    block = next((item for item in structure.blocks if item.name == anchor), None)
+                    if block is not None:
+                        position = block.start
+                        break
+            left, right = candidate[:position], candidate[position:]
+            newline = "\r\n" if "\r\n" in body else "\n"
+            prefix = (
+                ""
+                if not left
+                else newline * (2 - min(2, left[len(left.rstrip("\r\n")) :].count("\n")))
+            )
+            suffix = (
+                ""
+                if not right
+                else newline
+                * (2 - min(2, right[: len(right) - len(right.lstrip("\r\n"))].count("\n")))
+            )
+            candidate = left + prefix + projection + suffix + right
+    validated = scan_markdown_structure(candidate)
+    validated.owned(name)
+    return candidate

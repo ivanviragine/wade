@@ -1335,3 +1335,62 @@ class TestAnalyzeDepsPermissionMode:
         assert result is not None
         request = mock_delegate.call_args[0][0]
         assert request.permission_mode == PermissionMode.YOLO
+
+
+def test_dependencies_migration_preserves_plan_and_fenced_examples() -> None:
+    body = (
+        "<!-- wade:plan:start -->\n"
+        "## Dependencies\n"
+        "Requirements.\n"
+        "<!-- wade:plan:end -->\n"
+        "\n"
+        "~~~markdown\n"
+        "## Dependencies\n"
+        "Example.\n"
+        "~~~\n"
+        "After."
+    )
+    assert strip_deps_section(body) == body
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    ["<!-- wade:plan:end -->", "```\nUnclosed.", "## Dependencies\nA.\n## Dependencies\nB."],
+)
+def test_dependency_refusal_does_not_count_success_and_continues(malformed: str) -> None:
+    provider = MagicMock()
+    provider.read_task.side_effect = [
+        Task(id="1", title="Broken", body=malformed),
+        Task(id="2", title="Valid", body="Keep."),
+    ]
+    assert (
+        apply_deps_to_issues(provider, ["1", "2"], [DependencyEdge(from_task="1", to_task="2")])
+        == 1
+    )
+    provider.update_task.assert_called_once()
+    assert provider.update_task.call_args.args[0] == "2"
+
+
+def test_dependencies_owned_pair_preserves_unmarked_section_and_plan() -> None:
+    provider = MagicMock()
+    body = (
+        "## Dependencies\n"
+        "User requirements.\n"
+        "<!-- wade:deps:start -->\n"
+        "Old.\n"
+        "<!-- wade:deps:end -->\n"
+        "<!-- wade:plan:start -->\n"
+        "## Dependencies\n"
+        "Plan requirements.\n"
+        "<!-- wade:plan:end -->"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], [DependencyEdge(from_task="1", to_task="2")]) == 1
+    assert provider.update_task.call_args.kwargs["body"] == body.replace(
+        "Old.", "## Dependencies\n\n**Depends on:** #1"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == body.replace(
+        "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->", ""
+    )

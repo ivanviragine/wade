@@ -23,7 +23,7 @@ _TITLE = "fix: preserve the PR body"
 
 @contextmanager
 def _finalizer(
-    tmp_path: Path, *, repo_fallback: bool = False
+    tmp_path: Path, *, repo_fallback: bool = False, review_enabled: bool = True
 ) -> Iterator[tuple[Callable[[], bool], MagicMock]]:
     """Keep real push orchestration, body transformation, and marker operations."""
     repo = tmp_path / "repo"
@@ -78,7 +78,9 @@ def _finalizer(
                     reviewed_sha=_SHA,
                     passes=1,
                     session_type="implementation",
-                ),
+                )
+                if review_enabled
+                else None,
             )
 
         yield run, calls
@@ -206,3 +208,133 @@ def test_rejected_body_write_revokes_done_marker_and_stops_completion(tmp_path: 
         calls.write.assert_called_once()
         _assert_no_completion(calls)
         assert not markers.marker_present(tmp_path / "worktree", "done", _SHA)
+
+
+@pytest.mark.parametrize(
+    "usage", ["", "<!-- wade:impl-usage:start -->\nUsage.\n<!-- wade:impl-usage:end -->\n"]
+)
+def test_finalizer_preserves_summary_heading_inside_plan(tmp_path: Path, usage: str) -> None:
+    plan = (
+        "<!-- wade:plan:start -->\n"
+        "## Summary\n"
+        "Acceptance requirements.\n"
+        "## Tasks\n"
+        "Keep tasks.\n"
+        "<!-- wade:plan:end -->\n"
+    )
+    with _finalizer(tmp_path) as (run, calls):
+        calls.read.return_value = plan + usage
+        assert run() is True
+        assert plan in calls.write.call_args.args[2]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "Substantive summary.\n```python\nexample",
+        "Substantive summary.\n~~~\nexample",
+        "Substantive summary.\n<!-- wade:plan:start -->\nnested\n<!-- wade:plan:end -->",
+    ],
+)
+def test_finalizer_refuses_new_malformed_summary_then_retries(tmp_path: Path, payload: str) -> None:
+    with _finalizer(tmp_path) as (run, calls):
+        calls.read.return_value = "User description.\n"
+        summary = tmp_path / "worktree" / "PR-SUMMARY.md"
+        summary.write_text(payload, encoding="utf-8")
+        assert run() is False
+        calls.write.assert_not_called()
+        _assert_no_completion(calls)
+        assert not markers.marker_present(tmp_path / "worktree", "done", _SHA)
+        summary.write_text("Repaired summary.\n", encoding="utf-8")
+        assert run() is True
+        body = calls.write.call_args.args[2]
+        calls.read.return_value = body
+        assert run() is True
+        assert calls.write.call_args.args[2] == body
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!-- wade:plan:end -->",
+        "<!-- wade:plan:start -->",
+        "```\nUnclosed.",
+        "## Summary\nOne.\n## Summary\nTwo.",
+        "<!-- wade:summary:start -->\nOne.\n<!-- wade:summary:end -->\n"
+        "<!-- wade:summary:start -->\nTwo.\n<!-- wade:summary:end -->",
+    ],
+)
+def test_finalizer_refuses_malformed_current_body(tmp_path: Path, body: str) -> None:
+    with _finalizer(tmp_path) as (run, calls):
+        calls.read.return_value = body
+        assert run() is False
+        calls.write.assert_not_called()
+        _assert_no_completion(calls)
+        assert not markers.marker_present(tmp_path / "worktree", "done", _SHA)
+
+
+def test_finalizer_preserves_existing_positions_and_fenced_new_summary(tmp_path: Path) -> None:
+    prefix = "## Summary\nUser-authored section.\n"
+    plan = "<!-- wade:plan:start -->\n## Summary\nRequirements.\n<!-- wade:plan:end -->"
+    summary = "<!-- wade:summary:start -->\nOld summary.\n<!-- wade:summary:end -->"
+    review = "<!-- wade:review-status:start -->\nOld review.\n<!-- wade:review-status:end -->"
+    body = "Closes #42\n" + prefix + review + "\n" + plan + "\n" + summary
+    payload = "New description.\n```markdown\n<!-- wade:plan:start -->\n## Summary\n```"
+    with _finalizer(tmp_path) as (run, calls):
+        (tmp_path / "worktree" / "PR-SUMMARY.md").write_text(payload, encoding="utf-8")
+        calls.read.return_value = body
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert prefix in result
+        assert plan in result
+        assert payload in result
+        assert result.index("<!-- wade:review-status:start -->") < result.index(plan)
+        assert result.index(plan) < result.index("<!-- wade:summary:start -->")
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result
+
+
+def test_finalizer_missing_blocks_use_first_real_usage_anchor(tmp_path: Path) -> None:
+    example = (
+        "```markdown\n<!-- wade:impl-usage:start -->\nExample.\n<!-- wade:impl-usage:end -->\n```\n"
+    )
+    usage = "<!-- wade:impl-usage:start -->\nUsage.\n<!-- wade:impl-usage:end -->"
+    with _finalizer(tmp_path) as (run, calls):
+        calls.read.return_value = "Closes #42\n" + example + usage + "\n" + usage
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert example in result
+        assert result.count(usage) == 2
+        assert result.index(example) < result.index("<!-- wade:summary:start -->")
+        assert result.index("<!-- wade:summary:start -->") < result.index(
+            "<!-- wade:review-status:start -->"
+        )
+        assert result.index("<!-- wade:review-status:start -->") < result.index(usage)
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_empty_projection_removal_stays_within_owner(tmp_path: Path, marked: bool) -> None:
+    plan = "<!-- wade:plan:start -->\n## Summary\nKeep.\n<!-- wade:plan:end -->"
+    old = "## Summary\nRemove.\n"
+    if marked:
+        old = "<!-- wade:summary:start -->\n" + old + "<!-- wade:summary:end -->\n"
+    review = "<!-- wade:review-status:start -->\nOld.\n<!-- wade:review-status:end -->"
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        (tmp_path / "worktree" / "PR-SUMMARY.md").unlink()
+        calls.read.return_value = "Closes #42\n" + old + plan + "\n" + review + "\nTail."
+        assert run() is True
+        assert (
+            calls.write.call_args.args[2]
+            == "Closes #42\n" + ("\n" if marked else "") + plan + "\n\nTail."
+        )
+
+
+def test_finalizer_retries_repaired_remote_body_with_fresh_read(tmp_path: Path) -> None:
+    with _finalizer(tmp_path) as (run, calls):
+        calls.read.side_effect = ["<!-- wade:plan:start -->\nBroken.", "Fresh user note.\n"]
+        assert run() is False
+        assert run() is True
+        assert calls.read.call_count == 2
+        assert "Fresh user note." in calls.write.call_args.args[2]
+        assert "Broken." not in calls.write.call_args.args[2]

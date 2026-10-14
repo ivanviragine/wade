@@ -615,6 +615,16 @@ body again and preserves existing plan and user content. A successfully read
 empty body remains valid. The branch may already have been pushed before this
 retryable failure.
 
+Summary and dependency updates preserve embedded plans, fenced examples, and
+unrelated sections. An existing managed block is replaced in place. Older
+unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
+column-zero heading, stopping at the next H1/H2 heading, managed block, or code
+fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
+unclosed fences stop the update with a repair message. This also applies to new
+`PR-SUMMARY.md` content: close its fences and keep marker examples inside fenced
+code. Repair the indicated input and retry; dependency batches skip the affected
+issue and continue with the others.
+
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is
 refused, so committing-and-pushing straight past `done` doesn't work. It is

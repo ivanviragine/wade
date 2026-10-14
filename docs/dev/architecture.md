@@ -1064,6 +1064,31 @@ HEAD, so any sha-keyed check must precede it):
    documentation, bot, and feedback-cycle state stays intact; the successful
    push and any earlier title synchronization are not rolled back.
 
+**Structural body replacement (#495).** The leaf `utils/markdown.py` owns an
+offset-preserving scanner for standalone `wade:<name>:start/end` pairs, code
+fences, and column-zero ATX headings. Only Summary finalization and dependency
+updates adopt it; existing extraction, session-list, usage, and budget helpers
+retain their own contracts. Pydantic range models carry offsets into the
+original string so unrelated content, including CRLF slices, remains unchanged.
+Backtick/tilde fences accept zero-to-three-space indentation and matching longer
+closing runs; their contents cannot supply marker pairs or insertion anchors.
+
+Each owned pair is authoritative and replaced in place. Without a pair, a unique
+exact legacy H2 may migrate only up to the first H1/H2, managed range, fence, or
+EOF. Unmarked lookalikes elsewhere remain untouched when a pair exists. Missing
+Summary/review projections use real managed anchors: Summary precedes existing
+review status or the first implementation usage; missing review status follows
+Summary, otherwise precedes usage. Repeated unrelated blocks remain opaque.
+
+Validate the original, rendered candidate, and post-budget write payload.
+Unmatched, reversed, nested/crossed markers, duplicate owned pairs, ambiguous
+legacy headings, and unclosed fences raise `MarkdownStructureError`. The shared
+finalizer catches this before the remote body write and follows the failed-body
+completion path above, including revoking only done markers; diagnostics name
+the current body or new summary input. Dependency updates report a skipped issue,
+do not count it as updated, and continue the batch. This is conservative
+migration, not a general Markdown parser or a concurrent-write compare-and-swap.
+
 **Review status is legible in the PR body (#367).** `_classify_review()` is the
 single source for the gate and the `wade:review-status` PR-body block. It records
 reviewed-at-`<sha>`, reviewer changed, skipped, gate disabled, or cap reached and
