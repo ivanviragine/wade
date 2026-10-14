@@ -247,21 +247,18 @@ def _restore_stash_or_warn(main_root: Path, stash_sha: str, stash_message: str) 
             "is retained (automatic cleanup skipped)."
         )
         console.hint(
-            escape(
-                f"Inspect {command} stash list --format='%H %gd %gs'; verify the "
-                "selected entry matches this SHA before manually dropping its ref."
-            )
+            "Inspect the stash list; verify the SHA, ref and message, then re-check "
+            "the current ref before manually removing the selected entry."
         )
+        console.command(f"{command} stash list --format='%H %gd %gs'")
         return
     console.warn(f"Could not restore stash {identity} in {location}: {escape(diagnostic)}")
-    console.hint(
-        escape(
-            f"Inspect conflicts with {command} status and resolve them before retrying "
-            f"{command} stash apply {stash_sha}. Inspect "
-            f"{command} stash list --format='%H %gd %gs' for any retained entry; "
-            "if its object is unavailable, recover it before applying. No stash was dropped."
-        )
-    )
+    console.hint("Inspect conflicts and resolve them before retrying the apply command:")
+    console.command(f"{command} status")
+    console.hint("If the stash object is unavailable, recover it before applying:")
+    console.command(f"{command} stash apply {stash_sha}")
+    console.hint("Inspect any retained entry. No stash was dropped.")
+    console.command(f"{command} stash list --format='%H %gd %gs'")
 
 
 def _pull_main_after_merge(repo_root: Path) -> None:
@@ -318,11 +315,9 @@ def _pull_main_after_merge(repo_root: Path) -> None:
                 # Creation may have succeeded before identity lookup failed.
                 # Preserve any possible entry; never guess a SHA or pop it.
                 console.warn(escape(f"Could not create post-merge stash in {main_root}: {exc}"))
-                console.hint(
-                    escape(
-                        f"Inspect git -C {shlex.quote(str(main_root))} stash list "
-                        "--format='%H %gs' before recovering any possible stash by SHA."
-                    )
+                console.hint("Inspect SHA and message before recovering any possible stash by SHA.")
+                console.command(
+                    f"git -C {shlex.quote(str(main_root))} stash list --format='%H %gs'"
                 )
                 break
         else:
