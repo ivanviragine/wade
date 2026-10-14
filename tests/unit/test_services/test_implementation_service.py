@@ -6,6 +6,7 @@ import contextlib
 import json
 import shlex
 import shutil
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1129,13 +1130,52 @@ class TestImplementationStart:
         add_label.assert_not_called()
         mock_provider.move_to_in_progress.assert_not_called()
 
-    def test_cd_only_prints_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    @pytest.mark.parametrize("restored", [False, True])
+    def test_cd_only_prints_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], restored: bool
+    ) -> None:
         """cd_only=True → worktree path printed to stdout, no AI launched, returns True."""
         task = self._make_task()
         mock_provider = MagicMock()
         mock_provider.read_task.return_value = task
+        from importlib import import_module
+
+        recovery = import_module("wade.services.implementation_service.sync")
+        paths: list[Path] = []
+        original_out = recovery.console.out
+
+        def catchup(**kwargs: Path | str) -> None:
+            worktree_path = kwargs["worktree_path"]
+            assert isinstance(worktree_path, Path)
+            paths.append(worktree_path)
+            with (
+                patch.object(
+                    recovery.git_stash,
+                    "apply_stash_by_sha",
+                    return_value=subprocess.CompletedProcess(
+                        [], 0 if restored else 1, "", "fixture conflict"
+                    ),
+                ),
+                patch.object(recovery.git_stash, "drop_stash_by_sha", return_value=False),
+            ):
+                recovery._handle_stash_restoration(
+                    "1234567890abcdef1234567890abcdef12345678",
+                    worktree_path,
+                    True,
+                    lambda *_args, **_kwargs: None,
+                    False,
+                )
 
         with (
+            patch(
+                "wade.services.implementation_service.core._catchup_and_surface_staleness",
+                side_effect=catchup,
+            ),
+            patch(
+                "wade.services.implementation_service.core.resolve_task_branch",
+                return_value="feat/42-test-task",
+            ),
+            patch("wade.git.branch.branch_exists", return_value=False),
             patch(
                 "wade.services.implementation_service.core.load_config",
                 return_value=self._make_config(),
@@ -1165,7 +1205,16 @@ class TestImplementationStart:
             mock_get.assert_not_called()
 
         captured = capsys.readouterr()
-        assert "42" in captured.out  # Worktree path containing issue ID was printed
+        assert captured.out == str(paths[0]) + "\n"
+        commands = [line for line in captured.err.splitlines() if line.startswith("git ")]
+        assert len(commands) == 1
+        expected = (
+            ["git", "-C", str(paths[0]), "stash", "list", "--format=%H %gd %gs"]
+            if restored
+            else ["git", "stash", "apply", "1234567890abcdef1234567890abcdef12345678"]
+        )
+        assert shlex.split(commands[0]) == expected
+        assert recovery.console.out is original_out
 
     def test_inside_ai_cli_skips_launch(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

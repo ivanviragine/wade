@@ -102,3 +102,17 @@ def test_command_preserves_raw_shell_text_on_one_stdout_line(
     output = capsys.readouterr()
     assert output.out == text + "\n"
     assert output.err == ""
+
+
+@pytest.mark.parametrize("width", [40, 80])
+def test_command_respects_effective_console_output_redirection(
+    width: int, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    console = Console()
+    monkeypatch.setattr(console, "out", console.err)
+    monkeypatch.setattr(console.err, "_width", width)
+    text = "git -C '" + "long owner path " * 12 + "[red] [/] ; $(echo unchanged)' status"
+    console.command(text)
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == text + "\n"

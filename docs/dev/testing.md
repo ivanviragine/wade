@@ -63,6 +63,8 @@ Use narrow renderer widths (40/80) and long quoted paths with spaces, apostrophe
 markup and shell metacharacters; wrapped hints can change correctly quoted
 argument bytes. Select the intended command lines rather than matching paths in
 combined logs: unrelated debug messages can mask a broken recovery diagnostic.
+Also test the effective console stream: `implement --cd` redirects diagnostics
+to stderr and must keep stdout limited to the worktree path, even during recovery.
 Execute only non-destructive emitted inspection commands in disposable Git repos,
 from another working directory, and verify stash membership and data remain intact.
 
