@@ -1509,3 +1509,32 @@ def test_dependencies_bound_legacy_at_actual_noneligible_heading(boundary: str) 
     provider.update_task.reset_mock()
     assert apply_deps_to_issues(provider, ["2"], []) == 0
     provider.update_task.assert_not_called()
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_empty_dependencies_preserve_heading_exposed_by_removal(marked: bool) -> None:
+    provider = MagicMock()
+    old = "## Dependencies\n<details>\nOld.\n</details>\n"
+    if marked:
+        old = "<!-- wade:deps:start -->\n" + old + "<!-- wade:deps:end -->\n"
+    plan = "<!-- wade:plan:start -->\nKeep plan.\n<!-- wade:plan:end -->\n"
+    human = "## Dependencies\nKeep human requirements."
+    provider.read_task.return_value = Task(id="2", title="UI", body=old + plan + human)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    result = provider.update_task.call_args.kwargs["body"]
+    assert plan in result
+    assert human in result
+    assert "Old." not in result
+    provider.read_task.return_value = Task(id="2", title="UI", body=result)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+
+
+def test_dependencies_refuse_context_shift_hiding_unrelated_plan() -> None:
+    provider = MagicMock()
+    plan = "  <!-- wade:plan:start -->\n  Keep.\n  <!-- wade:plan:end -->"
+    body = "- Example\n## Dependencies\nOld.\n" + plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()

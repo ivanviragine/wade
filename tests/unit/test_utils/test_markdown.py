@@ -587,3 +587,35 @@ def test_all_actual_top_level_headings_bound_legacy_migration(heading: str, boun
 def test_boundary_only_heading_does_not_become_legacy_candidate(heading: str, form: str) -> None:
     body = form.format(heading=heading)
     assert strip_legacy_section(body, heading) == body
+
+
+@pytest.mark.parametrize("name,heading", [("summary", "Summary"), ("deps", "Dependencies")])
+@pytest.mark.parametrize("marked", [False, True])
+def test_empty_removal_retains_newly_exposed_human_heading(
+    name: str, heading: str, marked: bool
+) -> None:
+    old = f"## {heading}\n<details>\nOld.\n</details>\n"
+    if marked:
+        old = f"<!-- wade:{name}:start -->\n" + old + f"<!-- wade:{name}:end -->\n"
+    plan = "<!-- wade:plan:start -->\nKeep plan.\n<!-- wade:plan:end -->\n"
+    human = f"## {heading}\nKeep human requirements."
+    body = old + plan + human
+    once = replace_owned_section(body, name=name, heading=heading, content="")
+    assert plan in once
+    assert human in once
+    assert "Old." not in once
+    assert scan_markdown_structure(once).owned(name) is not None
+    assert replace_owned_section(once, name=name, heading=heading, content="") == once
+    restored = replace_owned_section(once, name=name, heading=heading, content="New.")
+    assert plan in restored
+    assert human in restored
+    assert replace_owned_section(restored, name=name, heading=heading, content="New.") == restored
+
+
+@pytest.mark.parametrize("name,heading", [("summary", "Summary"), ("deps", "Dependencies")])
+def test_context_shift_cannot_hide_unrelated_managed_ownership(name: str, heading: str) -> None:
+    plan = "  <!-- wade:plan:start -->\n  Keep.\n  <!-- wade:plan:end -->"
+    body = f"- Example\n## {heading}\nOld.\n" + plan
+    assert scan_markdown_structure(body).owned("plan") is not None
+    with pytest.raises(MarkdownStructureError, match="ownership changed"):
+        replace_owned_section(body, name=name, heading=heading, content="")

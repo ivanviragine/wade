@@ -1387,6 +1387,9 @@ def _done_via_pr(
                 heading="Summary",
                 content=f"## Summary\n\n{summary_content}" if summary_content else "",
                 before=("review-status", "impl-usage"),
+                # Legacy selection/removal already occurred above. Never use
+                # newly exposed human headings as another migration candidate.
+                migrate_legacy=False,
             )
             body = replace_owned_section(
                 body,

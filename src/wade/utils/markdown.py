@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field
@@ -327,61 +328,79 @@ def replace_owned_section(
     content: str,
     before: tuple[str, ...] = (),
     after: tuple[str, ...] = (),
+    migrate_legacy: bool = True,
 ) -> str:
-    """Replace an authoritative pair, or migrate bounded legacy text and insert.
+    """Replace an authoritative pair, or migrate one original legacy range.
 
-    Existing owned pairs keep their original position. Missing projections use
-    real managed anchors from the scanner; fenced examples cannot be anchors.
-    An empty owned pair remains when same-named human headings need protection
-    from legacy migration on a later retry. Otherwise empty projections remove
-    the owned pair. Both the input and complete output must be structurally valid.
+    Original ownership and legacy selection are fixed before rendering. Empty
+    removals retain a minimal pair when the cleared body exposes a same-named
+    human H2, so repeated updates cannot reinterpret it as legacy. Unrelated
+    managed ownership must survive the edit, not merely its literal bytes.
     """
     structure = scan_markdown_structure(body)
     owned = structure.owned(name)
+    section = (
+        legacy_section_range(body, heading, structure)
+        if owned is None and heading is not None and migrate_legacy
+        else None
+    )
+
+    def _render(projection: str) -> str:
+        if owned is not None:
+            return body[: owned.start] + projection + body[owned.end :]
+        cleaned = body if section is None else body[: section.start] + body[section.end :]
+        if not projection:
+            return cleaned
+        anchors = scan_markdown_structure(cleaned)
+        position = len(cleaned)
+        for anchor in after:
+            block = next((item for item in anchors.blocks if item.name == anchor), None)
+            if block is not None:
+                position = block.end
+                break
+        else:
+            for anchor in before:
+                block = next((item for item in anchors.blocks if item.name == anchor), None)
+                if block is not None:
+                    position = block.start
+                    break
+        left, right = cleaned[:position], cleaned[position:]
+        newline = "\r\n" if "\r\n" in body else "\n"
+        prefix = (
+            "" if not left else newline * (2 - min(2, left[len(left.rstrip("\r\n")) :].count("\n")))
+        )
+        suffix = (
+            ""
+            if not right
+            else newline * (2 - min(2, right[: len(right) - len(right.lstrip("\r\n"))].count("\n")))
+        )
+        return left + prefix + projection + suffix + right
+
     projection = (
         f"<!-- wade:{name}:start -->\n{content}\n<!-- wade:{name}:end -->" if content else ""
     )
-    if owned is not None:
-        if (
-            not content
-            and heading is not None
-            and any(item.level == 2 and item.title == heading for item in structure.headings)
-        ):
-            # Without this ownership evidence, an identical empty retry would
-            # misclassify a preserved human section as legacy and delete it.
-            projection = f"<!-- wade:{name}:start -->\n\n<!-- wade:{name}:end -->"
-        candidate = body[: owned.start] + projection + body[owned.end :]
-    else:
-        section = legacy_section_range(body, heading, structure) if heading is not None else None
-        candidate = body if section is None else body[: section.start] + body[section.end :]
-        if projection:
-            structure = scan_markdown_structure(candidate)
-            position = len(candidate)
-            for anchor in after:
-                block = next((item for item in structure.blocks if item.name == anchor), None)
-                if block is not None:
-                    position = block.end
-                    break
-            else:
-                for anchor in before:
-                    block = next((item for item in structure.blocks if item.name == anchor), None)
-                    if block is not None:
-                        position = block.start
-                        break
-            left, right = candidate[:position], candidate[position:]
-            newline = "\r\n" if "\r\n" in body else "\n"
-            prefix = (
-                ""
-                if not left
-                else newline * (2 - min(2, left[len(left.rstrip("\r\n")) :].count("\n")))
-            )
-            suffix = (
-                ""
-                if not right
-                else newline
-                * (2 - min(2, right[: len(right) - len(right.lstrip("\r\n"))].count("\n")))
-            )
-            candidate = left + prefix + projection + suffix + right
+    candidate = _render(projection)
+    if not content and heading is not None and (owned is not None or section is not None):
+        # Removing HTML payloads can expose human headings hidden by the original
+        # parse. Analyze cleared ownership, for both marked and legacy removals.
+        empty_pair = f"<!-- wade:{name}:start -->\n\n<!-- wade:{name}:end -->"
+        provisional = _render(empty_pair)
+        cleared = scan_markdown_structure(provisional)
+        if any(item.level == 2 and item.title == heading for item in cleared.headings):
+            projection, candidate = empty_pair, provisional
     validated = scan_markdown_structure(candidate)
-    validated.owned(name)
+    if (validated.owned(name) is not None) != bool(projection):
+        raise MarkdownStructureError(f"managed ownership changed for wade:{name}")
+    original_unrelated = Counter(
+        (block.name, body[block.start : block.end])
+        for block in structure.blocks
+        if block.name != name
+    )
+    remaining_unrelated = Counter(
+        (block.name, candidate[block.start : block.end])
+        for block in validated.blocks
+        if block.name != name
+    )
+    if original_unrelated != remaining_unrelated:
+        raise MarkdownStructureError(f"managed ownership changed outside wade:{name}")
     return candidate

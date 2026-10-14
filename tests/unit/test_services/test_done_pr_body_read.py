@@ -548,3 +548,32 @@ def test_finalizer_bounds_legacy_at_actual_noneligible_heading(
         calls.read.return_value = result
         assert run() is True
         assert calls.write.call_args.args[2] == result
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_finalizer_migrates_original_legacy_summary_once(tmp_path: Path, empty: bool) -> None:
+    plan = "<!-- wade:plan:start -->\nKeep plan.\n<!-- wade:plan:end -->\n"
+    human = "## Summary\nKeep human requirements."
+    body = "Closes #42\n\n## Summary\n<details>\nOld.\n</details>\n" + plan + human
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        if empty:
+            (tmp_path / "worktree" / "PR-SUMMARY.md").unlink()
+        calls.read.return_value = body
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert plan in result
+        assert human in result
+        assert "Old." not in result
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result
+
+
+def test_finalizer_refuses_context_shift_hiding_unrelated_plan(tmp_path: Path) -> None:
+    plan = "  <!-- wade:plan:start -->\n  Keep.\n  <!-- wade:plan:end -->"
+    body = "Closes #42\n\n- Example\n## Summary\nOld.\n" + plan
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = body
+        assert run() is False
+        calls.write.assert_not_called()
+        _assert_no_completion(calls)

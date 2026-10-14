@@ -1093,13 +1093,22 @@ column-zero ATX legacy H2 may migrate only up to the first actual top-level
 H1/H2, managed range, fence, or EOF. All top-level headings are recorded as
 boundaries, including indented ATX and setext; `legacy_candidate` separately
 marks eligible migration starts. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
-empty update would remove the pair while a same-named human H2 remains, retain
-an empty owned pair at the original offset. This is necessary ownership evidence:
+empty update removes a pair or legacy section while a same-named human H2
+remains, retain an empty owned pair. Determine this using a provisional cleared
+projection, because removing old HTML can expose previously hidden headings.
+An existing owned pair retains its original offset. This is necessary ownership evidence:
 without it, an identical retry misclassifies that human section as legacy. Empty
 pairs remain idempotent and accept later nonempty replacement; when no such
 human heading remains, removal still deletes the owned pair. This evidence-driven
 exception to the original plan's literal pair-removal wording satisfies its
 stronger human-content preservation and repeated-update acceptance criteria.
+Select ownership and at most one legacy range from the original body before
+rendering. The finalizer disables legacy migration during its later projection
+pass; newly exposed human headings cannot authorize another deletion. Validate
+that unrelated managed block names and exact source slices still have the same
+multiplicity in the rendered scan. If an edit reclassifies one as literal text
+(or exposes a previously literal block as an owner), refuse rather than change
+ownership across parser contexts.
 Missing Summary/review projections use real managed anchors: Summary precedes existing
 review status or the first implementation usage; missing review status follows
 Summary, otherwise precedes usage. Repeated unrelated blocks remain opaque.

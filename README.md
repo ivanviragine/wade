@@ -620,11 +620,13 @@ retryable failure.
 Summary and dependency updates preserve embedded plans, fenced examples, and
 unrelated sections. An existing managed block is replaced in place. When an
 empty update removes its content while a same-named human section remains, an
-empty marker pair retains ownership so retries cannot delete the human section.
+empty marker pair retains ownership so retries cannot delete the human section,
+including headings exposed by removing old HTML content.
 Otherwise the empty owned block is removed. Older unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
 column-zero heading, stopping at the next top-level H1/H2 heading (including
 indented and setext headings), managed block, or code fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
-unclosed fences or excessive nesting stop the update with a repair message. This also applies to new
+unclosed fences, excessive nesting, or context changes that invalidate unrelated
+managed ownership stop the update with a repair message. This also applies to new
 `PR-SUMMARY.md` content: close its fences and keep marker examples inside fenced
 code. Repair the indicated input and retry; dependency batches skip the affected
 issue and continue with the others.
