@@ -285,11 +285,14 @@ including an explicit empty list when appropriate. The parent revalidates the
 completed handoff after exit, then creates tasks and draft PRs. Failed or missing
 handoffs retain output and create no tasks.
 
-**Codex requires CLI 0.154.x and a POSIX terminal (macOS/Linux).** Crossby's
-current startup adapter waits for the rendered Plan indicator before WADE sends
-the initial task; unknown versions or an unrecognized startup screen fail
-without retrying the task. This temporary terminal adapter can be replaced by a
-native launch flag when Codex provides one. WADE requires the task-submitted
+**Codex requires CLI 0.154.0 or newer and a POSIX terminal (macOS/Linux).**
+Crossby 0.43.2 repairs startup with CLI 0.162.1, including its Folder access
+prompt and transient Plan footer. Explicitly trust the intended folder when
+Codex asks; WADE never supplies that consent. Crossby observes native Plan
+activation before WADE sends the initial task, then confirms its submission
+across terminal redraws. Unrecognized startup screens fail closed without
+retrying the task. This temporary terminal adapter can be replaced by a native
+launch flag when Codex provides one. WADE requires the task-submitted
 event before collecting the explicit reviewed handoff. Codex can submit plan
 Markdown through `--from-stdin`; no native file destination is assumed.
 
