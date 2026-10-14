@@ -1478,3 +1478,34 @@ def test_dependency_quoted_code_cannot_hide_embedded_plan(quote: str) -> None:
     provider.update_task.reset_mock()
     assert apply_deps_to_issues(provider, ["2"], []) == 0
     provider.update_task.assert_not_called()
+
+
+def test_dependencies_preserve_plan_spanning_multiline_html_blocks() -> None:
+    provider = MagicMock()
+    plan = (
+        "<!-- wade:plan:start -->\n\n## Dependencies\nKeep requirements.\n\n"
+        "</details>\n<!-- wade:plan:end -->"
+    )
+    body = "## Dependencies\nLegacy.\n<details>\n" + plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=plan)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "boundary", ["  ## Requirements\nKeep.", "Requirements\n===\nKeep.", "Requirements\n---\nKeep."]
+)
+def test_dependencies_bound_legacy_at_actual_noneligible_heading(boundary: str) -> None:
+    provider = MagicMock()
+    body = "## Dependencies\nOld.\n\n" + boundary
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == boundary
+    provider.read_task.return_value = Task(id="2", title="UI", body=boundary)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()

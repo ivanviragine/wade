@@ -1069,7 +1069,9 @@ HEAD, so any sha-keyed check must precede it):
 offset-preserving scanner for standalone `wade:<name>:start/end` pairs, code
 fences, and column-zero ATX headings. The direct `markdown-it-py` dependency
 supplies CommonMark token nesting and source line maps; WADE retains original
-CR/LF offsets and never renders parsed content. Only Summary finalization and
+CR/LF offsets and never renders parsed content. Standalone marker lines within
+multiline top-level raw HTML spans remain visible; list/quote/code containers
+still exclude literal marker examples. Only Summary finalization and
 dependency updates adopt it; existing extraction, session-list, usage, and budget helpers
 retain their own contracts. Pydantic range models carry offsets into the
 original string so unrelated content, including CRLF slices, remains unchanged.
@@ -1087,8 +1089,10 @@ manual container tracking after reproduced preservation failures; it does not
 change the scanner/edit API or adopt it in other Markdown consumers.
 
 Each owned pair is authoritative and replaced in place. Without a pair, a unique
-exact legacy H2 may migrate only up to the first H1/H2, managed range, fence, or
-EOF. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
+column-zero ATX legacy H2 may migrate only up to the first actual top-level
+H1/H2, managed range, fence, or EOF. All top-level headings are recorded as
+boundaries, including indented ATX and setext; `legacy_candidate` separately
+marks eligible migration starts. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
 empty update would remove the pair while a same-named human H2 remains, retain
 an empty owned pair at the original offset. This is necessary ownership evidence:
 without it, an identical retry misclassifies that human section as legacy. Empty

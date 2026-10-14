@@ -533,3 +533,57 @@ def test_quoted_paragraph_continuation_with_code_indentation_remains_literal(nam
     )
     assert scan_markdown_structure(body).blocks == []
     assert replace_owned_section(body, name=name, heading=None, content="") == body
+
+
+@pytest.mark.parametrize("name", ["summary", "deps", "plan", "future"])
+@pytest.mark.parametrize("wrapper", ["details", "div"])
+def test_standalone_markers_inside_raw_html_remain_owned(name: str, wrapper: str) -> None:
+    before, after = f"<{wrapper}>\n", f"\n</{wrapper}>"
+    block = f"<!-- wade:{name}:start -->\nOld.\n<!-- wade:{name}:end -->"
+    body = before + block + after
+    expected = before + block.replace("Old.", "New.") + after
+    assert scan_markdown_structure(body).owned(name) is not None
+    result = replace_owned_section(body, name=name, heading=None, content="New.")
+    assert result == expected
+    assert replace_owned_section(result, name=name, heading=None, content="New.") == expected
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+def test_multiline_html_cannot_hide_protected_plan(heading: str) -> None:
+    plan = (
+        "<!-- wade:plan:start -->\n\n## " + heading + "\nKeep requirements.\n\n"
+        "</details>\n<!-- wade:plan:end -->"
+    )
+    body = "## " + heading + "\nLegacy.\n<details>\n" + plan
+    assert strip_legacy_section(body, heading) == plan
+
+
+def test_nested_owned_marker_in_raw_html_refuses_replacement() -> None:
+    body = (
+        "<!-- wade:summary:start -->\n<details>\n<!-- wade:plan:start -->\n"
+        "Keep.\n<!-- wade:plan:end -->\n</details>\n<!-- wade:summary:end -->"
+    )
+    with pytest.raises(MarkdownStructureError, match="nested"):
+        replace_owned_section(body, name="summary", heading="Summary", content="New.")
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "  ## Requirements\nKeep.",
+        "   # Requirements\nKeep.",
+        "Requirements\n============\nKeep.",
+        "Requirements\n---\nKeep.",
+    ],
+)
+def test_all_actual_top_level_headings_bound_legacy_migration(heading: str, boundary: str) -> None:
+    body = "Intro.\n\n## " + heading + "\nOld.\n\n" + boundary
+    assert strip_legacy_section(body, heading) == "Intro.\n\n" + boundary
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+@pytest.mark.parametrize("form", ["  ## {heading}\nHuman.", "{heading}\n---\nHuman."])
+def test_boundary_only_heading_does_not_become_legacy_candidate(heading: str, form: str) -> None:
+    body = form.format(heading=heading)
+    assert strip_legacy_section(body, heading) == body

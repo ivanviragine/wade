@@ -189,6 +189,7 @@ class ManagedBlock(MarkdownRange):
 class MarkdownHeading(MarkdownRange):
     level: int
     title: str
+    legacy_candidate: bool = False
 
 
 class MarkdownStructure(BaseModel):
@@ -221,7 +222,7 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
     for line in lines:
         offsets.append(offsets[-1] + len(line))
     tokens = MarkdownIt("commonmark", {"maxNesting": _MAX_STRUCTURE_NESTING}).parse(body)
-    for token in tokens:
+    for token_index, token in enumerate(tokens):
         # markdown-it stops parsing at its nesting limit. Refuse rather than
         # mistake omitted descendants or subsequent blocks for unowned text.
         if token.level >= _MAX_STRUCTURE_NESTING - 1:
@@ -243,36 +244,46 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
             continue
         if token.level != 0 or token.type not in {"html_block", "heading_open"}:
             continue
-        text = lines[start_line].rstrip("\r\n")
-        marker = (
-            re.fullmatch(r" {0,3}<!-- wade:([a-zA-Z0-9_-]+):(start|end) -->[ \t]*", text)
-            if token.type == "html_block" and end_line == start_line + 1
-            else None
-        )
-        if marker:
-            name, kind = marker.groups()
-            if kind == "start":
-                if active is not None:
-                    raise MarkdownStructureError(f"nested wade:{name} inside wade:{active[0]}")
-                active = (name, offsets[start_line])
-            else:
-                if active is None or active[0] != name:
-                    raise MarkdownStructureError(f"unmatched wade:{name}:end marker")
-                result.blocks.append(
-                    ManagedBlock(name=name, start=active[1], end=offsets[start_line] + len(text))
+        if token.type == "html_block":
+            # A top-level raw HTML span can contain several standalone comments,
+            # including managed markers before/after a <details> boundary. Its
+            # token nesting still excludes literal list/quote/code examples.
+            for line_number in range(start_line, end_line):
+                text = lines[line_number].rstrip("\r\n")
+                marker = re.fullmatch(
+                    r" {0,3}<!-- wade:([a-zA-Z0-9_-]+):(start|end) -->[ \t]*", text
                 )
-                active = None
-        elif active is None and token.type == "heading_open":
-            heading = re.fullmatch(r"(#{1,6})(?:[ \t]+(.*?)(?:[ \t]+#+)?)?[ \t]*", text)
-            if heading:
-                result.headings.append(
-                    MarkdownHeading(
-                        start=offsets[start_line],
-                        end=offsets[end_line],
-                        level=len(heading[1]),
-                        title=heading[2] or "",
+                if marker is None:
+                    continue
+                name, kind = marker.groups()
+                if kind == "start":
+                    if active is not None:
+                        raise MarkdownStructureError(f"nested wade:{name} inside wade:{active[0]}")
+                    active = (name, offsets[line_number])
+                else:
+                    if active is None or active[0] != name:
+                        raise MarkdownStructureError(f"unmatched wade:{name}:end marker")
+                    result.blocks.append(
+                        ManagedBlock(
+                            name=name, start=active[1], end=offsets[line_number] + len(text)
+                        )
                     )
+                    active = None
+        elif active is None:
+            text = lines[start_line].rstrip("\r\n")
+            legacy_heading = re.fullmatch(r"(#{1,6})(?:[ \t]+(.*?)(?:[ \t]+#+)?)?[ \t]*", text)
+            # Every actual top-level H1/H2 is a deletion boundary, including
+            # indented ATX and setext headings. Only column-zero ATX headings
+            # are eligible to start legacy migration.
+            result.headings.append(
+                MarkdownHeading(
+                    start=offsets[start_line],
+                    end=offsets[end_line],
+                    level=int(token.tag[1:]),
+                    title=tokens[token_index + 1].content,
+                    legacy_candidate=legacy_heading is not None,
                 )
+            )
     if active is not None:
         raise MarkdownStructureError(f"unclosed wade:{active[0]}:start marker")
     return result
@@ -282,7 +293,11 @@ def legacy_section_range(
     body: str, heading: str, structure: MarkdownStructure
 ) -> MarkdownRange | None:
     """Identify at most one legacy H2 section without crossing protected ranges."""
-    matches = [item for item in structure.headings if item.level == 2 and item.title == heading]
+    matches = [
+        item
+        for item in structure.headings
+        if item.level == 2 and item.title == heading and item.legacy_candidate
+    ]
     if len(matches) > 1:
         raise MarkdownStructureError(f"multiple legacy {heading} sections")
     if not matches:

@@ -496,3 +496,55 @@ def test_finalizer_quoted_code_cannot_hide_embedded_plan(tmp_path: Path, quote: 
         calls.read.return_value = result
         assert run() is True
         assert calls.write.call_args.args[2] == result
+
+
+def test_finalizer_preserves_plan_spanning_multiline_html_blocks(tmp_path: Path) -> None:
+    plan = (
+        "<!-- wade:plan:start -->\n\n## Summary\nKeep requirements.\n\n"
+        "</details>\n<!-- wade:plan:end -->"
+    )
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = "Closes #42\n\n## Summary\nLegacy.\n<details>\n" + plan
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert plan in result
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_new_summary_raw_html_retains_ownership_validation(tmp_path: Path, nested: bool) -> None:
+    payload = "Description.\n<details>\nDetails.\n</details>"
+    if nested:
+        payload = payload.replace("Details.", "<!-- wade:plan:start -->\n<!-- wade:plan:end -->")
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        (tmp_path / "worktree" / "PR-SUMMARY.md").write_text(payload, encoding="utf-8")
+        calls.read.return_value = "Closes #42\n\nUser description."
+        assert run() is not nested
+        if nested:
+            calls.write.assert_not_called()
+            _assert_no_completion(calls)
+        else:
+            result = calls.write.call_args.args[2]
+            assert payload in result
+            calls.read.return_value = result
+            assert run() is True
+            assert calls.write.call_args.args[2] == result
+
+
+@pytest.mark.parametrize(
+    "boundary", ["  ## Requirements\nKeep.", "Requirements\n===\nKeep.", "Requirements\n---\nKeep."]
+)
+def test_finalizer_bounds_legacy_at_actual_noneligible_heading(
+    tmp_path: Path, boundary: str
+) -> None:
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = "Closes #42\n\n## Summary\nOld.\n\n" + boundary
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert boundary in result
+        assert "Old." not in result
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result
