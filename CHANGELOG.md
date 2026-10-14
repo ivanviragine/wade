@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.3.1] — 2026-10-14
+
+### Bug Fixes
+
+- persist replacement plans when replanning an existing task (#536) (31c3e89)
+
 ## [v1.3.0] — 2026-10-14
 
 ### Features
