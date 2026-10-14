@@ -1728,7 +1728,7 @@ class TestStripSummarySection:
         assert "- a" in result
         assert "## Summary" not in result
 
-    def test_summary_with_subheadings_fully_removed(self) -> None:
+    def test_unrelated_h2_before_usage_preserved(self) -> None:
         body = (
             "PR description\n\n"
             "## Summary\n\nIntro.\n\n## Details\n\nMore detail.\n\n"
@@ -1736,8 +1736,8 @@ class TestStripSummarySection:
         )
         result = _strip_summary_section(body)
         assert "Intro" not in result
-        assert "## Details" not in result
-        assert "More detail" not in result
+        assert "## Details" in result
+        assert "More detail" in result
         assert IMPL_USAGE_MARKER_START in result
 
 

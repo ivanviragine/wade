@@ -33,19 +33,13 @@ from wade.services.implementation_service.bootstrap import (
 )
 from wade.services.implementation_service.core import _resolve_worktree_from_plan
 from wade.services.implementation_service.lifecycle import (
-    REVIEW_STATUS_MARKER_END,
-    REVIEW_STATUS_MARKER_START,
-    SUMMARY_MARKER_END,
-    SUMMARY_MARKER_START,
     ReviewStatus,
     ReviewStatusKind,
     SessionType,
     _apply_pr_refs,
     _build_pr_body,
     _render_review_status,
-    _strip_summary_section,
 )
-from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.services.review_cycle_service import clear_review_cycle
 from wade.services.review_record_service import (
     count_binding_passes,
@@ -61,12 +55,17 @@ from wade.services.task_service import remove_in_progress_label
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import markers
-from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
+from wade.utils.body_markers import update_body_preserving_markers
 from wade.utils.conventional import (
     conventional_title_error,
     is_conventional_title,
 )
-from wade.utils.markdown import remove_marker_block
+from wade.utils.markdown import (
+    MarkdownStructureError,
+    OwnedSectionReplacement,
+    replace_owned_sections,
+    scan_markdown_structure,
+)
 
 logger = structlog.get_logger()
 
@@ -1345,56 +1344,62 @@ def _done_via_pr(
             logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         def _transform(body: str) -> str:
-            # Keep existing content; refresh close/parent refs; rewrite ONLY
-            # wade's own marker blocks so a concurrent edit elsewhere survives (A4).
-            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
-            # Remove the prior marked blocks FIRST: the legacy heading stripper is
-            # not marker-aware, so running it on a body that still contains the
-            # marked block would match the `## Summary` *inside* the block,
-            # orphan the start marker, and drop the end marker (leaving an
-            # unbalanced pair remove_marker_block can no longer clean). Removing
-            # both wade blocks up front also keeps re-runs idempotent (the
-            # review-status block is replaced in place, never duplicated). After
-            # the marked blocks are gone, strip any genuinely legacy unmarked
-            # heading.
-            body = remove_marker_block(body, SUMMARY_MARKER_START, SUMMARY_MARKER_END)
-            body = remove_marker_block(body, REVIEW_STATUS_MARKER_START, REVIEW_STATUS_MARKER_END)
-            body = _strip_summary_section(body)
-
-            # Compose wade-owned blocks in order: summary, then review-status.
-            blocks: list[str] = []
+            # Select both outgoing ranges from the same original parse. Never
+            # authorize or reject an intermediate cleared projection.
             if summary_content:
-                blocks.append(
-                    build_marked_block(
-                        SUMMARY_MARKER_START, SUMMARY_MARKER_END, f"## Summary\n\n{summary_content}"
+                try:
+                    projection_structure = scan_markdown_structure(
+                        "<!-- wade:summary:start -->\n"
+                        + summary_content
+                        + "\n<!-- wade:summary:end -->"
                     )
-                )
-            if review_status is not None:
-                blocks.append(
-                    build_marked_block(
-                        REVIEW_STATUS_MARKER_START,
-                        REVIEW_STATUS_MARKER_END,
-                        _render_review_status(review_status),
-                    )
-                )
-            if not blocks:
-                return body.rstrip("\n") + "\n"
-            joined = "\n\n".join(blocks)
-            # Keep ordering content → [summary, review-status] → impl-usage.
-            marker_pos = body.find(IMPL_USAGE_MARKER_START)
-            if marker_pos != -1:
-                before = body[:marker_pos].rstrip("\n")
-                after = body[marker_pos:]
-                return f"{before}\n\n{joined}\n\n{after}\n"
-            return body.rstrip("\n") + "\n\n" + joined + "\n"
+                    projection_structure.owned("summary")
+                except MarkdownStructureError as exc:
+                    raise MarkdownStructureError(f"PR-SUMMARY.md: {exc}") from exc
+            return replace_owned_sections(
+                body,
+                [
+                    OwnedSectionReplacement(
+                        name="summary",
+                        heading="Summary",
+                        content=f"## Summary\n\n{summary_content}" if summary_content else "",
+                        before=("review-status", "impl-usage"),
+                    ),
+                    OwnedSectionReplacement(
+                        name="review-status",
+                        content=_render_review_status(review_status)
+                        if review_status is not None
+                        else "",
+                        after=("summary",),
+                        before=("impl-usage",),
+                    ),
+                ],
+                transform_survivors=lambda surviving: _apply_pr_refs(
+                    surviving, issue_number, close_issue, parent_issue
+                ),
+            )
 
-        if not update_body_preserving_markers(
-            read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
-            write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
-            transform=_transform,
-            warn=console.warn,
-            label=f"PR #{pr_number} body",
-        ):
+        def _write_body(body: str) -> bool:
+            # Budget trimming runs after the transform; validate its result too.
+            try:
+                scan_markdown_structure(body)
+            except MarkdownStructureError as exc:
+                raise MarkdownStructureError(f"generated PR body: {exc}") from exc
+            return git_pr.update_pr_body(repo_root, pr_number, body)
+
+        try:
+            body_updated = update_body_preserving_markers(
+                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                write_body=_write_body,
+                transform=_transform,
+                warn=console.warn,
+                label=f"PR #{pr_number} body",
+            )
+        except MarkdownStructureError as exc:
+            console.error(f"Unsafe PR body or new summary: {exc}", markup=False)
+            console.hint("Repair the current PR body or PR-SUMMARY.md, then retry done.")
+            body_updated = False
+        if not body_updated:
             # Push needs the marker for its backstop, but a body read/write
             # failure means this finalization has not completed. Retrying must
             # read the current remote body again, never synthesize an empty one.
