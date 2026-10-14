@@ -229,7 +229,7 @@ def _cleanup_empty_backup_dirs(main_root: Path) -> None:
 
 
 def _restore_stash_or_warn(main_root: Path, stash_sha: str, stash_message: str) -> None:
-    """Apply exactly the owned stash once; retain its entry for safe manual cleanup."""
+    """Apply exactly the owned stash once; preserve any remaining entry for cleanup."""
     location = escape(str(main_root))
     identity = escape(f"{stash_sha} ({stash_message})")
     command = f"git -C {shlex.quote(str(main_root))}"
@@ -243,7 +243,10 @@ def _restore_stash_or_warn(main_root: Path, stash_sha: str, stash_message: str) 
     if restored:
         # drop_stash_by_sha verifies a positional ref before a separate drop.
         # Another worktree can push between them, so never delete here.
-        console.warn(f"Restored local changes in {location}; stash {identity} retained.")
+        console.warn(
+            f"Restored local changes in {location}; any remaining entry for stash {identity} "
+            "is retained (automatic cleanup skipped)."
+        )
         console.hint(
             escape(
                 f"Inspect {command} stash list --format='%H %gd %gs'; verify the "

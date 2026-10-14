@@ -195,5 +195,7 @@ def test_post_merge_restore_failures_never_fall_back_to_sibling(
     if failure != "removed-entry":
         assert "git -C" in output.out
         assert f"stash apply {owned[0]}" in " ".join(output.out.split())
+    if failure == "removed-entry":
+        assert "any remaining entry" in " ".join(output.err.split())
     assert "stash drop " + owned[0] not in output.out + output.err
     assert pulls == 2
