@@ -61,7 +61,19 @@ uv run python scripts/auto_version.py major           # breaking changes (0.1.0 
 uv run python scripts/auto_version.py minor --dry-run # preview only
 ```
 
-The script updates both files, generates `CHANGELOG.md`, commits, and creates an annotated git tag.
+The script updates both files, synchronizes an existing `uv.lock` with checked
+`uv lock --project <script-root>` (without dependency upgrade flags), and includes
+the lock with generated `CHANGELOG.md` in the commit and annotated tag. Lock
+synchronization clears inherited `UV_FROZEN` in its child environment and must
+succeed before staging, committing, tagging, or optional
+push. Missing uv and lock failures leave visible partial edits but no release
+commit/tag; a missing tracked lock or unrelated staged paths fail before edits.
+Standalone copies without git and without a lock retain source-only behavior.
+
+Use direct Python for a strictly inert `--dry-run`: an outer ordinary `uv run`
+may update lock metadata before the script starts. See [Releasing](../../CONTRIBUTING.md#releasing)
+for tool-version/schema compatibility and recovery through the normal
+merge-triggered release workflow.
 
 ### Changelog Generation
 

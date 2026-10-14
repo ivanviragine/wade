@@ -791,3 +791,27 @@ For issue #480, delegation_service.delegate() remains the one dispatcher for dep
 For issue #480 sandbox tests, the autouse conftest fixture clears both SANDBOX_SIGNAL_ENV_VARS and real Codex identity markers in CODEX_IDENTITY_ENV_VARS. Tests that need another enclosing runtime still set or clear competing identity markers deliberately; do not claim the fixture never clears identity markers.
 
 ---
+
+## 377ad9019298 | 2026-10-14 | implementation | tags: git, hooks | Issue #489
+
+Git's path-limited `commit --only` can still admit unrelated paths staged by a pre-commit hook into its candidate index; on Apple Git 2.50.1, preparation/message-hook staging instead occurs after the committed tree is frozen. Validate the actual candidate tree before the reference update rather than assuming every hook phase rereads the index. A reference-transaction guard must also allow Git's normal zero-OID AUTO_MERGE deletion after a valid commit, or it can report failure after HEAD has already advanced.
+## cce7d3161157 | 2026-10-14 | implementation | tags: git, stash, concurrency | Issue #493
+
+`drop_stash_by_sha` verifies a positional stash ref before deleting it in a separate Git command; a competing push after verification can still shift that ref. Callers that must never delete another worktree's entry need to retain the owned stash after applying its captured SHA rather than assume verification makes deletion atomic. Inspect SHA/ref/message pairs and verify the chosen entry before manual cleanup.
+
+---
+
+## 7645fa43928e | 2026-10-14 | implementation | tags: git, hooks | Issue #489
+
+Git diff-tree can omit changed gitlinks because submodule.<name>.ignore=all or diff.ignoreSubmodules affects its output. Exact candidate-tree guards must explicitly use --ignore-submodules=none; a pre-commit hook can otherwise stage a hidden gitlink change into a path-limited commit.
+
+---
+
+## 64533e9c9e7f | 2026-10-14 | implementation | tags: git, data-integrity | Issue #489
+
+Git replacement refs alter object reads without changing the reported HEAD object ID, so a guard can compare against a different tree than the real commit parent. Treat replacement-object state as ineligible for conservative auto-commits and disable replacement interpretation consistently in object inspection and commit validation.
+## 11ab5583cc4d | 2026-10-14 | implementation | tags: rich, shell, testing | Issue #540
+
+Rich can insert literal newlines inside correctly shell-quoted arguments; shell quoting protects parsing, not later display transformations. Distinguish native terminal soft wrapping from captured bytes, and validate emitted physical command lines before parsing argv: unrelated debug logs can contain the intact path and mask a broken recovery hint.
+
+---

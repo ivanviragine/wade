@@ -351,6 +351,8 @@ wade implement 42 --base develop   # branch from, target, and merge into develop
 
 `--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value is rejected up front — whether declared in the plan (fails `wade plan-session done`) or passed as `--base` (fails fast when you run `wade implement`); a well-formed base branch that does not exist fails draft-PR creation with an actionable message. Changing the base of a PR whose work is already in flight — whether by re-running planning or by `wade implement --base` — is not applied silently: it requires explicit confirmation, because the branch's existing history cannot be moved onto the new base without discarding it.
 
+A scaffold branch checked out in a worktree can be moved onto a different base only when its tracked files are clean and no untracked or ignored paths obstruct the destination tree. Colliding files, symlinks, and directories cause refusal before the branch or PR base changes; noncolliding generated session files remain allowed. Preserve or move the reported paths outside the affected worktree before retrying. Ignored files receive the same protection as ordinary untracked work. Retarget and rollback explicitly leave submodule worktrees unchanged, including when `submodule.recurse` is enabled; update submodules separately when needed.
+
 ## Reviews & bot triggers
 
 WADE splits review into an **AI review pass** you or the agent can invoke, and
@@ -607,6 +609,14 @@ Decision and integrity gates deliberately require an explicit valid outcome:
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
 
+Finalizing an existing PR requires reading its current body successfully. If
+that read or the body update fails, completion stops, clears the local done
+marker, and leaves ready promotion, label removal, and bot-review triggers
+pending. Re-run the session's `done` command after resolving access; it reads the
+body again and preserves existing plan and user content. A successfully read
+empty body remains valid. The branch may already have been pushed before this
+retryable failure.
+
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is
 refused, so committing-and-pushing straight past `done` doesn't work. It is
@@ -621,6 +631,19 @@ review outcome — reviewed at `<sha>`, reviewer changed, skipped via
 `ai.review_implementation.enabled: false`), or completed at the active review
 binding's pass cap. A skipped, stale-reviewer, or never-run review is therefore
 visible to reviewers rather than hidden in worktree state.
+
+After a PR merge, WADE updates the main checkout and restores any tracked local
+changes using the exact stash SHA it captured, even if another worktree pushes
+its own stash meanwhile. WADE preserves any remaining owned stash entry after
+restoration because removing a positional stash entry can race with another push.
+Recovery commands are printed on separate copyable lines, with shell-quoted
+checkout paths and intact arguments even in narrow terminals. Inspect the
+reported checkout using the printed stash-list command, compare SHA/ref/message,
+and verify the current ref still names the intended SHA before manual cleanup.
+Resolve conflicts before retrying the printed apply command; if the stash object
+is unavailable, recover it first. Sync's apply command runs from the checkout
+named in its explanation. Local recovery warnings do not mean the remote PR
+merge failed.
 
 ## Task Providers
 
@@ -670,15 +693,27 @@ Description body here. Sub-headings, code blocks, anything markdown.
     name: markdown
     settings:
       path: ISSUES.md      # relative to repo root, or absolute
-      auto_commit: false   # if true, close_task auto-commits the change
+      auto_commit: false   # attempt a close-only commit for a clean tracked file
   ```
 
 - After a PR merges, `provider.close_task` flips the section's `state` to
   `closed` in `ISSUES.md`. By default the file is left modified in your
   working tree — commit it yourself. Set `auto_commit: true` to have
-  wade commit the change with a `chore: close #N` message; failures
-  (not a git repo, hook rejection, signing required) are logged and
-  swallowed so the close itself never blocks.
+  wade attempt a `chore: close #N` commit containing only the selected task's
+  state and `in-progress` label changes. Other file content and line endings
+  remain intact, and unrelated staged or unstaged work stays untouched.
+- Auto-commit requires the task file to be a clean tracked regular file with
+  matching HEAD, index, and disk contents. Preexisting staged, partially staged,
+  or unstaged task-file edits, hidden index flags, replacement objects, and
+  uncertain repository state cause a warning and skip the commit. The task still closes on disk;
+  its original staged version and flags remain intact. Optional task comments
+  are separate edits and follow this same skip policy.
+- Ordinary hooks and signing remain enabled. An invocation-local guard rejects
+  a hook-expanded candidate before HEAD advances; it does not change installed
+  hooks or persistent Git configuration. Unsupported Git hook dispatch
+  (Git older than 2.36), hook rejection, signing failure, and Git errors are
+  logged without undoing the disk closure. Hooks that directly edit other
+  files or refs retain their own side effects.
 - Tracking tasks with `- [ ] #N` checklist bodies work the same as with
   GitHub Issues — markdown's `find_parent_issue` scans every section's
   body for child refs.

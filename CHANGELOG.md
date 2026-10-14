@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.18] — 2026-10-14
+
+### Bug Fixes
+
+- isolate Markdown task auto-commits from unrelated staged work (#529) (b9f6658)
+
+## [v1.2.17] — 2026-10-14
+
+### Bug Fixes
+
+- preserve copyable stash recovery commands at narrow terminal widths (#541) (f39e0a1)
+
+## [v1.2.16] — 2026-10-14
+
+### Bug Fixes
+
+- restore post-merge stashes by identity across worktrees (#528) (d141f0b)
+
+## [v1.2.15] — 2026-10-14
+
+### Bug Fixes
+
+- preserve untracked files when retargeting scaffold branches (#526) (8c51aee)
+
+## [v1.2.14] — 2026-10-14
+
+### Bug Fixes
+
+- commit synchronized uv.lock with automatic version bumps (#534) (3ff2e97)
+- refuse PR body updates when the current body cannot be read (#525) (d3e3be5)
+
 ## [v1.2.13] — 2026-10-14
 
 ### Bug Fixes

@@ -142,6 +142,7 @@ src/wade/
     ├── conventional.py  # Canonical conventional-commit TITLE validator (types + is_conventional_title) — stdlib-only, single Python source of truth
     ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe; sources its title regex from conventional.py
     ├── process.py       # Subprocess helpers
+    ├── git_close_commit.py # Leaf Markdown close-commit eligibility and invocation-local hook/tree guard
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
@@ -1056,6 +1057,13 @@ HEAD, so any sha-keyed check must precede it):
    corruption cannot ship.
 8. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing
    and projects the review outcome into the PR body.
+   The existing-PR body callback preserves `None` for a failed read; the shared
+   body helper refuses to transform or write it, while an empty string remains
+   a valid read. A failed body read or write clears the active marker root's
+   `done` marker family and returns before ready promotion, label removal, or
+   bot-review actions. Retry reads the current remote body again. Other review,
+   documentation, bot, and feedback-cycle state stays intact; the successful
+   push and any earlier title synchronization are not rolled back.
 
 **Review status is legible in the PR body (#367).** `_classify_review()` is the
 single source for the gate and the `wade:review-status` PR-body block. It records
@@ -1510,6 +1518,20 @@ including under YOLO. Successful vote flushing and cleanup remain required.
 
 `wade implementation-session done` handles PR creation / update. The post-work lifecycle prompt handles the merge decision.
 
+After a successful remote merge, `lifecycle._pull_main_after_merge()` routes its
+bounded pull-recovery loop to the main checkout. It stashes tracked changes
+once with `git.stash.create_named_stash`, using the main checkout's actual
+branch, and carries the returned SHA/message through success and rollback.
+Restoration applies that exact SHA once; it never pops the shared stack or
+falls back to another entry. Successful apply preserves any remaining owned
+entry for manual cleanup: the shared `drop_stash_by_sha` helper verifies a positional ref
+before a separate drop, leaving a concurrent-push window this caller avoids by
+not deleting. Conflicts, unavailable identities, and stash-creation failures
+report recovery while preserving any remaining entries. Untracked move-aside
+and rollback ordering stay intact; local rollback is best effort rather than
+crash-safe or an exact no-op when restoration fails. Local warnings do not
+change the already-successful remote merge result.
+
 ## Determinism via Services
 
 All deterministic operations — git commands, state transitions, file manipulation, API calls — **must live in service/utility code**, never in AI agent reasoning. Agents are non-deterministic; code is deterministic. The boundary is:
@@ -1535,7 +1557,18 @@ When wade installs skills into a target project (per session, via worktree boots
 **`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
 - `--cd` — Create worktree, print its path to stdout, and exit without launching AI. Deterministic setup still runs first (for example worktree bootstrap and draft-PR bootstrap when needed). Used internally by `wade cd`.
-- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (read from the PR lookup's `baseRefName`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). An explicit `--base` is validated for well-formedness up front (`is_valid_git_ref`, symmetric with the plan-declared path checked at plan-done) so a malformed value fails fast instead of surfacing later as a murkier "does not exist"; a chain-derived base is a generated branch name and always passes. Reading the base off the already-verified lookup (rather than a second `get_pr_base_branch` query, whose `None` conflates "no base" with "gh failed") avoids a silent fallback to `main`. The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it — and cleared when the effective base resolves back to `main` (e.g. `--base main` retargeting a reused worktree's PR), so a stale pin never keeps targeting the old base. `sync`/`done` treat the stored base as **authoritative**: they no longer gate on a local/`origin/<base>` existence check (which a single-branch / narrow-refspec clone can fail even for a valid base), and instead let the fetch/merge path surface an unresolvable base as an error rather than silently falling back to `main`. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. Editing the PR base does **not** rewrite the head branch's ancestry, so a **scaffold-only** branch (only its scaffold commit beyond the old base) is first re-rooted on the new base and force-pushed (`reroot_scaffold_branch_for_retarget`, shared by the plan and implement retarget paths) — otherwise the old base's commits would leak into the new base's diff and merge into it. When the scaffold branch is **not** checked out it is moved with `git branch -f`; when it **is** checked out (the `wade implement --cd` case) it is re-rooted *in place* with a hard reset inside its worktree (`reset_worktree_hard`), since `git branch -f` refuses a checked-out branch. The reroot **aborts** rather than retarget onto a stale branch when it can't be done loss-free: an unresolvable old base (can't prove the branch is scaffold-only — a reset might discard commits), a checked-out worktree with uncommitted **tracked** changes (`has_tracked_changes`) or one whose path can't be resolved, or an unresolvable new base. A branch carrying **real work** (`_branch_has_real_work`: more than the scaffold commit past its base — measured against the local head or `origin/<branch>` when the head lives only on the remote) cannot be rewritten without discarding it, so `start()` guards that case — confirm in a TTY, else abort — instead of silently flipping the base and polluting the PR, mirroring the plan flow's `_base_retarget_is_safe`. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
+- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (read from the PR lookup's `baseRefName`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). An explicit `--base` is validated for well-formedness up front (`is_valid_git_ref`, symmetric with the plan-declared path checked at plan-done) so a malformed value fails fast instead of surfacing later as a murkier "does not exist"; a chain-derived base is a generated branch name and always passes. Reading the base off the already-verified lookup (rather than a second `get_pr_base_branch` query, whose `None` conflates "no base" with "gh failed") avoids a silent fallback to `main`. The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it — and cleared when the effective base resolves back to `main` (e.g. `--base main` retargeting a reused worktree's PR), so a stale pin never keeps targeting the old base. `sync`/`done` treat the stored base as **authoritative**: they no longer gate on a local/`origin/<base>` existence check (which a single-branch / narrow-refspec clone can fail even for a valid base), and instead let the fetch/merge path surface an unresolvable base as an error rather than silently falling back to `main`. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. Editing the PR base does **not** rewrite the head branch's ancestry, so a **scaffold-only** branch (only its scaffold commit beyond the old base) is first re-rooted on the new base and force-pushed (`reroot_scaffold_branch_for_retarget`, shared by the plan and implement retarget paths) — otherwise the old base's commits would leak into the new base's diff and merge into it. When the scaffold branch is **not** checked out it is moved with `git branch -f`; when it **is** checked out (the `wade implement --cd` case) it is re-rooted *in place* with a hard reset inside its worktree (`reset_worktree_hard`), since `git branch -f` refuses a checked-out branch. The reroot **aborts** rather than retarget onto a stale branch when it can't be done loss-free: an unresolvable old base (can't prove the branch is scaffold-only — a reset might discard commits), a checked-out worktree with uncommitted **tracked** changes (`has_tracked_changes`), untracked or ignored filesystem paths obstructing the destination tree, or one whose path can't be resolved, or an unresolvable new base. A branch carrying **real work** (`_branch_has_real_work`: more than the scaffold commit past its base — measured against the local head or `origin/<branch>` when the head lives only on the remote) cannot be rewritten without discarding it, so `start()` guards that case — confirm in a TTY, else abort — instead of silently flipping the base and polluting the PR, mirroring the plan flow's `_base_retarget_is_safe`. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
+
+Scaffold hard resets pin the destination commit and inspect its complete tree against
+the index and filesystem before mutation. The git-layer guard includes ignored
+files, empty/nested directories, symlinks without following them, and filesystem
+case aliases; inspection errors refuse. Tree-entry modes distinguish gitlinks:
+resets explicitly pass `--no-recurse-submodules` to leave submodule directories
+and their contents alone even when `submodule.recurse=true`.
+The same guard applies to scaffold
+rollback after a failed PR-base edit. An obstructed rollback preserves the new
+user data and reports the existing branch/PR divergence for manual recovery.
+This preflight does not provide isolation from concurrent filesystem writers.
 
 **`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.
