@@ -1103,8 +1103,9 @@ human heading remains, removal still deletes the owned pair. This evidence-drive
 exception to the original plan's literal pair-removal wording satisfies its
 stronger human-content preservation and repeated-update acceptance criteria.
 Select ownership and at most one legacy range from the original body before
-rendering. The finalizer disables legacy migration during its later projection
-pass; newly exposed human headings cannot authorize another deletion. Validate
+rendering. The finalizer selects Summary and review-status together and assembles
+their complete replacements atomically; no temporary cleared projection can
+authorize another deletion or reject an otherwise valid final context. Validate
 that unrelated managed block names and exact source slices still have the same
 multiplicity in the rendered scan. If an edit reclassifies one as literal text
 (or exposes a previously literal block as an owner), refuse rather than change
@@ -1112,11 +1113,13 @@ ownership across parser contexts.
 Missing Summary/review projections use real managed anchors: Summary precedes existing
 review status or the first implementation usage; missing review status follows
 Summary, otherwise precedes usage. Repeated unrelated blocks remain opaque.
-Before applying the existing reference helper, remove legacy Summary text and
-clear outgoing owned projection payloads while retaining their positional
-anchors. Only surviving body content participates in reference detection; new
-projection examples are inserted afterward. Temporary cleared payloads are
-never written.
+Internal source slots retain original positional anchors while excluding selected
+outgoing Summary/review text from the existing reference helper. New projection
+examples are inserted afterward. No slot-bearing body is parsed for ownership or
+written remotely. Empty-pair retention considers both final projections together;
+missing pairs use the same required anchors even when retained only as ownership
+evidence. Final managed ownership and exact unrelated source slices are checked
+after the complete composition.
 
 Validate the original, rendered candidate, and post-budget write payload.
 Unmatched, reversed, nested/crossed markers, duplicate owned pairs, ambiguous

@@ -577,3 +577,78 @@ def test_finalizer_refuses_context_shift_hiding_unrelated_plan(tmp_path: Path) -
         assert run() is False
         calls.write.assert_not_called()
         _assert_no_completion(calls)
+
+
+@pytest.mark.parametrize("review_enabled", [False, True])
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("old_review", [False, True])
+def test_atomic_finalizer_keeps_exposed_human_summary_and_required_anchors(
+    tmp_path: Path, review_enabled: bool, empty: bool, old_review: bool
+) -> None:
+    plan = "<!-- wade:plan:start -->\nKeep plan.\n<!-- wade:plan:end -->"
+    usage = "<!-- wade:impl-usage:start -->\nUsage.\n<!-- wade:impl-usage:end -->"
+    human = "## Summary\nKeep human requirements."
+    # Closing raw HTML in either outgoing projection hides the human heading
+    # during original selection. Both final projections must be considered.
+    if old_review:
+        old = (
+            "## Summary\nOld summary.\n"
+            "<!-- wade:review-status:start -->\n<details>\nOld review.\n</details>\n"
+            "<!-- wade:review-status:end -->\n"
+        )
+    else:
+        old = "## Summary\n<details>\nOld summary.\n</details>\n"
+    body = "Closes #42\n\n" + old + plan + "\n" + human + "\n" + usage
+    with _finalizer(tmp_path, review_enabled=review_enabled) as (run, calls):
+        if empty:
+            (tmp_path / "worktree" / "PR-SUMMARY.md").unlink()
+        calls.read.return_value = body
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert plan in result
+        assert human in result
+        assert "Old summary." not in result
+        assert "Old review." not in result
+        assert result.index("<!-- wade:summary:start -->") < result.index(usage)
+        if review_enabled:
+            assert (
+                result.index("<!-- wade:summary:start -->")
+                < result.index("<!-- wade:review-status:start -->")
+                < result.index(usage)
+            )
+        for _ in range(2):
+            calls.read.return_value = result
+            assert run() is True
+            assert calls.write.call_args.args[2] == result
+
+
+@pytest.mark.parametrize("review_enabled", [False, True])
+@pytest.mark.parametrize("wrapper", ["details", "div"])
+def test_atomic_finalizer_preserves_valid_html_projection_without_temporary_clear(
+    tmp_path: Path, review_enabled: bool, wrapper: str
+) -> None:
+    payload = f"<{wrapper}>\nRequirements.\n</{wrapper}>"
+    projection = (
+        "<!-- wade:summary:start -->\n## Summary\n\n" + payload + "\n<!-- wade:summary:end -->"
+    )
+    plan = "  <!-- wade:plan:start -->\n  Keep plan.\n  <!-- wade:plan:end -->"
+    body = "Closes #42\n\n" + projection + "\n- Example\n" + plan
+    with _finalizer(tmp_path, review_enabled=review_enabled) as (run, calls):
+        (tmp_path / "worktree" / "PR-SUMMARY.md").write_text(payload, encoding="utf-8")
+        calls.read.return_value = body
+        if review_enabled:
+            # Adding the real final review payload changes the list/HTML context
+            # and hides the plan. Refuse that actual shift, not a temporary one.
+            assert run() is False
+            calls.write.assert_not_called()
+            _assert_no_completion(calls)
+            return
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert projection in result
+        assert plan in result
+        if not review_enabled:
+            assert result == body
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result

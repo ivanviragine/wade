@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
+from itertools import pairwise
 
 from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field
@@ -403,4 +405,151 @@ def replace_owned_section(
     )
     if original_unrelated != remaining_unrelated:
         raise MarkdownStructureError(f"managed ownership changed outside wade:{name}")
+    return candidate
+
+
+class OwnedSectionReplacement(BaseModel):
+    """One projection selected against the original body in an atomic update."""
+
+    name: str
+    heading: str | None = None
+    content: str = ""
+    before: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
+
+
+def replace_owned_sections(
+    body: str,
+    replacements: list[OwnedSectionReplacement],
+    *,
+    transform_survivors: Callable[[str], str] | None = None,
+) -> str:
+    """Assemble related projections once, then validate final ownership.
+
+    Internal slots preserve original positions without parsing temporary cleared
+    payloads. Legacy ranges and anchors are selected only from the original
+    parse. The optional reference transform sees surviving text, never outgoing
+    or incoming projection contents. No slot-bearing intermediate is published.
+    """
+    structure = scan_markdown_structure(body)
+    targets = {item.name: item for item in replacements}
+    if len(targets) != len(replacements):
+        raise MarkdownStructureError("duplicate projection replacement")
+    prefix = "\x00wade-projection-"
+    while prefix in body or any(prefix in item.content for item in replacements):
+        prefix += "-"
+    slots: dict[str, str] = {}
+    for index, block in enumerate(structure.blocks):
+        slots.setdefault(block.name, f"{prefix}{index}\x00")
+    # Duplicate unrelated pairs remain valid; give each its own source slot.
+    block_slots = [f"{prefix}{index}\x00" for index in range(len(structure.blocks))]
+    original_blocks = dict(zip(block_slots, structure.blocks, strict=True))
+    edits: list[tuple[int, int, str]] = [
+        (block.start, block.end, slot) for slot, block in original_blocks.items()
+    ]
+    for item in replacements:
+        if structure.owned(item.name) is None:
+            if item.heading is not None:
+                legacy = legacy_section_range(body, item.heading, structure)
+                if legacy is not None:
+                    edits.append((legacy.start, legacy.end, ""))
+            slots[item.name] = f"{prefix}new-{len(slots)}\x00"
+    edits.sort()
+    if any(left[1] > right[0] for left, right in pairwise(edits)):
+        raise MarkdownStructureError("overlapping projection selections")
+    scaffold = body
+    for start, end, slot in reversed(edits):
+        scaffold = scaffold[:start] + slot + scaffold[end:]
+    newline = "\r\n" if "\r\n" in body else "\n"
+
+    def render(retained: set[str]) -> str:
+        projections = {
+            item.name: (
+                f"<!-- wade:{item.name}:start -->\n{item.content}\n<!-- wade:{item.name}:end -->"
+                if item.content or item.name in retained
+                else ""
+            )
+            for item in replacements
+        }
+        assembled = scaffold
+        for item in replacements:
+            slot = slots[item.name]
+            if slot in assembled or not projections[item.name]:
+                continue
+            position = len(assembled)
+            for anchor in item.after:
+                anchor_slot = slots.get(anchor)
+                if anchor_slot is not None and anchor_slot in assembled:
+                    position = assembled.index(anchor_slot) + len(anchor_slot)
+                    break
+            else:
+                for anchor in item.before:
+                    anchor_slot = slots.get(anchor)
+                    if anchor_slot is not None and anchor_slot in assembled:
+                        position = assembled.index(anchor_slot)
+                        break
+            left, right = assembled[:position], assembled[position:]
+            before = (
+                ""
+                if not left
+                else newline * (2 - min(2, left[len(left.rstrip("\r\n")) :].count("\n")))
+            )
+            after = (
+                ""
+                if not right
+                else newline
+                * (2 - min(2, right[: len(right) - len(right.lstrip("\r\n"))].count("\n")))
+            )
+            assembled = left + before + slot + after + right
+        # Restore unrelated original slices before applying existing reference
+        # semantics. Final validation rejects any ownership or byte changes.
+        for slot, block in original_blocks.items():
+            if block.name not in targets:
+                assembled = assembled.replace(slot, body[block.start : block.end])
+        if transform_survivors is not None:
+            assembled = transform_survivors(assembled)
+        for name, projection in projections.items():
+            assembled = assembled.replace(slots[name], projection)
+        return assembled
+
+    # Inspect the complete composition with minimal ownership evidence, not a
+    # succession of temporary Summary/review removals. Removing an empty pair
+    # is safe only when it cannot expose a same-named human legacy candidate.
+    empty = {item.name for item in replacements if not item.content and item.heading is not None}
+    provisional = scan_markdown_structure(render(empty))
+    retained = {
+        item.name
+        for item in replacements
+        if item.name in empty
+        and any(
+            heading.level == 2 and heading.title == item.heading for heading in provisional.headings
+        )
+    }
+    candidate = render(retained)
+    validated = scan_markdown_structure(candidate)
+    for item in replacements:
+        expected = bool(item.content) or item.name in retained
+        if (validated.owned(item.name) is not None) != expected:
+            raise MarkdownStructureError(f"managed ownership changed for wade:{item.name}")
+        if (
+            not expected
+            and item.heading is not None
+            and any(
+                heading.level == 2 and heading.title == item.heading
+                for heading in validated.headings
+            )
+        ):
+            raise MarkdownStructureError(f"removing wade:{item.name} exposes a legacy heading")
+    original_unrelated = Counter(
+        (block.name, body[block.start : block.end])
+        for block in structure.blocks
+        if block.name not in targets
+    )
+    remaining_unrelated = Counter(
+        (block.name, candidate[block.start : block.end])
+        for block in validated.blocks
+        if block.name not in targets
+    )
+    if original_unrelated != remaining_unrelated:
+        raise MarkdownStructureError("managed ownership changed outside projection replacements")
     return candidate

@@ -62,8 +62,8 @@ from wade.utils.conventional import (
 )
 from wade.utils.markdown import (
     MarkdownStructureError,
-    legacy_section_range,
-    replace_owned_section,
+    OwnedSectionReplacement,
+    replace_owned_sections,
     scan_markdown_structure,
 )
 
@@ -1344,33 +1344,8 @@ def _done_via_pr(
             logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         def _transform(body: str) -> str:
-            # Validate before any edit, then validate the fully assembled body.
-            # Owned pairs are authoritative; legacy headings inside other pairs
-            # or fenced examples never participate in replacement or anchoring.
-            try:
-                structure = scan_markdown_structure(body)
-                if structure.owned("summary") is None:
-                    legacy_section_range(body, "Summary", structure)
-                structure.owned("review-status")
-            except MarkdownStructureError as exc:
-                raise MarkdownStructureError(f"current PR body: {exc}") from exc
-            # Exclude outgoing projection payloads from reference detection,
-            # while retaining owned pairs as positional insertion anchors. These
-            # empty comments are replaced/removed below and are never written.
-            body = replace_owned_section(
-                body,
-                name="summary",
-                heading="Summary",
-                content="<!-- -->" if structure.owned("summary") is not None else "",
-            )
-            body = replace_owned_section(
-                body,
-                name="review-status",
-                heading=None,
-                content="<!-- -->" if structure.owned("review-status") is not None else "",
-            )
-            # New projection examples must not participate in reference edits.
-            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
+            # Select both outgoing ranges from the same original parse. Never
+            # authorize or reject an intermediate cleared projection.
             if summary_content:
                 try:
                     projection_structure = scan_markdown_structure(
@@ -1381,26 +1356,28 @@ def _done_via_pr(
                     projection_structure.owned("summary")
                 except MarkdownStructureError as exc:
                     raise MarkdownStructureError(f"PR-SUMMARY.md: {exc}") from exc
-            body = replace_owned_section(
+            return replace_owned_sections(
                 body,
-                name="summary",
-                heading="Summary",
-                content=f"## Summary\n\n{summary_content}" if summary_content else "",
-                before=("review-status", "impl-usage"),
-                # Legacy selection/removal already occurred above. Never use
-                # newly exposed human headings as another migration candidate.
-                migrate_legacy=False,
+                [
+                    OwnedSectionReplacement(
+                        name="summary",
+                        heading="Summary",
+                        content=f"## Summary\n\n{summary_content}" if summary_content else "",
+                        before=("review-status", "impl-usage"),
+                    ),
+                    OwnedSectionReplacement(
+                        name="review-status",
+                        content=_render_review_status(review_status)
+                        if review_status is not None
+                        else "",
+                        after=("summary",),
+                        before=("impl-usage",),
+                    ),
+                ],
+                transform_survivors=lambda surviving: _apply_pr_refs(
+                    surviving, issue_number, close_issue, parent_issue
+                ),
             )
-            body = replace_owned_section(
-                body,
-                name="review-status",
-                heading=None,
-                content=_render_review_status(review_status) if review_status is not None else "",
-                after=("summary",),
-                before=("impl-usage",),
-            )
-            scan_markdown_structure(body)
-            return body
 
         def _write_body(body: str) -> bool:
             # Budget trimming runs after the transform; validate its result too.

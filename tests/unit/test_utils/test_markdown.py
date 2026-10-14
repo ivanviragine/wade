@@ -619,3 +619,44 @@ def test_context_shift_cannot_hide_unrelated_managed_ownership(name: str, headin
     assert scan_markdown_structure(body).owned("plan") is not None
     with pytest.raises(MarkdownStructureError, match="ownership changed"):
         replace_owned_section(body, name=name, heading=heading, content="")
+
+
+@pytest.mark.parametrize("first", ["summary", "review-status"])
+@pytest.mark.parametrize("wrapper", ["details", "div"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_atomic_projections_validate_only_complete_html_composition(
+    first: str, wrapper: str, newline: str
+) -> None:
+    from wade.utils.markdown import OwnedSectionReplacement, replace_owned_sections
+
+    second = "review-status" if first == "summary" else "summary"
+    plan = "  <!-- wade:plan:start -->\n  Keep plan.\n  <!-- wade:plan:end -->"
+    payload = f"<{wrapper}>\nRequirements.\n</{wrapper}>"
+    block = f"<!-- wade:{first}:start -->\n{payload}\n<!-- wade:{first}:end -->"
+    body = (block + "\n- Example\n" + plan).replace("\n", newline)
+    # The same final source is safe even though clearing first's HTML payload
+    # alone would hide the indented plan. The second projection remains empty.
+    changes = [
+        OwnedSectionReplacement(name=first, content=payload.replace("\n", newline)),
+        OwnedSectionReplacement(name=second),
+    ]
+    expected = body.replace(
+        block.replace("\n", newline), block.replace(payload, payload.replace("\n", newline))
+    )
+    result = replace_owned_sections(body, changes)
+    assert plan.replace("\n", newline) in result
+    assert result == expected
+    assert replace_owned_sections(result, changes) == result
+
+
+def test_atomic_projection_slot_namespace_cannot_rewrite_new_payload() -> None:
+    from wade.utils.markdown import OwnedSectionReplacement, replace_owned_sections
+
+    payload = "Keep literal \x00wade-projection-new-1\x00 inside input."
+    changes = [
+        OwnedSectionReplacement(name="summary", content=payload),
+        OwnedSectionReplacement(name="review-status", content="Reviewed."),
+    ]
+    result = replace_owned_sections("Human.\n", changes)
+    assert payload in result
+    assert replace_owned_sections(result, changes) == result

@@ -621,7 +621,9 @@ Summary and dependency updates preserve embedded plans, fenced examples, and
 unrelated sections. An existing managed block is replaced in place. When an
 empty update removes its content while a same-named human section remains, an
 empty marker pair retains ownership so retries cannot delete the human section,
-including headings exposed by removing old HTML content.
+including headings exposed by removing old HTML content. Summary and review-status
+changes are assembled together, so preservation and empty-pair decisions reflect
+the complete update.
 Otherwise the empty owned block is removed. Older unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
 column-zero heading, stopping at the next top-level H1/H2 heading (including
 indented and setext headings), managed block, or code fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
