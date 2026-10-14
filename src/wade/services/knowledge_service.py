@@ -1069,9 +1069,21 @@ def get_annotated_knowledge(
             ]
             for member in sorted(members):
                 member_state = states.get(member)
+                displayed_member = next(e for e in entries if e.entry_id == member)
+                member_matches = (
+                    member_state is not None
+                    and member_state.body_digest == body_digest(displayed_member)
+                )
+                member_assessment = (
+                    member_state.assessment
+                    if member_state is not None and member_matches
+                    else "needs-recheck"
+                    if member_state is not None and member_state.assessments
+                    else "unverified"
+                )
                 result_parts.append(
                     f"\n> Exact duplicate member {member}: "
-                    f"{member_state.assessment if member_state else 'unverified'}; "
+                    f"{member_assessment}; "
                     "own receipts retained (use --all-history or reconcile --json).\n"
                 )
         else:

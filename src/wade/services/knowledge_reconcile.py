@@ -59,7 +59,8 @@ def _history_text(root: Path, commit: str, path: str) -> str:
 
 
 def _closing_tree_state(root: Path, config: KnowledgeConfig, commit: str) -> KnowledgeTreeState:
-    text = git_knowledge.read_tree_text(root, commit, config.path) or ""
+    path = resolve_knowledge_path(root, config).relative_to(root.resolve()).as_posix()
+    text = git_knowledge.read_tree_text(root, commit, path) or ""
     if validate_knowledge_text(text):
         raise ValueError("Invalid knowledge snapshot in closing comparison")
     entries = parse_entries(text)
@@ -71,7 +72,7 @@ def _closing_tree_state(root: Path, config: KnowledgeConfig, commit: str) -> Kno
         key = entry.entry_id or canonical_json(["plain", raw])
         grouped.setdefault(key, []).append(raw)
     history = decode_history(
-        _history_text(root, commit, str(resolve_ratings_path(Path(config.path))))
+        _history_text(root, commit, resolve_ratings_path(Path(path)).as_posix())
     )
     if history.problems:
         raise ValueError("Invalid knowledge history in closing comparison")

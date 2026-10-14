@@ -1555,3 +1555,109 @@ def test_bootstrap_author_uses_effective_config_before_copy(
     assert (root / ".wade/knowledge-author.json").read_bytes() == original
     assert load_config(root).knowledge.enabled
     assert actor(root).author
+
+
+@pytest.mark.parametrize("push_mode", ["initial", "merge-retry", "force-retry"])
+def test_dirty_knowledge_during_successful_push_cannot_finalize(
+    owned_repo: Path, monkeypatch: pytest.MonkeyPatch, push_mode: str
+) -> None:
+    from importlib import import_module
+
+    from wade.git.repo import GitError
+
+    done = import_module("wade.services.implementation_service.done")
+    main = owned_repo.parent / "main"
+    remote = main.parent / "push-remote"
+    remote.mkdir()
+    git(remote, "init", "--bare")
+    git(main, "remote", "add", "origin", str(remote))
+    approved = git(owned_repo, "rev-parse", "HEAD").strip()
+    git(main, "push", "origin", f"{approved}:refs/heads/feat/510-owner")
+    git(main, "update-ref", "refs/remotes/origin/feat/510-owner", approved)
+    original_push = done.git_repo.push_branch
+    calls = 0
+
+    def push_then_edit(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if push_mode != "initial" and calls == 1:
+            raise GitError("non-fast-forward")
+        original_push(*args, **kwargs)
+        with (owned_repo / "KNOWLEDGE.ratings.jsonl").open("a") as stream:
+            stream.write('{"id":"claim-a","dir":"up","event_id":"during-push"}\n')
+
+    monkeypatch.setattr(done.git_repo, "push_branch", push_then_edit)
+    monkeypatch.setattr(done.git_sync, "fetch_origin", lambda *_: None)
+    monkeypatch.setattr(done.prompts, "is_tty", lambda: True)
+    monkeypatch.setattr(done.prompts, "select", lambda *_: int(push_mode == "force-retry"))
+    assert not done._push_branch_with_recovery(
+        main,
+        "feat/510-owner",
+        owned_repo,
+        owned_repo,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        expected_head=approved,
+    )
+    assert git(remote, "rev-parse", "refs/heads/feat/510-owner").strip() == approved
+    assert git(owned_repo, "rev-parse", "HEAD").strip() == approved
+    assert not list((owned_repo / ".wade").glob("done@*"))
+
+
+def test_valid_newlineless_history_survives_assessment_append(owned_repo: Path) -> None:
+    from wade.services.knowledge_assessment import check_entry
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+
+    config = KnowledgeConfig(enabled=True)
+    path = owned_repo / "KNOWLEDGE.ratings.jsonl"
+    original = '{"id":"claim-a","dir":"up","event_id":"old-valid"}'
+    path.write_text(original)
+    git(owned_repo, "commit", "-am", "test: valid history without trailing newline")
+    assert reconcile_knowledge(owned_repo, config).valid
+    check_entry(owned_repo, config, "claim-a", "current", files=("source.py",), note="Fresh proof")
+    git(owned_repo, "commit", "-am", "docs: append new evidence")
+    report = reconcile_knowledge(owned_repo, config)
+    assert report.valid, report.problems
+    assert path.read_text().startswith(original + "\n")
+    assert report.entries[0].assessment == "checked-current"
+
+
+def test_changed_duplicate_member_cannot_inherit_assessment(owned_repo: Path) -> None:
+    from wade.services.knowledge_assessment import check_entry
+
+    config = KnowledgeConfig(enabled=True)
+    path = owned_repo / "KNOWLEDGE.md"
+    original = path.read_text()
+    different = (
+        original[original.index("## claim-a") :]
+        .replace("claim-a", "claim-z")
+        .replace("forty two", "seven")
+    )
+    path.write_text(original + "\n" + different)
+    git(owned_repo, "commit", "-am", "docs: distinct member claim")
+    check_entry(owned_repo, config, "claim-z", "current", files=("source.py",), note="Old body")
+    git(owned_repo, "commit", "-am", "docs: assess distinct member")
+    # Matching the representative only in displayed, uncommitted prose grants no authority.
+    path.write_text(original + "\n" + different.replace("seven", "forty two"))
+    rendered = knowledge.get_annotated_knowledge(owned_repo, config).content
+    assert rendered is not None
+    assert "Exact duplicate member claim-z: needs-recheck" in rendered
+    assert "Exact duplicate member claim-z: checked-current" not in rendered
+
+
+@pytest.mark.parametrize("configured_path", ["./KNOWLEDGE.md", "notes/../KNOWLEDGE.md"])
+def test_normalized_config_path_survives_clean_closing_sync(
+    owned_repo: Path, configured_path: str
+) -> None:
+    from wade.services.knowledge_reconcile import reconcile_knowledge, unchanged_knowledge_sync
+
+    config = KnowledgeConfig(enabled=True, path=configured_path)
+    assert reconcile_knowledge(owned_repo, config).valid
+    reviewed = git(owned_repo, "rev-parse", "HEAD").strip()
+    main = owned_repo.parent / "main"
+    (main / "incoming.txt").write_text("Independent incoming change\n")
+    git(main, "add", "incoming.txt")
+    git(main, "commit", "-m", "test: advance main")
+    base = git(main, "rev-parse", "HEAD").strip()
+    git(owned_repo, "merge", "--no-ff", "--no-edit", "main")
+    current = git(owned_repo, "rev-parse", "HEAD").strip()
+    assert unchanged_knowledge_sync(owned_repo, config, reviewed, base, current)

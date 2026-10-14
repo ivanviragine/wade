@@ -1151,7 +1151,7 @@ def _push_branch_with_recovery(
     mark_candidate()
     try:
         push_candidate()
-        if not candidate_matches():
+        if not ready():
             return False
         console.success("Branch pushed.")
         return True
@@ -1200,7 +1200,7 @@ def _push_branch_with_recovery(
                 return False
             mark_candidate()
             push_candidate()
-            if not candidate_matches():
+            if not ready():
                 return False
             console.success("Merged the remote and pushed.")
             return True
@@ -1215,7 +1215,7 @@ def _push_branch_with_recovery(
             if not ready():
                 return False
             push_candidate(force=True)
-            if not candidate_matches():
+            if not ready():
                 return False
             console.success("Force-pushed with lease.")
             return True

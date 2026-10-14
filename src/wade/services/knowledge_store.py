@@ -41,6 +41,8 @@ def append_event(path: Path, record: dict[str, Any], *, tracked: bool = True) ->
                 return False
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fd:
+            if text and not text.endswith("\n"):
+                fd.write("\n")
             fd.write(canonical_json(record) + "\n")
             fd.flush()
             os.fsync(fd.fileno())

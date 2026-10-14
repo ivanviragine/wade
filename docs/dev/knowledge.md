@@ -156,7 +156,8 @@ one parent, and typed history must be the exact immutable parent union. Concurre
 ambiguous edits, added knowledge in an amended merge, multiple merge bases, or
 invalid snapshots require the normal fresh closing workflow. This comparison
 covers knowledge/history, not every non-knowledge source-tree change.
-Pre-push checks require a clean tree, repeat reconciliation, and verify the
+Before and after every successful push, checks require a clean tree, repeat
+reconciliation, and verify the
 pinned tip. Push names the approved SHA explicitly, so a concurrent branch advance
 cannot substitute a later commit. A recovery merge on that pinned path requires
 fresh closing checks rather than re-keying an old review to a new candidate.
