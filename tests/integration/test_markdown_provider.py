@@ -709,3 +709,49 @@ def test_cr_only_close_preserves_raw_bytes_and_read_semantics(
     else:
         assert _git_bytes(main, "ls-files", "--stage", "-z") == index
     assert _git_bytes(main, "show", ":unrelated.txt") == b"staged user content\n"
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_close_preserves_fenced_examples_and_shared_raw_spans(md_repo, newline: bytes) -> None:
+    main, _ = md_repo
+    provider = MarkdownIssueProvider(
+        parse_config_file(main / ".wade.yml").provider, project_root=main
+    )
+    original = newline.join(
+        [
+            b"# Prelude  ",
+            b"~~~",
+            b"## #99 Prelude example",
+            b"~~~",
+            b"",
+            b"## #42: Seed task  ",
+            b"",
+            b"<!-- wade",
+            b"state: open",
+            b"owner: user",
+            b"-->",
+            b"",
+            b"````markdown",
+            b"```",
+            b"## #98 Body example",
+            b"```",
+            b"````",
+            b"Trailing explanation.  ",
+            b"",
+            b"## #17 Other",
+            b"",
+            b"<!-- wade",
+            b"state: open",
+            b"-->",
+            b"",
+            b"Other body  ",
+            b"",
+        ]
+    )
+    task_file = main / "ISSUES.md"
+    task_file.write_bytes(original)
+    provider.close_task("42")
+    assert task_file.read_bytes() == original.replace(b"state: open", b"state: closed", 1)
+    assert {task.id for task in provider.list_tasks(state=None)} == {"42", "17"}
+    assert provider.read_task("42").state == TaskState.CLOSED
+    assert provider.read_task("17").state == TaskState.OPEN
