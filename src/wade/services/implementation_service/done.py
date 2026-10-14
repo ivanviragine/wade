@@ -527,11 +527,16 @@ def _gate_knowledge_valid(
     from wade.services.knowledge_reconcile import reconcile_knowledge, render_report
 
     try:
+        from wade.git.knowledge import resolve_completion_base
+
+        resolved_base = (
+            resolve_completion_base(worktree_root, effective_base) if effective_base else None
+        )
         report = reconcile_knowledge(
             worktree_root,
             config.knowledge,
             main_ref=config.project.main_branch,
-            effective_base=effective_base,
+            effective_base=resolved_base,
         )
         checked_head = git_repo.rev_parse(worktree_root, "HEAD")
     except (ValueError, OSError, GitError) as exc:

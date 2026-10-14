@@ -55,6 +55,9 @@ line order and newer timestamps do not decide authority.
   entry is explicitly superseded/retired; an ADR may also have file evidence.
 
 Digests use `sha256:<64 lowercase hex>`; commits/blob IDs use full Git object IDs.
+Evidence paths with skip-worktree/assume-unchanged flags are refused, including
+injected AGENTS/gitignore paths. Other unflagged source remains usable without
+editing generated files. Local proof ignores replacement objects and never fetches.
 
 ## Utility and historical feedback
 

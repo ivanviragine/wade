@@ -14,7 +14,7 @@ from wade.models.knowledge import GitBlobSnapshot, GitFileEvidence
 def _run_git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Read locally available objects only, without index refresh or lazy fetch."""
     env = os.environ.copy()
-    env.update(GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0")
+    env.update(GIT_NO_LAZY_FETCH="1", GIT_OPTIONAL_LOCKS="0", GIT_NO_REPLACE_OBJECTS="1")
     result = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
     if check and result.returncode:
         raise GitError(result.stderr.strip() or "Local knowledge Git query failed")
@@ -29,6 +29,16 @@ def resolve_commit(root: Path, ref: str) -> str:
     if len(commit) not in {40, 64} or any(c not in "0123456789abcdef" for c in commit):
         raise GitError("Git did not resolve a full commit object ID")
     return commit
+
+
+def resolve_completion_base(root: Path, logical_base: str) -> str:
+    """Snapshot the same remote-first local refs used by completion's sync probe."""
+    for ref in (f"origin/{logical_base}", logical_base):
+        try:
+            return resolve_commit(root, ref)
+        except GitError:
+            continue
+    raise GitError(f"Completion base {logical_base!r} is not locally available")
 
 
 def tree_blob(root: Path, commit: str, path: str) -> GitBlobSnapshot | None:
@@ -61,6 +71,18 @@ def read_tree_text(root: Path, commit: str, path: str) -> str | None:
 
 
 def assert_source_clean(root: Path, path: str) -> None:
+    # Git diff intentionally ignores these per-path index flags. Generated
+    # pointers may legitimately use them, but a flagged evidence path cannot
+    # establish ordinary committed-source proof. Other paths remain usable.
+    records = _run_git("--literal-pathspecs", "ls-files", "-v", "-z", "--", path, cwd=root)
+    if any(
+        record and (record[0] == "S" or record[0].islower())
+        for record in records.stdout.split("\0")
+    ):
+        raise ValueError(
+            f"Referenced source {path!r} has skip-worktree/assume-unchanged index flags; "
+            "hidden working edits cannot establish committed proof"
+        )
     for flags in (("--cached", "HEAD"), ()):
         result = _run_git(
             "--literal-pathspecs", "diff", "--quiet", *flags, "--", path, cwd=root, check=False

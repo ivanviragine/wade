@@ -13,6 +13,7 @@ from wade.models.interactive_plan import PlanHandoffProgress
 from wade.models.knowledge import (
     DetachedObserverOperationBinding,
     KnowledgeProposal,
+    ObserverOperationBinding,
     ProposalAcceptanceEvent,
     ProposalDisposition,
     ProposalOwner,
@@ -96,14 +97,53 @@ def stage_proposal(
         if entry is None:
             raise ValueError("Proposal entry is missing from the local knowledge snapshot")
         digest = body_digest(entry)
-    owner = ProposalOwner(
-        repository_id=context.repository_id,
-        operation_id=context.operation_id,
-        session_id=operation_id or context.session_id,
-        provider=context.provider,
-        task_id=task_id or context.task_id,
-        base_commit=context.base_commit,
+    registered: bytes | None = None
+    if observer is not None:
+        owner = observer.owner
+    else:
+        registered = read_state_file(
+            git_knowledge.common_directory(root),
+            ("knowledge", "observer-bindings"),
+            _key(context.operation_id) + ".json",
+        )
+        if registered is not None:
+            frozen = ObserverOperationBinding.model_validate_json(registered).task
+            owner = ProposalOwner(
+                repository_id=frozen.repository_id,
+                operation_id=frozen.operation_id,
+                session_id=frozen.session_id,
+                provider=frozen.provider,
+                task_id=frozen.originating_task_id,
+                base_commit=frozen.base_commit,
+            )
+        else:
+            owner = ProposalOwner(
+                repository_id=context.repository_id,
+                operation_id=context.operation_id,
+                session_id=operation_id or context.session_id,
+                provider=context.provider,
+                task_id=task_id or context.task_id,
+                base_commit=context.base_commit,
+            )
+    if (
+        owner.repository_id != context.repository_id
+        or owner.operation_id != context.operation_id
+        or owner.provider != context.provider
+        or (task_id is not None and owner.task_id != task_id)
+    ):
+        raise ValueError("Observer differs from its registered repository/task ownership")
+    # The registration, not a concurrently advanced live HEAD, owns the
+    # observation snapshot. A changed claim requires a fresh bounded operation.
+    original_text = git_knowledge.read_tree_text(
+        root, owner.base_commit, path.relative_to(root.resolve()).as_posix()
     )
+    original_entry = next(
+        (e for e in parse_entries(original_text or "") if e.entry_id == entry_id), None
+    )
+    if (observer is not None or registered is not None) and (
+        original_entry is None or body_digest(original_entry) != digest
+    ):
+        raise ValueError("Claim differs from the observer's original frozen snapshot; retry fresh")
     stable_payload = dict(payload)
     if stable_payload.get("event_id"):
         stable_payload.pop("ts", None)

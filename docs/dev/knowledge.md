@@ -12,7 +12,12 @@ Assessment (`unverified`, `checked-current`, `contradicted`, `needs-recheck`),
 publication (`branch-local`, `integrated`, `unavailable`), usefulness and historical
 relationships are independent. `knowledge check` derives claim-body SHA256,
 HEAD, ordinary tracked file blobs and UTC timestamp. Dirty/staged/untracked,
-missing, symlink and submodule evidence is refused before appending. Explicit
+missing, symlink and submodule evidence is refused before appending. Evidence
+paths marked skip-worktree or assume-unchanged fail closed: their hidden working
+bytes cannot establish committed proof. Normal injected AGENTS/gitignore flags
+do not block unrelated unflagged source paths, and no generated files are edited.
+Local object reads disable Git replacement objects as well as lazy fetching.
+Explicit
 JSON evidence additionally supports recorded tests, fetched URL snapshots and
 PR/issue/ADR decisions. No command automatically runs tests or fetches URL bytes.
 
@@ -68,7 +73,10 @@ Observations persist directly in ignored Git-common-dir `.wade/knowledge/`
 partitions, not main's tracked sidecar. Each schema1 proposal retains repository
 identity, operation/session identity, provider, originating task when known,
 base commit, entry/body digest, original payload, proposal ID and optional plan
-member. Parent task bindings identify the actual persisted destination task.
+member. Parent task bindings identify the actual persisted destination task. Bounded
+worker proposals use the registered base even if an author advances live HEAD;
+a changed claim snapshot requires a fresh operation rather than corrupting the
+repository queue.
 A completed planning parent records that association after task persistence and
 before offering child implementation or cleanup. Multi-plan observations without
 member ownership remain unresolved; another worktree cannot claim them by
@@ -126,7 +134,10 @@ and renders. Generated session bundles/support projections are never edited.
 
 Knowledge changes must be committed before final review. Shared implementation
 and PR-comment completion runs authoritative read-only reconciliation after
-normal sync. Pre-push checks require a clean tree and repeat reconciliation;
+normal sync. Completion resolves the logical effective base to a full locally
+available object ID using its sync probe's remote-first branch order, including
+remote-only PR bases; it never fetches inside reconciliation. Pre-push checks
+require a clean tree and repeat reconciliation;
 a recovery merge changing HEAD repeats both before re-keying the done marker or
 retrying a push. Failure clears the marker and prevents PR finalization. This
 does not alter pre-sync review policy, configured pass caps or sanctioned review

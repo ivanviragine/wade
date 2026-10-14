@@ -1133,3 +1133,161 @@ def test_detached_bounded_observation_keeps_verified_destination_after_cleanup(
     else:
         accepted = accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id)
         assert accepted.entry_id == "claim-a"
+
+
+@pytest.mark.parametrize("flag", ["--skip-worktree", "--assume-unchanged"])
+def test_hidden_index_flags_cannot_grant_committed_source_proof(
+    owned_repo: Path, flag: str
+) -> None:
+    from wade.services.knowledge_assessment import check_entry
+
+    git(owned_repo, "update-index", flag, "source.py")
+    (owned_repo / "source.py").write_text("answer = 7\n")
+    assert not git(owned_repo, "diff", "--", "source.py")
+    original = (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes()
+    with pytest.raises(ValueError, match=r"(?i)(flag|hidden|skip|unchanged)"):
+        check_entry(
+            owned_repo,
+            KnowledgeConfig(enabled=True),
+            "claim-a",
+            "current",
+            files=("source.py",),
+            note="Refuse hidden edits",
+        )
+    assert (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes() == original
+
+
+def test_replacement_objects_cannot_substitute_committed_source_proof(owned_repo: Path) -> None:
+    from wade.services.knowledge_assessment import check_entry
+
+    original_head = git(owned_repo, "rev-parse", "HEAD").strip()
+    (owned_repo / "source.py").write_text("answer = 7\n")
+    git(owned_repo, "commit", "-am", "test: alternate source")
+    alternate = git(owned_repo, "rev-parse", "HEAD").strip()
+    git(owned_repo, "reset", "--hard", original_head)
+    git(owned_repo, "read-tree", "--reset", "-u", alternate)
+    git(owned_repo, "replace", original_head, alternate)
+    assert not git(owned_repo, "diff", "HEAD", "--", "source.py")
+    original = (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes()
+    with pytest.raises(ValueError, match=r"dirty|staged"):
+        check_entry(
+            owned_repo,
+            KnowledgeConfig(enabled=True),
+            "claim-a",
+            "current",
+            files=("source.py",),
+            note="Raw committed tree only",
+        )
+    assert (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes() == original
+
+
+@pytest.mark.parametrize("detached", [False, True])
+def test_observer_keeps_registered_base_after_author_advances(
+    owned_repo: Path, monkeypatch: pytest.MonkeyPatch, detached: bool
+) -> None:
+    from wade.services.knowledge_assessment import feedback
+    from wade.services.knowledge_proposals import (
+        accept_proposal,
+        bind_completed_parent,
+        proposals,
+        register_observer_operation,
+    )
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+
+    root = owned_repo
+    parent_id = None
+    if detached:
+        root, parent_id = _completed_parent(owned_repo.parent / "main")
+    frozen = git(root, "rev-parse", "HEAD").strip()
+    register_observer_operation(root, "concurrent-observer")
+    (root / "unrelated.txt").write_text("author advanced\n")
+    git(root, "add", "unrelated.txt")
+    git(root, "commit", "-m", "test: concurrent author commit")
+    monkeypatch.setenv("WADE_KNOWLEDGE_OBSERVER", "1")
+    monkeypatch.setenv("WADE_KNOWLEDGE_OPERATION_ID", "concurrent-observer")
+    feedback(root, KnowledgeConfig(enabled=True), "claim-a", "useful")
+    monkeypatch.delenv("WADE_KNOWLEDGE_OBSERVER")
+    monkeypatch.delenv("WADE_KNOWLEDGE_OPERATION_ID")
+    proposal = proposals(root)[0]
+    assert proposal.owner.base_commit == frozen
+    assert reconcile_knowledge(owned_repo, KnowledgeConfig(enabled=True)).valid
+    if parent_id:
+        bind_completed_parent(root, parent_id)
+    assert (
+        accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id).entry_id
+        == "claim-a"
+    )
+
+
+def test_completion_knowledge_gate_supports_remote_only_base(owned_repo: Path) -> None:
+    from importlib import import_module
+
+    done = import_module("wade.services.implementation_service.done")
+    head = git(owned_repo, "rev-parse", "HEAD").strip()
+    git(owned_repo, "update-ref", "refs/remotes/origin/develop", head)
+    assert done._behind_count(owned_repo, "develop", "HEAD") == 0
+    assert done._gate_knowledge_valid(
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)), owned_repo, "develop"
+    )
+
+
+def test_normal_bootstrap_flags_do_not_block_unflagged_source_receipting(
+    evidence_repo: Path,
+) -> None:
+    from wade.models.workflow import SessionKind
+    from wade.services.implementation_service.bootstrap import bootstrap_worktree
+    from wade.services.knowledge_assessment import check_entry
+
+    (evidence_repo / "AGENTS.md").write_text("# Fixture project instructions\n")
+    git(evidence_repo, "add", "AGENTS.md")
+    git(evidence_repo, "commit", "-m", "test: tracked project instructions")
+    owner = evidence_repo.parent / "bootstrapped-owner"
+    git(evidence_repo, "worktree", "add", "-b", "feat/510-bootstrapped", str(owner))
+    bootstrap_worktree(
+        owner,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        evidence_repo,
+        session_kind=SessionKind.IMPLEMENTATION,
+        task_id="510",
+        selected_ai_tool="codex",
+    )
+    flags = git(owner, "ls-files", "-v", "--", "AGENTS.md", ".gitignore")
+    assert "S AGENTS.md" in flags
+    assert "S .gitignore" in flags
+    event = check_entry(
+        owner,
+        KnowledgeConfig(enabled=True),
+        "claim-a",
+        "current",
+        files=("source.py",),
+        note="Ordinary committed source",
+    )
+    assert event.evidence[0].path == "source.py"
+    with pytest.raises(ValueError, match=r"(?i)(flag|hidden|skip|unchanged)"):
+        check_entry(
+            owner,
+            KnowledgeConfig(enabled=True),
+            "claim-a",
+            "current",
+            files=("AGENTS.md",),
+            note="Injected file is not ordinary proof",
+        )
+
+
+def test_changed_observer_claim_requires_fresh_operation_without_corrupting_queue(
+    owned_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wade.services.knowledge_assessment import feedback
+    from wade.services.knowledge_proposals import proposals, register_observer_operation
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+
+    register_observer_operation(owned_repo, "stale-observer")
+    path = owned_repo / "KNOWLEDGE.md"
+    path.write_text(path.read_text().replace("forty two", "seven"))
+    git(owned_repo, "commit", "-am", "test: author changes observed claim")
+    monkeypatch.setenv("WADE_KNOWLEDGE_OBSERVER", "1")
+    monkeypatch.setenv("WADE_KNOWLEDGE_OPERATION_ID", "stale-observer")
+    with pytest.raises(ValueError, match="original frozen snapshot"):
+        feedback(owned_repo, KnowledgeConfig(enabled=True), "claim-a", "useful")
+    assert not proposals(owned_repo)
+    assert reconcile_knowledge(owned_repo, KnowledgeConfig(enabled=True)).valid

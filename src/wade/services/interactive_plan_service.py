@@ -220,6 +220,7 @@ def _current_bundle(root: Path, state: InteractivePlanState) -> PlanBundle:
             for member in state.bundle.plans
         ),
         knowledge_votes=state.bundle.knowledge_votes,
+        knowledge_proposals=state.bundle.knowledge_proposals,
     )
 
 

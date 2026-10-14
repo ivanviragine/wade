@@ -1072,6 +1072,8 @@ and historical relationships. Use `wade knowledge check <id> current|contradicte
 usefulness. Legacy up/down/stale votes remain historical; they never hide claims
 or establish correctness. `knowledge reconcile --against HEAD --check --json`
 reports committed proof without fetching or changing HEAD/index/working files.
+Source evidence marked skip-worktree/assume-unchanged is refused; normal generated
+pointer flags do not block other source paths. Proof ignores replacement objects.
 `--apply` appends exact-duplicate aliases while retaining every member's history.
 
 Main, detached planning/dependency sessions and bounded reviewers persist ignored
