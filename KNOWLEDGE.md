@@ -791,3 +791,9 @@ For issue #480, delegation_service.delegate() remains the one dispatcher for dep
 For issue #480 sandbox tests, the autouse conftest fixture clears both SANDBOX_SIGNAL_ENV_VARS and real Codex identity markers in CODEX_IDENTITY_ENV_VARS. Tests that need another enclosing runtime still set or clear competing identity markers deliberately; do not claim the fixture never clears identity markers.
 
 ---
+
+## 377ad9019298 | 2026-10-14 | implementation | tags: git, hooks | Issue #489
+
+Git's path-limited `commit --only` can still admit unrelated paths staged by a pre-commit hook into its candidate index; on Apple Git 2.50.1, preparation/message-hook staging instead occurs after the committed tree is frozen. Validate the actual candidate tree before the reference update rather than assuming every hook phase rereads the index. A reference-transaction guard must also allow Git's normal zero-OID AUTO_MERGE deletion after a valid commit, or it can report failure after HEAD has already advanced.
+
+---
