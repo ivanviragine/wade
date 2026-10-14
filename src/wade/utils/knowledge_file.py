@@ -192,11 +192,14 @@ def validate_knowledge_file(path: Path) -> list[str]:
     heading-shaped line quoted inside an entry *body* is legitimate — flagging it
     would be a false positive that blocks an otherwise-valid PR at ``done``.
     """
-    problems: list[str] = []
     if not path.is_file():
-        return problems
-    text = path.read_text(encoding="utf-8")
+        return []
+    return validate_knowledge_text(path.read_text(encoding="utf-8"))
 
+
+def validate_knowledge_text(text: str) -> list[str]:
+    """Validate a committed text snapshot without filesystem writes."""
+    problems: list[str] = []
     entries = parse_entries(text)
     counts: dict[str, int] = {}
     for entry in entries:

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.3.0] — 2026-10-14
+
+### Features
+
+- make project knowledge evidence-bound and reconcile it at PR integration (#537) (5e0888c)
+
 ## [v1.2.20] — 2026-10-14
 
 ### Bug Fixes

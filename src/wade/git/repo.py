@@ -569,7 +569,11 @@ def status_porcelain_paths(cwd: Path, *paths: str) -> list[str]:
 
 
 def push_branch(
-    repo_root: Path, branch: str, set_upstream: bool = False, force: bool = False
+    repo_root: Path,
+    branch: str,
+    set_upstream: bool = False,
+    force: bool = False,
+    source_commit: str | None = None,
 ) -> None:
     """Push a branch to origin.
 
@@ -578,6 +582,8 @@ def push_branch(
         branch: Branch name to push.
         set_upstream: If True, add ``-u`` to track the remote branch.
         force: If True, use ``--force-with-lease`` to allow non-fast-forward pushes.
+        source_commit: Optional full immutable commit to deliver instead of re-reading
+            a concurrently moving local branch. Upstream still tracks ``branch``.
 
     Raises:
         GitError: If the push fails.
@@ -585,11 +591,20 @@ def push_branch(
     args = ["push"]
     if force:
         args.append("--force-with-lease")
-    if set_upstream:
+    if source_commit is not None:
+        if len(source_commit) not in {40, 64} or any(
+            c not in "0123456789abcdef" for c in source_commit
+        ):
+            raise GitError("Pinned push source must be a full commit object ID")
+        args.extend(["origin", f"{source_commit}:refs/heads/{branch}"])
+    elif set_upstream:
         args.extend(["-u", "origin", branch])
     else:
         args.extend(["origin", branch])
     _run_git_with_retry(*args, cwd=repo_root)
+    if source_commit is not None and set_upstream:
+        _run_git("config", f"branch.{branch}.remote", "origin", cwd=repo_root)
+        _run_git("config", f"branch.{branch}.merge", f"refs/heads/{branch}", cwd=repo_root)
 
 
 def checkout(repo_root: Path, branch: str) -> None:
