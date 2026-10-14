@@ -827,3 +827,9 @@ Python str.splitlines() treats U+000B, U+000C, U+001C through U+001E, U+0085, U+
 gh api -F converts integer-looking values but leaves fractional values as strings; GraphQL Float variables therefore need a JSON request body through --input - rather than -F number=33.333333. Audit the serialized stdin JSON type, not just a provider's Python argument, when testing numeric Projects mutations.
 
 ---
+
+## 07f33189950f | 2026-10-14 | implementation | tags: testing, rich, ci | Issue #39
+
+NO_COLOR=1 suppresses Rich color but can leave bold ANSI sequences in Typer help; TERM=xterm-256color with FORCE_COLOR=1 exposes flags split across escape sequences even when dumb-terminal tests pass. Check semantic help with click.unstyle while retaining command exit assertions; keep exact-byte assertions for emitted commands and JSON.
+
+---

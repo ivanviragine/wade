@@ -68,6 +68,15 @@ to stderr and must keep stdout limited to the worktree path, even during recover
 Execute only non-destructive emitted inspection commands in disposable Git repos,
 from another working directory, and verify stash membership and data remain intact.
 
+## Help-output assertions
+
+Rich may retain bold ANSI styling with `NO_COLOR=1`; a forced-color terminal can
+therefore split the visible `--json` flag across escape sequences. For semantic
+help assertions, retain the exit-code check and compare `click.unstyle(stdout)`,
+covering both `TERM=dumb` without `FORCE_COLOR` and `TERM=xterm-256color` with
+`FORCE_COLOR=1`. Preserve raw bytes when the test contract concerns exact output
+or emitted shell commands instead of visible help text.
+
 ## Running Tests
 
 ```bash

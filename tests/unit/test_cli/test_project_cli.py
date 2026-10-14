@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from wade.cli.project import project_app
@@ -12,9 +13,19 @@ from wade.models.project import ProjectError
 
 
 @pytest.mark.parametrize("command", ["items", "rank", "pick", "sync"])
-def test_all_commands_discoverable(command: str) -> None:
+@pytest.mark.parametrize("terminal", ["dumb", "xterm-256color"])
+def test_all_commands_discoverable(
+    command: str, terminal: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TERM", terminal)
+    monkeypatch.setenv("NO_COLOR", "1")
+    if terminal == "dumb":
+        monkeypatch.delenv("FORCE_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("FORCE_COLOR", "1")
     result = CliRunner().invoke(project_app, [command, "--help"])
-    assert result.exit_code == 0 and "--json" in result.stdout
+    assert result.exit_code == 0
+    assert "--json" in unstyle(result.stdout)
 
 
 @pytest.mark.parametrize(
