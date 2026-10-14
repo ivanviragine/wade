@@ -346,6 +346,18 @@ class KnowledgeActor(KnowledgeModel):
     author: bool = False
 
 
+class DetachedObserverOperationBinding(KnowledgeModel):
+    """Original detached parent/task association captured before worker launch."""
+
+    schema_version: Literal[1] = 1
+    owner: ProposalOwner
+    frozen_bundle_digest: Digest
+    parent_worktree: str
+    parent_session_id: str | None = None
+    plan_filename: str | None = None
+    task_ids: tuple[str, ...] = ()
+
+
 class ObserverOperationBinding(KnowledgeModel):
     """Trusted existing-task parent proof captured before a bounded worker starts."""
 

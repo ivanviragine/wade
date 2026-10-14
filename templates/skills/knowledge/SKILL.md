@@ -79,7 +79,10 @@ wade knowledge proposals recover --worktree <original-retained-parent> --from-ma
 Acceptance requires the original completed parent's persisted task/member
 association, matching repository/provider/task and unchanged claim content.
 It grants no correctness: assess fresh committed evidence separately. Multi-plan
-observations without a specific member remain pending. Queue originals and
+observations without a specific member remain pending. Bounded plan/dependency
+workers retain their original parent or service-verified task association before
+launch; ambiguous multi-task destinations remain pending after cleanup.
+Queue originals and
 auditable dispositions survive worktree cleanup. Recovery preserves original
 legacy bytes, never drains/reset main's old spool, and never guesses ownership
 from the next worktree or a caller-supplied task number.

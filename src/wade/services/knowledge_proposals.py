@@ -11,6 +11,7 @@ from wade.git import knowledge as git_knowledge
 from wade.models.config import KnowledgeConfig
 from wade.models.interactive_plan import PlanHandoffProgress
 from wade.models.knowledge import (
+    DetachedObserverOperationBinding,
     KnowledgeProposal,
     ProposalAcceptanceEvent,
     ProposalDisposition,
@@ -66,6 +67,15 @@ def find_proposal(root: Path, proposal_id: str) -> KnowledgeProposal:
     return matches[0]
 
 
+def _detached_observer(root: Path, operation_id: str) -> DetachedObserverOperationBinding | None:
+    raw = read_state_file(
+        git_knowledge.common_directory(root),
+        ("knowledge", "detached-observers"),
+        _key(operation_id) + ".json",
+    )
+    return DetachedObserverOperationBinding.model_validate_json(raw) if raw is not None else None
+
+
 def stage_proposal(
     root: Path,
     config: KnowledgeConfig,
@@ -77,6 +87,9 @@ def stage_proposal(
     plan_filename: str | None = None,
 ) -> KnowledgeProposal:
     context = knowledge_ownership.actor(root, create_operation=True, operation_id=operation_id)
+    observer = _detached_observer(root, context.operation_id)
+    if observer is not None:
+        plan_filename = plan_filename or observer.plan_filename
     path = resolve_knowledge_path(root, config)
     with file_lock(path):
         entry = next((e for e in parse_entries(path.read_text()) if e.entry_id == entry_id), None)
@@ -170,7 +183,9 @@ def bind_task_operation(root: Path, binding: TaskOperationBinding, *, proposal_i
     if binding.repository_id != git_knowledge.repository_identity(root):
         raise ValueError("Task binding belongs to a different repository")
     session_id, bundle, progress, manifest = _parent_snapshot(root)
-    if session_id != binding.session_id:
+    observer = _detached_observer(root, binding.operation_id)
+    parent_id = observer.parent_session_id if observer is not None else binding.session_id
+    if session_id != parent_id:
         raise ValueError("Proposal association does not match completed parent session")
     if progress.provider is None or progress.provider.name != binding.provider:
         raise ValueError("Proposal task provider differs from original parent")
@@ -180,6 +195,11 @@ def bind_task_operation(root: Path, binding: TaskOperationBinding, *, proposal_i
     if mapping.get(binding.plan_filename or "") != binding.task_id:
         raise ValueError("No actual persisted task/member association for this proposal")
     proposal = find_proposal(root, proposal_id)
+    if observer is not None and (
+        observer.owner != proposal.owner
+        or observer.plan_filename not in {None, binding.plan_filename}
+    ):
+        raise ValueError("Proposal differs from its original detached parent operation")
     if (
         proposal.owner.operation_id != binding.operation_id
         or proposal.owner.session_id != binding.session_id
@@ -211,7 +231,11 @@ def bind_completed_parent(root: Path, session_id: str) -> None:
     pending = [
         p
         for p in proposals(root)
-        if p.owner.session_id == session_id and p.owner.operation_id == session_id
+        if (p.owner.session_id == session_id and p.owner.operation_id == session_id)
+        or (
+            (observer := _detached_observer(root, p.owner.operation_id)) is not None
+            and observer.parent_session_id == session_id
+        )
     ]
     if not pending:
         return
@@ -221,9 +245,7 @@ def bind_completed_parent(root: Path, session_id: str) -> None:
     mapping = dict(progress.persisted_issues)
     if len(bundle.plans) == 1 and manifest.task_id is not None:
         mapping.setdefault(bundle.plans[0].filename, manifest.task_id)
-    for proposal in proposals(root):
-        if proposal.owner.session_id != session_id or proposal.owner.operation_id != session_id:
-            continue
+    for proposal in pending:
         filename = proposal.plan_filename
         if filename is None and len(bundle.plans) == 1:
             filename = bundle.plans[0].filename
@@ -233,8 +255,8 @@ def bind_completed_parent(root: Path, session_id: str) -> None:
             root,
             TaskOperationBinding(
                 repository_id=proposal.owner.repository_id,
-                operation_id=session_id,
-                session_id=session_id,
+                operation_id=proposal.owner.operation_id,
+                session_id=proposal.owner.session_id or session_id,
                 provider=progress.provider.name,
                 task_id=mapping[filename],
                 originating_task_id=manifest.task_id,
@@ -264,6 +286,27 @@ def _binding(
             raw = (
                 ObserverOperationBinding.model_validate_json(observer)
                 .task.model_dump_json()
+                .encode()
+            )
+    if raw is None:
+        detached = _detached_observer(root, proposal.owner.operation_id)
+        if (
+            detached is not None
+            and detached.owner == proposal.owner
+            and detached.parent_session_id is None
+            and len(detached.task_ids) == 1
+        ):
+            raw = (
+                TaskOperationBinding(
+                    repository_id=proposal.owner.repository_id,
+                    operation_id=proposal.owner.operation_id,
+                    session_id=proposal.owner.session_id or proposal.owner.operation_id,
+                    provider=proposal.owner.provider or "",
+                    task_id=detached.task_ids[0],
+                    originating_task_id=proposal.owner.task_id,
+                    base_commit=proposal.owner.base_commit,
+                )
+                .model_dump_json()
                 .encode()
             )
     if raw is None:
@@ -500,6 +543,10 @@ def recover_legacy(
 
         if InteractivePlanState.model_validate_json(native).completed:
             bind_completed_parent(source, context.session_id)
+    elif read_state_file(source, ("plans",), "native-session.json") is not None:
+        # Collected results have no interactive completion flag. Their validated
+        # artifact plus actual persisted progress is the same ownership proof.
+        bind_completed_parent(source, context.session_id)
     return tuple(result)
 
 
@@ -537,6 +584,26 @@ def validate_queue_ownership(root: Path) -> None:
     for record in dispositions(root):
         if record.proposal_id not in pending:
             raise ValueError("Knowledge disposition names an unavailable original proposal")
+    detached_directory = common / ".wade/knowledge/detached-observers"
+    if detached_directory.is_symlink():
+        raise ValueError("Unsafe detached observer ownership directory")
+    if detached_directory.exists():
+        for path in detached_directory.glob("*.json"):
+            raw = read_state_file(common, ("knowledge", "detached-observers"), path.name)
+            if raw is None:
+                raise ValueError("Unreadable detached observer ownership")
+            detached = DetachedObserverOperationBinding.model_validate_json(raw)
+            if (
+                detached.owner.repository_id != identity
+                or path.name != _key(detached.owner.operation_id) + ".json"
+            ):
+                raise ValueError("Foreign detached observer ownership")
+            for proposal in pending.values():
+                if (
+                    proposal.owner.operation_id == detached.owner.operation_id
+                    and proposal.owner != detached.owner
+                ):
+                    raise ValueError("Detached proposal differs from original parent ownership")
     observer_directory = common / ".wade/knowledge/observer-bindings"
     if observer_directory.is_symlink():
         raise ValueError("Unsafe bounded observer ownership directory")
@@ -600,7 +667,14 @@ def validate_queue_ownership(root: Path) -> None:
                 )
 
 
-def register_observer_operation(root: Path, operation_id: str) -> None:
+def register_observer_operation(
+    root: Path,
+    operation_id: str,
+    *,
+    plan_filename: str | None = None,
+    task_ids: tuple[str, ...] = (),
+    delegation_digest: str | None = None,
+) -> None:
     """Bind an existing owning task before launch; do not accept any feedback."""
     from wade.config.loader import load_config
     from wade.models.knowledge import ObserverOperationBinding
@@ -611,12 +685,57 @@ def register_observer_operation(root: Path, operation_id: str) -> None:
         return
 
     manifest = load_session_manifest(root)
+    from wade.git import repo as git_repo
+
+    detached_deps = manifest is None and delegation_digest is not None
+    if manifest is None and not detached_deps:
+        return
+    if detached_deps and (not git_repo.is_worktree(root) or git_repo.is_head_attached(root)):
+        raise ValueError("Standalone dependency ownership requires its detached worktree")
+    context = knowledge_ownership.actor(root)
+    if detached_deps or (manifest is not None and manifest.session is SessionKind.PLAN):
+        detached_binding = DetachedObserverOperationBinding(
+            owner=ProposalOwner(
+                repository_id=context.repository_id,
+                operation_id=operation_id,
+                session_id=operation_id,
+                provider=context.provider,
+                task_id=context.task_id,
+                base_commit=context.base_commit,
+            ),
+            frozen_bundle_digest=manifest.bundle_digest
+            if manifest is not None
+            else delegation_digest or "",
+            parent_worktree=str(root.resolve()),
+            parent_session_id=context.session_id if manifest is not None else None,
+            plan_filename=plan_filename,
+            task_ids=task_ids if detached_deps else (),
+        )
+        if manifest is not None and detached_binding.parent_session_id is None:
+            return  # A parent without a stable handoff identity remains unresolved.
+        common = git_knowledge.common_directory(root)
+        parts = ("knowledge", "detached-observers")
+        filename = _key(operation_id) + ".json"
+        with file_lock(
+            common / ".wade/knowledge/queue.lock", create_parent=False, resolve_path=False
+        ):
+            previous = read_state_file(common, parts, filename)
+            if (
+                previous is not None
+                and DetachedObserverOperationBinding.model_validate_json(previous)
+                != detached_binding
+            ):
+                raise ValueError("Conflicting detached observer operation identity")
+            if previous is None and not atomic_write_state_file(
+                common, parts, filename, detached_binding.model_dump_json().encode()
+            ):
+                raise ValueError("Could not durably bind detached observer parent")
+        return
     if manifest is None or manifest.session not in {
         SessionKind.IMPLEMENTATION,
         SessionKind.REVIEW_PR_COMMENTS,
     }:
         return
-    context = knowledge_ownership.actor(root)
     if not context.author or context.task_id is None or context.provider is None:
         return
     binding = ObserverOperationBinding(

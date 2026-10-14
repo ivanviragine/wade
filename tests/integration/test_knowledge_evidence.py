@@ -1036,3 +1036,100 @@ def test_collected_refresh_cannot_fall_back_past_unsafe_native_state(
         interactive.refresh_handoff(parent)
     assert outside.read_text() == "untouched external state"
     assert (parent / ".wade/session/manifest.json").read_bytes() == original
+
+
+def test_corrupt_assessment_history_is_visible_without_current_authority(owned_repo: Path) -> None:
+    from wade.services.knowledge_assessment import check_entry
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+
+    config = KnowledgeConfig(enabled=True)
+    event = check_entry(
+        owned_repo, config, "claim-a", "current", files=("source.py",), note="Proof"
+    )
+    conflicting = event.model_dump(mode="json") | {"outcome": "contradicted"}
+    with (owned_repo / "KNOWLEDGE.ratings.jsonl").open("a") as stream:
+        stream.write(json.dumps(conflicting) + "\n")
+    git(owned_repo, "commit", "-am", "test: conflicting durable receipt")
+    assert not reconcile_knowledge(owned_repo, config).valid
+    rendered = knowledge.get_annotated_knowledge(owned_repo, config).content
+    assert rendered and "conflicting payloads" in rendered
+    assert "checked-current" not in rendered
+    assert "unverified" in rendered
+
+
+@pytest.mark.parametrize("from_main", [False, True])
+def test_collected_legacy_recovery_retains_validated_identity_and_bytes(
+    owned_repo: Path, from_main: bool
+) -> None:
+    from wade.services.knowledge_ownership import actor
+    from wade.services.knowledge_proposals import accept_proposal, recover_legacy
+
+    main = owned_repo.parent / "main"
+    parent, config, identity = _collected_parent(main)
+    assert actor(parent).session_id == identity
+    event = knowledge.create_rating_event("claim-a", "up").to_record() | {"handoff_id": identity}
+    path = main / "KNOWLEDGE.ratings.jsonl" if from_main else knowledge.staged_ratings_path(parent)
+    path.write_text(json.dumps(event) + "\n")
+    original = path.read_bytes()
+    recovered = recover_legacy(owned_repo, parent, config.knowledge, from_main=from_main)
+    assert recovered[0].owner.session_id == identity
+    assert recovered[0].original_payload == event
+    assert path.read_bytes() == original
+    git(main, "worktree", "remove", "--force", str(parent))
+    assert (
+        accept_proposal(owned_repo, config.knowledge, recovered[0].proposal_id).entry_id
+        == "claim-a"
+    )
+
+
+@pytest.mark.parametrize("worker", ["plan-review", "in-plan-deps", "standalone-deps", "multi-deps"])
+def test_detached_bounded_observation_keeps_verified_destination_after_cleanup(
+    owned_repo: Path, monkeypatch: pytest.MonkeyPatch, worker: str
+) -> None:
+    from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
+    from wade.models.workflow import DelegationKind
+    from wade.services import delegation_service as delegation
+    from wade.services.knowledge_assessment import feedback
+    from wade.services.knowledge_proposals import accept_proposal, bind_completed_parent, proposals
+    from wade.services.skill_invocation_service import prepare_delegation_method
+
+    main = owned_repo.parent / "main"
+    delegation_digest = None
+    if worker in {"plan-review", "in-plan-deps"}:
+        parent, identity = _completed_parent(main, multi=worker == "plan-review")
+    else:
+        parent = main.parent / "deps-parent"
+        git(main, "worktree", "add", "--detach", str(parent))
+        prepared = prepare_delegation_method(
+            ProjectConfig(), DelegationKind.DEPENDENCY_ANALYSIS, cwd=parent
+        )
+        delegation_digest = prepared.binding.digest
+        identity = None
+
+    def observe(request: DelegationRequest) -> DelegationResult:
+        feedback(parent, KnowledgeConfig(enabled=True), "claim-a", "useful", note="Observer")
+        return DelegationResult(success=True, feedback="Observed", mode=request.mode)
+
+    monkeypatch.setattr(delegation, "_dispatch", observe)
+    result = delegation.delegate(
+        DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Observe",
+            cwd=parent,
+            invocation_id="detached-child",
+            knowledge_plan_filename="PLAN-one.md" if worker == "plan-review" else None,
+            knowledge_task_ids=("510", "532") if worker == "multi-deps" else ("510",),
+            knowledge_delegation_digest=delegation_digest,
+        )
+    )
+    assert result.success
+    if identity:
+        bind_completed_parent(parent, identity)
+    proposal = proposals(owned_repo)[0]
+    git(main, "worktree", "remove", "--force", str(parent))
+    if worker == "multi-deps":
+        with pytest.raises(ValueError, match="association"):
+            accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id)
+    else:
+        accepted = accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id)
+        assert accepted.entry_id == "claim-a"

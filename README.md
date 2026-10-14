@@ -1067,7 +1067,10 @@ owner-bound proposals in the Git common directory. Bootstrap never drains old
 main feedback into the next PR. `knowledge proposals list|retain|discard|accept`
 provides explicit disposition; acceptance requires the original parent's verified
 task/content association and grants no correctness. Check fresh committed proof
-after acceptance. Legacy logs remain intact and require explicit owner-verified
+after acceptance. Bounded planning/dependency observations retain their original
+parent or service-verified destination through cleanup; ambiguous multi-task
+observations remain pending. Invalid evidence history is visible in `knowledge get`
+and withholds correctness labels. Legacy logs remain intact and require explicit owner-verified
 `knowledge proposals recover --worktree <original-parent>`. See
 [the knowledge reference](docs/dev/knowledge.md) for proof types and recovery.
 

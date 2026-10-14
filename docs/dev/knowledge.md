@@ -76,6 +76,12 @@ supplying a task number. Accept verifies repository/provider/task, original
 parent binding and unchanged claim. It writes an auditable neutral acceptance,
 never an assessment; a subsequent explicit check creates fresh committed proof.
 Retain/discard/accepted/assessed dispositions keep original proposal bytes.
+Bounded plan reviewers retain their original parent session and reviewed member;
+in-plan dependency observers retain that parent, and are associated only when
+its actual persisted destination is unambiguous. Standalone dependency analysis
+records service-verified task identities and its frozen invocation before launch.
+A single verified destination remains usable after cleanup; multiple or failed
+lookups remain pending. All workers remain observation-only.
 
 No bootstrap, review startup, completion or automatic retained-worktree sweep
 accepts feedback, drains main's old spool, resets tracked files or guesses owner.
@@ -85,7 +91,9 @@ and payloads durably into the ignored queue, and preserves the source log. Add `
 main records bearing that original parent's explicit handoff ID; main bytes
 remain unchanged and foreign/unresolved records stay pending.
 Missing owner proof or corrupt/unsafe paths retain originals and report failure.
-New observations already survive disposable-worktree cleanup without a spool.
+Both native and validated collected parents support legacy recovery from actual
+persistence progress; neither relies on a synthetic completion flag. New
+observations survive disposable-worktree cleanup without a spool.
 
 Plan artifact protocol v2 adds typed `knowledge_proposals`; v1 historical votes
 remain readable. Session workflow revisions advance (plan4, implementation3,
@@ -102,6 +110,11 @@ frozen-bundle validation; retry explicit refresh against the retained original.
 Refresh itself never dispatches a reviewer or provider mutation. Receipt/proposal event schemas begin at1; no
 session-manifest schema change is needed because proposal ownership freezes the
 actual operation/session and task association independently of methodology.
+
+A tolerant `knowledge get` read reports structural evidence problems and
+withholds correctness labels for invalid history, including conflicting payloads
+under one durable event ID. Raw prose remains readable; corrupted history never
+silently promotes the first payload to checked-current.
 
 ## Boundaries and closing gates
 

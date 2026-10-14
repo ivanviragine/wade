@@ -388,6 +388,9 @@ def _run_delegation(
     sandbox: bool = DEFAULT_SANDBOX,
     operation: str | None = None,
     relaunch_command: str | None = None,
+    knowledge_task_ids: tuple[str, ...] = (),
+    knowledge_delegation_digest: str | None = None,
+    invocation_id: str | None = None,
 ) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -409,6 +412,9 @@ def _run_delegation(
         explicit_timeout=explicit_timeout,
         operation=operation,
         relaunch_command=relaunch_command,
+        knowledge_task_ids=knowledge_task_ids,
+        knowledge_delegation_digest=knowledge_delegation_digest,
+        invocation_id=invocation_id,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
@@ -728,11 +734,13 @@ def analyze_deps(
 
     valid_numbers = set(issue_numbers)
     task_titles: dict[str, str] = {}
+    verified_task_ids: list[str] = []
     if delegation_mode != DelegationMode.PROMPT:
         for num in issue_numbers:
             try:
                 task = provider.read_task(num)
                 task_titles[num] = task.title
+                verified_task_ids.append(task.id)
                 console.step(f"#{num}: {console.escape_markup(task.title)}")
             except Exception:
                 logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
@@ -787,6 +795,14 @@ def analyze_deps(
         # the dispatcher is common to every delegated operation, so it can only
         # name this one if the caller hands it the exact command to re-run.
         operation="the dependency analysis",
+        knowledge_delegation_digest=prepared_method.binding.digest,
+        invocation_id=(
+            prepared_method.operation_bundle.name if prepared_method.operation_bundle else None
+        ),
+        # A failed lookup or multiple destinations must remain unresolved.
+        knowledge_task_ids=(
+            tuple(verified_task_ids) if len(verified_task_ids) == len(issue_numbers) else ()
+        ),
         relaunch_command=build_relaunch_command(
             ["wade", "task", "deps", *issue_numbers],
             ai_tool=resolved_tool,

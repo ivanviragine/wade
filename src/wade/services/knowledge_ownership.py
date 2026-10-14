@@ -63,6 +63,13 @@ def actor(
             session_id = json.loads(native).get("session_id")
         except (ValueError, AttributeError) as exc:
             raise ValueError("Native knowledge handoff identity is malformed") from exc
+    elif read_state_file(root, ("plans",), "native-session.json") is not None:
+        from wade.services.native_plan_service import load_artifact
+
+        # Use only the public retained result after verifying its imported set.
+        # Invalid native state never falls through to a manufactured operation.
+        result, _ = load_artifact(root)
+        session_id = result.session_id
     journal = root / ".wade/knowledge-operation.json"
     raw_journal = read_state_file(root, (), "knowledge-operation.json")
     saved = (

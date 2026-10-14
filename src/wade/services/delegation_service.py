@@ -156,7 +156,13 @@ def delegate(request: DelegationRequest) -> DelegationResult:
         from wade.services.knowledge_proposals import register_observer_operation
 
         try:
-            register_observer_operation(request.cwd, operation_id)
+            register_observer_operation(
+                request.cwd,
+                operation_id,
+                plan_filename=request.knowledge_plan_filename,
+                task_ids=request.knowledge_task_ids,
+                delegation_digest=request.knowledge_delegation_digest,
+            )
         except (ValueError, OSError) as exc:
             return DelegationResult(
                 success=False,

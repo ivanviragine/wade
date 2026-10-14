@@ -948,9 +948,13 @@ def get_annotated_knowledge(
         evidence_report = reconcile_knowledge(
             project_root, config, main_ref=load_config(project_root).project.main_branch
         )
-        states = {e.entry_id: e for e in evidence_report.entries}
-    except (GitError, ValueError, OSError):
+        # A tolerant read must never promote the arbitrary first payload of a
+        # corrupt durable identity into a correctness assertion.
+        states = {e.entry_id: e for e in evidence_report.entries} if evidence_report.valid else {}
+        evidence_problems = evidence_report.problems
+    except (GitError, ValueError, OSError) as exc:
         states = {}
+        evidence_problems = (str(exc),)
 
     # Build the header (everything before the first entry)
     if entries:
@@ -961,6 +965,9 @@ def get_annotated_knowledge(
         header = text[: m.start()] if m else text
 
     result_parts = [header]
+    if evidence_problems:
+        result_parts.append("\n> Knowledge evidence is invalid; correctness is unverified.\n")
+        result_parts.extend("> " + problem + "\n" for problem in evidence_problems)
     filtered_entry_count = 0
     for entry in entries:
         if (
