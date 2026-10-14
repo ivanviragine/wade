@@ -81,11 +81,15 @@ Pure knowledge parsers/folds in `utils/knowledge_file.py` and
 `utils/knowledge_events.py` may import leaf models, never services; Git proof
 queries stay in `git/knowledge.py`. See `docs/dev/knowledge.md`.
 
-**Summary and dependency body replacement** share the offset-preserving scanner
-in `utils/markdown.py`. It protects standalone managed ranges and fenced code,
+**Summary, dependency, and explicit plan-body replacement** share the
+offset-preserving scanner in `utils/markdown.py`. It protects standalone managed
+ranges and fenced code,
 limits legacy migration to unique column-zero H2 sections, and rejects malformed
 input or rendered output before writing. CommonMark container facts come from
 `markdown-it-py`; WADE keeps original byte slices and rejects incomplete parses.
+Plan refresh selects a stable task PR identity once for retarget, replacement,
+and pin reconciliation; the plan extractor uses the same verified owned span.
+Generic resume retains its existing plan.
 Other Markdown consumers retain their existing contracts; do not assume the
 older extraction/removal helpers are
 structural scanners. See `docs/dev/architecture.md` for ownership and boundaries.
