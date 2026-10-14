@@ -1251,7 +1251,8 @@ def _done_via_pr(
     # `.wade/done@<pushed sha>` right before each push (so `done`'s own push
     # satisfies the pre-push backstop and the Stop hook reads the session as
     # finalized) and clears it on any push failure. A new commit changes the sha
-    # and invalidates the marker.
+    # and invalidates the marker. A later PR-body read/write failure also clears
+    # it, because a successful push alone does not complete finalization.
     marker_root = worktree_path or repo_root
     console.step("Pushing branch...")
     if not _push_branch_with_recovery(repo_root, branch, worktree_path, marker_root):
@@ -1388,13 +1389,18 @@ def _done_via_pr(
             return body.rstrip("\n") + "\n\n" + joined + "\n"
 
         if not update_body_preserving_markers(
-            read_body=lambda: git_pr.get_pr_body(repo_root, pr_number) or "",
+            read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
             write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
             transform=_transform,
             warn=console.warn,
             label=f"PR #{pr_number} body",
         ):
-            console.error("Could not update the PR body.")
+            # Push needs the marker for its backstop, but a body read/write
+            # failure means this finalization has not completed. Retrying must
+            # read the current remote body again, never synthesize an empty one.
+            markers.clear_markers(marker_root, "done")
+            console.error("Could not read or update the current PR body.")
+            console.hint("Re-run this session's done command to retry after resolving access.")
             return False
         console.success("PR body updated with summary.")
 
