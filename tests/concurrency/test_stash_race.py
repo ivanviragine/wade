@@ -88,3 +88,112 @@ def test_unresolvable_stash_is_reported_not_applied(tmp_path: Path) -> None:
     assert drop_stash_by_sha(bogus, wt_a) is False
     # The working file is unchanged by the failed apply/drop.
     assert (wt_a / "file.txt").read_text() == "base\n"
+
+
+@pytest.mark.parametrize("pull_succeeds", [True, False])
+def test_post_merge_restores_its_stash_after_sibling_push(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    pull_succeeds: bool,
+) -> None:
+    from wade.services.implementation_service import lifecycle
+
+    repo, wt_a, wt_b = _repo_with_two_worktrees(tmp_path)
+    (repo / "file.txt").write_text("MAIN USER WORK\n")
+    owned: list[str] = []
+    sibling: list[str] = []
+    calls: list[Path] = []
+
+    def pull(cwd: Path) -> subprocess.CompletedProcess[str]:
+        calls.append(cwd)
+        assert cwd == repo
+        if len(calls) == 1:
+            return subprocess.CompletedProcess([], 1, "", lifecycle._LOCAL_CHANGES_MARKER)
+        owned.append(_git(repo, "stash", "list", "--format=%H").splitlines()[0])
+        (wt_b / "file.txt").write_text("SIBLING USER WORK\n")
+        sibling.append(create_named_stash("sibling", "feat-b", wt_b)[0])
+        return subprocess.CompletedProcess([], 0 if pull_succeeds else 1, "", "pull unavailable")
+
+    monkeypatch.setattr(lifecycle.git_repo, "pull_ff_only", pull)
+    # Enter through a linked worktree: all mutations must still target main.
+    lifecycle._pull_main_after_merge(wt_a)
+
+    assert (repo / "file.txt").read_text() == "MAIN USER WORK\n"
+    stack = _git(repo, "stash", "list", "--format=%H").splitlines()
+    assert sibling[0] in stack
+    assert owned[0] in stack  # Conservative cleanup never drops another entry.
+    assert apply_stash_by_sha(sibling[0], wt_b).returncode == 0
+    assert (wt_b / "file.txt").read_text() == "SIBLING USER WORK\n"
+    output = capsys.readouterr()
+    assert "retained" in output.err.lower()
+    assert owned[0] in output.err
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", ["conflict", "missing-object", "removed-entry"])
+def test_post_merge_restore_failures_never_fall_back_to_sibling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    from wade.services.implementation_service import lifecycle
+
+    repo, wt_a, wt_b = _repo_with_two_worktrees(tmp_path)
+    (repo / "file.txt").write_text("MAIN USER WORK\n")
+    owned: list[str] = []
+    sibling: list[str] = []
+    pulls = 0
+
+    def pull(cwd: Path) -> subprocess.CompletedProcess[str]:
+        nonlocal pulls
+        pulls += 1
+        assert cwd == repo
+        if pulls == 1:
+            return subprocess.CompletedProcess([], 1, "", lifecycle._LOCAL_CHANGES_MARKER)
+        owned.append(_git(repo, "stash", "list", "--format=%H").splitlines()[0])
+        (wt_b / "file.txt").write_text("SIBLING USER WORK\n")
+        sibling.append(create_named_stash("sibling", "feat-b", wt_b)[0])
+        if failure == "conflict":
+            (repo / "file.txt").write_text("PULLED MAIN CHANGE\n")
+            _git(repo, "add", "file.txt")
+            _git(repo, "commit", "-m", "simulate pulled content")
+        else:
+            # Removing the reflog entry alone still leaves the object resolvable.
+            _git(repo, "stash", "drop", "stash@{1}")
+            if failure == "missing-object":
+                _git(repo, "prune", "--expire=now")
+                probe = subprocess.run(
+                    ["git", "cat-file", "-e", owned[0]], cwd=repo, capture_output=True
+                )
+                assert probe.returncode != 0
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(lifecycle.git_repo, "pull_ff_only", pull)
+    lifecycle._pull_main_after_merge(wt_a)
+
+    content = (repo / "file.txt").read_text()
+    assert "SIBLING USER WORK" not in content
+    stack = _git(repo, "stash", "list", "--format=%H").splitlines()
+    assert sibling[0] in stack
+    if failure == "conflict":
+        assert "MAIN USER WORK" in content and "PULLED MAIN CHANGE" in content
+        assert _git(repo, "ls-files", "-u")
+        assert owned[0] in stack
+    elif failure == "missing-object":
+        assert content == "base\n"
+        assert owned[0] not in stack
+    else:
+        assert content == "MAIN USER WORK\n"
+        assert owned[0] not in stack
+    assert apply_stash_by_sha(sibling[0], wt_b).returncode == 0
+    assert (wt_b / "file.txt").read_text() == "SIBLING USER WORK\n"
+    output = capsys.readouterr()
+    assert owned[0] in output.err
+    assert str(repo) in output.out + output.err
+    if failure != "removed-entry":
+        assert "git -C" in output.out
+        assert f"stash apply {owned[0]}" in " ".join(output.out.split())
+    assert "stash drop " + owned[0] not in output.out + output.err
+    assert pulls == 2

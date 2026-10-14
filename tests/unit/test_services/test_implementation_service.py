@@ -6,6 +6,7 @@ import contextlib
 import json
 import shlex
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -2076,7 +2077,19 @@ class TestParseOverwritePaths:
         assert paths == [".claude/settings.json", ".wade-managed"]
 
 
+_POST_MERGE_STASH_SHA = "b" * 40
+_POST_MERGE_STASH_MESSAGE = "wade-autostash/post-merge/main/test"
+
+
 class TestPullMainAfterMerge:
+    @pytest.fixture(autouse=True)
+    def main_branch(self) -> Iterator[None]:
+        with patch(
+            "wade.services.implementation_service.lifecycle.git_repo.get_current_branch",
+            return_value="main",
+        ):
+            yield
+
     def test_untracked_backed_up_then_retry(self, tmp_path: Path) -> None:
         """Untracked-files error moves colliding files to a backup dir (never
         deletes them) and retries the pull."""
@@ -2113,15 +2126,15 @@ class TestPullMainAfterMerge:
         assert not any("Could not sync local main" in msg for msg in warn_calls)
 
     def test_local_changes_triggers_stash_and_retry(self, tmp_path: Path) -> None:
-        """Tracked-files error triggers stash, pull retry, then stash pop."""
+        """Tracked-files error triggers stash, pull retry, then stash apply."""
         target_file = tmp_path / "src" / "main.py"
         target_file.parent.mkdir(parents=True)
         target_file.write_text("print('hello')")
 
         fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
-        stash_ok = MagicMock(returncode=0)
+        stash_ok = (_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE)
         pull_ok = MagicMock(returncode=0, stderr="")
-        pop_ok = MagicMock(returncode=0)
+        apply_ok = MagicMock(returncode=0)
 
         with (
             patch(
@@ -2129,25 +2142,33 @@ class TestPullMainAfterMerge:
                 side_effect=[fail_result, pull_ok],
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
                 return_value=stash_ok,
             ) as mock_stash,
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
-                return_value=pop_ok,
-            ) as mock_pop,
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
+                return_value=apply_ok,
+            ) as mock_apply,
         ):
             _pull_main_after_merge(tmp_path)
 
         # File must NOT be deleted
         assert target_file.exists()
-        mock_stash.assert_called_once_with(tmp_path)
-        mock_pop.assert_called_once_with(tmp_path)
+        mock_stash.assert_called_once_with("post-merge", "main", tmp_path)
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
 
-    def test_local_changes_stash_failure_warns(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "diagnostic",
+        [
+            "stash push failed",
+            "No local changes to save",
+            "Stash created but SHA not found: owned-message",
+        ],
+    )
+    def test_local_changes_stash_failure_warns(self, tmp_path: Path, diagnostic: str) -> None:
         """When stash fails, falls through to warning without retry."""
         fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
-        stash_fail = MagicMock(returncode=1)
+        stash_fail = GitError(diagnostic)
 
         with (
             patch(
@@ -2155,24 +2176,30 @@ class TestPullMainAfterMerge:
                 return_value=fail_result,
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
-                return_value=stash_fail,
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
+                side_effect=stash_fail,
             ),
-            patch("wade.services.implementation_service.lifecycle.git_repo.stash_pop") as mock_pop,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha"
+            ) as mock_apply,
             patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
-        mock_pop.assert_not_called()
-        mock_console.warn.assert_called_once()
-        mock_console.hint.assert_called_once()
+        mock_apply.assert_not_called()
+        assert diagnostic in mock_console.warn.call_args_list[0].args[0]
+        assert mock_console.warn.call_count == 2
+        assert mock_console.hint.call_count == 2
+        assert (
+            mock_console.warn.call_args.args[0] == "Could not sync local main branch after merge."
+        )
 
     def test_local_changes_pull_retry_failure_warns(self, tmp_path: Path) -> None:
-        """When stash succeeds but pull retry fails, warns and still pops stash."""
+        """When stash succeeds but pull retry fails, warns and still applies the owned stash."""
         fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
-        stash_ok = MagicMock(returncode=0)
+        stash_ok = (_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE)
         pull_fail = MagicMock(returncode=1, stderr="some error")
-        pop_ok = MagicMock(returncode=0)
+        apply_ok = MagicMock(returncode=0)
 
         with (
             patch(
@@ -2180,27 +2207,30 @@ class TestPullMainAfterMerge:
                 side_effect=[fail_result, pull_fail],
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
                 return_value=stash_ok,
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
-                return_value=pop_ok,
-            ) as mock_pop,
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
+                return_value=apply_ok,
+            ) as mock_apply,
             patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
-        mock_pop.assert_called_once_with(tmp_path)
-        mock_console.warn.assert_called_once()
-        mock_console.hint.assert_called_once()
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
+        assert mock_console.warn.call_count == 2
+        assert mock_console.hint.call_count == 2
+        assert (
+            mock_console.warn.call_args.args[0] == "Could not sync local main branch after merge."
+        )
 
-    def test_local_changes_stash_pop_failure_warns(self, tmp_path: Path) -> None:
-        """When stash pop fails after a successful pull, warns with a recovery hint."""
+    def test_local_changes_stash_apply_failure_warns(self, tmp_path: Path) -> None:
+        """When stash apply fails after a successful pull, warns with a recovery hint."""
         fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
-        stash_ok = MagicMock(returncode=0)
+        stash_ok = (_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE)
         pull_ok = MagicMock(returncode=0, stderr="")
-        pop_fail = MagicMock(returncode=1)
+        apply_fail = MagicMock(returncode=1, stderr="stash conflict", stdout="")
 
         with (
             patch(
@@ -2208,21 +2238,123 @@ class TestPullMainAfterMerge:
                 side_effect=[fail_result, pull_ok],
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
                 return_value=stash_ok,
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
-                return_value=pop_fail,
-            ) as mock_pop,
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
+                return_value=apply_fail,
+            ) as mock_apply,
             patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
-        # Pull succeeded, so the only warning comes from the failed stash pop.
-        mock_pop.assert_called_once_with(tmp_path)
+        # Pull succeeded, so the only warning comes from the failed stash apply.
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()
+
+    def test_main_branch_lookup_failure_rolls_back_moves_without_stashing(
+        self, tmp_path: Path
+    ) -> None:
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("user configuration")
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[
+                    MagicMock(returncode=1, stderr=UNTRACKED_STDERR),
+                    MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR),
+                ],
+            ) as pull,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.get_current_branch",
+                side_effect=GitError("detached main checkout"),
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash"
+            ) as create,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha"
+            ) as apply,
+            patch("wade.services.implementation_service.lifecycle.console") as output,
+        ):
+            _pull_main_after_merge(tmp_path)
+        assert settings.read_text() == "user configuration"
+        assert pull.call_count == 2
+        create.assert_not_called()
+        apply.assert_not_called()
+        assert "detached main checkout" in output.warn.call_args_list[0].args[0]
+        assert output.warn.call_args.args[0] == "Could not sync local main branch after merge."
+
+    def test_one_identity_survives_repeated_local_error_without_cleanup(
+        self, tmp_path: Path
+    ) -> None:
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                return_value=MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR),
+            ) as pull,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.get_current_branch",
+                return_value="release/main",
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
+                return_value=(_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE),
+            ) as create,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
+                return_value=MagicMock(returncode=0, stderr="", stdout=""),
+            ) as apply,
+            patch("wade.services.implementation_service.lifecycle.git_repo.stash_pop") as pop,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.drop_stash_by_sha"
+            ) as drop,
+            patch("wade.services.implementation_service.lifecycle.console") as output,
+        ):
+            _pull_main_after_merge(tmp_path)
+        assert pull.call_count == 2
+        create.assert_called_once_with("post-merge", "release/main", tmp_path)
+        apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
+        # Never enter the unsafe verify-then-positional-drop window at all.
+        drop.assert_not_called()
+        pop.assert_not_called()
+        assert "retained" in output.warn.call_args_list[0].args[0]
+        assert output.warn.call_args.args[0] == "Could not sync local main branch after merge."
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_failed_identity_apply_never_pops_or_deletes_and_quotes_recovery(
+        self, tmp_path: Path, raises: bool
+    ) -> None:
+        from wade.services.implementation_service.lifecycle import _restore_stash_or_warn
+
+        root = tmp_path / "my repo"
+        result = MagicMock(returncode=1, stderr="original stash unavailable", stdout="")
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
+                side_effect=GitError("original stash unavailable") if raises else None,
+                return_value=result,
+            ) as apply,
+            patch("wade.services.implementation_service.lifecycle.git_repo.stash_pop") as pop,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_stash.drop_stash_by_sha"
+            ) as drop,
+            patch("wade.services.implementation_service.lifecycle.console") as output,
+        ):
+            _restore_stash_or_warn(root, _POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE)
+        apply.assert_called_once_with(_POST_MERGE_STASH_SHA, root)
+        pop.assert_not_called()
+        drop.assert_not_called()
+        warning = output.warn.call_args.args[0]
+        hint = output.hint.call_args.args[0]
+        assert _POST_MERGE_STASH_SHA in warning and _POST_MERGE_STASH_MESSAGE in warning
+        assert "original stash unavailable" in warning
+        assert f"git -C {shlex.quote(str(root))} stash apply {_POST_MERGE_STASH_SHA}" in hint
+        assert "resolve them before retrying" in hint
+        assert "stash drop" not in hint
 
     def test_untracked_retry_failure_restores_files(self, tmp_path: Path) -> None:
         """Core regression: when the retry pull fails after moving untracked
@@ -2261,7 +2393,7 @@ class TestPullMainAfterMerge:
         """The combined scenario MAX_RESOLVE_ATTEMPTS keeps a spare for:
         untracked collision -> move aside -> retry fails with a *local-changes*
         error -> stash -> retry succeeds. Both classes handled; final tree state
-        correct (untracked files backed up, stash popped)."""
+        correct (untracked files backed up, stash applyped)."""
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text("{}")
@@ -2278,13 +2410,13 @@ class TestPullMainAfterMerge:
                 side_effect=[untracked_fail, local_fail, ok],
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
-                return_value=MagicMock(returncode=0),
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
+                return_value=(_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE),
             ) as mock_stash,
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
                 return_value=MagicMock(returncode=0),
-            ) as mock_pop,
+            ) as mock_apply,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -2294,9 +2426,9 @@ class TestPullMainAfterMerge:
         backup_root = tmp_path / ".wade" / "pull-backups"
         assert (backup_root / ".claude" / "settings.json").read_text() == "{}"
         assert (backup_root / ".wade-managed").read_text() == "# managed"
-        # ...and the stashed tracked changes were popped back.
-        mock_stash.assert_called_once_with(tmp_path)
-        mock_pop.assert_called_once_with(tmp_path)
+        # ...and the stashed tracked changes were applied back.
+        mock_stash.assert_called_once_with("post-merge", "main", tmp_path)
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
 
     def test_cap_exhaustion_rolls_back(self, tmp_path: Path) -> None:
         """Three full resolve iterations that each make progress but whose retry
@@ -2335,23 +2467,23 @@ class TestPullMainAfterMerge:
                 side_effect=pulls,
             ) as mock_pull,
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
-                return_value=MagicMock(returncode=0),
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
+                return_value=(_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE),
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
                 return_value=MagicMock(returncode=0),
-            ) as mock_pop,
+            ) as mock_apply,
             patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
         # Exactly the entry pull + 3 retries — the cap stopped a 4th resolution.
         assert mock_pull.call_count == 4
-        # Both moved files restored, stash popped, and the user warned.
+        # Both moved files restored, stash applyped, and the user warned.
         assert file_a.read_text() == "A"
         assert file_b.read_text() == "B"
-        mock_pop.assert_called_once_with(tmp_path)
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
         warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
         assert any("Could not sync local main" in msg for msg in warn_calls)
 
@@ -2374,13 +2506,13 @@ class TestPullMainAfterMerge:
                 side_effect=[untracked_fail, local_fail, unknown_fail],
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
-                return_value=MagicMock(returncode=0),
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
+                return_value=(_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE),
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
                 return_value=MagicMock(returncode=0),
-            ) as mock_pop,
+            ) as mock_apply,
             patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
@@ -2388,8 +2520,8 @@ class TestPullMainAfterMerge:
         # Moved files restored to their original paths...
         assert settings.read_text() == "{}"
         assert managed.read_text() == "# managed"
-        # ...the stash was popped during rollback...
-        mock_pop.assert_called_once_with(tmp_path)
+        # ...the stash was applied during rollback...
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
         # ...and the user was warned about the failed sync.
         warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
         assert any("Could not sync local main" in msg for msg in warn_calls)
@@ -2425,7 +2557,7 @@ class TestPullMainAfterMerge:
 
     def test_restore_failure_prints_manual_command_and_continues(self, tmp_path: Path) -> None:
         """If restoring one pair raises OSError, the exact `mv` recovery command
-        is surfaced, the *other* pairs are still restored, and stash_pop runs."""
+        is surfaced, the *other* pairs are still restored, and stash apply runs."""
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text("{}")
@@ -2453,13 +2585,13 @@ class TestPullMainAfterMerge:
                 side_effect=[untracked_fail, local_fail, unknown_fail],
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash",
-                return_value=MagicMock(returncode=0),
+                "wade.services.implementation_service.lifecycle.git_stash.create_named_stash",
+                return_value=(_POST_MERGE_STASH_SHA, _POST_MERGE_STASH_MESSAGE),
             ),
             patch(
-                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                "wade.services.implementation_service.lifecycle.git_stash.apply_stash_by_sha",
                 return_value=MagicMock(returncode=0),
-            ) as mock_pop,
+            ) as mock_apply,
             patch(
                 "wade.services.implementation_service.lifecycle.shutil.move",
                 side_effect=flaky_move,
@@ -2476,8 +2608,8 @@ class TestPullMainAfterMerge:
         # ...the exact manual recovery command was surfaced to the user...
         hint_calls = [c.args[0] for c in mock_console.hint.call_args_list]
         assert any(f"mv {managed_backup} {managed}" in msg for msg in hint_calls)
-        # ...and the stash was still popped (one bad move never strands the stash).
-        mock_pop.assert_called_once_with(tmp_path)
+        # ...and the stash was still applied (one bad move never strands the stash).
+        mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
 
     def test_restore_failure_shell_quotes_paths_with_spaces(self, tmp_path: Path) -> None:
         """The manual `mv` recovery command must be safely copy-pasteable even

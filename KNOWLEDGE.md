@@ -791,3 +791,9 @@ For issue #480, delegation_service.delegate() remains the one dispatcher for dep
 For issue #480 sandbox tests, the autouse conftest fixture clears both SANDBOX_SIGNAL_ENV_VARS and real Codex identity markers in CODEX_IDENTITY_ENV_VARS. Tests that need another enclosing runtime still set or clear competing identity markers deliberately; do not claim the fixture never clears identity markers.
 
 ---
+
+## cce7d3161157 | 2026-10-14 | implementation | tags: git, stash, concurrency | Issue #493
+
+`drop_stash_by_sha` verifies a positional stash ref before deleting it in a separate Git command; a competing push after verification can still shift that ref. Callers that must never delete another worktree's entry need to retain the owned stash after applying its captured SHA rather than assume verification makes deletion atomic. Inspect SHA/ref/message pairs and verify the chosen entry before manual cleanup.
+
+---
