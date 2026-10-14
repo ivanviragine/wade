@@ -355,8 +355,9 @@ def has_tracked_changes(path: Path) -> bool:
 
     Ignores untracked files (``--untracked-files=no``): a freshly bootstrapped scaffold
     worktree is full of untracked output (``.wade/``, ``PLAN.md``, installed skills) that
-    must not count as "dirty". Used to decide whether a checked-out scaffold branch can be
-    safely hard-reset for a base retarget without discarding real edits (#376 review).
+    must not count as "dirty". Used to decide whether a checked-out scaffold branch can
+    pass the tracked-edit prerequisite for a base retarget (#376 review).
+    The guarded hard reset separately checks untracked/ignored collisions.
 
     Args:
         path: Any directory inside the repo/worktree.

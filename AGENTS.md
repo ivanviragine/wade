@@ -114,6 +114,12 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
 
+Scaffold retargets use a guarded git-layer hard reset: tracked edits and
+untracked/ignored paths obstructing the pinned destination tree must refuse
+before mutation. Noncolliding session output remains allowed. The guard also
+applies to rollback; an obstructed rollback preserves data and reports manual
+recovery, rather than claiming branch/PR consistency was restored.
+
 ## Design Principles
 
 ### Determinism via Services
