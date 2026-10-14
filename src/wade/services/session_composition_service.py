@@ -273,8 +273,14 @@ def compose_session(
                 author_association(
                     worktree_root,
                     owner_task,
+                    config,
                     enforce=True,
-                    require_existing=existing is not None and not refresh,
+                    require_existing=(
+                        existing is not None
+                        and existing.session
+                        in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}
+                        and not refresh
+                    ),
                 )
             except ValueError as exc:
                 raise SessionCompositionError(str(exc)) from exc
@@ -325,7 +331,7 @@ def compose_session(
         from wade.services.knowledge_ownership import author_association
 
         try:
-            author_association(worktree_root, manifest.task_id, create=True, enforce=True)
+            author_association(worktree_root, manifest.task_id, config, create=True, enforce=True)
         except ValueError as exc:
             raise SessionCompositionError(str(exc)) from exc
     return SessionCompositionResult(manifest=manifest, reused=False, resolution=resolution)

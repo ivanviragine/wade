@@ -97,7 +97,11 @@ def owned_repo(evidence_repo: Path) -> Path:
     worktree = evidence_repo.parent / "owner-510"
     git(evidence_repo, "worktree", "add", "-b", "feat/510-owner", str(worktree))
     compose_session(
-        worktree, evidence_repo, ProjectConfig(), kind=SessionKind.IMPLEMENTATION, task_id="510"
+        worktree,
+        evidence_repo,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="510",
     )
     return worktree
 
@@ -390,7 +394,13 @@ def test_foreign_task_and_changed_claim_cannot_accept_parent_proposal(owned_repo
     proposal = proposals(repo)[0]
     foreign = main.parent / "foreign-532"
     git(main, "worktree", "add", "-b", "feat/532-foreign", str(foreign))
-    compose_session(foreign, main, ProjectConfig(), kind=SessionKind.IMPLEMENTATION, task_id="532")
+    compose_session(
+        foreign,
+        main,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="532",
+    )
     before = (foreign / "KNOWLEDGE.ratings.jsonl").read_bytes()
     with pytest.raises(ValueError, match="ownership"):
         accept_proposal(foreign, config, proposal.proposal_id)
@@ -888,7 +898,13 @@ def test_primary_branch_in_linked_worktree_is_still_observation_only(evidence_re
     git(main, "checkout", "--detach")
     root = main.parent / "linked-main"
     git(main, "worktree", "add", str(root), "main")
-    compose_session(root, main, ProjectConfig(), kind=SessionKind.IMPLEMENTATION, task_id="510")
+    compose_session(
+        root,
+        main,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="510",
+    )
     with pytest.raises(ValueError, match="Tracked knowledge writes"):
         knowledge.append_knowledge(
             root, KnowledgeConfig(enabled=True), "unowned main write", "implementation"
@@ -1329,7 +1345,13 @@ def test_same_task_acceptance_reuses_one_shared_immutable_event(owned_repo: Path
     proposal = proposals(owned_repo)[0]
     second = main.parent / "owner-510-second"
     git(main, "worktree", "add", "-b", "feat/510-second", str(second))
-    compose_session(second, main, ProjectConfig(), kind=SessionKind.IMPLEMENTATION, task_id="510")
+    compose_session(
+        second,
+        main,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="510",
+    )
     one = accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id)
     two = accept_proposal(second, KnowledgeConfig(enabled=True), proposal.proposal_id)
     assert one == two
@@ -1482,9 +1504,54 @@ def test_stale_task_branch_cannot_be_reassigned_by_skill_refresh(owned_repo: Pat
         compose_session(
             owned_repo,
             owned_repo.parent / "main",
-            ProjectConfig(),
+            ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
             kind=SessionKind.IMPLEMENTATION,
             task_id="510",
             refresh=True,
         )
     assert (owned_repo / ".wade/knowledge-author.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("initial", ["disabled", "absent", "plan"])
+def test_bootstrap_author_uses_effective_config_before_copy(
+    evidence_repo: Path, initial: str
+) -> None:
+    from wade.config.loader import load_config
+    from wade.models.workflow import SessionKind
+    from wade.services.implementation_service.bootstrap import bootstrap_worktree
+    from wade.services.knowledge_ownership import actor
+    from wade.services.session_composition_service import compose_session
+
+    main = evidence_repo
+    root = main.parent / "fresh-owner"
+    git(main, "worktree", "add", "-b", "feat/510-fresh-owner", str(root))
+    if initial == "disabled":
+        path = root / ".wade.yml"
+        path.write_text(path.read_text().replace("enabled: true", "enabled: false"))
+        git(root, "commit", "-am", "test: older dependency base disables knowledge")
+    elif initial == "absent":
+        git(root, "rm", ".wade.yml")
+        git(root, "commit", "-m", "test: older dependency base has no configuration")
+    else:
+        compose_session(root, main, load_config(main), kind=SessionKind.PLAN, task_id="510")
+        assert not (root / ".wade/knowledge-author.json").exists()
+    effective = load_config(main)
+    bootstrap_worktree(
+        root,
+        effective,
+        main,
+        session_kind=SessionKind.IMPLEMENTATION,
+        task_id="510",
+        compose_session_only=True,
+    )
+    original = (root / ".wade/knowledge-author.json").read_bytes()
+    bootstrap_worktree(
+        root,
+        effective,
+        main,
+        session_kind=SessionKind.IMPLEMENTATION,
+        task_id="510",
+    )
+    assert (root / ".wade/knowledge-author.json").read_bytes() == original
+    assert load_config(root).knowledge.enabled
+    assert actor(root).author

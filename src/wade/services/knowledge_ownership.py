@@ -12,6 +12,7 @@ from typing import ParamSpec, TypeVar
 
 from wade.git import knowledge as git_knowledge
 from wade.git import repo as git_repo
+from wade.models.config import ProjectConfig
 from wade.models.knowledge import KnowledgeActor, KnowledgeAuthorBinding, KnowledgeOperationState
 from wade.models.session_manifest import SessionManifest
 from wade.utils.filelock import file_lock
@@ -52,6 +53,7 @@ def _manifest(root: Path) -> SessionManifest | None:
 def author_association(
     root: Path,
     task_id: str,
+    config: ProjectConfig | None = None,
     *,
     create: bool = False,
     enforce: bool = False,
@@ -61,7 +63,9 @@ def author_association(
     from wade.config.loader import load_config
 
     root = root.resolve()
-    config = load_config(root)
+    # Composition supplies its effective config before copied configuration
+    # reaches this worktree. Ordinary actor reads use the actual local config.
+    config = config if config is not None else load_config(root)
     if not config.knowledge.enabled:
         return False
     try:

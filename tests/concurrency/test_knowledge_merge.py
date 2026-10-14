@@ -58,13 +58,13 @@ def _init_repo(tmp_path: Path) -> Path:
 
 
 def _owned_branch(repo: Path, branch: str) -> Path:
-    from wade.models.config import ProjectConfig
+    from wade.config.loader import load_config
     from wade.models.workflow import SessionKind
     from wade.services.session_composition_service import compose_session
 
     root = repo.parent / branch
     _git_ok(repo, "worktree", "add", "-b", branch, str(root), "main")
-    compose_session(root, repo, ProjectConfig(), kind=SessionKind.IMPLEMENTATION, task_id="1")
+    compose_session(root, repo, load_config(root), kind=SessionKind.IMPLEMENTATION, task_id="1")
     return root
 
 

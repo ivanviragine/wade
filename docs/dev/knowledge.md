@@ -70,7 +70,11 @@ worktree with its current valid frozen task/session bundle and an immutable
 repository, provider and task. Switching branches cannot transfer authority or
 reassign that association through skill refresh. Legacy sessions missing it must
 explicitly refresh their frozen skills before authoring; they cannot synthesize
-an association through an ordinary read. Main, detached
+an association through an ordinary read. Initial composition uses the effective
+configuration supplied to bootstrap even before main's configuration is copied
+into an older dependency checkout. Subsequent actor reads validate actual local
+configuration; normal preflight/full-bootstrap and plan-to-implementation
+transitions retain the same original author association. Main, detached
 planning/dependency analysis and all bounded delegations observe only, including
 when they share an author's checkout. Delegation sets a scoped child environment
 and distinct invocation identity, restores the parent environment on every exit,

@@ -202,7 +202,7 @@ manifest/workflow. Durable review records survive outside the session bundle,
 but apply only if the new session's review binding is identical.
 
 The implementation and PR-comment definitions currently use workflow revision
-2. Their authoritative order is verification, documentation decision, knowledge,
+3 (planning uses4 for typed owner-bound knowledge proposals). Their authoritative order is verification, documentation decision, knowledge,
 then closing method review; an old frozen revision is rejected until an explicit
 refresh replaces it. Expected tracked documentation and knowledge changes are
 therefore normally present in the final review. If a review finding creates a
