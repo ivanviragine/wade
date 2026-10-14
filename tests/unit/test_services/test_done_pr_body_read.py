@@ -481,3 +481,18 @@ def test_finalizer_preserves_blockquote_list_lazy_continuation(tmp_path: Path) -
         calls.read.return_value = expected
         assert run() is True
         assert calls.write.call_args.args[2] == expected
+
+
+@pytest.mark.parametrize("quote", [">", "> >"])
+def test_finalizer_quoted_code_cannot_hide_embedded_plan(tmp_path: Path, quote: str) -> None:
+    plan = "  <!-- wade:plan:start -->\n  ## Summary\n  Requirements.\n  <!-- wade:plan:end -->"
+    body = f"Closes #42\n\n## Summary\nLegacy.\n- Text.\n  {quote}     Code.\nHuman text.\n" + plan
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = body
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert plan in result
+        assert "Legacy." not in result
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result

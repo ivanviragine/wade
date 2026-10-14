@@ -476,3 +476,60 @@ def test_nonparagraph_blockquotes_end_lazy_list_context(quote: str) -> None:
     assert replace_owned_section(prefix + old, name="summary", heading=None, content="New.") == (
         prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
     )
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+@pytest.mark.parametrize(
+    "context",
+    [
+        "- Text.\n  >     Code.\nHuman text.\n",
+        "- Text.\n  > >     Code.\nHuman text.\n",
+        "- Outer.\n  - Text.\n    >     Code.\nHuman text.\n",
+        "- Text.\n  > # Heading\nHuman text.\n",
+        "- Text.\n  >\nHuman text.\n",
+        "- Text.\n  > ```\n  > Code.\n  > ```\nHuman text.\n",
+        "- Text.\n  > Quote.\n\nHuman text.\n",
+    ],
+)
+def test_container_boundaries_cannot_hide_following_plan(heading: str, context: str) -> None:
+    plan = "  <!-- wade:plan:start -->\n  Requirements.\n  <!-- wade:plan:end -->"
+    body = f"## {heading}\nLegacy.\n" + context + plan
+    expected = "  > ```\n  > Code.\n  > ```\nHuman text.\n" + plan if "```" in context else plan
+    assert strip_legacy_section(body, heading) == expected
+    assert scan_markdown_structure(body).owned("plan") is not None
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("container", ["", "- ", "> ", "- > "])
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+@pytest.mark.parametrize("content", ["", "Keep.\n", "<!-- wade:plan:end -->\n\n"])
+def test_container_fence_closure_contract(
+    newline: str, container: str, fence: str, content: str
+) -> None:
+    continuation = container.replace("- ", "  ")
+    middle = "".join(continuation + line + "\n" for line in content.split("\n")[:-1])
+    unclosed = (container + fence + "\n" + middle).replace("\n", newline)
+    closed = unclosed + continuation + fence + fence[0]
+    structure = scan_markdown_structure(closed)
+    assert len(structure.fences) == 1
+    assert structure.fences[0].start == 0
+    assert structure.fences[0].end == len(closed)
+    assert structure.blocks == []
+    with pytest.raises(MarkdownStructureError, match="unclosed code fence"):
+        scan_markdown_structure(unclosed)
+
+
+def test_parser_nesting_limit_refuses_instead_of_hiding_owned_blocks() -> None:
+    body = "> " * 110 + "Nested quote.\n\n<!-- wade:plan:start -->\nKeep.\n<!-- wade:plan:end -->"
+    with pytest.raises(MarkdownStructureError, match="nesting exceeds"):
+        scan_markdown_structure(body)
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+def test_quoted_paragraph_continuation_with_code_indentation_remains_literal(name: str) -> None:
+    body = (
+        "- > Quote paragraph.\n  >     Still paragraph.\nlazy continuation\n"
+        f"  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n"
+    )
+    assert scan_markdown_structure(body).blocks == []
+    assert replace_owned_section(body, name=name, heading=None, content="") == body

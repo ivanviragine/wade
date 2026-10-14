@@ -1457,3 +1457,24 @@ def test_dependency_update_preserves_blockquote_list_lazy_continuation() -> None
     provider.update_task.reset_mock()
     assert apply_deps_to_issues(provider, ["2"], edges) == 0
     provider.update_task.assert_not_called()
+
+
+@pytest.mark.parametrize("quote", [">", "> >"])
+def test_dependency_quoted_code_cannot_hide_embedded_plan(quote: str) -> None:
+    provider = MagicMock()
+    plan = "\n".join(
+        [
+            "  <!-- wade:plan:start -->",
+            "  ## Dependencies",
+            "  Requirements.",
+            "  <!-- wade:plan:end -->",
+        ]
+    )
+    body = f"## Dependencies\nLegacy.\n- Text.\n  {quote}     Code.\nHuman text.\n" + plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=plan)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field
 
 
@@ -202,153 +203,76 @@ class MarkdownStructure(BaseModel):
         return matches[0] if matches else None
 
 
-_PARAGRAPH_INTERRUPT_RE = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|<!--)")
-_THEMATIC_BREAK_RE = re.compile(r" {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})")
-
-
-def _list_paragraph_open(content: str, paragraph: bool = False) -> bool:
-    """Recognize text paragraphs inside list blockquotes, including lazy lines."""
-    while quote := re.match(r" {0,3}>[ \t]?", content):
-        content = content[quote.end() :]
-    if paragraph and re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", content):
-        return False
-    return (
-        bool(content.strip())
-        and (paragraph or not content.startswith("    "))
-        and not bool(_PARAGRAPH_INTERRUPT_RE.match(content))
-        and not bool(_THEMATIC_BREAK_RE.fullmatch(content))
-    )
-
-
-def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tuple[str, bool, bool]:
-    """Track list content columns without treating contained examples as owners.
-
-    Blank-separated dedents and interrupting blocks leave the list; plain lazy
-    paragraph continuations retain it. Expand tabs only for detection, never for
-    offsets or replacements. Nested item columns survive a return to the parent.
-    """
-    visual = text.expandtabs(4)
-    if not visual.strip():
-        return visual, bool(indents), False
-    indent = len(visual) - len(visual.lstrip(" "))
-    thematic = _THEMATIC_BREAK_RE.fullmatch(visual)
-    if thematic and (not indents or indent < indents[-1]):
-        indents.clear()
-        return text, False, False
-    if indents and paragraph and indent >= indents[-1]:
-        content = visual[indents[-1] :]
-        if re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", content):
-            # A setext underline completes the list paragraph; a following
-            # dedented paragraph cannot be its lazy continuation.
-            return content, True, False
-    item = re.fullmatch(r"( *)([-+*]|[0-9]{1,9}[.)])(?:( +)(.*)|$)", visual)
-    # Only a nonempty bullet or an ordered item starting at 1 can interrupt
-    # an existing paragraph. Otherwise its following HTML is still top-level.
-    interrupts_paragraph = (
-        item and bool(item[4] and item[4].strip()) and (item[2] in {"-", "+", "*", "1.", "1)"})
-    )
-    if (
-        item
-        and (indent <= 3 or (indents and indent >= indents[-1]))
-        and (indents or not paragraph or interrupts_paragraph)
-    ):
-        while indents and indent < indents[-1]:
-            indents.pop()
-        padding = len(item[3]) if item[3] and len(item[3]) <= 4 else 1
-        content_column = indent + len(item[2]) + padding
-        indents.append(content_column)
-        content = visual[content_column:]
-        return content, True, _list_paragraph_open(content)
-    while len(indents) > 1 and indents[-2] <= indent < indents[-1]:
-        indents.pop()
-    if indents:
-        if indent >= indents[-1]:
-            content = visual[indents[-1] :]
-            return content, True, _list_paragraph_open(content, paragraph)
-        interrupts = _PARAGRAPH_INTERRUPT_RE.match(visual)
-        if not paragraph or interrupts or thematic:
-            indents.clear()
-        else:
-            return visual, True, True
-    starts_block = _PARAGRAPH_INTERRUPT_RE.match(visual)
-    return (
-        text,
-        False,
-        bool(text.strip())
-        and (paragraph or not visual.startswith("    "))
-        and not bool(starts_block),
-    )
+_MAX_STRUCTURE_NESTING = 100
 
 
 def scan_markdown_structure(body: str) -> MarkdownStructure:
-    """Scan standalone markers, column-zero headings and Markdown code fences.
+    """Map CommonMark blocks back to untouched source slices for safe edits.
 
-    Heading migration deliberately accepts only column-zero ATX headings.
-    Quoted, list-prefixed and indented examples are not migration candidates.
-    Fences may have Markdown's zero-to-three-space indentation. Marker-looking
-    text inside a fence is opaque, including examples with unbalanced markers.
+    The parser owns list/quote/code container semantics. Ownership still requires
+    a standalone top-level marker, and legacy headings remain column-zero ATX.
+    Rendering is never used, so parser normalization cannot rewrite user bytes.
     """
     result = MarkdownStructure()
     active: tuple[str, int] | None = None
-    fence: tuple[str, int, int, int] | None = None
-    list_indents: list[int] = []
-    paragraph_open = False
-    offset = 0
-    # Markdown lines end at CR/LF, not Python's broader Unicode separators.
-    for match in re.finditer(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z", body):
-        line = match.group()
-        text = line.rstrip("\r\n")
-        if fence is not None:
-            char, length, start, container_indent = fence
-            visual = text.expandtabs(4)
-            if visual.startswith(" " * container_indent) and re.fullmatch(
-                r" {0,3}" + re.escape(char) + "{" + str(length) + r",}[ \t]*",
-                visual[container_indent:],
-            ):
-                result.fences.append(MarkdownRange(start=start, end=offset + len(line)))
-                fence = None
-            offset += len(line)
+    # Parser maps use CR/LF line numbers; retain offsets in the original body.
+    lines = [match.group() for match in re.finditer(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z", body)]
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    tokens = MarkdownIt("commonmark", {"maxNesting": _MAX_STRUCTURE_NESTING}).parse(body)
+    for token in tokens:
+        # markdown-it stops parsing at its nesting limit. Refuse rather than
+        # mistake omitted descendants or subsequent blocks for unowned text.
+        if token.level >= _MAX_STRUCTURE_NESTING - 1:
+            raise MarkdownStructureError("Markdown nesting exceeds the safe scan limit")
+        if token.map is None:
             continue
-        container_text, in_list, paragraph_open = _list_container_line(
-            text, list_indents, paragraph_open
+        start_line, end_line = token.map
+        if token.type == "fence":
+            # The locked parser's fence rule includes the closing source line
+            # in map, but excludes it from content. getLines preserves one line
+            # per source content line, even after stripping container prefixes.
+            # Auto-closed fences lack that extra line and must never be edited.
+            content_lines = token.content.count("\n") + int(
+                bool(token.content) and not token.content.endswith("\n")
+            )
+            if end_line - start_line != content_lines + 2:
+                raise MarkdownStructureError("unclosed code fence")
+            result.fences.append(MarkdownRange(start=offsets[start_line], end=offsets[end_line]))
+            continue
+        if token.level != 0 or token.type not in {"html_block", "heading_open"}:
+            continue
+        text = lines[start_line].rstrip("\r\n")
+        marker = (
+            re.fullmatch(r" {0,3}<!-- wade:([a-zA-Z0-9_-]+):(start|end) -->[ \t]*", text)
+            if token.type == "html_block" and end_line == start_line + 1
+            else None
         )
-        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", container_text)
-        if opening and not (opening[1][0] == "`" and "`" in opening[2]):
-            fence = (opening[1][0], len(opening[1]), offset, list_indents[-1] if in_list else 0)
-            paragraph_open = False
-            offset += len(line)
-            continue
-        if in_list:
-            offset += len(line)
-            continue
-        marker = re.fullmatch(r" {0,3}<!-- wade:([a-zA-Z0-9_-]+):(start|end) -->[ \t]*", text)
         if marker:
             name, kind = marker.groups()
             if kind == "start":
                 if active is not None:
                     raise MarkdownStructureError(f"nested wade:{name} inside wade:{active[0]}")
-                active = (name, offset)
+                active = (name, offsets[start_line])
             else:
                 if active is None or active[0] != name:
                     raise MarkdownStructureError(f"unmatched wade:{name}:end marker")
                 result.blocks.append(
-                    ManagedBlock(name=name, start=active[1], end=offset + len(text))
+                    ManagedBlock(name=name, start=active[1], end=offsets[start_line] + len(text))
                 )
                 active = None
-        elif active is None:
+        elif active is None and token.type == "heading_open":
             heading = re.fullmatch(r"(#{1,6})(?:[ \t]+(.*?)(?:[ \t]+#+)?)?[ \t]*", text)
             if heading:
                 result.headings.append(
                     MarkdownHeading(
-                        start=offset,
-                        end=offset + len(line),
+                        start=offsets[start_line],
+                        end=offsets[end_line],
                         level=len(heading[1]),
                         title=heading[2] or "",
                     )
                 )
-        offset += len(line)
-    if fence is not None:
-        raise MarkdownStructureError("unclosed code fence")
     if active is not None:
         raise MarkdownStructureError(f"unclosed wade:{active[0]}:start marker")
     return result

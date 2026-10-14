@@ -1066,17 +1066,24 @@ HEAD, so any sha-keyed check must precede it):
 
 **Structural body replacement (#495).** The leaf `utils/markdown.py` owns an
 offset-preserving scanner for standalone `wade:<name>:start/end` pairs, code
-fences, and column-zero ATX headings. Only Summary finalization and dependency
-updates adopt it; existing extraction, session-list, usage, and budget helpers
+fences, and column-zero ATX headings. The direct `markdown-it-py` dependency
+supplies CommonMark token nesting and source line maps; WADE retains original
+CR/LF offsets and never renders parsed content. Only Summary finalization and
+dependency updates adopt it; existing extraction, session-list, usage, and budget helpers
 retain their own contracts. Pydantic range models carry offsets into the
 original string so unrelated content, including CRLF slices, remains unchanged.
 Backtick/tilde fences accept zero-to-three-space indentation and matching longer
-closing runs, including fences in list items. List-contained marker examples
-cannot supply owned pairs; fence contents cannot supply pairs or insertion
-anchors. Setext underlines finish list paragraphs, so later dedented prose and
-owned projections are not mistaken for lazy list continuations. Text paragraphs
-inside list blockquotes also admit lazy continuations; quoted headings, blank
-quotes, code and setext underlines do not keep paragraph continuation open.
+closing runs, including fences in nested list/quote containers. List/quote/code
+contents cannot supply owned pairs or legacy headings. The parser decides
+paragraph, setext, lazy-continuation, blank-line and indentation boundaries;
+WADE does not maintain a second container state machine. The locked parser's
+fence rule includes a real closing line in its source map and excludes it from
+content. WADE checks that contract explicitly to reject auto-closed fences;
+regressions cover empty/content/marker payloads, containers, CR/LF/CRLF and EOF.
+If token nesting reaches the configured parser limit (100), refuse instead of
+trusting an incomplete parse. This evidence-driven parser adoption replaces
+manual container tracking after reproduced preservation failures; it does not
+change the scanner/edit API or adopt it in other Markdown consumers.
 
 Each owned pair is authoritative and replaced in place. Without a pair, a unique
 exact legacy H2 may migrate only up to the first H1/H2, managed range, fence, or

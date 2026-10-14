@@ -624,7 +624,7 @@ empty marker pair retains ownership so retries cannot delete the human section.
 Otherwise the empty owned block is removed. Older unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
 column-zero heading, stopping at the next H1/H2 heading, managed block, or code
 fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
-unclosed fences stop the update with a repair message. This also applies to new
+unclosed fences or excessive nesting stop the update with a repair message. This also applies to new
 `PR-SUMMARY.md` content: close its fences and keep marker examples inside fenced
 code. Repair the indicated input and retry; dependency batches skip the affected
 issue and continue with the others.
