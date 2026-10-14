@@ -142,6 +142,7 @@ src/wade/
     ├── conventional.py  # Canonical conventional-commit TITLE validator (types + is_conventional_title) — stdlib-only, single Python source of truth
     ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe; sources its title regex from conventional.py
     ├── process.py       # Subprocess helpers
+    ├── git_close_commit.py # Leaf Markdown close-commit eligibility and invocation-local hook/tree guard
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
