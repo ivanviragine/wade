@@ -176,13 +176,43 @@ def _join_labels(names: list[str]) -> str:
     return ", ".join(name for name in names if name)
 
 
+def _task_headings(text: str) -> list[re.Match[str]]:
+    """Keep ordinary heading matches outside top-level fenced examples.
+
+    Scan original lines and retain regex offsets; neither code examples nor
+    source line endings are reconstructed. Container Markdown is out of scope.
+    """
+    matches = iter(_HEADING_RE.finditer(text))
+    heading = next(matches, None)
+    headings: list[re.Match[str]] = []
+    delimiter: str | None = None
+    opening_length = 0
+    # Markdown line endings are CR/LF, not Python's broader Unicode splitlines.
+    for source_line in re.finditer(r"[^\r\n]*(?:\r\n?|\n|$)", text):
+        line = source_line.group()
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)", line)
+        if marker is not None:
+            run, suffix = marker.groups()
+            if delimiter is not None:
+                if run[0] == delimiter and len(run) >= opening_length and not suffix.strip(" \t"):
+                    delimiter = None
+            elif run[0] == "~" or "`" not in suffix:
+                delimiter, opening_length = run[0], len(run)
+        end = source_line.end()
+        while heading is not None and heading.start() < end:
+            if delimiter is None:
+                headings.append(heading)
+            heading = next(matches, None)
+    return headings
+
+
 def _parse_sections(text: str) -> list[_Section]:
     """Split a markdown file into issue sections.
 
     Returns sections in document order. Anything before the first ``## ``
     heading is preserved in the file as a prelude (handled by the writer).
     """
-    headings = list(_HEADING_RE.finditer(text))
+    headings = _task_headings(text)
     if not headings:
         return []
 

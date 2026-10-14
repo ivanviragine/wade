@@ -815,3 +815,9 @@ Git replacement refs alter object reads without changing the reported HEAD objec
 Rich can insert literal newlines inside correctly shell-quoted arguments; shell quoting protects parsing, not later display transformations. Distinguish native terminal soft wrapping from captured bytes, and validate emitted physical command lines before parsing argv: unrelated debug logs can contain the intact path and mask a broken recovery hint.
 
 ---
+
+## eb2a4279f75b | 2026-10-14 | implementation | tags: markdown, parsing, unicode | Issue #497
+
+Python str.splitlines() treats U+000B, U+000C, U+001C through U+001E, U+0085, U+2028, and U+2029 as line boundaries, but Markdown source lines end only at CR/LF. A fence scanner using splitlines() can therefore turn inline delimiters into openers or closers and hide real tasks or expose example headings. Use CR/LF-only source-line boundaries and preserve original offsets and the other separator characters literally.
+
+---

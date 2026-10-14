@@ -719,6 +719,12 @@ Description body here. Sub-headings, code blocks, anything markdown.
   (Git older than 2.36), hook rejection, signing failure, and Git errors are
   logged without undoing the disk closure. Hooks that directly edit other
   files or refs retain their own side effects.
+- Task-like headings inside backtick or tilde fenced code blocks remain body
+  or prelude examples. A real heading after a valid closing fence starts the
+  next task; an unclosed fence continues through the end of the file. Fences
+  use zero to three leading spaces and at least three matching delimiters;
+  closing runs use the same delimiter, at least the opening length, and only
+  spaces or tabs afterward.
 - Tracking tasks with `- [ ] #N` checklist bodies work the same as with
   GitHub Issues — markdown's `find_parent_issue` scans every section's
   body for child refs.

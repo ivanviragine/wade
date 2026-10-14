@@ -798,3 +798,123 @@ def test_already_closed_has_no_write_or_commit(config_factory, monkeypatch) -> N
 def test_missing_file_close_reports_task_not_found(config_factory) -> None:
     with pytest.raises(TaskNotFoundError):
         config_factory().close_task("1")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "```python\n## #99 Phantom\n```\nTrailing explanation.",
+        "~~~text\n## #99 Phantom\n~~~\nTrailing explanation.",
+        " ```\n## #99 Phantom\n ```\nTrailing explanation.",
+        "```\n``` suffix\n## #99 Phantom\n```\nTrailing explanation.",
+        "~~~\n    ~~~\n## #99 Phantom\n\t~~~\n## #98 Still example\n~~~\nTrailing explanation.",
+        "   ```python\n## #99 Phantom\n   ```\nTrailing explanation.",
+        "  ~~~info`allowed\n## #99 Phantom\n  ~~~~ \t\nTrailing explanation.",
+        "````markdown\n```\n## #99 Phantom\n```\n````\nTrailing explanation.",
+        "~~~~markdown\n~~~\n## #99 Phantom\n~~~\n~~~~~\nTrailing explanation.",
+        "````\n~~~\n## #99 Phantom\n```\n## #98 Still example\n`````\nTrailing explanation.",
+        "~~~\n~~~ suffix\n## #99 Phantom\n```\n## #98 Still example\n~~~\nTrailing explanation.",
+    ],
+)
+def test_fenced_task_boundaries_keep_exact_bodies_and_spans(body: str) -> None:
+    first = "## #1 Real\n\n" + body + "\n\n"
+    second = "## #2 Next\n\nEnd\n"
+    text = "# Prelude\n\n" + first + second
+    sections = _parse_sections(text)
+    assert [section.id for section in sections] == ["1", "2"]
+    assert sections[0].body == body
+    assert text[slice(*sections[0].span)] == first
+    assert text[slice(*sections[1].span)] == second
+
+
+@pytest.mark.parametrize("opener", ["```", "~~~", "   ````python"])
+def test_unclosed_fence_keeps_apparent_tasks_as_content(opener: str) -> None:
+    body = opener + "\n## #99 Example\n\n## #2 Still example\n"
+    sections = _parse_sections("## #1 Real\n\n" + body)
+    assert [section.id for section in sections] == ["1"]
+    assert sections[0].body == body.rstrip()
+    assert _parse_sections("# Prelude\n\n" + body) == []
+
+
+@pytest.mark.parametrize("opener", ["``", "~~", "    ```", "\t~~~", "inline ```", "```bad`info"])
+def test_non_fence_openers_do_not_hide_real_task_headings(opener: str) -> None:
+    text = "## #1 Real\n\n" + opener + "\n## #99 Real too\n\nBody\n"
+    assert [section.id for section in _parse_sections(text)] == ["1", "99"]
+
+
+def test_fenced_prelude_and_crlf_source_spans() -> None:
+    prelude = "# Prelude\r\n\r\n~~~\r\n## #99 Example\r\n~~~\r\n\r\n"
+    first = "## #1 Real\r\n\r\n```\r\n## #98 Example\r\n```\r\nTrailing\r\n\r\n"
+    second = "## #2 Next\r\n\r\nEnd\r\n"
+    text = prelude + first + second
+    assert _parse_sections(prelude) == []
+    sections = _parse_sections(text)
+    assert [section.id for section in sections] == ["1", "2"]
+    assert text[slice(*sections[0].span)] == first
+    assert text[slice(*sections[1].span)] == second
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~", "````"])
+def test_fenced_example_survives_provider_lifecycle(
+    config_factory, monkeypatch, fence: str
+) -> None:
+    monkeypatch.setattr("wade.providers.markdown.secrets.randbelow", lambda _limit: 11111111)
+    inner = "```\n" if len(fence) > 3 else ""
+    example = fence + "markdown\n" + inner + "## #12345678 Example task\n" + inner + fence
+    body = "Instructions.\n\n" + example + "\n\nTrailing explanation."
+    prelude = "# Prelude\n\n~~~\n## #87654321 Prelude example\n~~~\n\n"
+    existing = prelude + "## #1 Existing\n\n<!-- wade\nstate: open\nowner: user\n-->\n\nOriginal.\n"
+    provider = config_factory(existing)
+    created = provider.create_task("Fence task", body, labels=["feature"])
+    reopened = config_factory()
+    assert {task.id for task in reopened.list_tasks()} == {"1", created.id}
+    assert reopened.read_task(created.id).body == body
+    with pytest.raises(TaskNotFoundError):
+        reopened.read_task("12345678")
+    reopened.update_task(created.id, title="Renamed", body=body + "\nUpdated.")
+    reopened.close_task(created.id)
+    fresh = config_factory()
+    actual = fresh.read_task(created.id)
+    assert actual.title == "Renamed"
+    assert actual.body == body + "\nUpdated."
+    assert actual.state == TaskState.CLOSED
+    assert {label.name for label in actual.labels} == {"feature"}
+    assert fresh.read_task("1").body == "Original."
+    raw = fresh._path.read_text()
+    assert raw.startswith(prelude)
+    assert example in raw
+    assert raw.count("<!-- wade") == 2
+    assert "owner: user" in raw
+
+
+@pytest.mark.parametrize("real_collision", [False, True])
+def test_fenced_example_does_not_reserve_task_id(
+    config_factory, monkeypatch, real_collision: bool
+) -> None:
+    example = "```\n## #12345678 Example\n```"
+    content = "# Prelude\n\n" + example + "\n\n"
+    if real_collision:
+        content += "## #12345678 Existing\n\nReal body.\n"
+    provider = config_factory(content)
+    random = MagicMock(side_effect=[2345678, 2345679])
+    monkeypatch.setattr("wade.providers.markdown.secrets.randbelow", random)
+    task = provider.create_task("Generated", example + "\nTrailing.")
+    assert task.id == ("12345679" if real_collision else "12345678")
+    assert random.call_count == (2 if real_collision else 1)
+    assert config_factory().read_task(task.id).body == example + "\nTrailing."
+
+
+@pytest.mark.parametrize(
+    "separator", ["\u2028", "\u2029", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85"]
+)
+def test_unicode_and_control_separators_do_not_create_fence_lines(separator: str) -> None:
+    inline = "Inline" + separator + "```"
+    outside = "## #1 Real\n\n" + inline + "\n\n## #2 Real\n\nBody\n"
+    sections = _parse_sections(outside)
+    assert [section.id for section in sections] == ["1", "2"]
+    assert sections[0].body == inline
+    body = "```\n" + inline + "\n## #99 Phantom\n```"
+    inside = "## #1 Real\n\n" + body + "\n\n## #2 Real\n\nBody\n"
+    sections = _parse_sections(inside)
+    assert [section.id for section in sections] == ["1", "2"]
+    assert sections[0].body == body
