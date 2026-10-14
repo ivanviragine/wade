@@ -6,6 +6,7 @@ Also hosts worktree staleness classification, shared by the cleanup module.
 from __future__ import annotations
 
 import json
+import shlex
 from collections import Counter
 from collections.abc import Callable
 from enum import StrEnum
@@ -302,7 +303,11 @@ def _handle_stash_restoration(
     if apply_result.returncode == 0:
         if not git_stash.drop_stash_by_sha(stash_sha, cwd) and not json_output:
             console.warn(f"Restored the changes, but the stash entry {stash_sha} remains.")
-            console.hint(f"Remove it with: git stash drop {stash_sha}")
+            console.hint(
+                "Inspect SHA, ref and message; verify the current ref still names this "
+                "SHA before manually removing the selected entry."
+            )
+            console.command(f"git -C {shlex.quote(str(cwd))} stash list --format='%H %gd %gs'")
         emit(SyncEventType.STASH_RESTORED, stash_ref=stash_sha)
         if not json_output:
             console.success("Restored stashed changes.")
@@ -321,7 +326,11 @@ def _handle_stash_restoration(
             console.error(
                 "Could not restore stash after failed merge \N{EM DASH} changes preserved:"
             )
-        console.hint(f"Recover with: {recovery_cmd}")
+        console.hint(
+            "Resolve conflicts before retrying; recover an unavailable stash object first. "
+            "Run the apply command from this checkout: " + console.escape_markup(str(cwd))
+        )
+        console.command(recovery_cmd)
     return False
 
 

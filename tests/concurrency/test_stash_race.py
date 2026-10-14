@@ -9,6 +9,7 @@ real git — no threads.
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -29,8 +30,8 @@ def _git(cwd: Path, *args: str) -> str:
     ).stdout
 
 
-def _repo_with_two_worktrees(tmp_path: Path) -> tuple[Path, Path, Path]:
-    repo = tmp_path / "repo"
+def _repo_with_two_worktrees(tmp_path: Path, repo_name: str = "repo") -> tuple[Path, Path, Path]:
+    repo = tmp_path / repo_name
     repo.mkdir()
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "t@t.com")
@@ -97,9 +98,28 @@ def test_post_merge_restores_its_stash_after_sibling_push(
     capsys: pytest.CaptureFixture[str],
     pull_succeeds: bool,
 ) -> None:
+    from wade.ui import console
+
+    for width in (40, 80):
+        case = tmp_path / str(width)
+        case.mkdir()
+        with monkeypatch.context() as local:
+            local.setattr(console.out, "_width", width)
+            local.setattr(console.err, "_width", width)
+            _post_merge_success(case, local, capsys, pull_succeeds)
+
+
+def _post_merge_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    pull_succeeds: bool,
+) -> None:
     from wade.services.implementation_service import lifecycle
 
-    repo, wt_a, wt_b = _repo_with_two_worktrees(tmp_path)
+    repo, wt_a, wt_b = _repo_with_two_worktrees(
+        tmp_path, "long checkout " * 8 + "owner's [red] ; $(touch sentinel)"
+    )
     (repo / "file.txt").write_text("MAIN USER WORK\n")
     owned: list[str] = []
     sibling: list[str] = []
@@ -127,7 +147,9 @@ def test_post_merge_restores_its_stash_after_sibling_push(
     assert (wt_b / "file.txt").read_text() == "SIBLING USER WORK\n"
     output = capsys.readouterr()
     assert "retained" in output.err.lower()
-    assert owned[0] in output.err
+    assert owned[0] in output.err.replace("\n", "").replace(" ", "")
+    commands = _recovery_commands(output.out, repo, owned[0], False)
+    _execute_inspection_commands(commands, repo, tmp_path, sibling[0], owned[0])
     assert len(calls) == 2
 
 
@@ -138,9 +160,28 @@ def test_post_merge_restore_failures_never_fall_back_to_sibling(
     capsys: pytest.CaptureFixture[str],
     failure: str,
 ) -> None:
+    from wade.ui import console
+
+    for width in (40, 80):
+        case = tmp_path / str(width)
+        case.mkdir()
+        with monkeypatch.context() as local:
+            local.setattr(console.out, "_width", width)
+            local.setattr(console.err, "_width", width)
+            _post_merge_failure(case, local, capsys, failure)
+
+
+def _post_merge_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
     from wade.services.implementation_service import lifecycle
 
-    repo, wt_a, wt_b = _repo_with_two_worktrees(tmp_path)
+    repo, wt_a, wt_b = _repo_with_two_worktrees(
+        tmp_path, "long checkout " * 8 + "owner's [red] ; $(touch sentinel)"
+    )
     (repo / "file.txt").write_text("MAIN USER WORK\n")
     owned: list[str] = []
     sibling: list[str] = []
@@ -190,12 +231,75 @@ def test_post_merge_restore_failures_never_fall_back_to_sibling(
     assert apply_stash_by_sha(sibling[0], wt_b).returncode == 0
     assert (wt_b / "file.txt").read_text() == "SIBLING USER WORK\n"
     output = capsys.readouterr()
-    assert owned[0] in output.err
-    assert str(repo) in output.out + output.err
-    if failure != "removed-entry":
-        assert "git -C" in output.out
-        assert f"stash apply {owned[0]}" in " ".join(output.out.split())
+    assert owned[0] in output.err.replace("\n", "").replace(" ", "")
+    commands = _recovery_commands(output.out, repo, owned[0], failure != "removed-entry")
+    _execute_inspection_commands(commands, repo, tmp_path, sibling[0], owned[0])
     if failure == "removed-entry":
         assert "any remaining entry" in " ".join(output.err.split())
     assert "stash drop " + owned[0] not in output.out + output.err
     assert pulls == 2
+
+
+def _recovery_commands(output: str, repo: Path, sha: str, failed: bool) -> list[str]:
+    """Select only emitted standalone commands, never decoy debug text."""
+    decoy = f"debug cwd={repo} stash apply {sha}"
+    lines = [line for line in (output + "\n" + decoy).splitlines() if line.startswith("git ")]
+    argv = [["git", "-C", str(repo), "stash", "list", "--format=%H %gd %gs"]]
+    if failed:
+        argv = [
+            ["git", "-C", str(repo), "status"],
+            ["git", "-C", str(repo), "stash", "apply", sha],
+            *argv,
+        ]
+    assert len(lines) == len(argv)
+    assert [shlex.split(line) for line in lines] == argv
+    return lines
+
+
+def _execute_inspection_commands(
+    commands: list[str], repo: Path, outside: Path, sibling_sha: str, owned_sha: str
+) -> None:
+    before = (
+        _git(repo, "stash", "list", "--format=%H %gd %gs"),
+        _git(repo, "status", "--porcelain"),
+        (repo / "file.txt").read_bytes(),
+        _git(repo, "ls-files", "-u"),
+    )
+    for command in commands:
+        argv = shlex.split(command)
+        if argv[3:5] == ["stash", "apply"]:
+            # Never retry an unresolved conflict or unavailable object.
+            assert argv[-1] == owned_sha
+            continue
+        result = subprocess.run(
+            ["sh", "-c", command], cwd=outside, capture_output=True, text=True, check=True
+        )
+        if argv[3:5] == ["stash", "list"]:
+            assert result.stdout == before[0]
+            assert sibling_sha in result.stdout
+            assert "stash@{" in result.stdout and "wade-autostash/" in result.stdout
+        else:
+            assert "On branch main" in result.stdout
+    after = (
+        _git(repo, "stash", "list", "--format=%H %gd %gs"),
+        _git(repo, "status", "--porcelain"),
+        (repo / "file.txt").read_bytes(),
+        _git(repo, "ls-files", "-u"),
+    )
+    assert after == before
+    assert not (outside / "sentinel").exists()
+
+
+@pytest.mark.parametrize("width", [40, 80])
+def test_wrapped_hint_cannot_pass_command_assertions_using_debug_decoys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], width: int
+) -> None:
+    from wade.ui import console
+
+    repo = tmp_path / ("long checkout with spaces " * 8)
+    monkeypatch.setattr(console.out, "_width", width)
+    console.hint(f"Inspect git -C {shlex.quote(str(repo))} status and git stash apply owned")
+    legacy = capsys.readouterr().out
+    assert "\n" in legacy
+    with pytest.raises(AssertionError):
+        _recovery_commands(legacy, repo, "owned", True)

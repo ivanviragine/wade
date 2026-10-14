@@ -810,5 +810,8 @@ Git diff-tree can omit changed gitlinks because submodule.<name>.ignore=all or d
 ## 64533e9c9e7f | 2026-10-14 | implementation | tags: git, data-integrity | Issue #489
 
 Git replacement refs alter object reads without changing the reported HEAD object ID, so a guard can compare against a different tree than the real commit parent. Treat replacement-object state as ineligible for conservative auto-commits and disable replacement interpretation consistently in object inspection and commit validation.
+## 11ab5583cc4d | 2026-10-14 | implementation | tags: rich, shell, testing | Issue #540
+
+Rich can insert literal newlines inside correctly shell-quoted arguments; shell quoting protects parsing, not later display transformations. Distinguish native terminal soft wrapping from captured bytes, and validate emitted physical command lines before parsing argv: unrelated debug logs can contain the intact path and mask a broken recovery hint.
 
 ---
