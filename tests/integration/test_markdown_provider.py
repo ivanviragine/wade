@@ -430,9 +430,14 @@ def test_auto_commit_forwards_existing_hooks_and_reference_input(
     assert new != original
     events = log.read_bytes()
     transaction = original + b" " + new + b" refs/heads/main\n"
-    assert events.startswith(b"pre-commit\nprepared\n")
+    # Git 2.54+ also forwards an earlier preparing phase with unresolved HEAD.
+    assert events.startswith(b"pre-commit\n")
+    prepared = b"prepared\n" + transaction
+    committed = b"committed\n" + transaction
+    assert prepared in events
+    assert committed in events
+    assert events.index(prepared) < events.index(committed)
     assert events.count(transaction) == 2
-    assert b"committed\n" in events
     assert _git_bytes(main, "config", "core.hooksPath").strip() == os.fsencode(
         "custom hooks" if hooks_setting == "relative" else str(hooks)
     )
