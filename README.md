@@ -356,6 +356,8 @@ wade implement 42 --base develop   # branch from, target, and merge into develop
 
 `--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value is rejected up front — whether declared in the plan (fails `wade plan-session done`) or passed as `--base` (fails fast when you run `wade implement`); a well-formed base branch that does not exist fails draft-PR creation with an actionable message. Changing the base of a PR whose work is already in flight — whether by re-running planning or by `wade implement --base` — is not applied silently: it requires explicit confirmation, because the branch's existing history cannot be moved onto the new base without discarding it.
 
+A scaffold branch checked out in a worktree can be moved onto a different base only when its tracked files are clean and no untracked or ignored paths obstruct the destination tree. Colliding files, symlinks, and directories cause refusal before the branch or PR base changes; noncolliding generated session files remain allowed. Preserve or move the reported paths outside the affected worktree before retrying. Ignored files receive the same protection as ordinary untracked work. Retarget and rollback explicitly leave submodule worktrees unchanged, including when `submodule.recurse` is enabled; update submodules separately when needed.
+
 ## Reviews & bot triggers
 
 WADE splits review into an **AI review pass** you or the agent can invoke, and
@@ -634,6 +636,19 @@ review outcome — reviewed at `<sha>`, reviewer changed, skipped via
 `ai.review_implementation.enabled: false`), or completed at the active review
 binding's pass cap. A skipped, stale-reviewer, or never-run review is therefore
 visible to reviewers rather than hidden in worktree state.
+
+After a PR merge, WADE updates the main checkout and restores any tracked local
+changes using the exact stash SHA it captured, even if another worktree pushes
+its own stash meanwhile. WADE preserves any remaining owned stash entry after
+restoration because removing a positional stash entry can race with another push.
+Recovery commands are printed on separate copyable lines, with shell-quoted
+checkout paths and intact arguments even in narrow terminals. Inspect the
+reported checkout using the printed stash-list command, compare SHA/ref/message,
+and verify the current ref still names the intended SHA before manual cleanup.
+Resolve conflicts before retrying the printed apply command; if the stash object
+is unavailable, recover it first. Sync's apply command runs from the checkout
+named in its explanation. Local recovery warnings do not mean the remote PR
+merge failed.
 
 ## Task Providers
 

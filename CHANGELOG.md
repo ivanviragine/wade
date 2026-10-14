@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.17] — 2026-10-14
+
+### Bug Fixes
+
+- preserve copyable stash recovery commands at narrow terminal widths (#541) (f39e0a1)
+
+## [v1.2.16] — 2026-10-14
+
+### Bug Fixes
+
+- restore post-merge stashes by identity across worktrees (#528) (d141f0b)
+
+## [v1.2.15] — 2026-10-14
+
+### Bug Fixes
+
+- preserve untracked files when retargeting scaffold branches (#526) (8c51aee)
+
 ## [v1.2.14] — 2026-10-14
 
 ### Bug Fixes
