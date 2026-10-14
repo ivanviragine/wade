@@ -34,7 +34,8 @@ KNOWLEDGE_TEMPLATE = """\
 # Project Knowledge
 
 Shared learnings from AI planning and implementation sessions.
-Read this at the start of every session. Add new entries via `wade knowledge add`.
+Search relevant entries during the task; verify committed proof.
+Add new entries via `wade knowledge add`.
 
 ---
 """
@@ -43,9 +44,8 @@ Read this at the start of every session. Add new entries via `wade knowledge add
 _TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _TAG_MAX_LEN = 30
 
-# Detached plan/deps worktrees are deliberately disposable.  Ratings created in
-# one must therefore live in a WADE-owned, ignored session artefact until the
-# parent workflow can transfer them through main's existing ratings spool.
+# Legacy transport path remains recognizable for explicit owner recovery. New
+# observations persist directly in the ignored Git-common-dir proposal queue.
 STAGED_RATINGS_RELATIVE_PATH = ".wade/knowledge-ratings-staged.jsonl"
 
 # Written by the parent that creates a throwaway plan/deps worktree, and read by
@@ -96,6 +96,8 @@ class KnowledgeStatus(BaseModel, frozen=True):
     root: Path
     dirty_paths: list[str] = []
     legacy_migration_pending: bool = False
+    pending_proposal_count: int = 0
+    proposal_error: str | None = None
     staged_vote_count: int = 0
     staging_path: Path | None = None
     staging_error: str | None = None
@@ -124,7 +126,7 @@ class RatingEvent(BaseModel, frozen=True):
 
 
 class StagedRatingsFlushResult(BaseModel, frozen=True):
-    """Outcome of transferring detached-session rating events to main's spool.
+    """Outcome of preserving/reconciling a legacy detached transport artifact.
 
     ``worktree`` names the session the votes came from, so a sweep over
     *retained* worktrees (:func:`flush_retained_staged_ratings`) can report
@@ -181,31 +183,8 @@ def _canonical_project_root(project_root: Path) -> Path:
 
 
 def _resolve_knowledge_root(project_root: Path) -> Path:
-    """Resolve where knowledge reads/writes land, keyed on the HEAD-attachment state.
-
-    Knowledge is worktree-local (#358): the file is tracked, so a branch-backed
-    worktree edits its *own* checkout and the change rides in the PR. Only a
-    **throwaway detached-HEAD worktree** (a ``wade plan`` or ``wade task deps``
-    session — both created via ``create_detached_worktree``) is redirected to the
-    main checkout, because such a worktree is deleted at session end and any write
-    there would be lost.
-
-    - ``is_head_attached(project_root)`` True (branch-backed worktree *or* the main
-      checkout) → return *project_root* unchanged: edit the file you stand in.
-    - detached HEAD (plan / task deps throwaway) → redirect to the main checkout.
-
-    Falls back to *project_root* if the git state can't be determined.
-    """
-    try:
-        from wade.git.repo import is_head_attached
-    except ImportError:
-        return project_root
-    try:
-        if is_head_attached(project_root):
-            return project_root
-    except OSError:
-        return project_root
-    return _canonical_project_root(project_root)
+    """Knowledge snapshots always belong to the checkout being observed."""
+    return project_root
 
 
 def throwaway_session_marker_path(worktree_path: Path) -> Path:
@@ -395,10 +374,30 @@ def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeSt
             staged_vote_count = 0
             staging_error = str(exc)
 
+    pending_proposal_count = 0
+    proposal_error = None
+    from wade.git import repo as git_repo
+    from wade.services.knowledge_proposals import dispositions, proposals
+
+    if git_repo.get_git_common_dir(project_root) is not None:
+        try:
+            finished = {
+                d.proposal_id
+                for d in dispositions(project_root)
+                if d.action in {"discarded", "assessed"}
+            }
+            pending_proposal_count = sum(
+                p.proposal_id not in finished for p in proposals(project_root)
+            )
+        except (ValueError, OSError) as exc:
+            proposal_error = str(exc)
+
     return KnowledgeStatus(
         root=root,
         dirty_paths=dirty,
         legacy_migration_pending=legacy_pending,
+        pending_proposal_count=pending_proposal_count,
+        proposal_error=proposal_error,
         staged_vote_count=staged_vote_count,
         staging_path=staging_path,
         staging_error=staging_error,
@@ -460,59 +459,33 @@ def _read_legacy_yaml_ratings(legacy_path: Path) -> dict[str, EntryRating]:
 
 
 def _fold_jsonl_ratings(ratings_path: Path) -> dict[str, EntryRating]:
-    """Reduce the append-only JSONL vote log into per-entry rating totals.
+    """Historical usefulness only; authoritative corruption belongs to reconcile."""
+    from wade.models.knowledge import RelationshipEvent
+    from wade.utils.knowledge_events import decode_history, utility_counts
 
-    Fold rule per record (skipping any malformed line defensively — a union merge
-    can concatenate imperfectly, and one bad line must never crash a read):
-
-    - ``dir`` (``up``/``down``/``stale``) → +1 to that counter.
-    - a seed record (``seed: true``) → add its integer ``up``/``down``/``stale``
-      fields **once per entry id**. Seeds are byte-deterministic and idempotent, so
-      a duplicate seed line (e.g. produced when two branches migrate the same
-      legacy ``.yml`` and union-merge) is folded exactly once — never double-counted.
-    - ``superseded_by`` → set the link (last-seen wins).
-    """
-    data: dict[str, EntryRating] = {}
-    seeded: set[str] = set()
-    delivered_event_ids: set[str] = set()
-    for raw_line in ratings_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            record: Any = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            logger.debug("knowledge.ratings_malformed_line", line=line)
-            continue
-        if not isinstance(record, dict):
-            continue
-        event_id = record.get("event_id")
-        if isinstance(event_id, str):
-            if event_id in delivered_event_ids:
-                continue
-            delivered_event_ids.add(event_id)
-        entry_id = record.get("id")
-        if not isinstance(entry_id, str):
-            continue
-        entry = data.setdefault(entry_id, EntryRating())
-        if record.get("seed") is True:
-            if entry_id in seeded:
-                continue  # idempotent — dedupe duplicate seed lines from union merges
-            seeded.add(entry_id)
-            for counter in ("up", "down", "stale"):
-                val = record.get(counter)
-                if isinstance(val, int) and not isinstance(val, bool):
-                    setattr(entry, counter, getattr(entry, counter) + val)
-            sb = record.get("superseded_by")
-            if isinstance(sb, str):
-                entry.superseded_by = sb
-            continue
-        direction = record.get("dir")
-        if direction in ("up", "down", "stale"):
-            setattr(entry, direction, getattr(entry, direction) + 1)
-        sb = record.get("superseded_by")
-        if isinstance(sb, str):
-            entry.superseded_by = sb
+    history = decode_history(ratings_path.read_text(encoding="utf-8"))
+    ids = {str(r["id"]) for r in history.legacy_records} | {e.entry_id for e in history.events}
+    data = {}
+    for entry_id in sorted(ids):
+        up, down, stale = utility_counts(history, entry_id)
+        links = {
+            str(r["superseded_by"])
+            for r in history.legacy_records
+            if r.get("id") == entry_id and r.get("superseded_by")
+        }
+        links.update(
+            e.related_id
+            for e in history.events
+            if isinstance(e, RelationshipEvent)
+            and e.entry_id == entry_id
+            and e.related_id is not None
+        )
+        data[entry_id] = EntryRating(
+            up=up,
+            down=down,
+            stale=stale,
+            superseded_by=next(iter(links)) if len(links) == 1 else None,
+        )
     return data
 
 
@@ -576,21 +549,11 @@ def _materialize_migration_locked(ratings_path: Path) -> None:
     legacy = _legacy_ratings_path(ratings_path)
     if not legacy.is_file():
         return
-    ratings = _read_legacy_yaml_ratings(legacy)
+    from wade.utils.knowledge_events import legacy_yaml_history
+
     seed_lines = [
-        json.dumps(
-            {
-                "event_id": f"legacy-seed:{entry_id}",
-                "id": entry_id,
-                "seed": True,
-                "up": r.up,
-                "down": r.down,
-                "stale": r.stale,
-                "superseded_by": r.superseded_by,
-            },
-            sort_keys=True,
-        )
-        for entry_id, r in sorted(ratings.items())
+        json.dumps(json.loads(line), sort_keys=True)
+        for line in legacy_yaml_history(legacy.read_text()).splitlines()
     ]
     ratings_path.write_text(
         "".join(f"{line}\n" for line in seed_lines),
@@ -611,6 +574,10 @@ def _append_jsonl_record(
     detached-session staging file is intentionally an isolated transport log;
     it must never inspect, migrate, or copy a canonical knowledge file.
     """
+    if materialize_legacy:
+        from wade.services.knowledge_ownership import assert_author_path
+
+        assert_author_path(path)
     with file_lock(path):
         _append_jsonl_record_locked(path, record, materialize_legacy=materialize_legacy)
 
@@ -635,7 +602,9 @@ def _append_jsonl_record_locked(
 
 def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
     """Append one canonical ratings record, migrating legacy YAML if needed."""
-    _append_jsonl_record(ratings_path, record, materialize_legacy=True)
+    from wade.services.knowledge_store import append_event
+
+    append_event(ratings_path, record)
 
 
 def create_rating_event(entry_id: str, direction: str) -> RatingEvent:
@@ -688,18 +657,17 @@ def record_rating_for_session(
     entry_id: str,
     direction: str,
 ) -> RatingEvent:
-    """Record a rating through the appropriate attached/detached lifecycle.
+    """Legacy feedback is utility history, never a correctness assessment."""
+    from wade.services.knowledge_ownership import actor
+    from wade.services.knowledge_proposals import stage_proposal
 
-    Detached plan/deps sessions can write their own ``.wade`` directory but
-    must never write the main checkout merely to vote.  Attached worktrees
-    retain the existing direct tracked-sidecar behavior.
-    """
     event = create_rating_event(entry_id, direction)
-    if is_throwaway_knowledge_session(project_root):
-        stage_rating_event(project_root, event)
-        return event
-    ratings_path = resolve_ratings_path(resolve_knowledge_path(project_root, config))
-    _append_ratings_record(ratings_path, event.to_record())
+    if actor(project_root).author:
+        _append_ratings_record(
+            resolve_ratings_path(resolve_knowledge_path(project_root, config)), event.to_record()
+        )
+    else:
+        stage_proposal(project_root, config, entry_id, event.to_record())
     return event
 
 
@@ -710,51 +678,31 @@ def record_handoff_rating_for_session(
     direction: str,
     handoff_id: str,
 ) -> RatingEvent:
-    """Record one completed plan handoff vote exactly once per retained session.
+    """Persist completed-plan feedback as a historical owner-bound proposal."""
+    from wade.services.knowledge_proposals import stage_proposal
 
-    A completed plan bundle permits one vote per knowledge entry.  Its event ID
-    is derived from that stable handoff identity, so a retry remains idempotent
-    even after the staging file was flushed before a later worktree-cleanup
-    failure.  ``handoff_id`` distinguishes that retryable event from ordinary
-    detached ``wade knowledge rate`` calls, which retain their append-only
-    semantics.
-    """
     if not handoff_id:
         raise ValueError("Plan handoff ratings require a stable handoff identity")
-    if not is_throwaway_knowledge_session(project_root):
-        return record_rating_for_session(project_root, config, entry_id, direction)
-
-    path = staged_ratings_path(project_root)
-    if path_escapes_session(project_root, path):
-        raise ValueError(
-            f"Refusing to stage a knowledge vote outside the session worktree: {path!s}"
-        )
-    with file_lock(path):
-        for record in _load_staged_rating_records(path):
-            if record["id"] == entry_id and record.get("handoff_id") == handoff_id:
-                return RatingEvent(
-                    event_id=str(record["event_id"]),
-                    entry_id=entry_id,
-                    direction=direction,
-                    timestamp=str(record["ts"]),
-                )
-        event = RatingEvent(
-            event_id=str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    f"wade:plan-handoff-rating:{handoff_id}:{entry_id}",
-                )
+    event = create_rating_event(entry_id, direction).model_copy(
+        update={
+            "event_id": str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"wade:plan-handoff-rating:{handoff_id}:{entry_id}")
             ),
-            entry_id=entry_id,
-            direction=direction,
-            timestamp=datetime.now(tz=UTC).isoformat(),
-        )
-        _append_jsonl_record_locked(
-            path,
-            event.to_record() | {"handoff_id": handoff_id},
-            materialize_legacy=False,
-        )
-        return event
+        }
+    )
+    proposal = stage_proposal(
+        project_root,
+        config,
+        entry_id,
+        event.to_record() | {"handoff_id": handoff_id},
+        operation_id=handoff_id,
+    )
+    return RatingEvent(
+        event_id=event.event_id,
+        entry_id=entry_id,
+        direction=direction,
+        timestamp=str(proposal.original_payload["ts"]),
+    )
 
 
 def _load_staged_rating_records(staging_path: Path) -> list[dict[str, Any]]:
@@ -823,127 +771,49 @@ def flush_staged_ratings(
     repo_root: Path,
     config: KnowledgeConfig,
 ) -> StagedRatingsFlushResult:
-    """Atomically hand detached-session votes to main's existing spool.
+    """Preserve legacy transport logs; no generic delivery or main mutation.
 
-    The main ratings path is the lock key used by the pre-#462 carry-forward
-    lifecycle.  Retrying after a crash is safe: durable event IDs already in
-    that spool are skipped, while the staging artefact is retained until it can
-    be removed after a successful durable append.
-
-    A staging path that resolves outside *worktree_path* is skipped rather than
-    read and unlinked: the same ``.wade/`` symlink that would redirect the read
-    would also make the post-transfer ``unlink`` delete a file outside the
-    session. Nothing can legitimately be waiting there either — the writer
-    refuses the identical check — so this is "nothing to hand off", not a
-    failure that would strand the worktree forever on an unfixable path.
+    New sessions durably stage directly in the ignored common-directory queue.
+    Legacy logs require explicit operator recovery with a verified owner and
+    remain intact until that recovery succeeds.
     """
-    staging_path = staged_ratings_path(worktree_path)
-    if path_escapes_session(worktree_path, staging_path):
-        logger.warning("knowledge.flush_path_escapes_session", path=str(staging_path))
+    path = staged_ratings_path(worktree_path)
+    if path_escapes_session(worktree_path, path):
         return StagedRatingsFlushResult(
-            success=True,
+            success=False,
             worktree=worktree_path,
-            message=(
-                "Skipped a staged-ratings path that resolves outside the session "
-                f"worktree: {staging_path!s}"
-            ),
+            message="Unsafe legacy proposal path; original retained",
         )
-    # Do not create an otherwise-absent ``.wade/`` directory merely to lock it.
-    # If a writer starts after this check, its own lifecycle will flush the new
-    # event; if it starts before the lock, it is included in this transfer.
-    if not staging_path.exists():
-        return StagedRatingsFlushResult(success=True, worktree=worktree_path)
+    if path.exists() and path.read_text().strip():
+        from wade.services.knowledge_proposals import legacy_transport_archived
 
-    # A retained-worktree sweep may encounter a live sibling session.  Hold its
-    # append lock from the snapshot through durable delivery and cleanup, so an
-    # append cannot land in the interval between read and unlink.
-    with file_lock(staging_path):
         try:
-            staged_records = _load_staged_rating_records(staging_path)
-        except (OSError, ValueError) as exc:
-            return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
-        if not staged_records:
-            try:
-                staging_path.unlink()
-            except OSError as exc:
+            if legacy_transport_archived(repo_root, worktree_path):
                 return StagedRatingsFlushResult(
-                    success=False,
-                    message=f"Empty staging cleanup failed: {exc}",
+                    success=True,
                     worktree=worktree_path,
+                    message="Original legacy transport durably archived by explicit owner recovery",
                 )
-            return StagedRatingsFlushResult(success=True, worktree=worktree_path)
-
-        try:
-            main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config))
-        except ValueError as exc:
-            return StagedRatingsFlushResult(success=False, message=str(exc), worktree=worktree_path)
-
-        try:
-            with file_lock(main_ratings):
-                if main_ratings.exists() and main_ratings.is_dir():
-                    raise ValueError(
-                        f"Ratings path {main_ratings!s} points to a directory, not a file"
-                    )
-                _materialize_migration_locked(main_ratings)
-                delivered = _event_ids_in_jsonl(main_ratings)
-                missing = [
-                    record for record in staged_records if str(record["event_id"]) not in delivered
-                ]
-                if missing:
-                    with main_ratings.open("a", encoding="utf-8") as fd:
-                        for record in missing:
-                            fd.write(f"{json.dumps(record, sort_keys=True)}\n")
-                        fd.flush()
-                        os.fsync(fd.fileno())
-        except (OSError, ValueError) as exc:
-            return StagedRatingsFlushResult(
-                success=False,
-                staged_count=len(staged_records),
-                message=str(exc),
-                worktree=worktree_path,
-            )
-
-        try:
-            staging_path.unlink()
-        except OSError as exc:
-            # The durable main-spool transfer is already complete.  Keep the
-            # artefact for a later idempotent retry rather than claiming cleanup.
-            return StagedRatingsFlushResult(
-                success=False,
-                staged_count=len(staged_records),
-                appended_count=len(missing),
-                message=f"Ratings reached the main spool but staging cleanup failed: {exc}",
-                worktree=worktree_path,
-            )
+        except (ValueError, OSError):
+            pass
         return StagedRatingsFlushResult(
-            success=True,
-            staged_count=len(staged_records),
-            appended_count=len(missing),
+            success=False,
             worktree=worktree_path,
+            message="Legacy pending feedback retained; explicitly recover with an operation owner",
         )
+    return StagedRatingsFlushResult(success=True, worktree=worktree_path)
 
 
 def flush_retained_staged_ratings(
     repo_root: Path,
     config: KnowledgeConfig,
 ) -> list[StagedRatingsFlushResult]:
-    """Recover votes stranded in throwaway worktrees a previous run retained.
+    """Report retained legacy transport without accepting or delivering it.
 
-    A failed handoff deliberately preserves its worktree so the staging log can
-    be retried — but the parent process then exits, and a re-run of ``wade
-    plan`` / ``wade task deps`` creates a *fresh* worktree that knows nothing
-    about the old one, so nothing would ever pick the log back up (#462 review).
-    Both lifecycles call this before creating their new worktree: discovery is
-    deterministic (every linked worktree of *repo_root* that still carries the
-    throwaway marker and a staging log), so recovery needs no extra command and
-    no user bookkeeping.
-
-    Only worktrees with a staging log left are reported — a clean one is a
-    silent no-op. The flush itself is idempotent (event IDs already in the main
-    spool are skipped), so sweeping a *live* sibling session's log is harmless:
-    it delivers those votes early and that session's own flush then finds
-    nothing. Worktrees are never removed here for exactly that reason — a
-    retained worktree may still be in use.
+    New proposals already persist outside disposable worktrees. Legacy logs
+    require explicit original-owner recovery; a verified exact durable archive
+    permits the owning parent's eventual cleanup. The sweep never removes any
+    worktree or changes tracked main/branch files.
     """
     from wade.git import worktree as git_worktree
 
@@ -969,16 +839,15 @@ def flush_retained_staged_ratings(
     return results
 
 
-def record_supersede(
-    ratings_path: Path,
-    old_id: str,
-    new_id: str,
-) -> None:
-    """Append a supersede link (``old_id`` is superseded by ``new_id``) to the log."""
-    _append_ratings_record(
-        ratings_path,
-        {"id": old_id, "superseded_by": new_id, "ts": datetime.now(tz=UTC).isoformat()},
+def record_supersede(ratings_path: Path, old_id: str, new_id: str) -> None:
+    """Record a historical relationship, never replace correctness by utility."""
+    from wade.models.knowledge import RelationshipEvent
+    from wade.services.knowledge_store import append_event
+
+    event = RelationshipEvent(
+        event_id=uuid.uuid4().hex, entry_id=old_id, relation="superseded_by", related_id=new_id
     )
+    append_event(ratings_path, event.model_dump(mode="json"))
 
 
 def compute_auto_filter_threshold(
@@ -1029,13 +898,15 @@ def get_annotated_knowledge(
     search_query: str | None = None,
     filter_tags: list[str] | None = None,
     no_filter: bool = False,
+    raw: bool = False,
+    all_history: bool = False,
 ) -> AnnotatedKnowledgeResult:
     """Read knowledge file, annotate headings with scores, and optionally filter.
 
     Filtering modes (mutually exclusive, checked in order):
     - ``no_filter=True``: no score filtering at all
     - ``min_score`` set: hard cutoff on net score
-    - default: statistical auto-filter (prunes low-rated entries with sufficient votes)
+    - default: no usefulness or stale filtering; exact duplicates share display only
 
     ``search_query`` and ``filter_tags`` combine with OR: an entry passes if it
     matches the search OR has any of the requested tags.
@@ -1053,6 +924,8 @@ def get_annotated_knowledge(
 
     text = path.read_text(encoding="utf-8")
     entries = parse_entries(text)
+    if raw:
+        return AnnotatedKnowledgeResult(content=text, entries_count=len(entries))
 
     if not entries and search_query is None and not filter_tags:
         return AnnotatedKnowledgeResult(content=text, entries_count=0)
@@ -1067,10 +940,23 @@ def get_annotated_knowledge(
     # Pre-parse search query
     parsed_query = parse_query(search_query) if search_query else None
 
-    # Compute auto-filter threshold if using default filtering
-    auto_threshold: float | None = None
-    if min_score is None and not no_filter and entries:
-        auto_threshold = compute_auto_filter_threshold(entries, ratings)
+    from wade.config.loader import load_config
+    from wade.git.repo import GitError
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+    from wade.utils.knowledge_events import body_digest, exact_duplicate_groups
+
+    representatives = {
+        member: group.representative_id
+        for group in exact_duplicate_groups(entries)
+        for member in group.member_ids
+    }
+    try:
+        evidence_report = reconcile_knowledge(
+            project_root, config, main_ref=load_config(project_root).project.main_branch
+        )
+        states = {e.entry_id: e for e in evidence_report.entries}
+    except (GitError, ValueError, OSError):
+        states = {}
 
     # Build the header (everything before the first entry)
     if entries:
@@ -1083,42 +969,41 @@ def get_annotated_knowledge(
     result_parts = [header]
     filtered_entry_count = 0
     for entry in entries:
+        if (
+            not all_history
+            and entry.entry_id is not None
+            and representatives.get(entry.entry_id, entry.entry_id) != entry.entry_id
+        ):
+            continue
         entry_rating = ratings.get(entry.entry_id) if entry.entry_id else None
         up = entry_rating.up if entry_rating else 0
         down = entry_rating.down if entry_rating else 0
         stale = entry_rating.stale if entry_rating else 0
-        net_score = up - down
-        total_votes = up + down
         should_annotate = entry.entry_id is not None
+        candidates = [entry]
+        if not all_history and entry.entry_id is not None:
+            candidates += [
+                e
+                for e in entries
+                if e.entry_id != entry.entry_id
+                and representatives.get(e.entry_id or "") == entry.entry_id
+            ]
 
-        # Score and stale filtering
-        if not no_filter:
-            if min_score is not None:
-                # Hard cutoff mode
-                if net_score < min_score:
-                    continue
-            elif (
-                auto_threshold is not None
-                and entry.entry_id is not None
-                and total_votes >= 5
-                and net_score < auto_threshold
-            ):
-                continue
-            # Stale threshold filter (independent of score filter)
-            if entry.entry_id is not None and stale >= 2:
-                continue
+        def matches(candidate: ParsedEntry) -> bool:
+            rating = ratings.get(candidate.entry_id) if candidate.entry_id else None
+            score = rating.up - rating.down if rating else 0
+            if not no_filter and min_score is not None and score < min_score:
+                return False
+            if parsed_query is None and not filter_tags:
+                return True
+            text_match = parsed_query is not None and evaluate_query(
+                parsed_query, candidate.raw.split("\n")[0] + "\n" + candidate.content
+            )
+            tag_match = bool(filter_tags and set(candidate.tags) & set(filter_tags))
+            return text_match or tag_match
 
-        # Search/tag filtering (OR semantics)
-        if parsed_query is not None or filter_tags:
-            matches_search = False
-            matches_tag = False
-            if parsed_query is not None:
-                searchable = entry.raw.split("\n")[0] + "\n" + entry.content
-                matches_search = evaluate_query(parsed_query, searchable)
-            if filter_tags:
-                matches_tag = bool(set(entry.tags) & set(filter_tags))
-            if not matches_search and not matches_tag:
-                continue
+        if not any(matches(candidate) for candidate in candidates):
+            continue
 
         # Re-build the heading with score annotation. ``should_annotate`` already
         # implies the entry was parsed from a structured ``## <id> | <date> | …``
@@ -1128,14 +1013,60 @@ def get_annotated_knowledge(
             id_part = f"{entry.entry_id} | " if entry.entry_id else ""
             assert entry.date is not None  # entry_id is always accompanied by a date
             stale_part = f"/stale:{stale}" if stale > 0 else ""
-            heading = f"## {id_part}{entry.date} | {entry.heading_rest} [+{up}/-{down}{stale_part}]"
+            state = states.get(entry.entry_id)
+            assessment = (
+                state.assessment
+                if state and state.body_digest == body_digest(entry)
+                else "unverified"
+            )
+            publication = state.publication if state else "unavailable"
+            heading = (
+                f"## {id_part}{entry.date} | {entry.heading_rest} "
+                f"[utility:+{up}/-{down}{stale_part}; {assessment}; {publication}]"
+            )
             raw_lines = entry.raw.split("\n")
             raw_lines[0] = heading
             result_parts.append("\n".join(raw_lines))
+            if state:
+                result_parts.extend("\n> " + reason + "\n" for reason in state.reasons)
+                for assessment_report in state.assessments:
+                    if not all_history and not assessment_report.active:
+                        continue
+                    result_parts.append(
+                        f"\n> Receipt {assessment_report.event.event_id}: "
+                        f"{assessment_report.publication}; "
+                        f"{'active' if assessment_report.active else 'replaced historical proof'}\n"
+                    )
+                    result_parts.extend(
+                        "\n> "
+                        + proof.reason
+                        + f" expected={proof.expected}; actual={proof.actual}\n"
+                        for proof in assessment_report.checks
+                    )
+            members = [
+                member
+                for member, representative in representatives.items()
+                if representative == entry.entry_id and member != entry.entry_id
+            ]
+            for member in sorted(members):
+                member_state = states.get(member)
+                result_parts.append(
+                    f"\n> Exact duplicate member {member}: "
+                    f"{member_state.assessment if member_state else 'unverified'}; "
+                    "own receipts retained (use --all-history or reconcile --json).\n"
+                )
         else:
             result_parts.append(entry.raw)
         filtered_entry_count += 1
 
+    if all_history:
+        ratings_path = resolve_ratings_path(path)
+        if ratings_path.exists():
+            result_parts.append(
+                "\n## Raw append-only history (no authority from append order)\n\n```jsonl\n"
+                + ratings_path.read_text()
+                + "\n```\n"
+            )
     output = "".join(result_parts)
     if not output.endswith("\n"):
         output += "\n"
@@ -1149,11 +1080,16 @@ def append_knowledge(
     session_type: str,
     issue_ref: str | None = None,
     tags: list[str] | None = None,
+    kind: str = "note",
+    claim_key: str | None = None,
 ) -> KnowledgeEntry:
     """Format and append a knowledge entry to the knowledge file.
 
     Returns a KnowledgeEntry with the path and generated entry ID.
     """
+    from wade.services.knowledge_ownership import assert_author
+
+    assert_author(project_root)
     project_root = _resolve_knowledge_root(project_root)
     if tags:
         for tag in tags:
@@ -1161,6 +1097,10 @@ def append_knowledge(
             if err:
                 raise ValueError(err)
 
+    if not re.fullmatch(r"[a-z][a-z0-9_-]*", kind):
+        raise ValueError("Knowledge kind must be a lowercase semantic identifier")
+    if claim_key is not None and (not claim_key.strip() or any(c in claim_key for c in "|\r\n")):
+        raise ValueError("Claim key must be a nonempty single heading field")
     path = ensure_knowledge_file(project_root, config)
 
     # Lock the uniqueness read + append as one unit. With worktree-local files the
@@ -1180,7 +1120,11 @@ def append_knowledge(
         timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         tags_part = f" | tags: {', '.join(tags)}" if tags else ""
         issue_part = f" | Issue #{issue_ref}" if issue_ref else ""
-        header = f"## {entry_id} | {timestamp} | {session_type}{tags_part}{issue_part}"
+        key_part = f" | key: {claim_key}" if claim_key else ""
+        header = (
+            f"## {entry_id} | {timestamp} | {session_type} | kind: {kind}"
+            f"{key_part}{tags_part}{issue_part}"
+        )
 
         entry = f"\n{header}\n\n{content.strip()}\n\n---\n"
         with path.open("a", encoding="utf-8") as f:
@@ -1217,8 +1161,8 @@ def _decompose_heading_rest(heading_rest: str) -> tuple[str, list[str], str]:
         if part.startswith("tags:"):
             raw_tags = part[5:].strip()
             tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
-        elif part.startswith("Issue"):
-            issue_part = part
+        else:
+            issue_part = " | ".join(filter(None, (issue_part, part)))
     return session_type, tags, issue_part
 
 
@@ -1231,6 +1175,10 @@ def add_tag_to_entry(
     err = validate_tag(tag)
     if err:
         raise ValueError(err)
+
+    from wade.services.knowledge_ownership import assert_author_path
+
+    assert_author_path(knowledge_path)
 
     with file_lock(knowledge_path):
         content = knowledge_path.read_text(encoding="utf-8")
@@ -1265,6 +1213,10 @@ def remove_tag_from_entry(
     tag: str,
 ) -> None:
     """Remove a tag from an existing entry's heading (in-place file edit with locking)."""
+    from wade.services.knowledge_ownership import assert_author_path
+
+    assert_author_path(knowledge_path)
+
     with file_lock(knowledge_path):
         content = knowledge_path.read_text(encoding="utf-8")
         entries = parse_entries(content)

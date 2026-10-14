@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from wade.models.config import KnowledgeConfig, ProjectSettings, ProviderConfig
-from wade.models.plan_bundle import PlanBundle, PlanKnowledgeVote
+from wade.models.plan_bundle import PlanBundle, PlanKnowledgeProposal, PlanKnowledgeVote
 
 
 class InteractivePlanState(BaseModel):
@@ -22,6 +22,7 @@ class InteractivePlanState(BaseModel):
     bundle_digest: str
     bundle: PlanBundle | None = None
     completed: bool = False
+    refresh_pending: bool = False
 
 
 class PlanHandoffProgress(BaseModel):
@@ -43,6 +44,7 @@ class PlanHandoffProgress(BaseModel):
     # a recovered artifact with the same session ID from changing a vote while
     # retaining its already-delivered event identity.
     knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None
+    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None
     persisted_issues: dict[str, str] = Field(default_factory=dict)
     # Each persisted task's draft PR contains this exact plan content. Recovery
     # must reject a reviewed edit rather than reusing the task with a stale PR.

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import typer
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from wade.models.config import KnowledgeConfig
 
 knowledge_app = typer.Typer(
     help="Project knowledge management.",
@@ -47,6 +49,10 @@ def _refuse_write_in_throwaway_session(project_root: Path, command: str) -> None
 def add(
     session: str = typer.Option(..., "--session", "-s", help="Session type (plan/implementation)."),
     issue: str | None = typer.Option(None, "--issue", "-i", help="Issue number."),
+    kind: str = typer.Option(
+        "note", "--kind", help="Semantic claim kind; session labels are not kinds."
+    ),
+    claim_key: str | None = typer.Option(None, "--claim-key"),
     supersedes: str | None = typer.Option(
         None, "--supersedes", help="Entry ID that this new entry supersedes."
     ),
@@ -105,6 +111,8 @@ def add(
             session_type=session,
             issue_ref=issue,
             tags=tag,
+            kind=kind,
+            claim_key=claim_key,
         )
 
         if supersedes:
@@ -141,6 +149,10 @@ def get(
         list[str] | None,
         typer.Option("--tag", help="Filter by tag (repeatable, OR semantics)."),
     ] = None,
+    raw: bool = typer.Option(False, "--raw", help="Original Markdown with every member."),
+    all_history: bool = typer.Option(
+        False, "--all-history", help="Include every duplicate member and its own history."
+    ),
     no_filter: bool = typer.Option(
         False, "--no-filter", help="Disable all score filtering (auto-filter and min-score)."
     ),
@@ -166,8 +178,10 @@ def get(
             search_query=search,
             filter_tags=tag,
             no_filter=no_filter,
+            raw=raw,
+            all_history=all_history,
         )
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
     if result.content is None:
@@ -229,6 +243,17 @@ def rate(
     except OSError as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
+    console.warn(
+        "Deprecated historical utility feedback; votes never establish correctness or hide claims."
+    )
+    from wade.services.knowledge_ownership import actor
+
+    if not actor(project_root).author:
+        console.info(
+            "Historical feedback retained as a pending owner-bound proposal; "
+            "inspect `knowledge proposals list`."
+        )
+        return
     if direction == "stale":
         console.success(f"Recorded stale vote for entry {entry_id}")
     else:
@@ -253,7 +278,7 @@ def status() -> None:
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
         result = knowledge_status(project_root, config.knowledge)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
 
@@ -261,6 +286,8 @@ def status() -> None:
         not result.dirty_paths
         and not result.legacy_migration_pending
         and not result.staged_vote_count
+        and not result.pending_proposal_count
+        and not result.proposal_error
         # An unreadable staging log is a dirty session, not a clean one: the
         # handoff to main's spool will fail, and this command is how that gets
         # diagnosed (#462 review).
@@ -269,6 +296,15 @@ def status() -> None:
         console.success("Knowledge is clean — no uncommitted knowledge or ratings changes.")
         return
 
+    if result.pending_proposal_count:
+        console.info(
+            f"{result.pending_proposal_count} owner-bound knowledge proposal(s) pending; "
+            "inspect `knowledge proposals list`."
+        )
+    if result.proposal_error:
+        console.warn(
+            "Knowledge proposal ownership could not be inspected: " + result.proposal_error
+        )
     if result.dirty_paths:
         console.warn("Uncommitted knowledge/ratings changes:")
         for line in result.dirty_paths:
@@ -451,5 +487,233 @@ def tag_list(
         console.error(str(exc))
         raise typer.Exit(1) from exc
     except OSError as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@knowledge_app.command("check")
+def check_entry(
+    entry_id: str = typer.Argument(help="Entry ID to assess."),
+    outcome: str = typer.Argument(help="current or contradicted."),
+    file: Annotated[
+        list[str] | None, typer.Option("--file", help="Committed literal path, optionally #Lx-Ly.")
+    ] = None,
+    evidence_file: str | None = typer.Option(
+        None, "--evidence-file", help="JSON array of typed evidence."
+    ),
+    note: str = typer.Option(..., "--note", help="Why the evidence supports this assessment."),
+    replaces: Annotated[
+        list[str] | None, typer.Option("--replaces", help="Explicit prior assessment ID.")
+    ] = None,
+    proposal: str | None = typer.Option(None, "--proposal", help="Accepted matching proposal ID."),
+) -> None:
+    """Append an immutable assessment bound to the claim and committed proof."""
+    from pathlib import Path
+
+    from wade.services.knowledge_assessment import check_entry as assess
+    from wade.ui.console import console
+
+    root, config = _knowledge_context()
+    if outcome not in {"current", "contradicted"}:
+        console.error("Outcome must be current or contradicted")
+        raise typer.Exit(1)
+    try:
+        event = assess(
+            root,
+            config,
+            entry_id,
+            "current" if outcome == "current" else "contradicted",
+            files=tuple(file or ()),
+            evidence_file=Path(evidence_file) if evidence_file else None,
+            note=note,
+            replaces=tuple(replaces or ()),
+            proposal_id=proposal,
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+    console.raw(event.model_dump_json(indent=2))
+
+
+def _knowledge_context() -> tuple[Path, KnowledgeConfig]:
+    from pathlib import Path
+
+    from wade.config.loader import load_config
+    from wade.ui.console import console
+
+    config = load_config()
+    if not config.knowledge.enabled:
+        console.error("Knowledge capture is not enabled")
+        raise typer.Exit(1)
+    return Path(config.project_root) if config.project_root else Path.cwd(), config.knowledge
+
+
+@knowledge_app.command("feedback")
+def feedback_entry(
+    entry_id: str,
+    value: str = typer.Argument(help="useful or not-useful; never correctness."),
+    note: str = typer.Option("", "--note"),
+) -> None:
+    """Record utility feedback or retain an owner-bound observer proposal."""
+    from wade.services.knowledge_assessment import feedback
+    from wade.ui.console import console
+
+    root, config = _knowledge_context()
+    if value not in {"useful", "not-useful"}:
+        console.error("Feedback must be useful or not-useful")
+        raise typer.Exit(1)
+    try:
+        result = feedback(
+            root, config, entry_id, "useful" if value == "useful" else "not-useful", note=note
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+    console.raw(result if isinstance(result, str) else result.model_dump_json(indent=2))
+
+
+@knowledge_app.command("identify")
+def identify_entry(
+    position: int = typer.Argument(help="One-based entry position from get --raw."),
+) -> None:
+    """Explicitly assign a local ID to a plain historical entry."""
+    from wade.services.knowledge_assessment import assign_identity
+    from wade.ui.console import console
+
+    root, config = _knowledge_context()
+    try:
+        console.raw(assign_identity(root, config, position))
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@knowledge_app.command("reconcile")
+def reconcile(
+    against: str = typer.Option("HEAD", "--against"),
+    check: bool = typer.Option(False, "--check", help="Read-only; also the default."),
+    apply: bool = typer.Option(
+        False, "--apply", help="Append deterministic exact-duplicate links."
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+    base: str | None = typer.Option(
+        None, "--base", help="Effective local PR base for branch impact."
+    ),
+) -> None:
+    """Derive assessment, publication and duplicate state from committed trees."""
+    from wade.config.loader import load_config
+    from wade.services.knowledge_reconcile import reconcile_knowledge, render_report
+    from wade.ui.console import console
+
+    root, config = _knowledge_context()
+    if check and apply:
+        console.error("Choose either --check or --apply")
+        raise typer.Exit(1)
+    try:
+        report = reconcile_knowledge(
+            root,
+            config,
+            against=against,
+            main_ref=load_config(root).project.main_branch,
+            effective_base=base,
+            apply=apply,
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+    console.raw(report.model_dump_json(indent=2) if json_output else render_report(report))
+    if not report.valid:
+        raise typer.Exit(1)
+
+
+proposal_app = typer.Typer(help="Ignored owner-bound proposals; no automatic tracked delivery.")
+knowledge_app.add_typer(proposal_app, name="proposals")
+
+
+@proposal_app.command("list")
+def list_proposals() -> None:
+    """List durable pending proposals and auditable dispositions."""
+    import json
+
+    from wade.services.knowledge_proposals import dispositions, proposals
+    from wade.ui.console import console
+
+    root, _ = _knowledge_context()
+    try:
+        console.raw(
+            json.dumps(
+                {
+                    "proposals": [p.model_dump(mode="json") for p in proposals(root)],
+                    "dispositions": [d.model_dump(mode="json") for d in dispositions(root)],
+                },
+                indent=2,
+            )
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@proposal_app.command("accept")
+def accept_proposal(proposal_id: str) -> None:
+    """Accept only matching verified owner/content; a fresh check remains required."""
+    from wade.services.knowledge_proposals import accept_proposal as accept
+    from wade.ui.console import console
+
+    root, config = _knowledge_context()
+    try:
+        console.raw(accept(root, config, proposal_id).model_dump_json(indent=2))
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@proposal_app.command("retain")
+def retain_proposal(proposal_id: str, note: str = typer.Option(..., "--note")) -> None:
+    """Record an explicit pending disposition without changing claim authority."""
+    _proposal_disposition(proposal_id, "retained", note)
+
+
+@proposal_app.command("discard")
+def discard_proposal(proposal_id: str, note: str = typer.Option(..., "--note")) -> None:
+    """Record an auditable discard; keep the original proposal bytes."""
+    _proposal_disposition(proposal_id, "discarded", note)
+
+
+def _proposal_disposition(
+    proposal_id: str, action: Literal["retained", "discarded"], note: str
+) -> None:
+    from wade.services.knowledge_proposals import disposition
+    from wade.ui.console import console
+
+    root, _ = _knowledge_context()
+    try:
+        console.raw(disposition(root, proposal_id, action, note).model_dump_json(indent=2))
+    except (ValueError, OSError, RuntimeError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@proposal_app.command("recover")
+def recover_proposals(
+    worktree: str = typer.Option(..., "--worktree", help="Original retained parent worktree."),
+    from_main: bool = typer.Option(
+        False,
+        "--from-main",
+        help="Recover this parent's explicit pending handoff IDs; preserve main bytes.",
+    ),
+) -> None:
+    """Archive a legacy transport under its original owner, preserving all bytes."""
+    import json
+    from pathlib import Path
+
+    from wade.services.knowledge_proposals import recover_legacy
+    from wade.ui.console import console
+
+    root, config = _knowledge_context()
+    try:
+        result = recover_legacy(root, Path(worktree).resolve(), config, from_main=from_main)
+        console.raw(json.dumps([proposal.model_dump(mode="json") for proposal in result], indent=2))
+    except (ValueError, OSError, RuntimeError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc

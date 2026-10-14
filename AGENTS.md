@@ -72,6 +72,15 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 > GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
 > code still exists but is inert; removal is tracked as #357 C5.
 
+**Knowledge authority** lives in typed append-only receipts and committed Git
+snapshots. Main/detached/bounded workers observe via ignored Git-common-dir
+owner-bound proposals; never drain generic main feedback into a worktree.
+Acceptance requires original parent/task/content proof and grants no correctness.
+Keep assessment, publication, usefulness and historical relationships separate.
+Pure knowledge parsers/folds in `utils/knowledge_file.py` and
+`utils/knowledge_events.py` may import leaf models, never services; Git proof
+queries stay in `git/knowledge.py`. See `docs/dev/knowledge.md`.
+
 > **Closing-review state** lives in worktree files, not the immutable session
 > bundle: binding-aware receipts are under `.wade/reviews/`, and an active
 > PR-comment feedback cycle is under `.wade/review-cycles/`. The cycle preserves

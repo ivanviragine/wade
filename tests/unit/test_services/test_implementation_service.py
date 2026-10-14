@@ -3350,8 +3350,7 @@ class TestChainContinuation:
 
 
 class TestCarryForwardPendingVotes:
-    """Ratings-only carry-forward (#358): a throwaway `rate` on main is flushed
-    into the next attached worktree's log, and main is restored to clean."""
+    """Bootstrap never transfers or resets legacy pending main feedback (#510)."""
 
     @staticmethod
     def _git(cwd: Path, *args: str) -> None:
@@ -3374,7 +3373,7 @@ class TestCarryForwardPendingVotes:
         self._git(main, "commit", "-m", "chore: init")
         return main
 
-    def test_carries_pending_vote_and_cleans_main(self, tmp_path: Path) -> None:
+    def test_leaves_pending_vote_in_main_without_dirtying_branch(self, tmp_path: Path) -> None:
         from wade.models.config import KnowledgeConfig, ProjectConfig
         from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
 
@@ -3391,9 +3390,11 @@ class TestCarryForwardPendingVotes:
         _carry_forward_pending_votes(worktree, main, config)
 
         # Pending vote moved into the worktree's log (rides into that branch's PR).
-        assert pending_line in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert pending_line not in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(
+            encoding="utf-8"
+        )
         # Main restored to its committed state — the pending line is gone.
-        assert pending_line not in ratings.read_text(encoding="utf-8")
+        assert pending_line in ratings.read_text(encoding="utf-8")
 
     def test_second_carry_is_a_noop(self, tmp_path: Path) -> None:
         # Serialized by the lock: once the first carry clears main, later bootstraps
@@ -3419,10 +3420,10 @@ class TestCarryForwardPendingVotes:
         # Only the first worktree got the vote; the second saw a clean main.
         wt1_text = (wt1 / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
         wt2_text = (wt2 / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
-        assert wt1_text.count(pending_line) == 1
+        assert wt1_text.count(pending_line) == 0
         assert wt2_text.count(pending_line) == 0
 
-    def test_carries_verified_untracked_staged_vote_spool(self, tmp_path: Path) -> None:
+    def test_retains_verified_untracked_legacy_spool(self, tmp_path: Path) -> None:
         """A first detached vote reaches an attached PR even with no prior sidecar."""
         from wade.models.config import KnowledgeConfig, ProjectConfig
         from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
@@ -3443,8 +3444,8 @@ class TestCarryForwardPendingVotes:
         config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
         _carry_forward_pending_votes(worktree, main, config)
 
-        assert pending_line in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
-        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
+        assert not (worktree / "KNOWLEDGE.ratings.jsonl").exists()
+        assert (main / "KNOWLEDGE.ratings.jsonl").read_text() == pending_line + "\n"
 
     def test_untracked_spool_without_event_ids_is_left_in_main(self, tmp_path: Path) -> None:
         """The durable-spool guard is what stops an arbitrary untracked file moving.
@@ -3626,9 +3627,11 @@ class TestCarryForwardPendingVotes:
         # Vote content remains durable even when git cannot exactly restore the
         # legacy deletion in its index; a warning records the partial rollback.
         assert pending_line in main_ratings.read_text(encoding="utf-8")
-        assert (main / "KNOWLEDGE.ratings.yml").is_file()
+        assert not (main / "KNOWLEDGE.ratings.yml").exists()
 
-    def test_carries_staged_vote_through_legacy_ratings_migration(self, tmp_path: Path) -> None:
+    def test_legacy_pending_feedback_cannot_trigger_implicit_migration(
+        self, tmp_path: Path
+    ) -> None:
         """The first detached vote migrates legacy YAML in the attached PR, not main."""
         from wade.models.config import KnowledgeConfig, ProjectConfig
         from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
@@ -3654,8 +3657,8 @@ class TestCarryForwardPendingVotes:
         stage_rating_event(plan_worktree, create_rating_event("e", "up"))
 
         handoff = flush_staged_ratings(plan_worktree, main, config.knowledge)
-        assert handoff.success
-        assert not (main / "KNOWLEDGE.ratings.yml").exists()
+        assert not handoff.success
+        assert (main / "KNOWLEDGE.ratings.yml").is_file()
 
         worktree = tmp_path / "wt"
         self._git(main, "worktree", "add", "-b", "feat/legacy-rating", str(worktree))
@@ -3663,8 +3666,8 @@ class TestCarryForwardPendingVotes:
 
         assert (main / "KNOWLEDGE.ratings.yml").is_file()
         assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
-        assert not (worktree / "KNOWLEDGE.ratings.yml").exists()
-        assert read_ratings(worktree / "KNOWLEDGE.ratings.jsonl")["e"].up == 3
+        assert (worktree / "KNOWLEDGE.ratings.yml").is_file()
+        assert read_ratings(worktree / "KNOWLEDGE.ratings.jsonl")["e"].up == 2
 
     def test_failed_main_restore_carries_nothing(self, tmp_path: Path) -> None:
         # If restoring main fails, the votes must NOT be carried into the worktree —
@@ -3720,7 +3723,7 @@ class TestCarryForwardPendingVotes:
         # main is rolled back to its snapshot — the pending vote survives for a retry.
         assert pending_line in ratings.read_text(encoding="utf-8")
 
-    def test_carries_pending_vote_identical_to_a_committed_line(self, tmp_path: Path) -> None:
+    def test_preserves_identical_pending_line_in_main_only(self, tmp_path: Path) -> None:
         # Regression (#358 review): a genuinely-new vote whose serialized line is
         # IDENTICAL to a line already committed in the worktree must still be carried.
         # Deduping pending against the worktree's committed records dropped it here while
@@ -3745,6 +3748,6 @@ class TestCarryForwardPendingVotes:
         _carry_forward_pending_votes(worktree, main, config)
 
         # Both events survive checkout: the worktree's committed copy PLUS the carried one.
-        assert wt_ratings.read_text(encoding="utf-8").count(committed_line) == 2
+        assert wt_ratings.read_text(encoding="utf-8").count(committed_line) == 1
         # Main is restored to its single committed line (the pending duplicate removed).
-        assert ratings.read_text(encoding="utf-8").count(committed_line) == 1
+        assert ratings.read_text(encoding="utf-8").count(committed_line) == 2

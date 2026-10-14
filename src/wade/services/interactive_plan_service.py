@@ -16,6 +16,7 @@ from wade.models.interactive_plan import (
     InteractivePlanState,
 )
 from wade.models.plan_bundle import PlanBundle, PlanMember
+from wade.models.skill import SkillSlot
 from wade.models.workflow import SessionKind
 from wade.services import native_plan_service as native
 from wade.services.session_composition_service import (
@@ -148,6 +149,10 @@ def _load(root: Path) -> InteractivePlanState:
     if raw is None:  # pragma: no cover - strict reads return bytes or raise
         raise ValueError("Interactive planning handoff is absent or unsafe")
     state = InteractivePlanState.model_validate_json(raw)
+    if state.refresh_pending:
+        raise ValueError(
+            "Planning refresh interrupted; rerun plan-session refresh on the original directory"
+        )
     if state.bundle_digest != _binding_digest(root):
         raise ValueError("Interactive planning bindings changed; restart the planning session")
     return state
@@ -322,9 +327,14 @@ def complete(root: Path) -> None:
     bundle = _current_bundle(root, state)
     if plan_done(root / ".wade/plans").has_errors:
         raise ValueError("Fix plan validation errors before completing the session")
-    if state.knowledge_required and bundle.knowledge_votes is None:
+    if (
+        state.knowledge_required
+        and bundle.knowledge_votes is None
+        and bundle.knowledge_proposals is None
+    ):
         raise ValueError(
-            "Knowledge-enabled planning requires a bundle with knowledge_votes; "
+            "Knowledge-enabled planning requires knowledge_proposals "
+            "(legacy knowledge_votes remain historical); "
             "use an explicit empty list when no entries were evaluated"
         )
     _validate_reviews(root, state, bundle)
@@ -352,3 +362,75 @@ def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
         return state, bundle
     except StateFileAccessError as exc:
         raise InteractivePlanAccessError(root, exc) from exc
+
+
+def refresh_handoff(root: Path) -> None:
+    """Explicitly refresh an intact native handoff and invalidate all completion/review.
+
+    The original plans, session identity, launch binding and persistence progress
+    remain unchanged. A durable pending flag makes interrupted refresh retryable.
+    No provider operation or new review is dispatched here.
+    """
+    from wade.config.loader import load_config
+    from wade.git import repo as git_repo
+    from wade.services.session_composition_service import compose_session
+    from wade.skills.materializer import compute_session_bundle_digest, validate_session_bundle
+    from wade.utils.filelock import file_lock
+
+    root = root.resolve()
+    if not git_repo.is_worktree(root) or git_repo.is_head_attached(root):
+        raise ValueError("Refresh requires the original registered detached planning worktree")
+    with file_lock(root / ".wade/plans/refresh.lock", create_parent=False):
+        raw = read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
+        state = InteractivePlanState.model_validate_json(raw)
+        manifest = load_session_manifest_strict(root)
+        if manifest.session is not SessionKind.PLAN:
+            raise ValueError("Original planning session composition is required")
+        validate_session_bundle(root, manifest)
+        if not state.refresh_pending and state.bundle_digest != manifest.bundle_digest:
+            raise ValueError("Native handoff does not match its original frozen bundle")
+        # Archive the validated old bundle before any replacement. It remains a
+        # recovery artifact; never claim its prior reviews cover the new bundle.
+        archive_name = "session-refresh-" + manifest.bundle_digest.split(":", 1)[1]
+        archive = root / ".wade/plans" / archive_name
+        if archive.is_symlink():
+            raise ValueError("Unsafe session refresh archive")
+        for source in sorted((root / ".wade/session").rglob("*")):
+            if source.is_symlink():
+                raise ValueError("Unsafe frozen session archive source")
+            if not source.is_file():
+                continue
+            relative = source.relative_to(root / ".wade/session")
+            parts = ("plans", archive_name, *relative.parent.parts)
+            original = source.read_bytes()
+            previous = read_state_file(root, parts, relative.name)
+            if previous is not None and previous != original:
+                raise ValueError("Original session refresh archive conflicts; preserve it")
+            if previous is None and not atomic_write_state_file(
+                root, parts, relative.name, original
+            ):
+                raise ValueError("Could not durably archive frozen session before refresh")
+        if compute_session_bundle_digest(archive) != manifest.bundle_digest:
+            raise ValueError("Original frozen session archive is incomplete or changed")
+        state.completed = False
+        state.refresh_pending = True
+        state.review_required = True
+        _save(root, state)
+        _save_reviews(root, InteractivePlanReviews())
+        config = load_config(root)
+        main = git_repo.main_checkout_root(root)
+        refreshed = compose_session(
+            root,
+            main,
+            config,
+            kind=SessionKind.PLAN,
+            task_id=manifest.task_id,
+            refresh=True,
+            work_skills=[skill.canonical_ref for skill in manifest.bindings[SkillSlot.WORK].skills],
+            review_skills=[
+                skill.canonical_ref for skill in manifest.bindings[SkillSlot.REVIEW].skills
+            ],
+        )
+        state.bundle_digest = refreshed.manifest.bundle_digest
+        state.refresh_pending = False
+        _save(root, state)

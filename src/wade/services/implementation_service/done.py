@@ -464,7 +464,7 @@ def _run_completion_gates(
             return False
         if not _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type):
             return False
-        return _gate_knowledge_valid(config, worktree_root)
+        return _gate_knowledge_valid(config, worktree_root, main_branch)
 
     # Default: implementation session.
     if not _gate_pr_title(config, provider, issue_number):
@@ -482,7 +482,7 @@ def _run_completion_gates(
     # Runs LAST — after sync merges the base branch into the worktree, the local
     # `merge=union` point where a structural corruption of KNOWLEDGE.md could be
     # introduced. Validating here keeps a union-corrupted file from shipping.
-    return _gate_knowledge_valid(config, worktree_root)
+    return _gate_knowledge_valid(config, worktree_root, main_branch)
 
 
 def _gate_documentation_decision(
@@ -516,37 +516,35 @@ def _gate_documentation_decision(
     return False
 
 
-def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
-    """Refuse when the knowledge file is structurally corrupt (e.g. a union merge).
-
-    ``merge=union`` keeps both sides of a conflict with no structural awareness, so a
-    rewrite-in-place knowledge edit diverging from an append can leave a malformed
-    ``KNOWLEDGE.md`` (duplicate entry headings) that merges cleanly and would ship
-    undetected. This gate runs :func:`validate_knowledge_file` on the worktree's own
-    knowledge file — the one about to be pushed and merged — so such corruption is
-    caught before it reaches main. No-op when knowledge is disabled.
-    """
+def _gate_knowledge_valid(
+    config: ProjectConfig,
+    worktree_root: Path,
+    effective_base: str | None = None,
+) -> bool:
+    """Read-only committed-tree reconciliation after sync, fail closed on corruption."""
     if not config.knowledge.enabled:
         return True
-    from wade.utils.knowledge_file import (
-        resolve_knowledge_path,
-        validate_knowledge_file,
-    )
+    from wade.services.knowledge_reconcile import reconcile_knowledge, render_report
 
     try:
-        path = resolve_knowledge_path(worktree_root, config.knowledge)
-    except ValueError:
-        return True  # misconfigured knowledge.path is not this gate's concern
-    problems = validate_knowledge_file(path)
-    if not problems:
-        return True
-    console.error(
-        f"{config.knowledge.path} failed structural validation — a merge may have corrupted it."
-    )
-    for problem in problems:
-        console.detail(problem)
-    console.hint("Repair the knowledge file (dedupe entries / fix headings), commit, then re-run.")
-    return False
+        report = reconcile_knowledge(
+            worktree_root,
+            config.knowledge,
+            main_ref=config.project.main_branch,
+            effective_base=effective_base,
+        )
+        checked_head = git_repo.rev_parse(worktree_root, "HEAD")
+    except (ValueError, OSError, GitError) as exc:
+        console.error(f"Knowledge reconciliation failed: {exc}")
+        return False
+    console.detail(render_report(report))
+    if report.checked_commit != checked_head:
+        console.error("HEAD changed during knowledge reconciliation; re-run done.")
+        return False
+    if not report.valid or report.local_dirty_paths:
+        console.error("Knowledge history is corrupt or uncommitted; repair/commit and re-run done.")
+        return False
+    return True
 
 
 def _title_fix_hint(config: ProjectConfig, issue_number: str) -> str:
@@ -1002,6 +1000,8 @@ def _push_branch_with_recovery(
     branch: str,
     worktree_path: Path | None,
     marker_root: Path,
+    config: ProjectConfig | None = None,
+    effective_base: str | None = None,
 ) -> bool:
     """Push *branch*, recovering interactively from a non-fast-forward rejection.
 
@@ -1022,6 +1022,28 @@ def _push_branch_with_recovery(
       no stale ``done@<sha>`` may linger (which would tell the Stop hook the
       session finished and let the next push skip the backstop).
     """
+    push_root = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
+    if config is None:
+        from wade.config.loader import load_config
+
+        config = load_config(push_root)
+
+    def ready() -> bool:
+        if not git_repo.is_clean(push_root):
+            console.error("Working tree changed after completion gates; commit and re-run done.")
+            markers.clear_markers(marker_root, "done")
+            return False
+        if not _gate_knowledge_valid(config, push_root, effective_base):
+            markers.clear_markers(marker_root, "done")
+            return False
+        if not git_repo.is_clean(push_root):
+            console.error("Working tree changed during reconciliation; commit and re-run done.")
+            markers.clear_markers(marker_root, "done")
+            return False
+        return True
+
+    if not ready():
+        return False
     _write_done_marker(marker_root, repo_root, branch)
     try:
         git_repo.push_branch(repo_root, branch, set_upstream=True)
@@ -1068,6 +1090,8 @@ def _push_branch_with_recovery(
                 return False
             # The merge advanced the branch tip — re-key the marker to it so the
             # retry push satisfies the backstop.
+            if not ready():
+                return False
             _write_done_marker(marker_root, repo_root, branch)
             git_repo.push_branch(repo_root, branch, set_upstream=True)
             console.success("Merged the remote and pushed.")
@@ -1080,6 +1104,8 @@ def _push_branch_with_recovery(
         # Force-push sends the same local tip, so the marker from the initial
         # write still matches — no re-write needed.
         try:
+            if not ready():
+                return False
             git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
             console.success("Force-pushed with lease.")
             return True
@@ -1255,7 +1281,9 @@ def _done_via_pr(
     # it, because a successful push alone does not complete finalization.
     marker_root = worktree_path or repo_root
     console.step("Pushing branch...")
-    if not _push_branch_with_recovery(repo_root, branch, worktree_path, marker_root):
+    if not _push_branch_with_recovery(
+        repo_root, branch, worktree_path, marker_root, config, main_branch
+    ):
         return False
 
     # Check for existing PR (expected from plan or implement bootstrap).

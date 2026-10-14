@@ -737,6 +737,12 @@ class TestKnowledgeValidGate:
     def _config(self, tmp_path: Path, *, enabled: bool) -> ProjectConfig:
         from wade.models.config import KnowledgeConfig
 
+        if not (tmp_path / ".git").exists():
+            _git(tmp_path, "init", "-b", "main")
+            _git(tmp_path, "config", "user.name", "Knowledge gate fixture")
+            _git(tmp_path, "config", "user.email", "gate@example.invalid")
+            _git(tmp_path, "add", ".")
+            _git(tmp_path, "commit", "--allow-empty", "-m", "test: committed gate fixture")
         return ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=enabled, path="KNOWLEDGE.md"),

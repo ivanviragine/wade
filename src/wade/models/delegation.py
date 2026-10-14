@@ -59,6 +59,7 @@ class DelegationRequest(BaseModel):
     # ``relaunch_command`` is the exact line to type in a host terminal. Left
     # ``None`` by direct constructions that have no meaningful command to offer —
     # the finding is still reported, just without a copyable command.
+    invocation_id: str | None = None
     operation: str | None = None
     relaunch_command: str | None = None
 

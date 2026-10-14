@@ -366,3 +366,17 @@ This is a qualitative, repository-evidence review rather than a claim that a
 particular model will always produce identical output. The defaults provide the
 missing generic method; fixed workflows, deterministic gates, and tests remain
 the authority when output quality varies.
+
+## Evidence-bound knowledge compatibility
+
+Plan workflow4 and implementation/PR-comment workflow3 use the knowledge
+contracts in [knowledge.md](knowledge.md). Typed v2 plan observations and schema1
+owner-bound proposals replace generic next-worktree delivery; v1 votes remain
+historical input. Explicit refresh/recovery must validate frozen current workflow
+and handoff/review bindings. `plan-session refresh <original .wade/plans>`
+durably archives an intact native parent's old bundle and invalidates its old
+review/completion; fresh independent review/done precedes `plan --recover`.
+Interrupted refresh is explicitly retryable and never invents a receipt.
+Bootstrap/review/done never auto-accept proposals.
+Commit owned knowledge before review; post-sync and recovery-push reconciliation
+are deterministic fixed gates, not methodology or agent discretion.

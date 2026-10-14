@@ -358,3 +358,10 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - Replaced it with WADE-behavior live tests (`test_wade_live_gh.py`) and a gated live AI smoke (`test_wade_live_ai.py`).
 
 **When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+
+Knowledge evidence coverage uses disposable real-Git source/receipt commits,
+linked owned sessions composed through the public composition service, changed
+source/path/body, missing historical objects, main publication and exact-duplicate
+normalization. Pure model/fold tests cover append-order independence and durable
+ID conflicts; ownership tests preserve main/index/foreign worktree bytes. These
+fixtures use no paid inference or network. Run the prescribed test scripts.

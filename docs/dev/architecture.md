@@ -1340,65 +1340,18 @@ The tier values `wade init` writes are **not wade constants** — `init_service/
 
 **Repo-quality gates** (`HooksConfig` → `PreCommitConfig` / `CommitMsgConfig` / `PostToolUseConfig`, #352): three opt-in, off-by-default subsections. `pre_commit.{lint,test}` and `commit_msg.conventional` install per-worktree `pre-commit` / `commit-msg` git hooks (baked from config at bootstrap via placeholder substitution — no per-commit config load). They are reconciled together with the `done.pre_push_backstop` `pre-push` hook by `reconcile_worktree_git_hooks`, which installs the desired set in one batch (so every prior user hook is captured **before** wade sets `core.hooksPath` — per-hook `.chain-<hook_name>` files; a #349 unsuffixed `.chain` is migrated to `.chain-pre-push` on upgrade) **and** is idempotent across re-bootstraps of a reused worktree: a gate turned off since a prior session is neutralized (a chain-only passthrough that still runs any captured prior, or a full uninstall + `core.hooksPath` unset when nothing is managed), so disabling a gate actually disables it. `post_tool_use` installs a PostToolUse hook into context-capable tools only (dialect ≠ `DECISION`, so Antigravity CLI is skipped and its prior entry removed); the command is **stable** (`wade-hook post_tool_use --tool <id> --root <root>`) and resolves `lint_cmd`/timeout/scope from `.wade.yml` at runtime, so re-bootstrap dedups, a disabled gate's entry is removed (and a leftover hook self-noops), and it fails open — lints the just-edited file (`lint_cmd` file-scoped; falls back to `pre_commit.lint` whole-repo) and injects findings back as `additionalContext`, never blocking. All three, like `done`, derive their `check_service` validator allowlists from `*.model_fields` so config-key validity can't drift (knowledge `ca245d6a`). **Honesty:** `git commit --no-verify` bypasses the git hooks — these are quality gates, not enforcement boundaries.
 
-**Project knowledge** (worktree-local lifecycle, #358/#462): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — an attached session edits the copy in its worktree and the change rides to `main` with its PR. They are never copied into worktrees (a copy would manufacture a stale snapshot). Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`.
-
-**Detached-vote staging (#462):** `record_rating_for_session()` first validates
-the entry against the detached worktree's committed knowledge snapshot, then
-serializes a durable `RatingEvent` only to `.wade/knowledge-ratings-staged.jsonl`.
-What *authorizes* staging is `is_throwaway_knowledge_session()`: a
-`.wade/throwaway-session` marker **plus** a linked worktree on a detached HEAD.
-The marker is written by the two parents that create such a worktree
-(`plan()` and standalone `task deps`, via `mark_throwaway_knowledge_session`) —
-i.e. exactly the two lifecycles that later call `flush_staged_ratings()`. A bare
-detached HEAD is deliberately not enough: a primary checkout parked on one (CI,
-`git checkout <sha>`, bisect) or a hand-made `git worktree add --detach` has no
-parent that would ever flush the artefact, so a vote staged there would be
-stranded — those write the ordinary ratings sidecar instead.
-Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
-they never cross into the main checkout. The parent plan/deps lifecycle calls
-`flush_staged_ratings()` before cleanup, holds the staging-log lock through its
-snapshot, the locked main-spool transfer, and staging cleanup, then appends only
-event IDs not already present and fsyncs. A live sibling's append therefore
-waits until cleanup and creates a fresh log rather than being lost between the
-snapshot and unlink. Every filesystem operation on a session-relative
-`.wade/` path — the readiness probe, the marker writer
-(`mark_throwaway_knowledge_session`, which **raises** on an escape), the staging
-writer, and the flush's read + unlink — first rejects a parent that is a symlink
-or resolves outside the session root (`path_escapes_session`): `.wade/` is an
-ordinary checked-out path, so a symlink there would silently redirect a vote into
-the main checkout (or make the post-transfer `unlink` delete an outside file),
-and a preflight alone cannot stop one planted afterwards. The flush *skips* such
-a path (success, nothing to hand off) rather than failing, since the writer's
-identical check means nothing could legitimately be staged there and a failure
-would strand the worktree on an unclearable condition. A failed or partially
-completed handoff leaves the
-throwaway worktree and its generated output in place for retry — and that retry
-is real, not advisory: `wade plan` and standalone `wade task deps` both call
-`report_retained_vote_recovery` (`services/knowledge_recovery.py`) **before**
-creating their next worktree, which sweeps every linked worktree of the repo
-still carrying the throwaway marker plus a staging log
-(`flush_retained_staged_ratings`) and reports what it recovered. Discovery is
-deterministic, so no resume command or user bookkeeping is needed. The sweep
-never *removes* a worktree — a retained one may be a live sibling session — and
-is safe to run against one anyway, because the flush skips event IDs already in
-the main spool. Standalone deps
-also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
-handoff, because stdout alone would be lost with the parent process. Duplicate
-delivery of a new event is folded once, while legacy no-ID JSONL vote records
-retain their historical duplicate-vote semantics. The next attached
-bootstrap's existing ratings-only carry-forward remains the sole path that puts
-tracked ratings into a PR. `knowledge status` reports staged votes from a
-detached session in addition to canonical sidecar dirt, and carries an
-unreadable staging log as its own `staging_error` state — a corrupt transport
-log is a *failing handoff*, so it must never be collapsed into "0 staged votes"
-and reported as a clean session.
-
-`wade task deps` runs the `DEPS` check for **every** non-prompt agent cwd, not
-only a worktree it created itself — a reused planning worktree with blocked
-`.wade/` staging must stop delegation too. Cleanup differs by owner: a
-standalone worktree this call created is removed (nothing was produced yet),
-while a planning worktree is preserved for the parent `wade plan` lifecycle that
-flushes its votes.
+**Project knowledge** (#510): tracked prose and schema1 append-only evidence receipts
+belong to a valid owning implementation/PR-comment worktree. Assessment,
+publication, usefulness and historical relationships remain independent.
+Reconciliation reads consistent committed Git trees without fetching; file proof
+uses blob identity across receipt commits/rebase/squash. Main/detached/bounded
+workers persist ignored Git-common-dir owner-bound proposals, never a generic
+tracked main spool. Only a verified original parent/task/content association can
+be accepted, and fresh committed proof is required for correctness. Bootstrap
+never adopts foreign feedback. Shared done gates reconcile after sync and after
+recovery merges, reject corruption/late dirt, and clear unsafe done markers.
+See [knowledge.md](knowledge.md) for proof types, concurrency, exact-duplicate
+normalization, compatibility, ownership and explicit recovery commands.
 
 **Lifecycle readiness enforcement (#462):** Phase readiness is resolved by
 `check_service.resolve_session_readiness(phase, cwd)` — it loads config, maps the
