@@ -26,6 +26,7 @@ from wade.models.task import (
     parse_complexity_from_labels,
 )
 from wade.providers.base import AbstractTaskProvider
+from wade.providers.markdown import MarkdownIssueProvider
 from wade.providers.registry import get_provider
 from wade.ui.console import console
 from wade.utils.conventional import (
@@ -784,7 +785,8 @@ def close_task(
         if comment:
             provider.comment_on_task(task_id, comment)
 
-        remove_in_progress_label(provider, task_id)
+        if not isinstance(provider, MarkdownIssueProvider):
+            remove_in_progress_label(provider, task_id)
         provider.close_task(task_id)
         console.success(f"Closed #{task_id}")
         return True

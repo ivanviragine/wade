@@ -16,6 +16,7 @@ from wade.providers.markdown import (
     DEFAULT_FILE_HEADER,
     MarkdownIssueProvider,
     TaskNotFoundError,
+    _close_metadata,
     _format_meta_block,
     _parse_meta_block,
     _parse_sections,
@@ -536,7 +537,8 @@ class TestAutoCommit:
 
         with patch.object(provider, "_git_commit_close") as mock_commit:
             provider.close_task("1")
-            mock_commit.assert_called_once_with("1")
+            mock_commit.assert_called_once()
+            assert mock_commit.call_args.args[0] == "1"
 
     def test_close_skips_git_commit_when_disabled(self, tmp_path: Path) -> None:
         from unittest.mock import patch
@@ -737,3 +739,62 @@ class TestPRReviewDelegation:
         assert gh is not None
         # And cache it.
         assert provider._pr_gh() is gh
+
+
+@pytest.mark.parametrize(
+    ("original", "expected"),
+    [
+        ("## #1 Task\n\nBody  ", "## #1 Task\n\n<!-- wade\nstate: closed\n-->\n\nBody  "),
+        ("## #1 Task", "## #1 Task\n\n<!-- wade\nstate: closed\n-->\n"),
+        (
+            "## #1 Task\n\n<!-- wade\nowner: user\n-->\nbody",
+            "## #1 Task\n\n<!-- wade\nstate: closed\nowner: user\n-->\nbody",
+        ),
+        (
+            "## #1 Task\n<!-- wade\nstate: open\nSTATE : in_progress  \n"
+            "labels: other\nLabels : in-progress  \n-->\nbody",
+            "## #1 Task\n<!-- wade\nstate: open\nSTATE : closed  \n"
+            "labels: other\nLabels :   \n-->\nbody",
+        ),
+        (
+            "## #1 Task\r\n\r\n<!-- wade\r\nlabels: in-progress\r\n-->\r\nbody",
+            "## #1 Task\r\n\r\n<!-- wade\r\nstate: closed\r\nlabels: \r\n-->\r\nbody",
+        ),
+    ],
+)
+def test_close_metadata_preserves_raw_format(original: str, expected: str) -> None:
+    normalized = original.replace("\r\n", "\n").replace("\r", "\n")
+    assert _close_metadata(original, _parse_sections(normalized)[0]) == expected
+
+
+def test_close_probe_exception_still_closes(config_factory, monkeypatch) -> None:
+    provider = config_factory(SAMPLE_FILE)
+    provider._auto_commit = True
+    monkeypatch.setattr(
+        "wade.providers.markdown.inspect_close_commit",
+        MagicMock(side_effect=OSError("probe unavailable")),
+    )
+    attempt = MagicMock()
+    monkeypatch.setattr(provider, "_git_commit_close", attempt)
+    assert provider.close_task("1").state == TaskState.CLOSED
+    assert attempt.call_args.args[1].baseline is None
+    assert "probe unavailable" in attempt.call_args.args[1].reason
+
+
+def test_already_closed_has_no_write_or_commit(config_factory, monkeypatch) -> None:
+    provider = config_factory(SAMPLE_FILE)
+    provider._auto_commit = True
+    before = provider._path.read_bytes()
+    persist = MagicMock()
+    commit = MagicMock()
+    monkeypatch.setattr("wade.providers.markdown._atomic_write", persist)
+    monkeypatch.setattr(provider, "_git_commit_close", commit)
+    assert provider.close_task("2").state == TaskState.CLOSED
+    assert provider._path.read_bytes() == before
+    persist.assert_not_called()
+    commit.assert_not_called()
+
+
+def test_missing_file_close_reports_task_not_found(config_factory) -> None:
+    with pytest.raises(TaskNotFoundError):
+        config_factory().close_task("1")

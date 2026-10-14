@@ -705,15 +705,27 @@ Description body here. Sub-headings, code blocks, anything markdown.
     name: markdown
     settings:
       path: ISSUES.md      # relative to repo root, or absolute
-      auto_commit: false   # if true, close_task auto-commits the change
+      auto_commit: false   # attempt a close-only commit for a clean tracked file
   ```
 
 - After a PR merges, `provider.close_task` flips the section's `state` to
   `closed` in `ISSUES.md`. By default the file is left modified in your
   working tree — commit it yourself. Set `auto_commit: true` to have
-  wade commit the change with a `chore: close #N` message; failures
-  (not a git repo, hook rejection, signing required) are logged and
-  swallowed so the close itself never blocks.
+  wade attempt a `chore: close #N` commit containing only the selected task's
+  state and `in-progress` label changes. Other file content and line endings
+  remain intact, and unrelated staged or unstaged work stays untouched.
+- Auto-commit requires the task file to be a clean tracked regular file with
+  matching HEAD, index, and disk contents. Preexisting staged, partially staged,
+  or unstaged task-file edits, hidden index flags, replacement objects, and
+  uncertain repository state cause a warning and skip the commit. The task still closes on disk;
+  its original staged version and flags remain intact. Optional task comments
+  are separate edits and follow this same skip policy.
+- Ordinary hooks and signing remain enabled. An invocation-local guard rejects
+  a hook-expanded candidate before HEAD advances; it does not change installed
+  hooks or persistent Git configuration. Unsupported Git hook dispatch
+  (Git older than 2.36), hook rejection, signing failure, and Git errors are
+  logged without undoing the disk closure. Hooks that directly edit other
+  files or refs retain their own side effects.
 - Tracking tasks with `- [ ] #N` checklist bodies work the same as with
   GitHub Issues — markdown's `find_parent_issue` scans every section's
   body for child refs.
