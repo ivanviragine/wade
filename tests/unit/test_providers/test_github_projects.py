@@ -322,3 +322,20 @@ def test_unknown_bound_union_preserved_unavailable_and_invalid_date_rejected() -
         pytest.raises(ProjectError, match="ISO date"),
     ):
         client._values("I1", {"F0"})
+
+
+def test_unmapped_multiselect_identity_does_not_require_new_union_payload() -> None:
+    def api(args, **kwargs):
+        query = json.loads(kwargs["input_text"])["query"]
+        unselected = {"__typename": "ProjectV2ItemFieldMultiSelectValue"}
+        # Model the actual GraphQL projection, not an overgenerous fake payload.
+        if "... on ProjectV2ItemFieldValueCommon" in query:
+            unselected["field"] = {"id": "UNSELECTED"}
+        data = {"node": {"id": "I1", "fieldValues": connection([field_value("F0"), unselected])}}
+        return subprocess.CompletedProcess(args, 0, json.dumps({"data": data}), "")
+
+    client = provider()
+    with patch("wade.providers.github_projects.run", side_effect=api):
+        values = client._values("I1", {"F0"})
+    assert values["F0"].value == 1 and set(values) == {"F0"}
+    assert not client._multi_select

@@ -56,11 +56,12 @@ def _resolve_field(reference: ProjectOptionRef, fields: list[ProjectField]) -> P
 
 
 def _resolve_option(field: ProjectField, token: str, aliases: dict[str, str]) -> str:
+    by_id = [o.id for o in field.options if o.id == token]
+    if by_id:
+        return by_id[0]
     if token in aliases:
         return aliases[token]
-    by_id = [o.id for o in field.options if o.id == token]
-    by_name = [o.id for o in field.options if o.name == token]
-    candidates = by_id or by_name
+    candidates = [o.id for o in field.options if o.name == token]
     if len(candidates) != 1:
         raise ProjectError(f"Unknown or ambiguous option {token!r} for field {field.name}.")
     return candidates[0]
@@ -76,11 +77,19 @@ def bind(config: GitHubProjectsConfig, schema: ProjectSchema) -> ProjectBindings
         bindings.fields[alias] = field
         aliases: dict[str, str] = {}
         for name, option_ref in reference.options.items():
-            option_id = _resolve_option(field, option_ref.id or option_ref.name or "", {})
-            actual = next(o for o in field.options if o.id == option_id)
+            candidates = (
+                [option for option in field.options if option.id == option_ref.id]
+                if option_ref.id is not None
+                else [option for option in field.options if option.name == option_ref.name]
+            )
+            if len(candidates) != 1:
+                raise ProjectError(
+                    f"Mapped option ID/name is missing or ambiguous: {alias}.{name}."
+                )
+            actual = candidates[0]
             if option_ref.name is not None and actual.name != option_ref.name:
                 raise ProjectError(f"Option ID/name mismatch for {alias}.{name}.")
-            aliases[name] = option_id
+            aliases[name] = actual.id
         bindings.options[alias] = aliases
         order = [_resolve_option(field, token, aliases) for token in reference.option_order]
         if len(set(order)) != len(order):

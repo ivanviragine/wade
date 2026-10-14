@@ -518,3 +518,46 @@ def test_unknown_selected_option_or_type_is_not_missing_input() -> None:
     value.values["E"].type = "FutureValue"
     with pytest.raises(ProjectError, match="incompatible value"):
         evaluate_items([value], ProjectRequest(operation="rank"))
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"id": "High"},
+        {"id": "High", "name": "High"},
+        {"id": "stale", "name": "High"},
+        {"name": "HIGH"},
+    ],
+)
+def test_explicit_option_identity_never_falls_back_to_other_identity_type(reference) -> None:
+    config = settings()
+    from wade.models.project import ProjectOptionRef
+
+    config.fields["priority"].options["urgent"] = ProjectOptionRef.model_validate(reference)
+    with pytest.raises(ProjectError, match="missing or ambiguous"):
+        bind(config, schema())
+
+
+def test_explicit_option_names_need_unique_exact_matches_and_ids_remain_authoritative() -> None:
+    config, board = settings(), schema()
+    from wade.models.project import ProjectOptionRef
+
+    config.fields["priority"].options["urgent"] = ProjectOptionRef(name="High")
+    assert bind(config, board).options["priority"]["urgent"] == "HIGH"
+    board.fields[1].options.append(ProjectOption(id="OTHER", name="High"))
+    with pytest.raises(ProjectError, match="missing or ambiguous"):
+        bind(config, board)
+    config.fields["priority"].options["urgent"] = ProjectOptionRef(id="HIGH")
+    assert bind(config, board).options["priority"]["urgent"] == "HIGH"
+    config.fields["priority"].options["LOW"] = ProjectOptionRef(id="HIGH")
+    bindings = bind(config, board)
+    assert bindings.factor_scores["priority"]["LOW"] == -10
+    result = evaluate(
+        config,
+        ProjectRequest(operation="items", filters=["priority=LOW"]),
+        ProjectSnapshot(
+            project=board.project, fields=board.fields, items=[item(1), item(2, priority="LOW")]
+        ),
+        bindings,
+    )
+    assert [row.item.number for row in result.rows] == [2]

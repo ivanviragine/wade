@@ -34,6 +34,7 @@ _FIELDS = (
 )
 _VALUES = (
     """nodes { __typename
+ ... on ProjectV2ItemFieldValueCommon { field { ... on ProjectV2FieldCommon { id } } }
  ... on ProjectV2ItemFieldDateValue { field { ... on ProjectV2FieldCommon { id } } date }
  ... on ProjectV2ItemFieldNumberValue { field { ... on ProjectV2FieldCommon { id } } number }
  ... on ProjectV2ItemFieldTextValue { field { ... on ProjectV2FieldCommon { id } } text }
