@@ -85,3 +85,67 @@ not claim to represent production Codex's new terminal path.
 
 WADE adoption checklist: 4,408 tests passed, with lint, formatting, and strict
 types passing. The live probe returned one completed reviewed plan after exit.
+
+
+## Crossby 0.43.2 adoption — 2026-10-14
+
+WADE adopts the published registry wheel for Crossby 0.43.2, including upstream
+[PR #216](https://github.com/ivanviragine/crossby/pull/216) and
+[PR #218](https://github.com/ivanviragine/crossby/pull/218). These repair Codex
+0.162.1 startup, Folder access consent, transient/missing Plan footers, hidden
+composers and ambiguous paste confirmation. The release test checkout resolves
+to `2e26158f1816a72df3f7796577de004d533be0f7`; it supplied tests only.
+
+A fresh Python 3.14.2 environment was synchronized with `uv sync --all-extras
+--locked` from WADE's updated manifest/lock. Crossby imported from that
+environment's `site-packages`, reported 0.43.2, and had no `direct_url.json`.
+`UV_PROJECT` selected the WADE checkout for child commands; neither
+`UV_NO_SYNC`, an editable Crossby install nor a source-path override supplied
+adoption evidence. See [the reproducible procedure](testing.md#native-planning-dependency-validation).
+
+Validation against that wheel:
+
+- Focused WADE planning, bootstrap, hook mirrors and probe controls: 399 passed.
+- Full `./scripts/test.sh`: 4,486 passed, four dependency deprecation warnings.
+- `./scripts/check.sh`: lint/format passed; strict types passed for 141 sources.
+- Explicit `./scripts/test-e2e.sh`: 109 passed.
+- Release terminal unit/nested-PTY and collector/preflight/policy suites, via
+  the upstream script with `-o pythonpath=`: 550 passed.
+
+The authenticated live run used the synchronized environment and:
+
+```bash
+uv run python scripts/probe_native_plan_handoff.py --tool codex --worktree \
+  --model gpt-6.1-sol --effort high --review-mode headless \
+  --review-ai codex --review-model gpt-6.1-sol --review-effort high
+```
+
+Codex 0.162.1 displayed Folder access for the new fixture; the caller explicitly
+selected Trust and continue. Crossby activated `/plan` before the task. A
+probe-local observer forwarded the genuine public startup callback unchanged
+and recorded one `plan_ready`, one `send_message` whose SHA-256 matched WADE's
+rendered prompt, and one `message_submitted`; no events were synthesized.
+Both scope confirmation and user review used the native selectable question
+component and received explicit answers. The planner imported `PLAN.md`, ran
+independent Codex/gpt-6.1-sol/high headless review with explicit flags, and
+completed `plan-session done`. Normal exit returned
+`PASS: received 1 completed, reviewed plan(s)`. The greeting remained exactly
+`print("Hello")\n`; the probe now rejects source changes before reporting PASS.
+
+Live evidence is retained at
+`/private/tmp/wade-execution-20261013/524-live-evidence`, with the event log
+`524-live-events.jsonl` and wheel provenance `524-wheel-provenance.json` beside
+it. The fixture is `wade-native-handoff-codex-h3v458tw/worktree` in the host
+temporary directory. These are local verification artifacts, not installed
+project files.
+
+Limits: the live acknowledgement retained its Plan footer. The preserved
+140-column missing-footer capture separately reached ACTIVE with one ready and
+submitted event under the wheel. The 180-column capture reached ready/paste;
+that original capture ends before task delivery, so it cannot prove submission.
+Release regressions also exercise those layouts. The model called its runtime Default despite the observed native Plan
+activation and accepted native questions; this self-report is not protocol
+evidence of per-turn mode. No tool-mode rejection was observed. This run proves
+startup and reviewed parent collection, not OS isolation, every-turn internal
+mode, or provider issue/PR persistence. Its fixture review does not review the
+WADE adoption candidate.
