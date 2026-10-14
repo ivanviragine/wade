@@ -233,8 +233,8 @@ def reroot_scaffold_branch_for_retarget(
     into *new_base* once the PR is retargeted (the later startup catchup merge
     cannot remove them). When the branch is scaffold-only — only its scaffold commit
     beyond *old_base* — rebuild it rooted on *new_base* and force-push; this is
-    loss-free whether or not it is checked out (an in-place hard reset handles the
-    checked-out case).
+    guarded whether or not it is checked out (an in-place hard reset refuses
+    untracked/ignored collisions in the checked-out case).
 
     A real-work branch is left untouched (rewriting in-flight history is
     destructive); the caller confirms/aborts that retarget separately (the plan flow
@@ -245,8 +245,8 @@ def reroot_scaffold_branch_for_retarget(
     It **aborts** rather than retarget onto a stale branch when the reroot cannot be done
     loss-free: an unresolvable *old* base (cannot prove the branch is scaffold-only — a
     reset might discard real commits), a checked-out worktree carrying uncommitted tracked
-    changes (a hard reset would discard them) or one whose path can't be resolved, or an
-    unresolvable *new* base / failed git op.
+    changes, untracked/ignored paths obstructing the destination tree, or one whose
+    path can't be resolved, or an unresolvable *new* base / failed git op.
 
     Returns:
         ``True`` — safe to proceed with the PR-base edit: the branch was recreated,

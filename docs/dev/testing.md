@@ -56,6 +56,18 @@ tests/
     └── transcripts/         # Sample AI tool transcripts
 ```
 
+## Copyable command output
+
+Assert emitted shell commands as exact physical output lines before parsing argv.
+Use narrow renderer widths (40/80) and long quoted paths with spaces, apostrophes,
+markup and shell metacharacters; wrapped hints can change correctly quoted
+argument bytes. Select the intended command lines rather than matching paths in
+combined logs: unrelated debug messages can mask a broken recovery diagnostic.
+Also test the effective console stream: `implement --cd` redirects diagnostics
+to stderr and must keep stdout limited to the worktree path, even during recovery.
+Execute only non-destructive emitted inspection commands in disposable Git repos,
+from another working directory, and verify stash membership and data remain intact.
+
 ## Running Tests
 
 ```bash
@@ -358,3 +370,10 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - Replaced it with WADE-behavior live tests (`test_wade_live_gh.py`) and a gated live AI smoke (`test_wade_live_ai.py`).
 
 **When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+
+Knowledge evidence coverage uses disposable real-Git source/receipt commits,
+linked owned sessions composed through the public composition service, changed
+source/path/body, missing historical objects, main publication and exact-duplicate
+normalization. Pure model/fold tests cover append-order independence and durable
+ID conflicts; ownership tests preserve main/index/foreign worktree bytes. These
+fixtures use no paid inference or network. Run the prescribed test scripts.

@@ -142,6 +142,7 @@ src/wade/
     ├── conventional.py  # Canonical conventional-commit TITLE validator (types + is_conventional_title) — stdlib-only, single Python source of truth
     ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe; sources its title regex from conventional.py
     ├── process.py       # Subprocess helpers
+    ├── git_close_commit.py # Leaf Markdown close-commit eligibility and invocation-local hook/tree guard
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
@@ -1050,11 +1051,14 @@ HEAD, so any sha-keyed check must precede it):
    review evidence.
 5. **documentation decision** (both) — require an `updated` or reasoned
    `not-needed` receipt for the pre-sync HEAD and session kind.
-6. **sync** (both) — auto-sync through the existing service and refuse only on
-   conflict.
+6. **sync** (both) — auto-sync through the existing service and refuse conflicts.
 7. **knowledge validity** (both, when enabled) — runs after sync so a union-merge
-   corruption cannot ship.
-8. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing
+   corruption cannot ship. Pin the reviewed tip and accepted actual base merge;
+   late authored knowledge, ambiguous merged claims/history or further HEAD
+   changes require fresh closing checks. The knowledge-only comparison does not
+   certify arbitrary non-knowledge tree equivalence.
+8. `_done_via_pr` writes `.wade/done@<approved HEAD>` immediately before pushing
+   that immutable SHA when knowledge gates are enabled,
    and projects the review outcome into the PR body.
    The existing-PR body callback preserves `None` for a failed read; the shared
    body helper refuses to transform or write it, while an empty string remains
@@ -1063,6 +1067,74 @@ HEAD, so any sha-keyed check must precede it):
    bot-review actions. Retry reads the current remote body again. Other review,
    documentation, bot, and feedback-cycle state stays intact; the successful
    push and any earlier title synchronization are not rolled back.
+
+**Structural body replacement (#495).** The leaf `utils/markdown.py` owns an
+offset-preserving scanner for standalone `wade:<name>:start/end` pairs, code
+fences, and column-zero ATX headings. The direct `markdown-it-py` dependency
+supplies CommonMark token nesting and source line maps; WADE retains original
+CR/LF offsets and never renders parsed content. Standalone marker lines within
+multiline top-level raw HTML spans remain visible; list/quote/code containers
+still exclude literal marker examples. Only Summary finalization and
+dependency updates adopt it; existing extraction, session-list, usage, and budget helpers
+retain their own contracts. Pydantic range models carry offsets into the
+original string so unrelated content, including CRLF slices, remains unchanged.
+Backtick/tilde fences accept zero-to-three-space indentation and matching longer
+closing runs, including fences in nested list/quote containers. List/quote/code
+contents cannot supply owned pairs or legacy headings. The parser decides
+paragraph, setext, lazy-continuation, blank-line and indentation boundaries;
+WADE does not maintain a second container state machine. The locked parser's
+fence rule includes a real closing line in its source map and excludes it from
+content. WADE checks that contract explicitly to reject auto-closed fences;
+regressions cover empty/content/marker payloads, containers, CR/LF/CRLF and EOF.
+If token nesting reaches the configured parser limit (100), refuse instead of
+trusting an incomplete parse. This evidence-driven parser adoption replaces
+manual container tracking after reproduced preservation failures; it does not
+change the scanner/edit API or adopt it in other Markdown consumers.
+
+Each owned pair is authoritative and replaced in place. Without a pair, a unique
+column-zero ATX legacy H2 may migrate only up to the first actual top-level
+H1/H2, managed range, fence, or EOF. All top-level headings are recorded as
+boundaries, including indented ATX and setext; `legacy_candidate` separately
+marks eligible migration starts. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
+empty update removes a pair or legacy section while a same-named human H2
+remains, retain an empty owned pair. Determine this using a provisional cleared
+projection, because removing old HTML can expose previously hidden headings.
+An existing owned pair retains its original offset. This is necessary ownership evidence:
+without it, an identical retry misclassifies that human section as legacy. Empty
+pairs remain idempotent and accept later nonempty replacement; when no such
+human heading remains, removal still deletes the owned pair. This evidence-driven
+exception to the original plan's literal pair-removal wording satisfies its
+stronger human-content preservation and repeated-update acceptance criteria.
+Select ownership and at most one legacy range from the original body before
+rendering. The finalizer selects Summary and review-status together and assembles
+their complete replacements atomically; no temporary cleared projection can
+authorize another deletion or reject an otherwise valid final context. Validate
+that unrelated managed block names and exact source slices still have the same
+multiplicity in the rendered scan. If an edit reclassifies one as literal text
+(or exposes a previously literal block as an owner), refuse rather than change
+ownership across parser contexts.
+Missing Summary/review projections use real managed anchors: Summary precedes existing
+review status or the first implementation usage; missing review status follows
+Summary, otherwise precedes usage. An outgoing projection whose final content
+and retained ownership evidence are both absent cannot serve as an insertion
+anchor. Retained empty ownership pairs remain valid anchors. Repeated unrelated
+blocks remain opaque.
+Internal source slots retain original positional anchors while excluding selected
+outgoing Summary/review text from the existing reference helper. New projection
+examples are inserted afterward. No slot-bearing body is parsed for ownership or
+written remotely. Empty-pair retention considers both final projections together;
+missing pairs use the same required anchors even when retained only as ownership
+evidence. Final managed ownership and exact unrelated source slices are checked
+after the complete composition.
+
+Validate the original, rendered candidate, and post-budget write payload.
+Unmatched, reversed, nested/crossed markers, duplicate owned pairs, ambiguous
+legacy headings, and unclosed fences raise `MarkdownStructureError`. The shared
+finalizer catches this before the remote body write and follows the failed-body
+completion path above, including revoking only done markers; diagnostics name
+the current body or new summary input. Dependency updates report a skipped issue,
+do not count it as updated, and continue the batch. This is conservative
+migration, not a general Markdown parser or a concurrent-write compare-and-swap.
 
 **Review status is legible in the PR body (#367).** `_classify_review()` is the
 single source for the gate and the `wade:review-status` PR-body block. It records
@@ -1340,65 +1412,23 @@ The tier values `wade init` writes are **not wade constants** — `init_service/
 
 **Repo-quality gates** (`HooksConfig` → `PreCommitConfig` / `CommitMsgConfig` / `PostToolUseConfig`, #352): three opt-in, off-by-default subsections. `pre_commit.{lint,test}` and `commit_msg.conventional` install per-worktree `pre-commit` / `commit-msg` git hooks (baked from config at bootstrap via placeholder substitution — no per-commit config load). They are reconciled together with the `done.pre_push_backstop` `pre-push` hook by `reconcile_worktree_git_hooks`, which installs the desired set in one batch (so every prior user hook is captured **before** wade sets `core.hooksPath` — per-hook `.chain-<hook_name>` files; a #349 unsuffixed `.chain` is migrated to `.chain-pre-push` on upgrade) **and** is idempotent across re-bootstraps of a reused worktree: a gate turned off since a prior session is neutralized (a chain-only passthrough that still runs any captured prior, or a full uninstall + `core.hooksPath` unset when nothing is managed), so disabling a gate actually disables it. `post_tool_use` installs a PostToolUse hook into context-capable tools only (dialect ≠ `DECISION`, so Antigravity CLI is skipped and its prior entry removed); the command is **stable** (`wade-hook post_tool_use --tool <id> --root <root>`) and resolves `lint_cmd`/timeout/scope from `.wade.yml` at runtime, so re-bootstrap dedups, a disabled gate's entry is removed (and a leftover hook self-noops), and it fails open — lints the just-edited file (`lint_cmd` file-scoped; falls back to `pre_commit.lint` whole-repo) and injects findings back as `additionalContext`, never blocking. All three, like `done`, derive their `check_service` validator allowlists from `*.model_fields` so config-key validity can't drift (knowledge `ca245d6a`). **Honesty:** `git commit --no-verify` bypasses the git hooks — these are quality gates, not enforcement boundaries.
 
-**Project knowledge** (worktree-local lifecycle, #358/#462): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — an attached session edits the copy in its worktree and the change rides to `main` with its PR. They are never copied into worktrees (a copy would manufacture a stale snapshot). Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`.
-
-**Detached-vote staging (#462):** `record_rating_for_session()` first validates
-the entry against the detached worktree's committed knowledge snapshot, then
-serializes a durable `RatingEvent` only to `.wade/knowledge-ratings-staged.jsonl`.
-What *authorizes* staging is `is_throwaway_knowledge_session()`: a
-`.wade/throwaway-session` marker **plus** a linked worktree on a detached HEAD.
-The marker is written by the two parents that create such a worktree
-(`plan()` and standalone `task deps`, via `mark_throwaway_knowledge_session`) —
-i.e. exactly the two lifecycles that later call `flush_staged_ratings()`. A bare
-detached HEAD is deliberately not enough: a primary checkout parked on one (CI,
-`git checkout <sha>`, bisect) or a hand-made `git worktree add --detach` has no
-parent that would ever flush the artefact, so a vote staged there would be
-stranded — those write the ordinary ratings sidecar instead.
-Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
-they never cross into the main checkout. The parent plan/deps lifecycle calls
-`flush_staged_ratings()` before cleanup, holds the staging-log lock through its
-snapshot, the locked main-spool transfer, and staging cleanup, then appends only
-event IDs not already present and fsyncs. A live sibling's append therefore
-waits until cleanup and creates a fresh log rather than being lost between the
-snapshot and unlink. Every filesystem operation on a session-relative
-`.wade/` path — the readiness probe, the marker writer
-(`mark_throwaway_knowledge_session`, which **raises** on an escape), the staging
-writer, and the flush's read + unlink — first rejects a parent that is a symlink
-or resolves outside the session root (`path_escapes_session`): `.wade/` is an
-ordinary checked-out path, so a symlink there would silently redirect a vote into
-the main checkout (or make the post-transfer `unlink` delete an outside file),
-and a preflight alone cannot stop one planted afterwards. The flush *skips* such
-a path (success, nothing to hand off) rather than failing, since the writer's
-identical check means nothing could legitimately be staged there and a failure
-would strand the worktree on an unclearable condition. A failed or partially
-completed handoff leaves the
-throwaway worktree and its generated output in place for retry — and that retry
-is real, not advisory: `wade plan` and standalone `wade task deps` both call
-`report_retained_vote_recovery` (`services/knowledge_recovery.py`) **before**
-creating their next worktree, which sweeps every linked worktree of the repo
-still carrying the throwaway marker plus a staging log
-(`flush_retained_staged_ratings`) and reports what it recovered. Discovery is
-deterministic, so no resume command or user bookkeeping is needed. The sweep
-never *removes* a worktree — a retained one may be a live sibling session — and
-is safe to run against one anyway, because the flush skips event IDs already in
-the main spool. Standalone deps
-also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
-handoff, because stdout alone would be lost with the parent process. Duplicate
-delivery of a new event is folded once, while legacy no-ID JSONL vote records
-retain their historical duplicate-vote semantics. The next attached
-bootstrap's existing ratings-only carry-forward remains the sole path that puts
-tracked ratings into a PR. `knowledge status` reports staged votes from a
-detached session in addition to canonical sidecar dirt, and carries an
-unreadable staging log as its own `staging_error` state — a corrupt transport
-log is a *failing handoff*, so it must never be collapsed into "0 staged votes"
-and reported as a clean session.
-
-`wade task deps` runs the `DEPS` check for **every** non-prompt agent cwd, not
-only a worktree it created itself — a reused planning worktree with blocked
-`.wade/` staging must stop delegation too. Cleanup differs by owner: a
-standalone worktree this call created is removed (nothing was produced yet),
-while a planning worktree is preserved for the parent `wade plan` lifecycle that
-flushes its votes.
+**Project knowledge** (#510): tracked prose and schema1 append-only evidence receipts
+belong to a valid owning implementation/PR-comment worktree. Assessment,
+publication, usefulness and historical relationships remain independent.
+Reconciliation reads consistent committed Git trees without fetching; file proof
+uses blob identity across receipt commits/rebase/squash. Main/detached/bounded
+workers persist ignored Git-common-dir owner-bound proposals, never a generic
+tracked main spool. Only a verified original parent/task/content association can
+be accepted, and fresh committed proof is required for correctness. Bootstrap
+never adopts foreign feedback. A separately frozen original author association
+binds worktree/branch/provider/task and cannot move on branch switch or refresh.
+Shared acceptance records converge under the queue lock. Shared done gates
+reconcile after sync, pin the approved candidate, and push its explicit SHA;
+late authored knowledge or ambiguous knowledge merges require fresh closing
+checks. Recovery merges after the pin cannot inherit an old review. Invalid or
+changed displayed claims withhold committed labels; unsafe done markers clear.
+See [knowledge.md](knowledge.md) for proof types, concurrency, exact-duplicate
+normalization, compatibility, ownership and explicit recovery commands.
 
 **Lifecycle readiness enforcement (#462):** Phase readiness is resolved by
 `check_service.resolve_session_readiness(phase, cwd)` — it loads config, maps the
@@ -1517,6 +1547,20 @@ including under YOLO. Successful vote flushing and cleanup remain required.
 
 `wade implementation-session done` handles PR creation / update. The post-work lifecycle prompt handles the merge decision.
 
+After a successful remote merge, `lifecycle._pull_main_after_merge()` routes its
+bounded pull-recovery loop to the main checkout. It stashes tracked changes
+once with `git.stash.create_named_stash`, using the main checkout's actual
+branch, and carries the returned SHA/message through success and rollback.
+Restoration applies that exact SHA once; it never pops the shared stack or
+falls back to another entry. Successful apply preserves any remaining owned
+entry for manual cleanup: the shared `drop_stash_by_sha` helper verifies a positional ref
+before a separate drop, leaving a concurrent-push window this caller avoids by
+not deleting. Conflicts, unavailable identities, and stash-creation failures
+report recovery while preserving any remaining entries. Untracked move-aside
+and rollback ordering stay intact; local rollback is best effort rather than
+crash-safe or an exact no-op when restoration fails. Local warnings do not
+change the already-successful remote merge result.
+
 ## Determinism via Services
 
 All deterministic operations — git commands, state transitions, file manipulation, API calls — **must live in service/utility code**, never in AI agent reasoning. Agents are non-deterministic; code is deterministic. The boundary is:
@@ -1542,7 +1586,18 @@ When wade installs skills into a target project (per session, via worktree boots
 **`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
 - `--cd` — Create worktree, print its path to stdout, and exit without launching AI. Deterministic setup still runs first (for example worktree bootstrap and draft-PR bootstrap when needed). Used internally by `wade cd`.
-- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (read from the PR lookup's `baseRefName`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). An explicit `--base` is validated for well-formedness up front (`is_valid_git_ref`, symmetric with the plan-declared path checked at plan-done) so a malformed value fails fast instead of surfacing later as a murkier "does not exist"; a chain-derived base is a generated branch name and always passes. Reading the base off the already-verified lookup (rather than a second `get_pr_base_branch` query, whose `None` conflates "no base" with "gh failed") avoids a silent fallback to `main`. The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it — and cleared when the effective base resolves back to `main` (e.g. `--base main` retargeting a reused worktree's PR), so a stale pin never keeps targeting the old base. `sync`/`done` treat the stored base as **authoritative**: they no longer gate on a local/`origin/<base>` existence check (which a single-branch / narrow-refspec clone can fail even for a valid base), and instead let the fetch/merge path surface an unresolvable base as an error rather than silently falling back to `main`. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. Editing the PR base does **not** rewrite the head branch's ancestry, so a **scaffold-only** branch (only its scaffold commit beyond the old base) is first re-rooted on the new base and force-pushed (`reroot_scaffold_branch_for_retarget`, shared by the plan and implement retarget paths) — otherwise the old base's commits would leak into the new base's diff and merge into it. When the scaffold branch is **not** checked out it is moved with `git branch -f`; when it **is** checked out (the `wade implement --cd` case) it is re-rooted *in place* with a hard reset inside its worktree (`reset_worktree_hard`), since `git branch -f` refuses a checked-out branch. The reroot **aborts** rather than retarget onto a stale branch when it can't be done loss-free: an unresolvable old base (can't prove the branch is scaffold-only — a reset might discard commits), a checked-out worktree with uncommitted **tracked** changes (`has_tracked_changes`) or one whose path can't be resolved, or an unresolvable new base. A branch carrying **real work** (`_branch_has_real_work`: more than the scaffold commit past its base — measured against the local head or `origin/<branch>` when the head lives only on the remote) cannot be rewritten without discarding it, so `start()` guards that case — confirm in a TTY, else abort — instead of silently flipping the base and polluting the PR, mirroring the plan flow's `_base_retarget_is_safe`. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
+- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (read from the PR lookup's `baseRefName`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). An explicit `--base` is validated for well-formedness up front (`is_valid_git_ref`, symmetric with the plan-declared path checked at plan-done) so a malformed value fails fast instead of surfacing later as a murkier "does not exist"; a chain-derived base is a generated branch name and always passes. Reading the base off the already-verified lookup (rather than a second `get_pr_base_branch` query, whose `None` conflates "no base" with "gh failed") avoids a silent fallback to `main`. The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it — and cleared when the effective base resolves back to `main` (e.g. `--base main` retargeting a reused worktree's PR), so a stale pin never keeps targeting the old base. `sync`/`done` treat the stored base as **authoritative**: they no longer gate on a local/`origin/<base>` existence check (which a single-branch / narrow-refspec clone can fail even for a valid base), and instead let the fetch/merge path surface an unresolvable base as an error rather than silently falling back to `main`. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. Editing the PR base does **not** rewrite the head branch's ancestry, so a **scaffold-only** branch (only its scaffold commit beyond the old base) is first re-rooted on the new base and force-pushed (`reroot_scaffold_branch_for_retarget`, shared by the plan and implement retarget paths) — otherwise the old base's commits would leak into the new base's diff and merge into it. When the scaffold branch is **not** checked out it is moved with `git branch -f`; when it **is** checked out (the `wade implement --cd` case) it is re-rooted *in place* with a hard reset inside its worktree (`reset_worktree_hard`), since `git branch -f` refuses a checked-out branch. The reroot **aborts** rather than retarget onto a stale branch when it can't be done loss-free: an unresolvable old base (can't prove the branch is scaffold-only — a reset might discard commits), a checked-out worktree with uncommitted **tracked** changes (`has_tracked_changes`), untracked or ignored filesystem paths obstructing the destination tree, or one whose path can't be resolved, or an unresolvable new base. A branch carrying **real work** (`_branch_has_real_work`: more than the scaffold commit past its base — measured against the local head or `origin/<branch>` when the head lives only on the remote) cannot be rewritten without discarding it, so `start()` guards that case — confirm in a TTY, else abort — instead of silently flipping the base and polluting the PR, mirroring the plan flow's `_base_retarget_is_safe`. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
+
+Scaffold hard resets pin the destination commit and inspect its complete tree against
+the index and filesystem before mutation. The git-layer guard includes ignored
+files, empty/nested directories, symlinks without following them, and filesystem
+case aliases; inspection errors refuse. Tree-entry modes distinguish gitlinks:
+resets explicitly pass `--no-recurse-submodules` to leave submodule directories
+and their contents alone even when `submodule.recurse=true`.
+The same guard applies to scaffold
+rollback after a failed PR-base edit. An obstructed rollback preserves the new
+user data and reports the existing branch/PR divergence for manual recovery.
+This preflight does not provide isolation from concurrent filesystem writers.
 
 **`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.

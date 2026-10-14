@@ -215,6 +215,10 @@ wade plan ─▶ tasks + draft PRs ─▶ wade <N> ─▶ AI implements in an is
 | `wade knowledge rate` | Record an up / down / stale vote for a knowledge entry |
 | `wade knowledge status` | Show uncommitted knowledge/ratings changes and any pending ratings migration |
 | `wade knowledge enable [--path PATH]` | Enable knowledge capture and optionally set custom file path |
+| `wade knowledge check <id> current --file <path> --note <reason>` | Record committed-evidence assessment |
+| `wade knowledge feedback <id> useful` | Record usefulness, independently of correctness |
+| `wade knowledge reconcile --check --json` | Read-only committed proof/publication report |
+| `wade knowledge proposals list` | Inspect ignored owner-bound observations |
 | `wade knowledge disable` | Disable knowledge capture (keeps existing knowledge file) |
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
@@ -236,6 +240,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade review-pr-comments-session check \| docs \| sync \| done` | Same lifecycle and documentation receipt for a review session |
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
+| `wade plan-session refresh <original-plan-dir>` | Explicitly refresh retained native/collected contracts; archive originals and require the appropriate fresh review |
 | `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
 | `wade plan-session done <plan_dir>` | Import an optional native plan (`--from-file` / `--from-stdin`), validate, and complete the reviewed handoff |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
@@ -280,7 +285,7 @@ One task can be plain Markdown (`# feat: title`, `## Complexity`, tasks and
 acceptance criteria). Multiple tasks use the explicit versioned
 [plan bundle contract](templates/workflows/reference/plan-output-contract.md),
 with filenames and `depends_on` relationships; headings do not imply task
-boundaries. Knowledge-enabled sessions include `knowledge_votes` in that bundle,
+boundaries. Knowledge-enabled sessions include typed `knowledge_proposals` in that bundle,
 including an explicit empty list when appropriate. The parent revalidates the
 completed handoff after exit, then creates tasks and draft PRs. Failed or missing
 handoffs retain output and create no tasks.
@@ -350,6 +355,8 @@ wade implement 42 --base develop   # branch from, target, and merge into develop
 ```
 
 `--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value is rejected up front — whether declared in the plan (fails `wade plan-session done`) or passed as `--base` (fails fast when you run `wade implement`); a well-formed base branch that does not exist fails draft-PR creation with an actionable message. Changing the base of a PR whose work is already in flight — whether by re-running planning or by `wade implement --base` — is not applied silently: it requires explicit confirmation, because the branch's existing history cannot be moved onto the new base without discarding it.
+
+A scaffold branch checked out in a worktree can be moved onto a different base only when its tracked files are clean and no untracked or ignored paths obstruct the destination tree. Colliding files, symlinks, and directories cause refusal before the branch or PR base changes; noncolliding generated session files remain allowed. Preserve or move the reported paths outside the affected worktree before retrying. Ignored files receive the same protection as ordinary untracked work. Retarget and rollback explicitly leave submodule worktrees unchanged, including when `submodule.recurse` is enabled; update submodules separately when needed.
 
 ## Reviews & bot triggers
 
@@ -605,7 +612,7 @@ Decision and integrity gates deliberately require an explicit valid outcome:
 | Review ran | `wade review implementation` has no successful external-review or explicitly acknowledged self-review record for the current commit **and frozen REVIEW binding**, or the frozen workflow/skill bundle no longer matches its manifest. Bundle validation happens before receipts or pass counts are trusted. Prompt emission alone never satisfies this gate. **Implementation sessions bound this loop:** at `done.max_review_passes` (default 2), `wade review implementation` stops before launching an excess reviewer, while a valid `--ack-self-review` may still record its receipt; `done` remains authoritative and completes an unreviewed later commit with a cap-reached status instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 | Conventional title | the task title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
-| Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
+| Knowledge valid | committed knowledge/history has structural conflicts, invalid references, or uncommitted knowledge after sync; recovery pushes repeat reconciliation and cleanliness | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
 
 Finalizing an existing PR requires reading its current body successfully. If
 that read or the body update fails, completion stops, clears the local done
@@ -614,6 +621,22 @@ pending. Re-run the session's `done` command after resolving access; it reads th
 body again and preserves existing plan and user content. A successfully read
 empty body remains valid. The branch may already have been pushed before this
 retryable failure.
+
+Summary and dependency updates preserve embedded plans, fenced examples, and
+unrelated sections. An existing managed block is replaced in place. When an
+empty update removes its content while a same-named human section remains, an
+empty marker pair retains ownership so retries cannot delete the human section,
+including headings exposed by removing old HTML content. Summary and review-status
+changes are assembled together, so preservation and empty-pair decisions reflect
+the complete update.
+Otherwise the empty owned block is removed. Older unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
+column-zero heading, stopping at the next top-level H1/H2 heading (including
+indented and setext headings), managed block, or code fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
+unclosed fences, excessive nesting, or context changes that invalidate unrelated
+managed ownership stop the update with a repair message. This also applies to new
+`PR-SUMMARY.md` content: close its fences and keep marker examples inside fenced
+code. Repair the indicated input and retry; dependency batches skip the affected
+issue and continue with the others.
 
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is
@@ -629,6 +652,19 @@ review outcome — reviewed at `<sha>`, reviewer changed, skipped via
 `ai.review_implementation.enabled: false`), or completed at the active review
 binding's pass cap. A skipped, stale-reviewer, or never-run review is therefore
 visible to reviewers rather than hidden in worktree state.
+
+After a PR merge, WADE updates the main checkout and restores any tracked local
+changes using the exact stash SHA it captured, even if another worktree pushes
+its own stash meanwhile. WADE preserves any remaining owned stash entry after
+restoration because removing a positional stash entry can race with another push.
+Recovery commands are printed on separate copyable lines, with shell-quoted
+checkout paths and intact arguments even in narrow terminals. Inspect the
+reported checkout using the printed stash-list command, compare SHA/ref/message,
+and verify the current ref still names the intended SHA before manual cleanup.
+Resolve conflicts before retrying the printed apply command; if the stash object
+is unavailable, recover it first. Sync's apply command runs from the checkout
+named in its explanation. Local recovery warnings do not mean the remote PR
+merge failed.
 
 ## Task Providers
 
@@ -678,15 +714,33 @@ Description body here. Sub-headings, code blocks, anything markdown.
     name: markdown
     settings:
       path: ISSUES.md      # relative to repo root, or absolute
-      auto_commit: false   # if true, close_task auto-commits the change
+      auto_commit: false   # attempt a close-only commit for a clean tracked file
   ```
 
 - After a PR merges, `provider.close_task` flips the section's `state` to
   `closed` in `ISSUES.md`. By default the file is left modified in your
   working tree — commit it yourself. Set `auto_commit: true` to have
-  wade commit the change with a `chore: close #N` message; failures
-  (not a git repo, hook rejection, signing required) are logged and
-  swallowed so the close itself never blocks.
+  wade attempt a `chore: close #N` commit containing only the selected task's
+  state and `in-progress` label changes. Other file content and line endings
+  remain intact, and unrelated staged or unstaged work stays untouched.
+- Auto-commit requires the task file to be a clean tracked regular file with
+  matching HEAD, index, and disk contents. Preexisting staged, partially staged,
+  or unstaged task-file edits, hidden index flags, replacement objects, and
+  uncertain repository state cause a warning and skip the commit. The task still closes on disk;
+  its original staged version and flags remain intact. Optional task comments
+  are separate edits and follow this same skip policy.
+- Ordinary hooks and signing remain enabled. An invocation-local guard rejects
+  a hook-expanded candidate before HEAD advances; it does not change installed
+  hooks or persistent Git configuration. Unsupported Git hook dispatch
+  (Git older than 2.36), hook rejection, signing failure, and Git errors are
+  logged without undoing the disk closure. Hooks that directly edit other
+  files or refs retain their own side effects.
+- Task-like headings inside backtick or tilde fenced code blocks remain body
+  or prelude examples. A real heading after a valid closing fence starts the
+  next task; an unclosed fence continues through the end of the file. Fences
+  use zero to three leading spaces and at least three matching delimiters;
+  closing runs use the same delimiter, at least the opening length, and only
+  spaces or tabs afterward.
 - Tracking tasks with `- [ ] #N` checklist bodies work the same as with
   GitHub Issues — markdown's `find_parent_issue` scans every section's
   body for child refs.
@@ -973,10 +1027,15 @@ writable.
 
 | Agent session | Run in the AI runtime | Required there | Intentionally not required there |
 |---|---|---|---|
-| Planning | `wade plan-session check` | a worktree and, when knowledge is enabled, local `.wade/` vote staging — or, in the `PLAN_DIR_ONLY` fallback, just a writable plan directory (no worktree, no vote staging) | GitHub, remote network, and writable out-of-worktree Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
+| Planning | `wade plan-session check` | a worktree with local `.wade/` handoff artifacts — or, in the `PLAN_DIR_ONLY` fallback, just a writable plan directory | GitHub, remote network, and task-persistence Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
 | Dependency analysis | `wade deps-session check` | worktree output and optional local vote staging | GitHub and Git metadata writes — the parent `wade task deps` reads/updates task data after exit |
 | Implementation | `wade implementation-session check` | worktree plus Git metadata writes, usable `gh` authentication, and a read-only GitHub API route | main-checkout writes |
 | PR comments | `wade review-pr-comments-session check` | the same Git/GitHub capabilities as implementation, because it fetches threads, syncs, resolves, and completes a PR | main-checkout writes |
+
+Direct knowledge proposal commands additionally need write access to the ignored
+Git-common-directory queue. Native plan observations can instead stay in the
+explicit handoff artifact for the parent to persist; local handoff readiness does
+not promise that direct common-queue writes are available.
 
 Implementation and PR-comment checks require GitHub regardless of the task
 provider: Markdown and ClickUp can own tasks, but PR creation, review threads,
@@ -1029,19 +1088,29 @@ host runtime and its credentials as the boundary rather than assuming a
 worktree is one. These are external tool/runtime settings; WADE reports missing
 capabilities but never rewrites them.
 
-Detached plan and dependency sessions stage knowledge-rating events in their own
-ignored `.wade/` area. Wade flushes those durable-ID events into the main ratings
-spool before removing the throwaway worktree; a failed handoff preserves the
-worktree, and the **next** `wade plan` or `wade task deps` automatically hands
-off what it finds there and tells you what it recovered — no recovery command to
-remember. Only a worktree wade itself created for one of those two
-lifecycles stages votes — it is marked at creation by the same parent that will
-flush it. Any other detached checkout (a CI checkout, `git checkout <sha>`, your
-own `git worktree add --detach`) records votes normally, so nothing is left
-staged with no one to deliver it. Dependency sessions also save their returned edge analysis
-there before handoff, so a blocked main checkout does not discard the generated
-output. The next attached worktree remains the only path that commits the
-ratings log into a PR.
+Project knowledge separates committed-evidence assessment, publication, usefulness,
+and historical relationships. Use `wade knowledge check <id> current|contradicted
+--file <path> --note <reason>` for a fresh check and `knowledge feedback` for
+usefulness. Legacy up/down/stale votes remain historical; they never hide claims
+or establish correctness. `knowledge reconcile --against HEAD --check --json`
+reports committed proof without fetching or changing HEAD/index/working files.
+Source evidence marked skip-worktree/assume-unchanged is refused; normal generated
+pointer flags do not block other source paths. Proof ignores replacement objects.
+`--apply` appends exact-duplicate aliases while retaining every member's history.
+
+Main, detached planning/dependency sessions and bounded reviewers persist ignored
+owner-bound proposals in the Git common directory. Bootstrap never drains old
+main feedback into the next PR. `knowledge proposals list|retain|discard|accept`
+provides explicit disposition; acceptance requires the original parent's verified
+task/content association and grants no correctness. Check fresh committed proof
+after acceptance. Bounded planning/dependency observations retain their original
+parent or service-verified destination through cleanup; ambiguous multi-task
+observations remain pending. Switched branches cannot inherit knowledge author authority; repeated same-task
+acceptance reuses shared event bytes. Local prose edits withhold committed labels.
+Invalid evidence history is visible in `knowledge get`
+and withholds correctness labels. Legacy logs remain intact and require explicit owner-verified
+`knowledge proposals recover --worktree <original-parent>`. See
+[the knowledge reference](docs/dev/knowledge.md) for proof types and recovery.
 
 ## Supported AI Tools
 

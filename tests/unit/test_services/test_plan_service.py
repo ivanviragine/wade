@@ -77,6 +77,27 @@ from wade.utils.safe_state import StateFileAccessError, StateFileIOError
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def isolate_parent_proposal_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, dict[str, object]]:
+    """Fake queue I/O in orchestration units; real durability/ownership has integration coverage."""
+    from types import SimpleNamespace
+
+    records: dict[str, dict[str, object]] = {}
+
+    def stage(
+        root: Path, config: object, entry_id: str, payload: dict[str, object], **kwargs: object
+    ) -> SimpleNamespace:
+        identity = str(payload.get("event_id", (kwargs.get("operation_id"), entry_id)))
+        records.setdefault(identity, payload)
+        return SimpleNamespace(original_payload=records[identity])
+
+    monkeypatch.setattr("wade.services.knowledge_proposals.bind_completed_parent", lambda *_: None)
+    monkeypatch.setattr("wade.services.knowledge_proposals.stage_proposal", stage)
+    return records
+
+
 class TestPromptTemplate:
     def test_get_template_exists(self) -> None:
         template = get_plan_prompt_template()
@@ -1356,10 +1377,10 @@ class TestPlanOrchestrator:
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
+        isolate_parent_proposal_binding: dict[str, dict[str, object]],
     ) -> None:
         from wade.models.workflow import SessionKind
         from wade.services import interactive_plan_service as interactive
-        from wade.services.knowledge_service import staged_ratings_path
         from wade.services.session_composition_service import compose_session
 
         config, provider, _, root = collected_harness
@@ -1391,18 +1412,12 @@ class TestPlanOrchestrator:
             ),
         ):
             assert not plan(project_root=tmp_path, recover=root)
-            first_attempt = [
-                json.loads(line)
-                for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
-            ]
+            first_attempt = dict(isolate_parent_proposal_binding)
             assert len(first_attempt) == 1
 
             assert plan(project_root=tmp_path, recover=root)
 
-        retries = [
-            json.loads(line)
-            for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
-        ]
+        retries = isolate_parent_proposal_binding
         assert retries == first_attempt
         provider.create_task.assert_called_once()
 

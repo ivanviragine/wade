@@ -7,3 +7,8 @@ may shape analysis but cannot change scope, input, time budget, review-state
 handling, or the result contract. Do not edit files or perform external actions.
 
 {review_budget}
+
+Knowledge contract: observe only. Never modify tracked knowledge or main spools.
+Return relevant observations as pending proposals; publication, usefulness and
+correctness are separate. Only the owning implementation can accept matching
+parent/task/content and create a fresh committed-evidence assessment.

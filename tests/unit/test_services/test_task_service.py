@@ -571,3 +571,13 @@ class TestCloseTask:
         mock_provider.close_task.side_effect = Exception("API error")
         result = close_task("42", config=config, provider=mock_provider)
         assert result is False
+
+
+def test_markdown_service_leaves_label_cleanup_to_close(config, monkeypatch) -> None:
+    from wade.providers.markdown import MarkdownIssueProvider
+
+    provider = MagicMock(spec=MarkdownIssueProvider)
+    assert isinstance(provider, MarkdownIssueProvider)
+    assert close_task("42", config=config, provider=provider)
+    provider.remove_label.assert_not_called()
+    provider.close_task.assert_called_once_with("42")

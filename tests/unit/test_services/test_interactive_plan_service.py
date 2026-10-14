@@ -262,3 +262,27 @@ def test_managed_review_rejects_symlink_before_delegation(session: Path) -> None
         result = review_plan(str(plan), project_root=session)
     assert not result.success
     reviewer.assert_not_called()
+
+
+@pytest.mark.parametrize("proposals", [(), ("claim-a",)])
+def test_native_v2_proposals_survive_completion_and_collection(
+    tmp_path: Path, proposals: tuple[str, ...]
+) -> None:
+    from wade.models.plan_bundle import PlanKnowledgeProposal
+
+    compose_session(tmp_path, tmp_path, ProjectConfig(), kind=SessionKind.PLAN, task_id=None)
+    interactive.begin(tmp_path, "codex", review_required=False, knowledge_required=True)
+    bundle = PlanBundle(
+        plans=(PlanMember(filename="PLAN.md", markdown=PLAN),),
+        knowledge_proposals=tuple(
+            PlanKnowledgeProposal(
+                entry_id=value, body_digest="sha256:" + "a" * 64, feedback="useful", note="Useful"
+            )
+            for value in proposals
+        ),
+    )
+    interactive.import_artifact(
+        tmp_path, BUNDLE_MARKER + "\n```json\n" + bundle.model_dump_json() + "\n```"
+    )
+    interactive.complete(tmp_path)
+    assert interactive.collect(tmp_path).knowledge_proposals == bundle.knowledge_proposals
