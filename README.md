@@ -485,8 +485,22 @@ the retained plan count is unknown rather than reporting zero. WADE never change
 OS privacy or sandbox settings for you.
 
 `wade plan --issue <N>` re-plans an existing task. If the session produces a
-single plan file, it's attached to `#N` and the task stays open. If the
-session decides the work should be split into several independent pieces
+single plan file, its reviewed body replaces the plan in the task's existing
+open PR, and the task stays open. A task title change keeps the same PR and head
+branch. Current issue edits and unrelated PR sections are preserved; a missing
+Full plan link is appended to the freshly read issue body. A failed lookup,
+read, write, structural check, or retarget reconciliation retains the original
+planning workspace and handoff instead of reporting success and deleting it.
+Retry with `wade plan --recover <planning-worktree>` after repairing the cause.
+A completed, cleaned-up session or a copied archive cannot recover its old
+receipt authority: use a fresh `wade plan --issue <N>` session with archived
+content as input, then complete new review/done gates and verify the PR-backed
+plan before implementing. The next implementation reads the same structurally
+owned plan; fenced marker examples cannot redirect or truncate it. Generic
+implementation resume keeps the existing plan. Fresh PR creation rejects unsafe
+plan ownership before branch or PR creation.
+
+If the session decides the work should be split into several independent pieces
 (2+ plan files), `#N` is **superseded**: a new task + draft PR is created
 per plan file, a comment and a `> **Superseded by ...**` banner are added to
 `#N`, and it's closed as *not planned* (confirmed via prompt unless

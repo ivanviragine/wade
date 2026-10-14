@@ -16,8 +16,14 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.task import Task
+from wade.services.implementation_service._shared import DraftPRTarget
 from wade.ui.console import console
-from wade.utils.body_markers import upsert_marked_block
+from wade.utils.body_markers import GITHUB_BODY_MAX, update_body_preserving_markers
+from wade.utils.markdown import (
+    MarkdownStructureError,
+    replace_owned_section,
+    scan_markdown_structure,
+)
 
 logger = structlog.get_logger()
 
@@ -53,16 +59,25 @@ def _build_draft_pr_body(plan_body: str, issue_number: str) -> str:
 
 
 def extract_plan_from_pr_body(pr_body: str) -> str | None:
-    """Extract plan content from between plan markers in a PR body.
+    """Read one structurally owned plan, preserving the str/None contract.
 
-    Returns the content between markers, or None if markers are not found.
+    The same scanner used for replacement selects the authoritative span so
+    literal examples cannot change what the next implementation materializes.
+    Missing or unsafe ownership yields None; valid empty ownership yields "".
     """
-    start_idx = pr_body.find(PLAN_MARKER_START)
-    end_idx = pr_body.find(PLAN_MARKER_END)
-    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+    try:
+        block = scan_markdown_structure(pr_body).owned("plan")
+    except MarkdownStructureError as exc:
+        logger.warning("implementation.unsafe_plan_body", error=str(exc))
         return None
-    content = pr_body[start_idx + len(PLAN_MARKER_START) : end_idx]
-    return content.strip()
+    if block is None:
+        return None
+    span = pr_body[block.start : block.end]
+    # These delimiters are the first/last physical lines of the scanner-owned
+    # span, not unverified global matches. Keep original interior newline bytes.
+    inner_start = span.index(PLAN_MARKER_START) + len(PLAN_MARKER_START)
+    inner_end = span.rindex(PLAN_MARKER_END)
+    return span[inner_start:inner_end].strip()
 
 
 def _resolve_base_start_point(repo_root: Path, base: str) -> str | None:
@@ -321,6 +336,7 @@ def bootstrap_draft_pr(
     base_branch: str | None = None,
     refresh_existing_plan: bool = False,
     refresh_title: str | None = None,
+    resolved_target: DraftPRTarget | None = None,
 ) -> dict[str, str | int] | None:
     """Create branch + push + draft PR for an issue.
 
@@ -336,24 +352,32 @@ def bootstrap_draft_pr(
         base_branch: When set, branch from this instead of main and target
             the PR at it (stacked PR for chain execution).
         refresh_existing_plan: Rewrite an existing PR's managed plan body before
-            accepting a recovered task as persisted.
+            accepting an explicitly replanned or recovered task as persisted.
         refresh_title: When refreshing a recovered task, update the existing
             draft PR title (or use it for a newly created PR) after locating
             the branch from ``issue_title``.
+        resolved_target: Optional stable task identity selected once by planning;
+            all retarget/refresh operations use its branch and verified lookup.
 
     Returns:
         Dict with "number" (int) and "url" (str) keys, or None on failure.
     """
-    # Generate deterministic branch name
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(issue_number),
-        issue_title,
+    # Planning passes its verified identity; generic bootstrap retains its default.
+    branch_name = (
+        resolved_target.branch_name
+        if resolved_target is not None
+        else git_branch.make_branch_name(
+            config.project.branch_prefix, int(issue_number), issue_title
+        )
     )
 
     # Reuse only an OPEN PR for this branch. A merged/closed PR must not be
     # reused (its branch work is done); fall through and create a fresh one.
-    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    lookup = (
+        resolved_target.lookup
+        if resolved_target is not None
+        else git_pr.get_pr_for_branch(repo_root, branch_name)
+    )
     if lookup.lookup_failed:
         # A failed lookup is NOT "no PR" — creating one now risks a duplicate PR
         # (or GitHub's "a pull request already exists" error) for a branch that
@@ -365,6 +389,49 @@ def bootstrap_draft_pr(
         return None
     if lookup.is_open and lookup.pr is not None:
         existing = lookup.pr
+        if refresh_existing_plan:
+
+            def transform(current: str) -> str:
+                # Empty is a successful read; retain the existing reference
+                # convention without reconstructing any nonempty remote body.
+                source = current if current else f"Implements #{issue_number}\n\n"
+                candidate = replace_owned_section(
+                    source, name="plan", heading=None, content=plan_body
+                )
+                if len(candidate) > GITHUB_BODY_MAX:
+                    raise ValueError(
+                        "replacement plan exceeds the PR body limit; shorten it and retry"
+                    )
+                return candidate
+
+            def write(candidate: str) -> bool:
+                scan_markdown_structure(candidate)
+                return git_pr.update_pr_body(repo_root, existing.number, candidate)
+
+            try:
+                refreshed = update_body_preserving_markers(
+                    read_body=lambda: git_pr.get_pr_body(repo_root, existing.number),
+                    write_body=write,
+                    transform=transform,
+                    warn=console.warn,
+                    label=f"PR #{existing.number} plan",
+                )
+            except (MarkdownStructureError, ValueError) as exc:
+                console.error(f"Could not refresh draft PR #{existing.number}: {exc}", markup=False)
+                return None
+            if not refreshed:
+                console.error(f"Failed to read or refresh the plan in draft PR #{existing.number}.")
+                return None
+        if (
+            refresh_title is not None
+            and existing.title != refresh_title
+            and not git_pr.update_pr_title(repo_root, existing.number, refresh_title)
+        ):
+            console.error(f"Failed to refresh the title in draft PR #{existing.number}.")
+            return None
+        # Required content/title writes precede retargeting. Once the PR base
+        # changes, attachment must reach pin reconciliation without an earlier
+        # refresh failure leaving the in-flight worktree on its old merge target.
         # If a base was requested and differs from the PR's current base, retarget
         # it (stacked chain, or a plan-declared base). Skip the gh call when the
         # base already matches, and report success so the change is visible.
@@ -395,32 +462,24 @@ def bootstrap_draft_pr(
                     _restore_scaffold_head(repo_root, branch_name, pre_reroot_sha, existing.number)
                 return None
             console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
-        if refresh_existing_plan:
-            current_body = git_pr.get_pr_body(repo_root, existing.number)
-            if current_body is None:
-                console.error(f"Failed to read the body of draft PR #{existing.number}.")
-                return None
-            refreshed_body = (
-                upsert_marked_block(current_body, PLAN_MARKER_START, PLAN_MARKER_END, plan_body)
-                if current_body
-                else _build_draft_pr_body(plan_body, issue_number)
-            )
-            if not git_pr.update_pr_body(repo_root, existing.number, refreshed_body):
-                console.error(f"Failed to refresh the plan in draft PR #{existing.number}.")
-                return None
-        if (
-            refresh_title is not None
-            and existing.title != refresh_title
-            and not git_pr.update_pr_title(repo_root, existing.number, refresh_title)
-        ):
-            console.error(f"Failed to refresh the title in draft PR #{existing.number}.")
-            return None
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,
             pr=existing.number,
         )
         return {"number": existing.number, "url": existing.url}
+
+    # Creation must satisfy the same owned-plan contract as extraction and
+    # refresh before any branch/push side effect can outlive a rejected handoff.
+    body = _build_draft_pr_body(plan_body, issue_number)
+    try:
+        if scan_markdown_structure(body).owned("plan") is None:
+            raise MarkdownStructureError("composed draft PR has no owned plan")
+        if len(body) > GITHUB_BODY_MAX:
+            raise ValueError("plan exceeds the PR body limit; shorten it and retry")
+    except (MarkdownStructureError, ValueError) as exc:
+        console.error(f"Could not compose draft PR for #{issue_number}: {exc}", markup=False)
+        return None
 
     # Resolve the effective base for branch creation and PR target
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -451,9 +510,6 @@ def bootstrap_draft_pr(
     except GitError as e:
         console.error(f"Failed to push branch: {e}")
         return None
-
-    # Build draft PR body with plan markers
-    body = _build_draft_pr_body(plan_body, issue_number)
 
     # Create draft PR targeting the effective base (parent branch for stacked PRs)
     try:
