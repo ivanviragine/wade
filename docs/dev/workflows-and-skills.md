@@ -374,8 +374,10 @@ contracts in [knowledge.md](knowledge.md). Typed v2 plan observations and schema
 owner-bound proposals replace generic next-worktree delivery; v1 votes remain
 historical input. Explicit refresh/recovery must validate frozen current workflow
 and handoff/review bindings. `plan-session refresh <original .wade/plans>`
-durably archives an intact native parent's old bundle and invalidates its old
-review/completion; fresh independent review/done precedes `plan --recover`.
+durably archives an intact original parent's old bundle. Native refresh closes
+old review/completion; fresh independent review/done precedes `plan --recover`.
+Collected artifacts/progress remain unchanged, and recovery performs its normal
+parent review before persistence without creating native completion state.
 Interrupted refresh is explicitly retryable and never invents a receipt.
 Bootstrap/review/done never auto-accept proposals.
 Commit owned knowledge before review; post-sync and recovery-push reconciliation

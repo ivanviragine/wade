@@ -433,11 +433,18 @@ def test_direct_services_refuse_unowned_tracked_mutation(evidence_repo: Path, mo
 
 
 def test_explicit_native_refresh_preserves_artifacts_and_requires_new_review(
-    evidence_repo: Path,
+    evidence_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from wade.models.workflow import SESSION_DEFINITIONS, SessionKind
     from wade.services import interactive_plan_service as interactive
 
-    parent, identity = _completed_parent(evidence_repo)
+    with monkeypatch.context() as old:
+        old.setitem(
+            SESSION_DEFINITIONS,
+            SessionKind.PLAN,
+            SESSION_DEFINITIONS[SessionKind.PLAN].model_copy(update={"workflow_revision": 3}),
+        )
+        parent, identity = _completed_parent(evidence_repo)
     plan = parent / ".wade/plans/PLAN.md"
     before = plan.read_bytes()
     progress = (parent / ".wade/plans/handoff-progress.json").read_bytes()
@@ -541,7 +548,7 @@ def test_explicit_legacy_recovery_archives_owner_and_preserves_original_bytes(
         assert source.read_bytes() == before
 
 
-def test_collected_parent_uses_the_same_verified_task_binding(owned_repo: Path) -> None:
+def _collected_parent(main: Path) -> tuple[Path, ProjectConfig, str]:
     from crossby.models.ai import (
         AIToolID,
         PlanArtifactSource,
@@ -552,11 +559,9 @@ def test_collected_parent_uses_the_same_verified_task_binding(owned_repo: Path) 
     from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
     from wade.models.workflow import SessionKind
     from wade.services import native_plan_service as native
-    from wade.services.knowledge_proposals import accept_proposal, bind_completed_parent, proposals
     from wade.services.plan_service import _ensure_handoff_progress, _save_handoff_binding
     from wade.services.session_composition_service import compose_session
 
-    main = owned_repo.parent / "main"
     parent = main.parent / "collected-parent"
     git(main, "worktree", "add", "--detach", str(parent))
     config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True))
@@ -589,10 +594,15 @@ def test_collected_parent_uses_the_same_verified_task_binding(owned_repo: Path) 
     native.materialize(parent, bundle)
     _save_handoff_binding(parent, None, config)
     _ensure_handoff_progress(parent, result.session_id, None, config, ())
-    knowledge.record_handoff_rating_for_session(
-        parent, config.knowledge, "claim-a", "up", result.session_id
-    )
-    bind_completed_parent(parent, result.session_id)
+    return parent, config, result.session_id
+
+
+def test_collected_parent_uses_the_same_verified_task_binding(owned_repo: Path) -> None:
+    from wade.services.knowledge_proposals import accept_proposal, bind_completed_parent, proposals
+
+    parent, config, identity = _collected_parent(owned_repo.parent / "main")
+    knowledge.record_handoff_rating_for_session(parent, config.knowledge, "claim-a", "up", identity)
+    bind_completed_parent(parent, identity)
     proposal = proposals(owned_repo)[0]
     assert accept_proposal(owned_repo, config.knowledge, proposal.proposal_id).entry_id == "claim-a"
 
@@ -946,3 +956,83 @@ def test_disabled_knowledge_does_not_add_observer_write_requirements(
         DelegationRequest(mode=DelegationMode.HEADLESS, prompt="Observe only", cwd=owned_repo)
     )
     assert result.success
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_collected_contract_refresh_preserves_old_artifacts_and_requires_parent_review(
+    evidence_repo: Path, monkeypatch: pytest.MonkeyPatch, interrupted: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from wade.models.workflow import SESSION_DEFINITIONS, SessionKind
+    from wade.services import interactive_plan_service as interactive
+    from wade.services import native_plan_service as native
+    from wade.services import plan_service as recovery
+    from wade.services import session_composition_service as composition
+
+    original = SESSION_DEFINITIONS[SessionKind.PLAN]
+    with monkeypatch.context() as old:
+        old.setitem(
+            SESSION_DEFINITIONS,
+            SessionKind.PLAN,
+            original.model_copy(update={"workflow_revision": 3}),
+        )
+        parent, config, identity = _collected_parent(evidence_repo)
+    plans = parent / ".wade/plans"
+    before = {path.name: path.read_bytes() for path in plans.iterdir() if path.is_file()}
+    review = MagicMock(return_value=False)
+    provider = MagicMock()
+    get_provider = MagicMock(return_value=provider)
+    monkeypatch.setattr(native, "review_materialized_plans", review)
+    monkeypatch.setattr(recovery, "get_provider", get_provider)
+    assert not recovery._recover_completed_handoff(
+        recovery_root=parent, project_root=evidence_repo, config=config, yolo=True
+    )
+    review.assert_not_called()
+    get_provider.assert_not_called()
+
+    if interrupted:
+
+        def fail_compose(*args: object, **kwargs: object) -> None:
+            raise OSError("simulated collected refresh interruption")
+
+        with monkeypatch.context() as failure:
+            failure.setattr(composition, "compose_session", fail_compose)
+            with pytest.raises(OSError, match="interruption"):
+                interactive.refresh_handoff(parent)
+        assert not recovery._recover_completed_handoff(
+            recovery_root=parent, project_root=evidence_repo, config=config, yolo=True
+        )
+        review.assert_not_called()
+        get_provider.assert_not_called()
+    assert interactive.refresh_handoff(parent) == "collected"
+    for name, content in before.items():
+        assert (plans / name).read_bytes() == content
+    assert not (plans / "interactive-session.json").exists()
+    assert list(plans.glob("session-refresh-*"))
+    manifest = composition.load_session_manifest_strict(parent)
+    assert manifest.workflow_revision == 4
+    assert native.load_artifact(parent)[0].session_id == identity
+    assert not recovery._recover_completed_handoff(
+        recovery_root=parent, project_root=evidence_repo, config=config, yolo=True
+    )
+    review.assert_called_once()
+    provider.create_task.assert_not_called()
+    provider.update_task.assert_not_called()
+
+
+def test_collected_refresh_cannot_fall_back_past_unsafe_native_state(
+    evidence_repo: Path, tmp_path: Path
+) -> None:
+    from wade.services import interactive_plan_service as interactive
+    from wade.utils.safe_state import StateFileUnsafeError
+
+    parent, _config, _identity = _collected_parent(evidence_repo)
+    original = (parent / ".wade/session/manifest.json").read_bytes()
+    outside = tmp_path / "outside-native-state.json"
+    outside.write_text("untouched external state")
+    (parent / ".wade/plans/interactive-session.json").symlink_to(outside)
+    with pytest.raises(StateFileUnsafeError):
+        interactive.refresh_handoff(parent)
+    assert outside.read_text() == "untouched external state"
+    assert (parent / ".wade/session/manifest.json").read_bytes() == original

@@ -240,7 +240,7 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade review-pr-comments-session check \| docs \| sync \| done` | Same lifecycle and documentation receipt for a review session |
 | `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
-| `wade plan-session refresh <original-plan-dir>` | Explicitly refresh retained native contracts; archive originals and require fresh review/done |
+| `wade plan-session refresh <original-plan-dir>` | Explicitly refresh retained native/collected contracts; archive originals and require the appropriate fresh review |
 | `wade plan-session check` | Verify detached planning capabilities before writing plan artefacts or knowledge votes |
 | `wade plan-session done <plan_dir>` | Import an optional native plan (`--from-file` / `--from-stdin`), validate, and complete the reviewed handoff |
 | `wade deps-session check` | Verify the detached dependency-analysis runtime before writing output or staging a knowledge vote |
@@ -993,11 +993,15 @@ writable.
 
 | Agent session | Run in the AI runtime | Required there | Intentionally not required there |
 |---|---|---|---|
-| Planning | `wade plan-session refresh <original-plan-dir>` | Explicitly refresh retained native contracts; archive originals and require fresh review/done |
-| `wade plan-session check` | a worktree and, when knowledge is enabled, local `.wade/` vote staging — or, in the `PLAN_DIR_ONLY` fallback, just a writable plan directory (no worktree, no vote staging) | GitHub, remote network, and writable out-of-worktree Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
+| Planning | `wade plan-session check` | a worktree with local `.wade/` handoff artifacts — or, in the `PLAN_DIR_ONLY` fallback, just a writable plan directory | GitHub, remote network, and task-persistence Git metadata — the parent `wade plan` finalizes tasks/PRs after exit |
 | Dependency analysis | `wade deps-session check` | worktree output and optional local vote staging | GitHub and Git metadata writes — the parent `wade task deps` reads/updates task data after exit |
 | Implementation | `wade implementation-session check` | worktree plus Git metadata writes, usable `gh` authentication, and a read-only GitHub API route | main-checkout writes |
 | PR comments | `wade review-pr-comments-session check` | the same Git/GitHub capabilities as implementation, because it fetches threads, syncs, resolves, and completes a PR | main-checkout writes |
+
+Direct knowledge proposal commands additionally need write access to the ignored
+Git-common-directory queue. Native plan observations can instead stay in the
+explicit handoff artifact for the parent to persist; local handoff readiness does
+not promise that direct common-queue writes are available.
 
 Implementation and PR-comment checks require GitHub regardless of the task
 provider: Markdown and ClickUp can own tasks, but PR creation, review threads,

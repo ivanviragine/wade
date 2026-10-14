@@ -90,13 +90,16 @@ New observations already survive disposable-worktree cleanup without a spool.
 Plan artifact protocol v2 adds typed `knowledge_proposals`; v1 historical votes
 remain readable. Session workflow revisions advance (plan4, implementation3,
 PR-comment3) so old bundles require explicit refresh/recovery validation rather
-than silent reinterpretation. For an intact retained native parent, run
-`wade plan-session refresh <original .wade/plans>`: old frozen bytes are durably
-archived, session identity/plans/provider progress are preserved, and old
-review/completion gates close before replacement. Run a genuine fresh independent
-review for every plan, `plan-session done`, then `plan --recover`. An interrupted
-refresh keeps a durable pending flag and requires the same explicit retry; it
-never dispatches a reviewer or provider mutation. Receipt/proposal event schemas begin at1; no
+than silent reinterpretation. For an intact retained native or collected parent,
+run `wade plan-session refresh <original .wade/plans>`: old frozen bytes are durably
+archived and original artifacts/identity/provider progress are preserved. Native
+refresh closes old review/completion gates before replacement; run a genuine fresh
+review for every plan, `plan-session done`, then `plan --recover`. Interrupted native
+refresh keeps a durable pending flag and requires the same explicit retry.
+Collected refresh creates no native completion state: `plan --recover` performs
+its existing parent review before persistence. An incomplete composition fails
+frozen-bundle validation; retry explicit refresh against the retained original.
+Refresh itself never dispatches a reviewer or provider mutation. Receipt/proposal event schemas begin at1; no
 session-manifest schema change is needed because proposal ownership freezes the
 actual operation/session and task association independently of methodology.
 

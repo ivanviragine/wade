@@ -121,7 +121,7 @@ def done(
 def refresh(
     plan_dir: Path = typer.Argument(..., help="Original retained .wade/plans directory."),  # noqa: B008
 ) -> None:
-    """Refresh intact native planning contracts; require fresh review and done."""
+    """Refresh intact planning contracts; recovery still requires fresh review."""
     from wade.services.interactive_plan_service import refresh_handoff
     from wade.ui.console import console
 
@@ -130,11 +130,18 @@ def refresh(
         console.error("Refresh requires the original managed .wade/plans directory")
         raise typer.Exit(1)
     try:
-        refresh_handoff(directory.parent.parent)
+        kind = refresh_handoff(directory.parent.parent)
     except (ValueError, OSError, RuntimeError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
-    console.info(
-        "Planning contracts refreshed; original artifacts preserved. "
-        "Run an independent review for each plan, then plan-session done, then plan --recover."
-    )
+    if kind == "native":
+        console.info(
+            "Planning contracts refreshed; original artifacts preserved. "
+            "Run an independent review for each plan, then plan-session done, then plan --recover."
+        )
+    else:
+        console.info(
+            "Collected planning contracts refreshed; original artifacts preserved. "
+            "Run plan --recover on the original worktree; "
+            "its parent review runs before persistence."
+        )

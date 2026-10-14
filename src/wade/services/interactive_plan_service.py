@@ -9,6 +9,7 @@ import shlex
 import stat
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from wade.models.interactive_plan import (
     InteractivePlanReview,
@@ -364,11 +365,13 @@ def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
         raise InteractivePlanAccessError(root, exc) from exc
 
 
-def refresh_handoff(root: Path) -> None:
-    """Explicitly refresh an intact native handoff and invalidate all completion/review.
+def refresh_handoff(root: Path) -> Literal["native", "collected"]:
+    """Refresh an intact original handoff without promoting an old review.
 
     The original plans, session identity, launch binding and persistence progress
-    remain unchanged. A durable pending flag makes interrupted refresh retryable.
+    remain unchanged. Native refresh closes completion/review with a durable
+    pending flag. Collected recovery already reviews every materialized plan
+    before persistence; no synthetic native state is created for that path.
     No provider operation or new review is dispatched here.
     """
     from wade.config.loader import load_config
@@ -381,13 +384,25 @@ def refresh_handoff(root: Path) -> None:
     if not git_repo.is_worktree(root) or git_repo.is_head_attached(root):
         raise ValueError("Refresh requires the original registered detached planning worktree")
     with file_lock(root / ".wade/plans/refresh.lock", create_parent=False):
-        raw = read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
-        state = InteractivePlanState.model_validate_json(raw)
+        raw = (
+            read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
+            if state_file_present(root, ("plans",), STATE)
+            else None
+        )
+        state = InteractivePlanState.model_validate_json(raw) if raw is not None else None
+        if state is None:
+            # The public collected artifact must validate before its contracts
+            # change. Its normal recovery path still performs the parent review.
+            native.load_artifact(root)
         manifest = load_session_manifest_strict(root)
         if manifest.session is not SessionKind.PLAN:
             raise ValueError("Original planning session composition is required")
         validate_session_bundle(root, manifest)
-        if not state.refresh_pending and state.bundle_digest != manifest.bundle_digest:
+        if (
+            state is not None
+            and not state.refresh_pending
+            and state.bundle_digest != manifest.bundle_digest
+        ):
             raise ValueError("Native handoff does not match its original frozen bundle")
         # Archive the validated old bundle before any replacement. It remains a
         # recovery artifact; never claim its prior reviews cover the new bundle.
@@ -412,11 +427,12 @@ def refresh_handoff(root: Path) -> None:
                 raise ValueError("Could not durably archive frozen session before refresh")
         if compute_session_bundle_digest(archive) != manifest.bundle_digest:
             raise ValueError("Original frozen session archive is incomplete or changed")
-        state.completed = False
-        state.refresh_pending = True
-        state.review_required = True
-        _save(root, state)
-        _save_reviews(root, InteractivePlanReviews())
+        if state is not None:
+            state.completed = False
+            state.refresh_pending = True
+            state.review_required = True
+            _save(root, state)
+            _save_reviews(root, InteractivePlanReviews())
         config = load_config(root)
         main = git_repo.main_checkout_root(root)
         refreshed = compose_session(
@@ -431,6 +447,9 @@ def refresh_handoff(root: Path) -> None:
                 skill.canonical_ref for skill in manifest.bindings[SkillSlot.REVIEW].skills
             ],
         )
-        state.bundle_digest = refreshed.manifest.bundle_digest
-        state.refresh_pending = False
-        _save(root, state)
+        if state is not None:
+            state.bundle_digest = refreshed.manifest.bundle_digest
+            state.refresh_pending = False
+            _save(root, state)
+            return "native"
+        return "collected"
