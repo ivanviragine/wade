@@ -20,7 +20,7 @@ from crossby.models.ai import (
 from pydantic import ValidationError
 
 from wade.models.config import with_wade_base_pattern
-from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
+from wade.models.plan_bundle import BUNDLE_MARKER, LEGACY_BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.models.task import PlanFile
 from wade.ui import prompts
 from wade.ui.console import console
@@ -109,11 +109,21 @@ def parse_artifact(markdown: str) -> PlanBundle:
     if not markdown.strip().startswith("<!-- wade:plan-bundle:"):
         return PlanBundle(plans=(PlanMember(filename="PLAN.md", markdown=markdown),))
     match = re.fullmatch(
-        re.escape(BUNDLE_MARKER) + r"\s*```json\s*\n(.*)\n```\s*", markdown.strip(), re.DOTALL
+        "(?:"
+        + re.escape(BUNDLE_MARKER)
+        + "|"
+        + re.escape(LEGACY_BUNDLE_MARKER)
+        + ")"
+        + r"\s*```json\s*\n(.*)\n```\s*",
+        markdown.strip(),
+        re.DOTALL,
     )
     if match is None:
         raise ValueError("malformed or unsupported WADE plan bundle envelope")
-    return PlanBundle.model_validate(json.loads(match[1], object_pairs_hook=_unique_keys))
+    bundle = PlanBundle.model_validate(json.loads(match[1], object_pairs_hook=_unique_keys))
+    if markdown.strip().startswith(LEGACY_BUNDLE_MARKER) and bundle.knowledge_proposals is not None:
+        raise ValueError("Typed knowledge proposals require the v2 plan envelope")
+    return bundle
 
 
 def save_artifact(root: Path, result: PlanSessionResult) -> None:

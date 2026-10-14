@@ -50,7 +50,22 @@ def _init_repo(tmp_path: Path) -> Path:
     # The wade-managed union block is a committed, tracked file (the server-side
     # backstop). Committing it in the base is what makes the two-branch merge clean.
     (repo / ".gitattributes").write_text(_GITATTRIBUTES, encoding="utf-8")
+    (repo / ".gitignore").write_text(".wade/\n")
+    (repo / ".wade.yml").write_text(
+        "version: 2\nproject:\n  main_branch: main\nknowledge:\n  enabled: true\n"
+    )
     return repo
+
+
+def _owned_branch(repo: Path, branch: str) -> Path:
+    from wade.config.loader import load_config
+    from wade.models.workflow import SessionKind
+    from wade.services.session_composition_service import compose_session
+
+    root = repo.parent / branch
+    _git_ok(repo, "worktree", "add", "-b", branch, str(root), "main")
+    compose_session(root, repo, load_config(root), kind=SessionKind.IMPLEMENTATION, task_id="1")
+    return root
 
 
 def test_two_branch_knowledge_appends_both_survive_merge(tmp_path: Path) -> None:
@@ -92,16 +107,12 @@ def test_two_branch_rating_votes_both_survive_merge(tmp_path: Path) -> None:
     _git_ok(repo, "add", "-A")
     _git_ok(repo, "commit", "-m", "test: init ratings + gitattributes")
 
-    # Branch A votes up on an entry.
-    _git_ok(repo, "checkout", "-b", "vote-a")
-    record_rating(ratings, "entry1", "up")
-    _git_ok(repo, "commit", "-am", "test: vote up")
-
-    # Branch B (from main) votes down on the same entry.
-    _git_ok(repo, "checkout", "main")
-    _git_ok(repo, "checkout", "-b", "vote-b")
-    record_rating(ratings, "entry1", "down")
-    _git_ok(repo, "commit", "-am", "test: vote down")
+    branch_a = _owned_branch(repo, "vote-a")
+    branch_b = _owned_branch(repo, "vote-b")
+    record_rating(branch_a / ratings.name, "entry1", "up")
+    _git_ok(branch_a, "commit", "-am", "test: vote up")
+    record_rating(branch_b / ratings.name, "entry1", "down")
+    _git_ok(branch_b, "commit", "-am", "test: vote down")
 
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "merge", "--no-edit", "vote-a")
@@ -166,18 +177,14 @@ def test_two_branches_migrate_same_legacy_yaml_no_double_count(tmp_path: Path) -
 
     ratings = repo / "KNOWLEDGE.ratings.jsonl"
 
-    # Branch A: a rate triggers the on-disk migration (seed + vote), then git rm's yml.
-    _git_ok(repo, "checkout", "-b", "migrate-a")
-    record_rating(ratings, "entry1", "up")
-    _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "test: migrate + vote up")
-
-    # Branch B (from main): independently migrates the SAME legacy yml, then votes down.
-    _git_ok(repo, "checkout", "main")
-    _git_ok(repo, "checkout", "-b", "migrate-b")
-    record_rating(ratings, "entry1", "down")
-    _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "test: migrate + vote down")
+    branch_a = _owned_branch(repo, "migrate-a")
+    branch_b = _owned_branch(repo, "migrate-b")
+    record_rating(branch_a / ratings.name, "entry1", "up")
+    _git_ok(branch_a, "add", "-A")
+    _git_ok(branch_a, "commit", "-m", "test: migrate + vote up")
+    record_rating(branch_b / ratings.name, "entry1", "down")
+    _git_ok(branch_b, "add", "-A")
+    _git_ok(branch_b, "commit", "-m", "test: migrate + vote down")
 
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "merge", "--no-edit", "migrate-a")
@@ -193,3 +200,80 @@ def test_two_branches_migrate_same_legacy_yaml_no_double_count(tmp_path: Path) -
     # plus the two distinct votes (one up, one down) — NOT a doubled seed (up:10).
     assert folded["entry1"].up == 6  # 5 seed + 1 up vote
     assert folded["entry1"].down == 2  # 1 seed + 1 down vote
+
+
+def test_concurrent_assessment_union_is_independent_of_merge_order(tmp_path: Path) -> None:
+    from wade.models.config import KnowledgeConfig
+    from wade.services.knowledge_assessment import check_entry
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+
+    repo = _init_repo(tmp_path)
+    (repo / "source.py").write_text("answer = 42\n")
+    (repo / "KNOWLEDGE.md").write_text(
+        "## claim-a | 2026-10-14 | implementation\n\nAnswer is forty two.\n\n---\n"
+    )
+    (repo / "KNOWLEDGE.ratings.jsonl").write_text("")
+    _git_ok(repo, "add", "-A")
+    _git_ok(repo, "commit", "-m", "test: shared evidence baseline")
+    left = _owned_branch(repo, "assessment-left")
+    right = _owned_branch(repo, "assessment-right")
+    config = KnowledgeConfig(enabled=True)
+    check_entry(left, config, "claim-a", "current", files=("source.py",), note="left observation")
+    check_entry(
+        right, config, "claim-a", "contradicted", files=("source.py",), note="right observation"
+    )
+    for root in (left, right):
+        _git_ok(root, "commit", "-am", "docs: independent assessment")
+    _git_ok(repo, "branch", "merge-right", "main")
+    _git_ok(repo, "checkout", "-b", "merge-left", "main")
+    _git_ok(repo, "merge", "--no-edit", "assessment-left")
+    _git_ok(repo, "merge", "--no-edit", "assessment-right")
+    first = reconcile_knowledge(repo, config)
+    _git_ok(repo, "checkout", "merge-right")
+    _git_ok(repo, "merge", "--no-edit", "assessment-right")
+    _git_ok(repo, "merge", "--no-edit", "assessment-left")
+    second = reconcile_knowledge(repo, config)
+    assert first.valid and second.valid
+    assert first.entries[0].assessment == second.entries[0].assessment == "needs-recheck"
+    assert [a.event for a in first.entries[0].assessments] == [
+        a.event for a in second.entries[0].assessments
+    ]
+
+
+def test_concurrent_duplicate_normalization_converges_without_double_authority(
+    tmp_path: Path,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from wade.models.config import KnowledgeConfig
+    from wade.services.knowledge_reconcile import reconcile_knowledge
+    from wade.utils.knowledge_events import decode_history
+
+    repo = _init_repo(tmp_path)
+    (repo / "KNOWLEDGE.md").write_text(
+        "## claim-a | 2026-10-14 | implementation\n\nSame claim.\n\n---\n\n"
+        "## claim-z | 2026-10-14 | plan\n\nSame claim.\n\n---\n"
+    )
+    (repo / "KNOWLEDGE.ratings.jsonl").write_text("")
+    _git_ok(repo, "add", "-A")
+    _git_ok(repo, "commit", "-m", "test: duplicate baseline")
+    left = _owned_branch(repo, "alias-left")
+    right = _owned_branch(repo, "alias-right")
+    config = KnowledgeConfig(enabled=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reports = list(
+            pool.map(lambda root: reconcile_knowledge(root, config, apply=True), (left, right))
+        )
+    assert all(report.normalization_events_appended == 1 for report in reports)
+    assert (left / "KNOWLEDGE.ratings.jsonl").read_bytes() == (
+        right / "KNOWLEDGE.ratings.jsonl"
+    ).read_bytes()
+    for root in (left, right):
+        _git_ok(root, "commit", "-am", "docs: normalize exact duplicate")
+    _git_ok(repo, "merge", "--no-edit", "alias-left")
+    _git_ok(repo, "merge", "--no-edit", "alias-right")
+    history = decode_history((repo / "KNOWLEDGE.ratings.jsonl").read_text())
+    assert not history.problems and len(history.events) == 1
+    report = reconcile_knowledge(repo, config)
+    assert all(entry.assessment == "unverified" for entry in report.entries)
+    assert report.duplicate_groups[0].representative_id == "claim-a"

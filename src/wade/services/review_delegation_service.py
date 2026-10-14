@@ -291,6 +291,7 @@ def _run_review_delegation(
     relaunch_operand: str | None = None,
     relaunch_skills: list[str] | None = None,
     relaunch_staged: bool = False,
+    knowledge_plan_filename: str | None = None,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
 
@@ -463,6 +464,7 @@ def _run_review_delegation(
         explicit_timeout=explicit_timeout,
         operation=_OPERATION_LABELS.get(command),
         relaunch_command=relaunch_command,
+        knowledge_plan_filename=knowledge_plan_filename,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
@@ -638,6 +640,7 @@ def review_plan(
             # the relaunch hint has to carry the file this run was reviewing.
             relaunch_operand=plan_file,
             relaunch_skills=skills,
+            knowledge_plan_filename=plan_path.name,
         )
     except (SkillInvocationError, ValueError, OSError) as exc:
         console.error(str(exc))
