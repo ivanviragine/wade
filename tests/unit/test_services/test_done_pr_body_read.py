@@ -419,7 +419,7 @@ def test_reference_in_outgoing_projection_does_not_suppress_real_closing_ref(
     if owner == "summary":
         expected = "Closes #42\n\n" + prefix + summary + "\n\n" + tail
     elif owner == "review-status":
-        expected = "Closes #42\n\n" + prefix + summary + "\n\n\n\n" + tail
+        expected = "Closes #42\n\n" + prefix + "\n\n" + tail + "\n\n" + summary
     else:
         expected = "Closes #42\n\n" + prefix + tail + "\n\n" + summary
     with _finalizer(tmp_path, review_enabled=False) as (run, calls):
@@ -649,6 +649,60 @@ def test_atomic_finalizer_preserves_valid_html_projection_without_temporary_clea
         assert plan in result
         if not review_enabled:
             assert result == body
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result
+
+
+@pytest.mark.parametrize("usage_present", [False, True])
+@pytest.mark.parametrize("retain_summary", [False, True])
+def test_new_review_anchors_only_to_surviving_summary(
+    tmp_path: Path, usage_present: bool, retain_summary: bool
+) -> None:
+    old = "<!-- wade:summary:start -->\nOld.\n<!-- wade:summary:end -->"
+    requirements = "## Requirements\nKeep human requirements."
+    human = "\n\n## Summary\nHuman summary." if retain_summary else ""
+    usage = "<!-- wade:impl-usage:start -->\nUsage.\n<!-- wade:impl-usage:end -->"
+    body = "Closes #42\n\n" + old + "\n\n" + requirements + human
+    if usage_present:
+        body += "\n\n" + usage
+    with _finalizer(tmp_path) as (run, calls):
+        (tmp_path / "worktree" / "PR-SUMMARY.md").unlink()
+        calls.read.return_value = body
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert requirements in result
+        review_position = result.index("<!-- wade:review-status:start -->")
+        if retain_summary:
+            assert result.index("<!-- wade:summary:start -->") < review_position
+            assert review_position < result.index(requirements)
+        else:
+            assert "<!-- wade:summary:start -->" not in result
+            assert result.index(requirements) < review_position
+        if usage_present:
+            assert review_position < result.index(usage)
+        calls.read.return_value = result
+        assert run() is True
+        assert calls.write.call_args.args[2] == result
+
+
+@pytest.mark.parametrize("usage_present", [False, True])
+def test_new_summary_skips_removed_review_anchor(tmp_path: Path, usage_present: bool) -> None:
+    old = "<!-- wade:review-status:start -->\nOld.\n<!-- wade:review-status:end -->"
+    requirements = "## Requirements\nKeep human requirements."
+    usage = "<!-- wade:impl-usage:start -->\nUsage.\n<!-- wade:impl-usage:end -->"
+    body = "Closes #42\n\n" + old + "\n\n" + requirements
+    if usage_present:
+        body += "\n\n" + usage
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = body
+        assert run() is True
+        result = calls.write.call_args.args[2]
+        assert "<!-- wade:review-status:start -->" not in result
+        summary_position = result.index("<!-- wade:summary:start -->")
+        assert result.index(requirements) < summary_position
+        if usage_present:
+            assert summary_position < result.index(usage)
         calls.read.return_value = result
         assert run() is True
         assert calls.write.call_args.args[2] == result

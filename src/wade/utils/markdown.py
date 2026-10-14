@@ -478,12 +478,16 @@ def replace_owned_sections(
                 continue
             position = len(assembled)
             for anchor in item.after:
+                if anchor in projections and not projections[anchor]:
+                    continue
                 anchor_slot = slots.get(anchor)
                 if anchor_slot is not None and anchor_slot in assembled:
                     position = assembled.index(anchor_slot) + len(anchor_slot)
                     break
             else:
                 for anchor in item.before:
+                    if anchor in projections and not projections[anchor]:
+                        continue
                     anchor_slot = slots.get(anchor)
                     if anchor_slot is not None and anchor_slot in assembled:
                         position = assembled.index(anchor_slot)

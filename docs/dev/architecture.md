@@ -1112,7 +1112,10 @@ multiplicity in the rendered scan. If an edit reclassifies one as literal text
 ownership across parser contexts.
 Missing Summary/review projections use real managed anchors: Summary precedes existing
 review status or the first implementation usage; missing review status follows
-Summary, otherwise precedes usage. Repeated unrelated blocks remain opaque.
+Summary, otherwise precedes usage. An outgoing projection whose final content
+and retained ownership evidence are both absent cannot serve as an insertion
+anchor. Retained empty ownership pairs remain valid anchors. Repeated unrelated
+blocks remain opaque.
 Internal source slots retain original positional anchors while excluding selected
 outgoing Summary/review text from the existing reference helper. New projection
 examples are inserted afterward. No slot-bearing body is parsed for ownership or
