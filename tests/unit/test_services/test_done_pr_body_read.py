@@ -338,3 +338,25 @@ def test_finalizer_retries_repaired_remote_body_with_fresh_read(tmp_path: Path) 
         assert calls.read.call_count == 2
         assert "Fresh user note." in calls.write.call_args.args[2]
         assert "Broken." not in calls.write.call_args.args[2]
+
+
+def test_finalizer_bounds_legacy_summary_and_replaces_changed_projection(tmp_path: Path) -> None:
+    usage = "<!-- wade:impl-usage:start -->\nUsage.\n<!-- wade:impl-usage:end -->"
+    body = "Closes #42\n\n## Summary\nOld legacy text.\n\n## Requirements\nKeep.\n\n" + usage
+    expected = (
+        "Closes #42\n\n## Requirements\nKeep.\n\n"
+        "<!-- wade:summary:start -->\n## Summary\n\nNew implementation summary.\n"
+        "<!-- wade:summary:end -->\n\n" + usage
+    )
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = body
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        (tmp_path / "worktree" / "PR-SUMMARY.md").write_text("Changed summary.\n", encoding="utf-8")
+        calls.read.return_value = expected
+        assert run() is True
+        changed = expected.replace("New implementation summary.", "Changed summary.")
+        assert calls.write.call_args.args[2] == changed
+        calls.read.return_value = changed
+        assert run() is True
+        assert calls.write.call_args.args[2] == changed

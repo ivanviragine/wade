@@ -350,3 +350,9 @@ def test_scanner_supports_matching_longer_fences_and_opaque_marker_examples() ->
 def test_legacy_crlf_removal_preserves_unrelated_tail_without_final_newline() -> None:
     body = "Prefix.\r\n\r\n## Summary\r\nOld.\r\n## Tasks\r\nKeep."
     assert strip_legacy_section(body, "Summary") == "Prefix.\r\n\r\n## Tasks\r\nKeep."
+
+
+@pytest.mark.parametrize("separator", ["\v", "\f", "\x85", "\u2028", "\u2029"])
+def test_non_markdown_line_separators_do_not_create_legacy_headings(separator: str) -> None:
+    body = "User text." + separator + "## Summary\nKeep this paragraph."
+    assert strip_legacy_section(body, "Summary") == body

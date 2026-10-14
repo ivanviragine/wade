@@ -214,7 +214,9 @@ def scan_markdown_structure(body: str) -> MarkdownStructure:
     active: tuple[str, int] | None = None
     fence: tuple[str, int, int] | None = None
     offset = 0
-    for line in body.splitlines(keepends=True):
+    # Markdown lines end at CR/LF, not Python's broader Unicode separators.
+    for match in re.finditer(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z", body):
+        line = match.group()
         text = line.rstrip("\r\n")
         if fence is not None:
             char, length, start = fence
