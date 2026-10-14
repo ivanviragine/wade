@@ -1335,3 +1335,206 @@ class TestAnalyzeDepsPermissionMode:
         assert result is not None
         request = mock_delegate.call_args[0][0]
         assert request.permission_mode == PermissionMode.YOLO
+
+
+def test_dependencies_migration_preserves_plan_and_fenced_examples() -> None:
+    body = (
+        "<!-- wade:plan:start -->\n"
+        "## Dependencies\n"
+        "Requirements.\n"
+        "<!-- wade:plan:end -->\n"
+        "\n"
+        "~~~markdown\n"
+        "## Dependencies\n"
+        "Example.\n"
+        "~~~\n"
+        "After."
+    )
+    assert strip_deps_section(body) == body
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    ["<!-- wade:plan:end -->", "```\nUnclosed.", "## Dependencies\nA.\n## Dependencies\nB."],
+)
+def test_dependency_refusal_does_not_count_success_and_continues(malformed: str) -> None:
+    provider = MagicMock()
+    provider.read_task.side_effect = [
+        Task(id="1", title="Broken", body=malformed),
+        Task(id="2", title="Valid", body="Keep."),
+    ]
+    assert (
+        apply_deps_to_issues(provider, ["1", "2"], [DependencyEdge(from_task="1", to_task="2")])
+        == 1
+    )
+    provider.update_task.assert_called_once()
+    assert provider.update_task.call_args.args[0] == "2"
+
+
+def test_dependencies_owned_pair_preserves_unmarked_section_and_plan() -> None:
+    provider = MagicMock()
+    body = (
+        "## Dependencies\n"
+        "User requirements.\n"
+        "<!-- wade:deps:start -->\n"
+        "Old.\n"
+        "<!-- wade:deps:end -->\n"
+        "<!-- wade:plan:start -->\n"
+        "## Dependencies\n"
+        "Plan requirements.\n"
+        "<!-- wade:plan:end -->"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], [DependencyEdge(from_task="1", to_task="2")]) == 1
+    assert provider.update_task.call_args.kwargs["body"] == body.replace(
+        "Old.", "## Dependencies\n\n**Depends on:** #1"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == body.replace(
+        "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->",
+        "<!-- wade:deps:start -->\n\n<!-- wade:deps:end -->",
+    )
+
+
+def test_dependency_update_repeat_and_changed_edges_preserve_full_body() -> None:
+    provider = MagicMock()
+    body = (
+        "User requirement #1.\n"
+        "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->\n"
+        "<!-- wade:plan:start -->\n## Dependencies\nPlan requirement #1.\n<!-- wade:plan:end -->"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    edges = [DependencyEdge(from_task="1", to_task="2")]
+    assert apply_deps_to_issues(provider, ["2"], edges) == 1
+    expected = body.replace("Old.", "## Dependencies\n\n**Depends on:** #1")
+    assert provider.update_task.call_args.kwargs["body"] == expected
+    provider.update_task.reset_mock()
+    provider.read_task.return_value = Task(id="2", title="UI", body=expected)
+    assert apply_deps_to_issues(provider, ["2"], edges) == 0
+    provider.update_task.assert_not_called()
+    assert apply_deps_to_issues(provider, ["2"], [DependencyEdge(from_task="3", to_task="2")]) == 1
+    assert provider.update_task.call_args.kwargs["body"] == body.replace(
+        "Old.", "## Dependencies\n\n**Depends on:** #3"
+    )
+
+
+def test_empty_dependency_removal_preserves_human_section_on_repeat() -> None:
+    provider = MagicMock()
+    human = "## Dependencies\nHuman requirements.\n"
+    old = "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->"
+    expected = human + "<!-- wade:deps:start -->\n\n<!-- wade:deps:end -->"
+    provider.read_task.return_value = Task(id="2", title="UI", body=human + old)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == expected
+    provider.read_task.return_value = Task(id="2", title="UI", body=expected)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+    edges = [DependencyEdge(from_task="1", to_task="2")]
+    assert apply_deps_to_issues(provider, ["2"], edges) == 1
+    assert provider.update_task.call_args.kwargs["body"] == human + (
+        "<!-- wade:deps:start -->\n## Dependencies\n\n**Depends on:** #1\n<!-- wade:deps:end -->"
+    )
+
+
+def test_dependency_update_preserves_blockquote_list_lazy_continuation() -> None:
+    provider = MagicMock()
+    example = (
+        "- > Example\nlazy continuation\n"
+        "  <!-- wade:deps:start -->\n  Keep.\n  <!-- wade:deps:end -->\n"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=example)
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+    edges = [DependencyEdge(from_task="1", to_task="2")]
+    assert apply_deps_to_issues(provider, ["2"], edges) == 1
+    expected = example + (
+        "\n<!-- wade:deps:start -->\n## Dependencies\n\n**Depends on:** #1\n<!-- wade:deps:end -->"
+    )
+    assert provider.update_task.call_args.kwargs["body"] == expected
+    provider.read_task.return_value = Task(id="2", title="UI", body=expected)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], edges) == 0
+    provider.update_task.assert_not_called()
+
+
+@pytest.mark.parametrize("quote", [">", "> >"])
+def test_dependency_quoted_code_cannot_hide_embedded_plan(quote: str) -> None:
+    provider = MagicMock()
+    plan = "\n".join(
+        [
+            "  <!-- wade:plan:start -->",
+            "  ## Dependencies",
+            "  Requirements.",
+            "  <!-- wade:plan:end -->",
+        ]
+    )
+    body = f"## Dependencies\nLegacy.\n- Text.\n  {quote}     Code.\nHuman text.\n" + plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=plan)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+
+
+def test_dependencies_preserve_plan_spanning_multiline_html_blocks() -> None:
+    provider = MagicMock()
+    plan = (
+        "<!-- wade:plan:start -->\n\n## Dependencies\nKeep requirements.\n\n"
+        "</details>\n<!-- wade:plan:end -->"
+    )
+    body = "## Dependencies\nLegacy.\n<details>\n" + plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=plan)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "boundary", ["  ## Requirements\nKeep.", "Requirements\n===\nKeep.", "Requirements\n---\nKeep."]
+)
+def test_dependencies_bound_legacy_at_actual_noneligible_heading(boundary: str) -> None:
+    provider = MagicMock()
+    body = "## Dependencies\nOld.\n\n" + boundary
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == boundary
+    provider.read_task.return_value = Task(id="2", title="UI", body=boundary)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_empty_dependencies_preserve_heading_exposed_by_removal(marked: bool) -> None:
+    provider = MagicMock()
+    old = "## Dependencies\n<details>\nOld.\n</details>\n"
+    if marked:
+        old = "<!-- wade:deps:start -->\n" + old + "<!-- wade:deps:end -->\n"
+    plan = "<!-- wade:plan:start -->\nKeep plan.\n<!-- wade:plan:end -->\n"
+    human = "## Dependencies\nKeep human requirements."
+    provider.read_task.return_value = Task(id="2", title="UI", body=old + plan + human)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    result = provider.update_task.call_args.kwargs["body"]
+    assert plan in result
+    assert human in result
+    assert "Old." not in result
+    provider.read_task.return_value = Task(id="2", title="UI", body=result)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+
+
+def test_dependencies_refuse_context_shift_hiding_unrelated_plan() -> None:
+    provider = MagicMock()
+    plan = "  <!-- wade:plan:start -->\n  Keep.\n  <!-- wade:plan:end -->"
+    body = "- Example\n## Dependencies\nOld.\n" + plan
+    provider.read_task.return_value = Task(id="2", title="UI", body=body)
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()

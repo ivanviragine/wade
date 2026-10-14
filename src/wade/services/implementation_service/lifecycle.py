@@ -34,7 +34,6 @@ from wade.services.implementation_service.bootstrap import (
     _identify_session_dirty_files,
 )
 from wade.services.implementation_service.cleanup import _preserve_session_data
-from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.ui import prompts
 from wade.ui.console import console
 
@@ -740,45 +739,10 @@ def _render_review_status(status: ReviewStatus) -> str:
 
 
 def _strip_summary_section(body: str) -> str:
-    """Remove an existing ``## Summary`` section from a PR body.
+    """Remove only a uniquely verified unmarked top-level legacy Summary."""
+    from wade.utils.markdown import strip_legacy_section
 
-    Handles the *legacy* unmarked ``## Summary`` heading (written before #357
-    wrapped the section in ``wade:summary`` markers). The marked block is
-    removed separately via ``remove_marker_block``.
-
-    The body may contain an implementation-usage block delimited by HTML
-    comment markers.  We use that marker as a hard boundary so freeform
-    summary content (which may itself contain ``## `` subheadings) is fully
-    removed without eating into the impl-usage block.  The caller then
-    re-inserts the new summary *before* any impl-usage block.
-    """
-    idx = body.find("\n## Summary\n")
-    if idx == -1:
-        # Also check at the very start of the string
-        if body.startswith("## Summary\n"):
-            idx = 0
-        else:
-            return body
-
-    before = body[:idx]
-
-    # Find the next structural boundary after the summary heading.
-    # Prefer the impl-usage HTML marker; fall back to the next ## heading.
-    marker_idx = body.find(IMPL_USAGE_MARKER_START, idx)
-    if marker_idx != -1:
-        after = body[marker_idx:]
-    else:
-        # No impl-usage marker — look for next ## heading after the summary title
-        summary_title_end = idx + len("\n## Summary\n")
-        if body.startswith("## Summary\n"):
-            summary_title_end = len("## Summary\n")
-        next_heading = re.search(r"(?:^|\n)## ", body[summary_title_end:])
-        after = body[summary_title_end + next_heading.start() :] if next_heading else ""
-
-    result = before.rstrip("\n")
-    if after:
-        result = result + "\n\n" + after
-    return result if result else ""
+    return strip_legacy_section(body, "Summary")
 
 
 def _apply_pr_refs(
