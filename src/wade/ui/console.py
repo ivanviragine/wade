@@ -153,6 +153,16 @@ class Console:
         """Dim hint text with → arrow."""
         self.out.print(f"[hint]    {self.ARROW} {message}[/]")
 
+    def command(self, command: str) -> None:
+        """Emit raw shell text as one unframed stdout line, independent of width.
+
+        Callers shell-quote argument data before passing raw, non-Markup-escaped
+        text. No prompt, indentation, highlighting, wrapping or cropping is
+        added. Explanations belong in ``hint``; physical-newline paths are not
+        supported by this single-line command contract.
+        """
+        self.raw(command + "\n")
+
     def empty(self) -> None:
         """Print a blank line."""
         self.out.print()

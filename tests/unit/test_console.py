@@ -89,3 +89,16 @@ def test_dep_tree_bracket_title_renders_without_crash(
     # No MarkupError, and the bracketed title text survives to output.
     assert "feat:" in captured.out
     assert "fix: child" in captured.out
+
+
+@pytest.mark.parametrize("width", [40, 80])
+def test_command_preserves_raw_shell_text_on_one_stdout_line(
+    width: int, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    console = Console()
+    monkeypatch.setattr(console.out, "_width", width)
+    text = "git -C '" + "long owner path " * 12 + "[red] [/] ; $(echo unchanged)' status"
+    console.command(text)
+    output = capsys.readouterr()
+    assert output.out == text + "\n"
+    assert output.err == ""

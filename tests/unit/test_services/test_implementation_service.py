@@ -2252,7 +2252,8 @@ class TestPullMainAfterMerge:
         # Pull succeeded, so the only warning comes from the failed stash apply.
         mock_apply.assert_called_once_with(_POST_MERGE_STASH_SHA, tmp_path)
         mock_console.warn.assert_called_once()
-        mock_console.hint.assert_called_once()
+        assert mock_console.hint.call_count == 3
+        assert mock_console.command.call_count == 3
 
     def test_main_branch_lookup_failure_rolls_back_moves_without_stashing(
         self, tmp_path: Path
@@ -2349,12 +2350,13 @@ class TestPullMainAfterMerge:
         pop.assert_not_called()
         drop.assert_not_called()
         warning = output.warn.call_args.args[0]
-        hint = output.hint.call_args.args[0]
+        hints = " ".join(call.args[0] for call in output.hint.call_args_list)
+        commands = [call.args[0] for call in output.command.call_args_list]
         assert _POST_MERGE_STASH_SHA in warning and _POST_MERGE_STASH_MESSAGE in warning
         assert "original stash unavailable" in warning
-        assert f"git -C {shlex.quote(str(root))} stash apply {_POST_MERGE_STASH_SHA}" in hint
-        assert "resolve them before retrying" in hint
-        assert "stash drop" not in hint
+        assert f"git -C {shlex.quote(str(root))} stash apply {_POST_MERGE_STASH_SHA}" in commands
+        assert "resolve them before retrying" in hints
+        assert all("stash drop" not in command for command in commands)
 
     def test_untracked_retry_failure_restores_files(self, tmp_path: Path) -> None:
         """Core regression: when the retry pull fails after moving untracked

@@ -797,3 +797,9 @@ For issue #480 sandbox tests, the autouse conftest fixture clears both SANDBOX_S
 `drop_stash_by_sha` verifies a positional stash ref before deleting it in a separate Git command; a competing push after verification can still shift that ref. Callers that must never delete another worktree's entry need to retain the owned stash after applying its captured SHA rather than assume verification makes deletion atomic. Inspect SHA/ref/message pairs and verify the chosen entry before manual cleanup.
 
 ---
+
+## 11ab5583cc4d | 2026-10-14 | implementation | tags: rich, shell, testing | Issue #540
+
+Rich can insert literal newlines inside correctly shell-quoted arguments; shell quoting protects parsing, not later display transformations. Distinguish native terminal soft wrapping from captured bytes, and validate emitted physical command lines before parsing argv: unrelated debug logs can contain the intact path and mask a broken recovery hint.
+
+---
