@@ -16,9 +16,11 @@ from pathlib import Path
 
 import structlog
 from pydantic import BaseModel
+from rich.markup import escape
 
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
+from wade.git import stash as git_stash
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
@@ -225,50 +227,63 @@ def _cleanup_empty_backup_dirs(main_root: Path) -> None:
         backup_root.rmdir()
 
 
-def _pop_stash_or_warn(main_root: Path) -> None:
-    """Pop the stash taken during the resolve loop, warning on a pop conflict."""
-    pop_result = git_repo.stash_pop(main_root)
-    if pop_result.returncode != 0:
-        console.warn("Could not restore stashed local changes.")
-        console.hint("Resolve conflicts, then inspect `git stash list`.")
+def _restore_stash_or_warn(main_root: Path, stash_sha: str, stash_message: str) -> None:
+    """Apply exactly the owned stash once; preserve any remaining entry for cleanup."""
+    location = escape(str(main_root))
+    identity = escape(f"{stash_sha} ({stash_message})")
+    command = f"git -C {shlex.quote(str(main_root))}"
+    try:
+        result = git_stash.apply_stash_by_sha(stash_sha, main_root)
+        diagnostic = result.stderr.strip() or result.stdout.strip()
+        restored = result.returncode == 0
+    except GitError as exc:
+        diagnostic = str(exc)
+        restored = False
+    if restored:
+        # drop_stash_by_sha verifies a positional ref before a separate drop.
+        # Another worktree can push between them, so never delete here.
+        console.warn(
+            f"Restored local changes in {location}; any remaining entry for stash {identity} "
+            "is retained (automatic cleanup skipped)."
+        )
+        console.hint(
+            escape(
+                f"Inspect {command} stash list --format='%H %gd %gs'; verify the "
+                "selected entry matches this SHA before manually dropping its ref."
+            )
+        )
+        return
+    console.warn(f"Could not restore stash {identity} in {location}: {escape(diagnostic)}")
+    console.hint(
+        escape(
+            f"Inspect conflicts with {command} status and resolve them before retrying "
+            f"{command} stash apply {stash_sha}. Inspect "
+            f"{command} stash list --format='%H %gd %gs' for any retained entry; "
+            "if its object is unavailable, recover it before applying. No stash was dropped."
+        )
+    )
 
 
 def _pull_main_after_merge(repo_root: Path) -> None:
-    """Fast-forward the local main branch after a successful PR merge — atomically.
+    """Best-effort fast-forward of the main checkout after a completed PR merge.
 
-    **Contract:** if main cannot be fast-forwarded, the working tree is left
-    *exactly as it was on entry* (a true no-op) and a warning is printed. On
-    success, main is advanced and any set-aside untracked files are preserved in
-    ``.wade/pull-backups`` with a notice (unchanged happy-path behavior). This
-    atomicity covers the function's own **logical** failure paths (aborted pulls,
-    a failed stash, restorable moves); it is *not* crash-safe against the process
-    being killed mid-sequence — there is no journal/resume, so a hard kill
-    between two ``shutil.move`` calls could still strand files.
+    A bounded loop resolves untracked collisions by moving files into
+    ``.wade/pull-backups`` and tracked-change obstructions by creating one named
+    stash. Untracked files are deliberately not stashed: a successful pull may
+    introduce them as tracked files, making untracked stash restoration collide.
 
-    Two failure classes are resolved by a small bounded loop
-    (:data:`MAX_RESOLVE_ATTEMPTS`), and they compose because they act on disjoint
-    path sets:
+    Carry the owned stash SHA through every retry and apply that exact object
+    once, on either success or rollback. Linked worktrees share a stash stack,
+    so never pop its top entry or hold a positional ref. Successful application
+    retains the owned entry for manual cleanup because positional deletion is
+    not atomic with identity verification. Apply failures retain any available
+    entry and report recovery instead of touching another worktree's stash.
 
-    - **Untracked collisions** (wade-managed files installed by ``wade init`` as
-      untracked, then introduced as *tracked* by the merged PR) → each colliding,
-      still-present file is moved aside into ``.wade/pull-backups`` and the pull
-      retried. We deliberately do **not** ``git stash --include-untracked`` here:
-      after a successful pull brings the file back *tracked*, ``git stash pop``
-      would collide ("already exists, no checkout") on the common, expected wade
-      happy path (a previously-untracked managed file becoming tracked), turning
-      today's clean success into a noisy stash-conflict on essentially every
-      merge that introduces a managed file. Move-aside keeps the happy path
-      clean; the rollback below is what makes it atomic. Do not "fix" this back.
-    - **Local changes** to tracked files (e.g. ``wade init`` touching
-      ``.gitignore``) → ``git stash`` (at most once), retry the pull, pop later.
-
-    On any terminal failure (cap reached, unknown error, or no movable file left
-    to make progress), the moved files are restored to their original paths and
-    any stash is popped **before** warning, so the tree returns to entry state.
-
-    Pulling main only makes sense in the *main checkout*: a ``git pull`` run from
-    a linked worktree (on a feature branch) would target the wrong branch, so we
-    resolve the main checkout root first.
+    On terminal pull failure, restore moved files before applying the owned
+    stash and printing the pull warning. Rollback is best effort, not an exact
+    no-op when restoration fails, and not crash-safe. On pull success, keep the
+    untracked backups and report them. All operations route to the main
+    checkout; local recovery warnings do not undo the completed remote merge.
     """
     main_root = git_repo.main_checkout_root(repo_root)
 
@@ -277,7 +292,7 @@ def _pull_main_after_merge(repo_root: Path) -> None:
         return
 
     moved: list[tuple[Path, Path]] = []
-    stashed = False
+    stash_identity: tuple[str, str] | None = None
 
     for _ in range(MAX_RESOLVE_ATTEMPTS):
         stderr = result.stderr
@@ -292,13 +307,24 @@ def _pull_main_after_merge(repo_root: Path) -> None:
                 break
             moved.extend(newly_moved)
         elif _LOCAL_CHANGES_MARKER in stderr:
-            if stashed:
+            if stash_identity is not None:
                 # Already stashed once; a second local-changes error means the
                 # stash did not clear the obstruction, so re-stashing would loop.
                 break
-            if git_repo.stash(main_root).returncode != 0:
+            try:
+                main_branch = git_repo.get_current_branch(main_root)
+                stash_identity = git_stash.create_named_stash("post-merge", main_branch, main_root)
+            except GitError as exc:
+                # Creation may have succeeded before identity lookup failed.
+                # Preserve any possible entry; never guess a SHA or pop it.
+                console.warn(escape(f"Could not create post-merge stash in {main_root}: {exc}"))
+                console.hint(
+                    escape(
+                        f"Inspect git -C {shlex.quote(str(main_root))} stash list "
+                        "--format='%H %gs' before recovering any possible stash by SHA."
+                    )
+                )
                 break
-            stashed = True
         else:
             # Unknown error class — nothing actionable to resolve.
             break
@@ -306,21 +332,21 @@ def _pull_main_after_merge(repo_root: Path) -> None:
         result = git_repo.pull_ff_only(main_root)
         if result.returncode == 0:
             # Success → finalize: keep moved files in the backup dir (with the
-            # existing notice) and pop any stash we took.
+            # existing notice) and apply only the stash identity we captured.
             if moved:
                 console.warn("Backed up untracked files that collided with the merge:")
                 for _original, backup in moved:
                     console.detail(str(backup))
-            if stashed:
-                _pop_stash_or_warn(main_root)
+            if stash_identity is not None:
+                _restore_stash_or_warn(main_root, *stash_identity)
             return
 
-    # Terminal failure → roll back to the entry state (a failed sync is a no-op),
-    # then warn. Restore moved files first, pop any stash, and best-effort clear
+    # Terminal failure → best-effort rollback before warning. Restore moved
+    # files first, apply the owned stash, and best-effort clear
     # the now-empty backup dirs so nothing is stranded in .wade/pull-backups.
     _restore_backed_up(moved)
-    if stashed:
-        _pop_stash_or_warn(main_root)
+    if stash_identity is not None:
+        _restore_stash_or_warn(main_root, *stash_identity)
     if moved:
         _cleanup_empty_backup_dirs(main_root)
     _warn_pull_sync_failed()

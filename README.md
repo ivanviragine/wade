@@ -642,6 +642,16 @@ review outcome — reviewed at `<sha>`, reviewer changed, skipped via
 binding's pass cap. A skipped, stale-reviewer, or never-run review is therefore
 visible to reviewers rather than hidden in worktree state.
 
+After a PR merge, WADE updates the main checkout and restores any tracked local
+changes using the exact stash SHA it captured, even if another worktree pushes
+its own stash meanwhile. WADE preserves any remaining owned stash entry after
+restoration because removing a positional stash entry can race with another push. Inspect the
+reported checkout with `git stash list --format='%H %gd %gs'` and verify the
+selected entry matches the reported SHA before manually dropping its ref. If
+restoration conflicts or its object is unavailable, follow the printed recovery
+instructions; resolve conflicts before retrying the reported `stash apply <sha>`
+command. Local recovery warnings do not mean the remote PR merge failed.
+
 ## Task Providers
 
 WADE can pull tasks from three backends — pick one when you run `wade init`:

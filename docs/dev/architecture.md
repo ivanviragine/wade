@@ -1542,6 +1542,20 @@ including under YOLO. Successful vote flushing and cleanup remain required.
 
 `wade implementation-session done` handles PR creation / update. The post-work lifecycle prompt handles the merge decision.
 
+After a successful remote merge, `lifecycle._pull_main_after_merge()` routes its
+bounded pull-recovery loop to the main checkout. It stashes tracked changes
+once with `git.stash.create_named_stash`, using the main checkout's actual
+branch, and carries the returned SHA/message through success and rollback.
+Restoration applies that exact SHA once; it never pops the shared stack or
+falls back to another entry. Successful apply preserves any remaining owned
+entry for manual cleanup: the shared `drop_stash_by_sha` helper verifies a positional ref
+before a separate drop, leaving a concurrent-push window this caller avoids by
+not deleting. Conflicts, unavailable identities, and stash-creation failures
+report recovery while preserving any remaining entries. Untracked move-aside
+and rollback ordering stay intact; local rollback is best effort rather than
+crash-safe or an exact no-op when restoration fails. Local warnings do not
+change the already-successful remote merge result.
+
 ## Determinism via Services
 
 All deterministic operations — git commands, state transitions, file manipulation, API calls — **must live in service/utility code**, never in AI agent reasoning. Agents are non-deterministic; code is deterministic. The boundary is:
