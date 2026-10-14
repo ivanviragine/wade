@@ -1051,11 +1051,14 @@ HEAD, so any sha-keyed check must precede it):
    review evidence.
 5. **documentation decision** (both) — require an `updated` or reasoned
    `not-needed` receipt for the pre-sync HEAD and session kind.
-6. **sync** (both) — auto-sync through the existing service and refuse only on
-   conflict.
+6. **sync** (both) — auto-sync through the existing service and refuse conflicts.
 7. **knowledge validity** (both, when enabled) — runs after sync so a union-merge
-   corruption cannot ship.
-8. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing
+   corruption cannot ship. Pin the reviewed tip and accepted actual base merge;
+   late authored knowledge, ambiguous merged claims/history or further HEAD
+   changes require fresh closing checks. The knowledge-only comparison does not
+   certify arbitrary non-knowledge tree equivalence.
+8. `_done_via_pr` writes `.wade/done@<approved HEAD>` immediately before pushing
+   that immutable SHA when knowledge gates are enabled,
    and projects the review outcome into the PR body.
    The existing-PR body callback preserves `None` for a failed read; the shared
    body helper refuses to transform or write it, while an empty string remains
@@ -1349,8 +1352,13 @@ uses blob identity across receipt commits/rebase/squash. Main/detached/bounded
 workers persist ignored Git-common-dir owner-bound proposals, never a generic
 tracked main spool. Only a verified original parent/task/content association can
 be accepted, and fresh committed proof is required for correctness. Bootstrap
-never adopts foreign feedback. Shared done gates reconcile after sync and after
-recovery merges, reject corruption/late dirt, and clear unsafe done markers.
+never adopts foreign feedback. A separately frozen original author association
+binds worktree/branch/provider/task and cannot move on branch switch or refresh.
+Shared acceptance records converge under the queue lock. Shared done gates
+reconcile after sync, pin the approved candidate, and push its explicit SHA;
+late authored knowledge or ambiguous knowledge merges require fresh closing
+checks. Recovery merges after the pin cannot inherit an old review. Invalid or
+changed displayed claims withhold committed labels; unsafe done markers clear.
 See [knowledge.md](knowledge.md) for proof types, concurrency, exact-duplicate
 normalization, compatibility, ownership and explicit recovery commands.
 

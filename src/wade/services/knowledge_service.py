@@ -1015,12 +1015,17 @@ def get_annotated_knowledge(
             assert entry.date is not None  # entry_id is always accompanied by a date
             stale_part = f"/stale:{stale}" if stale > 0 else ""
             state = states.get(entry.entry_id)
+            display_matches = state is not None and state.body_digest == body_digest(entry)
             assessment = (
                 state.assessment
-                if state and state.body_digest == body_digest(entry)
+                if state is not None and display_matches
+                else "needs-recheck"
+                if state is not None and state.assessments
                 else "unverified"
             )
-            publication = state.publication if state else "unavailable"
+            publication = (
+                state.publication if state is not None and display_matches else "unavailable"
+            )
             heading = (
                 f"## {id_part}{entry.date} | {entry.heading_rest} "
                 f"[utility:+{up}/-{down}{stale_part}; {assessment}; {publication}]"
@@ -1029,14 +1034,27 @@ def get_annotated_knowledge(
             raw_lines[0] = heading
             result_parts.append("\n".join(raw_lines))
             if state:
-                result_parts.extend("\n> " + reason + "\n" for reason in state.reasons)
+                if not display_matches:
+                    result_parts.append(
+                        "\n> Displayed claim differs from committed content; prior receipts "
+                        "are historical and do not establish correctness/publication "
+                        "for this text.\n"
+                    )
+                else:
+                    result_parts.extend("\n> " + reason + "\n" for reason in state.reasons)
                 for assessment_report in state.assessments:
                     if not all_history and not assessment_report.active:
                         continue
+                    receipt_state = (
+                        "historical for different claim content"
+                        if not display_matches
+                        else "active"
+                        if assessment_report.active
+                        else "replaced historical proof"
+                    )
                     result_parts.append(
                         f"\n> Receipt {assessment_report.event.event_id}: "
-                        f"{assessment_report.publication}; "
-                        f"{'active' if assessment_report.active else 'replaced historical proof'}\n"
+                        f"{assessment_report.publication}; {receipt_state}\n"
                     )
                     result_parts.extend(
                         "\n> "

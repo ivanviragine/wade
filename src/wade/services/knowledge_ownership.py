@@ -12,10 +12,10 @@ from typing import ParamSpec, TypeVar
 
 from wade.git import knowledge as git_knowledge
 from wade.git import repo as git_repo
-from wade.models.knowledge import KnowledgeActor, KnowledgeOperationState
+from wade.models.knowledge import KnowledgeActor, KnowledgeAuthorBinding, KnowledgeOperationState
 from wade.models.session_manifest import SessionManifest
 from wade.utils.filelock import file_lock
-from wade.utils.safe_state import atomic_write_state_file, read_state_file
+from wade.utils.safe_state import atomic_write_state_file, read_state_file, state_file_present
 
 OBSERVER_ENV = "WADE_KNOWLEDGE_OBSERVER"
 
@@ -47,6 +47,74 @@ def _manifest(root: Path) -> SessionManifest | None:
         raise ValueError(
             "Knowledge ownership session manifest is invalid; explicitly refresh it"
         ) from exc
+
+
+def author_association(
+    root: Path,
+    task_id: str,
+    *,
+    create: bool = False,
+    enforce: bool = False,
+    require_existing: bool = False,
+) -> bool:
+    """Validate immutable lifecycle-created ownership; actor reads never create it."""
+    from wade.config.loader import load_config
+
+    root = root.resolve()
+    config = load_config(root)
+    if not config.knowledge.enabled:
+        return False
+    try:
+        main = config.project.main_branch or git_repo.detect_main_branch(root)
+        if (
+            not git_repo.is_worktree(root)
+            or not git_repo.is_head_attached(root)
+            or git_repo.get_current_branch(root) == main
+        ):
+            return False
+        expected = KnowledgeAuthorBinding(
+            repository_id=git_knowledge.repository_identity(root),
+            worktree_root=str(root),
+            branch=git_repo.get_current_branch(root),
+            provider=config.provider.name,
+            task_id=task_id,
+        )
+    except git_repo.GitError:
+        return False  # Template-only/non-Git sessions never obtain write authority.
+
+    def existing() -> KnowledgeAuthorBinding | None:
+        raw = read_state_file(root, (), "knowledge-author.json")
+        if raw is None:
+            if state_file_present(root, (), "knowledge-author.json"):
+                raise ValueError("Knowledge author association is unsafe; preserve it for recovery")
+            return None
+        return KnowledgeAuthorBinding.model_validate_json(raw)
+
+    prior = existing()
+    if prior is not None:
+        if prior != expected and (enforce or create):
+            raise ValueError(
+                "Knowledge worktree/branch/provider/task ownership differs from its original "
+                "association; return to the owning worktree/branch rather than reassigning it"
+            )
+        return prior == expected
+    if require_existing:
+        raise ValueError(
+            "Knowledge author association is missing; explicitly refresh the owning session first"
+        )
+    if not create:
+        return False
+    with file_lock(root / ".wade/knowledge-author.json", create_parent=False, resolve_path=False):
+        prior = existing()
+        if prior is not None:
+            if prior != expected:
+                raise ValueError("Conflicting original knowledge author association")
+            return True
+        if not atomic_write_state_file(
+            root, (), "knowledge-author.json", expected.model_dump_json().encode()
+        ):
+            raise ValueError("Could not persist original knowledge author association")
+    return True
 
 
 @knowledge_operation
@@ -115,6 +183,12 @@ def actor(
             main_branch = git_repo.detect_main_branch(root)
         except git_repo.GitError:
             main_branch = None
+    owns_task = (
+        manifest is not None
+        and manifest.session.value in {"implementation", "review-pr-comments"}
+        and bool(manifest.task_id)
+        and author_association(root, manifest.task_id or "")
+    )
     author = (
         os.environ.get(OBSERVER_ENV) != "1"
         and manifest is not None
@@ -124,6 +198,7 @@ def actor(
         and git_repo.is_head_attached(root)
         and main_branch is not None
         and git_repo.get_current_branch(root) != main_branch
+        and owns_task
     )
     return KnowledgeActor(
         root=str(root),
@@ -131,7 +206,11 @@ def actor(
         operation_id=identity,
         session_id=delegated or session_id or (saved.session_id if saved else None),
         provider=config.provider.name,
-        task_id=manifest.task_id if manifest else None,
+        task_id=(
+            manifest.task_id
+            if manifest is not None and (manifest.session.value == "plan" or owns_task)
+            else None
+        ),
         session_kind=manifest.session.value if manifest else None,
         base_commit=head
         if operation_id or delegated or session_id

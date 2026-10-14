@@ -1089,7 +1089,9 @@ provides explicit disposition; acceptance requires the original parent's verifie
 task/content association and grants no correctness. Check fresh committed proof
 after acceptance. Bounded planning/dependency observations retain their original
 parent or service-verified destination through cleanup; ambiguous multi-task
-observations remain pending. Invalid evidence history is visible in `knowledge get`
+observations remain pending. Switched branches cannot inherit knowledge author authority; repeated same-task
+acceptance reuses shared event bytes. Local prose edits withhold committed labels.
+Invalid evidence history is visible in `knowledge get`
 and withholds correctness labels. Legacy logs remain intact and require explicit owner-verified
 `knowledge proposals recover --worktree <original-parent>`. See
 [the knowledge reference](docs/dev/knowledge.md) for proof types and recovery.

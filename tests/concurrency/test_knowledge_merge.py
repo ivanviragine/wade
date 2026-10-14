@@ -51,6 +51,9 @@ def _init_repo(tmp_path: Path) -> Path:
     # backstop). Committing it in the base is what makes the two-branch merge clean.
     (repo / ".gitattributes").write_text(_GITATTRIBUTES, encoding="utf-8")
     (repo / ".gitignore").write_text(".wade/\n")
+    (repo / ".wade.yml").write_text(
+        "version: 2\nproject:\n  main_branch: main\nknowledge:\n  enabled: true\n"
+    )
     return repo
 
 

@@ -81,7 +81,10 @@ wade knowledge proposals recover --worktree <original-retained-parent> --from-ma
 
 Acceptance requires the original completed parent's persisted task/member
 association, matching repository/provider/task and unchanged claim content.
-It grants no correctness: assess fresh committed evidence separately. Multi-plan
+The original worktree/branch/provider/task author association must also match;
+branch switching or refresh cannot transfer authority. Legacy sessions lacking
+that association need explicit skill refresh. Repeated same-task acceptance reuses
+canonical shared event bytes. It grants no correctness: assess fresh committed evidence separately. Multi-plan
 observations without a specific member remain pending. Bounded plan/dependency
 workers retain their original parent or service-verified task association before
 launch; ambiguous multi-task destinations remain pending after cleanup.
@@ -113,4 +116,7 @@ never transfers a member's assessment. Repeated/concurrent applies converge.
 Check is the default and leaves HEAD, index and working files unchanged, never
 fetching. Unverified/needs-recheck/duplicate entries are valid; structural event
 conflicts and invalid references are errors. Commit knowledge before final review;
-closing gates reconcile after sync and again after any recovery merge.
+closing gates reconcile after sync, pin the approved tip, and push its explicit
+SHA. Late authored commits, ambiguous knowledge merges or a recovery merge after
+that pin require fresh closing review/documentation. Displayed local claim edits
+cannot inherit committed publication or assessment labels.

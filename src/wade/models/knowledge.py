@@ -303,6 +303,15 @@ class DecodedHistory(KnowledgeModel):
     problems: tuple[str, ...] = ()
 
 
+class KnowledgeTreeState(KnowledgeModel):
+    """Read-only closing comparison; never a merged or publishable artifact."""
+
+    header: str
+    entries: dict[str, tuple[str, ...]]
+    typed_history: frozenset[str]
+    legacy_history: tuple[str, ...]
+
+
 class ReconcileReport(KnowledgeModel):
     schema_version: Literal[1] = 1
     checked_commit: str
@@ -332,6 +341,17 @@ class KnowledgeOperationState(KnowledgeModel):
     operation_id: str = Field(min_length=1, max_length=200)
     session_id: str = Field(min_length=1, max_length=200)
     base_commit: ObjectID
+
+
+class KnowledgeAuthorBinding(KnowledgeModel):
+    """Original linked worktree/branch/provider/task association, not inferred authority."""
+
+    schema_version: Literal[1] = 1
+    repository_id: Digest
+    worktree_root: str
+    branch: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
 
 
 class KnowledgeActor(KnowledgeModel):

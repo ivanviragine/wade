@@ -21,6 +21,7 @@ from wade.models.knowledge import (
     EvidenceCheck,
     ExternalURLEvidence,
     GitFileEvidence,
+    KnowledgeTreeState,
     ReconcileReport,
     RelationshipEvent,
     TestRunEvidence,
@@ -55,6 +56,84 @@ def _history_text(root: Path, commit: str, path: str) -> str:
     if legacy is None:
         return ""
     return legacy_yaml_history(legacy)
+
+
+def _closing_tree_state(root: Path, config: KnowledgeConfig, commit: str) -> KnowledgeTreeState:
+    text = git_knowledge.read_tree_text(root, commit, config.path) or ""
+    if validate_knowledge_text(text):
+        raise ValueError("Invalid knowledge snapshot in closing comparison")
+    entries = parse_entries(text)
+    grouped: dict[str, list[str]] = {}
+    for entry in entries:
+        # Plain headings have no stable ID; their entire raw block identifies
+        # them. Comparing multisets also preserves duplicate legacy notes.
+        raw = entry.raw.rstrip()
+        key = entry.entry_id or canonical_json(["plain", raw])
+        grouped.setdefault(key, []).append(raw)
+    history = decode_history(
+        _history_text(root, commit, str(resolve_ratings_path(Path(config.path))))
+    )
+    if history.problems:
+        raise ValueError("Invalid knowledge history in closing comparison")
+    return KnowledgeTreeState(
+        header=text[: text.index(entries[0].raw)].rstrip() if entries else text.rstrip(),
+        entries={key: tuple(sorted(values)) for key, values in grouped.items()},
+        typed_history=frozenset(canonical_json(e.model_dump(mode="json")) for e in history.events),
+        legacy_history=tuple(sorted(canonical_json(record) for record in history.legacy_records)),
+    )
+
+
+def unchanged_knowledge_sync(
+    root: Path, config: KnowledgeConfig, reviewed: str, base: str, current: str
+) -> bool:
+    """Verify knowledge-only clean-sync reuse without synthesizing a merge.
+
+    Typed history must be the exact immutable union of both parent histories.
+    Each prose block/header and the legacy multiset must come unchanged from
+    the sole changed parent. Ambiguous concurrent edits require a fresh closing
+    review even if Git combined them without textual conflicts. This does not
+    establish unchanged non-knowledge source content.
+    """
+    ancestors = git_knowledge._run_git(
+        "merge-base", "--all", reviewed, base, cwd=root
+    ).stdout.split()
+    if len(ancestors) != 1:
+        return False
+    ancestor, ours, theirs, actual = (
+        _closing_tree_state(root, config, commit)
+        for commit in (ancestors[0], reviewed, base, current)
+    )
+
+    def unchanged_part(old: object, left: object, right: object, merged: object) -> bool:
+        if left == right:
+            return merged == left
+        if left == old:
+            return merged == right
+        if right == old:
+            return merged == left
+        return False
+
+    if not unchanged_part(ancestor.header, ours.header, theirs.header, actual.header):
+        return False
+    keys = (
+        ancestor.entries.keys()
+        | ours.entries.keys()
+        | theirs.entries.keys()
+        | actual.entries.keys()
+    )
+    if any(
+        not unchanged_part(
+            ancestor.entries.get(key),
+            ours.entries.get(key),
+            theirs.entries.get(key),
+            actual.entries.get(key),
+        )
+        for key in keys
+    ):
+        return False
+    return actual.typed_history == ours.typed_history | theirs.typed_history and unchanged_part(
+        ancestor.legacy_history, ours.legacy_history, theirs.legacy_history, actual.legacy_history
+    )
 
 
 def _evidence_check(

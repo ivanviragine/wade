@@ -26,6 +26,16 @@ def _write_knowledge_config(
         encoding="utf-8",
     )
 
+    # Knowledge becomes enabled after the fixture's initial composition.
+    # Explicitly refresh through the real service before exercising author writes.
+    from wade.config.loader import load_config
+    from wade.models.workflow import SessionKind
+    from wade.services.session_composition_service import compose_session
+
+    compose_session(
+        repo, repo, load_config(repo), kind=SessionKind.IMPLEMENTATION, task_id="42", refresh=True
+    )
+
 
 @pytest.fixture
 def e2e_repo(e2e_repo: Path) -> Path:

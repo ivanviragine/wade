@@ -35,7 +35,9 @@ Publication compares same ID/content against locally available configured main,
 separately for entry and each receipt. An intermediate dependency base determines
 branch impact only; it never grants publication. Missing main produces unavailable,
 without a fetch or guessed integration. Uncommitted knowledge is reported apart
-from committed state. Check leaves HEAD, index and all working bytes unchanged.
+from committed state. If displayed prose differs from the committed claim body,
+`knowledge get` withholds its publication and reports prior assessments only as
+historical evidence for different content. Check leaves HEAD, index and all working bytes unchanged.
 
 Typed event IDs deduplicate identical records and reject different payloads.
 Folds are independent of line order; timestamps do not establish precedence.
@@ -63,7 +65,12 @@ explicitly assigns an ID in the owning implementation before assessment.
 ## Ownership, proposals and recovery
 
 Tracked mutation requires an attached linked implementation or PR-comment
-worktree with its current valid frozen task/session bundle. Main, detached
+worktree with its current valid frozen task/session bundle and an immutable
+`.wade/knowledge-author.json` association to the original worktree path, branch,
+repository, provider and task. Switching branches cannot transfer authority or
+reassign that association through skill refresh. Legacy sessions missing it must
+explicitly refresh their frozen skills before authoring; they cannot synthesize
+an association through an ordinary read. Main, detached
 planning/dependency analysis and all bounded delegations observe only, including
 when they share an author's checkout. Delegation sets a scoped child environment
 and distinct invocation identity, restores the parent environment on every exit,
@@ -83,6 +90,8 @@ member ownership remain unresolved; another worktree cannot claim them by
 supplying a task number. Accept verifies repository/provider/task, original
 parent binding and unchanged claim. It writes an auditable neutral acceptance,
 never an assessment; a subsequent explicit check creates fresh committed proof.
+Acceptance payloads are canonicalized once under the shared queue lock, so valid
+same-task worktrees reuse the same timestamp and event bytes on repeated accept.
 Retain/discard/accepted/assessed dispositions keep original proposal bytes.
 Bounded plan reviewers retain their original parent session and reviewed member;
 in-plan dependency observers retain that parent, and are associated only when
@@ -136,9 +145,17 @@ Knowledge changes must be committed before final review. Shared implementation
 and PR-comment completion runs authoritative read-only reconciliation after
 normal sync. Completion resolves the logical effective base to a full locally
 available object ID using its sync probe's remote-first branch order, including
-remote-only PR bases; it never fetches inside reconciliation. Pre-push checks
-require a clean tree and repeat reconciliation;
-a recovery merge changing HEAD repeats both before re-keying the done marker or
-retrying a push. Failure clears the marker and prevents PR finalization. This
-does not alter pre-sync review policy, configured pass caps or sanctioned review
+remote-only PR bases; it never fetches inside reconciliation. The closing gate pins the reviewed tip and the permitted actual base-merge tip.
+Direct late authored commits require fresh review and documentation. For clean
+sync reuse, knowledge prose blocks and legacy history must be unchanged from
+one parent, and typed history must be the exact immutable parent union. Concurrent
+ambiguous edits, added knowledge in an amended merge, multiple merge bases, or
+invalid snapshots require the normal fresh closing workflow. This comparison
+covers knowledge/history, not every non-knowledge source-tree change.
+Pre-push checks require a clean tree, repeat reconciliation, and verify the
+pinned tip. Push names the approved SHA explicitly, so a concurrent branch advance
+cannot substitute a later commit. A recovery merge on that pinned path requires
+fresh closing checks rather than re-keying an old review to a new candidate.
+Failures clear the done marker and prevent PR finalization; a push already made
+is not rolled back. This does not alter configured pass caps or sanctioned review
 exceptions. No `done.*` option weakens the knowledge structural gate.

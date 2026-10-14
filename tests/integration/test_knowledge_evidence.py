@@ -1291,3 +1291,200 @@ def test_changed_observer_claim_requires_fresh_operation_without_corrupting_queu
         feedback(owned_repo, KnowledgeConfig(enabled=True), "claim-a", "useful")
     assert not proposals(owned_repo)
     assert reconcile_knowledge(owned_repo, KnowledgeConfig(enabled=True)).valid
+
+
+def test_branch_switch_cannot_reuse_stale_task_write_authority(owned_repo: Path) -> None:
+    from wade.services.knowledge_assessment import feedback
+    from wade.services.knowledge_ownership import actor
+    from wade.services.knowledge_proposals import accept_proposal, bind_completed_parent, proposals
+
+    parent, identity = _completed_parent(owned_repo.parent / "main")
+    knowledge.record_handoff_rating_for_session(
+        parent, KnowledgeConfig(enabled=True), "claim-a", "up", identity
+    )
+    bind_completed_parent(parent, identity)
+    proposal = proposals(owned_repo)[0]
+    git(owned_repo, "checkout", "-b", "feat/532-unrelated")
+    assert not actor(owned_repo).author
+    before = (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes()
+    with pytest.raises(ValueError, match="owning implementation"):
+        accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id)
+    assert (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes() == before
+    feedback(owned_repo, KnowledgeConfig(enabled=True), "claim-a", "useful")
+    assert (owned_repo / "KNOWLEDGE.ratings.jsonl").read_bytes() == before
+
+
+def test_same_task_acceptance_reuses_one_shared_immutable_event(owned_repo: Path) -> None:
+    from wade.models.workflow import SessionKind
+    from wade.services.knowledge_proposals import accept_proposal, bind_completed_parent, proposals
+    from wade.services.session_composition_service import compose_session
+    from wade.utils.knowledge_events import decode_history
+
+    main = owned_repo.parent / "main"
+    parent, identity = _completed_parent(main)
+    knowledge.record_handoff_rating_for_session(
+        parent, KnowledgeConfig(enabled=True), "claim-a", "up", identity
+    )
+    bind_completed_parent(parent, identity)
+    proposal = proposals(owned_repo)[0]
+    second = main.parent / "owner-510-second"
+    git(main, "worktree", "add", "-b", "feat/510-second", str(second))
+    compose_session(second, main, ProjectConfig(), kind=SessionKind.IMPLEMENTATION, task_id="510")
+    one = accept_proposal(owned_repo, KnowledgeConfig(enabled=True), proposal.proposal_id)
+    two = accept_proposal(second, KnowledgeConfig(enabled=True), proposal.proposal_id)
+    assert one == two
+    combined = (owned_repo / "KNOWLEDGE.ratings.jsonl").read_text() + (
+        second / "KNOWLEDGE.ratings.jsonl"
+    ).read_text()
+    assert not decode_history(combined).problems
+
+
+def test_locally_changed_claim_cannot_reuse_publication_or_assessment(owned_repo: Path) -> None:
+    from wade.services.knowledge_assessment import check_entry
+
+    check_entry(
+        owned_repo,
+        KnowledgeConfig(enabled=True),
+        "claim-a",
+        "current",
+        files=("source.py",),
+        note="Committed old body",
+    )
+    git(owned_repo, "commit", "-am", "docs: assess old body")
+    path = owned_repo / "KNOWLEDGE.md"
+    path.write_text(path.read_text().replace("forty two", "seven"))
+    result = knowledge.get_annotated_knowledge(owned_repo, KnowledgeConfig(enabled=True)).content
+    assert result and "needs-recheck; unavailable" in result
+    assert "; integrated]" not in result
+
+
+@pytest.mark.parametrize(
+    "transition",
+    [
+        "authored",
+        "clean-base-merge",
+        "clean-base-knowledge",
+        "authored-amended-merge",
+        "amended-prose",
+    ],
+)
+def test_closing_rejects_late_authored_commit_but_preserves_sync_merge(
+    owned_repo: Path, monkeypatch: pytest.MonkeyPatch, transition: str
+) -> None:
+    from importlib import import_module
+    from unittest.mock import MagicMock
+
+    done = import_module("wade.services.implementation_service.done")
+    old = git(owned_repo, "rev-parse", "HEAD").strip()
+    main = owned_repo.parent / "main"
+    for name in (
+        "_gate_pr_title",
+        "_gate_pr_summary",
+        "_gate_review_ran",
+        "_gate_documentation_decision",
+    ):
+        monkeypatch.setattr(done, name, lambda *args, **kwargs: True)
+
+    def sync(*args: object, **kwargs: object) -> bool:
+        if transition == "authored":
+            with (owned_repo / "KNOWLEDGE.ratings.jsonl").open("a") as stream:
+                stream.write('{"id":"claim-a","dir":"up","event_id":"late-authored"}\n')
+            git(owned_repo, "commit", "-am", "docs: late authored knowledge")
+        else:
+            (owned_repo / "own.txt").write_text("authored before checks\n")
+            # The reviewed fixture already owns this commit in the merge case.
+            (main / "incoming.txt").write_text("independent main change\n")
+            if transition == "clean-base-knowledge":
+                with (main / "KNOWLEDGE.md").open("a") as stream:
+                    stream.write(
+                        "\n## incoming | 2026-10-14 | implementation\n\nIndependent note.\n"
+                    )
+                with (main / "KNOWLEDGE.ratings.jsonl").open("a") as stream:
+                    stream.write('{"id":"claim-a","dir":"up","event_id":"incoming-feedback"}\n')
+            git(main, "add", ".")
+            git(main, "commit", "-m", "test: independent base update")
+            (owned_repo / "own.txt").unlink()
+            git(owned_repo, "merge", "--no-ff", "--no-edit", "main")
+            if transition == "authored-amended-merge":
+                with (owned_repo / "KNOWLEDGE.ratings.jsonl").open("a") as stream:
+                    stream.write('{"id":"claim-a","dir":"up","event_id":"late-amended"}\n')
+                git(
+                    owned_repo,
+                    "commit",
+                    "-am",
+                    "docs: amend sync with authored knowledge",
+                    "--amend",
+                )
+            elif transition == "amended-prose":
+                path = owned_repo / "KNOWLEDGE.md"
+                path.write_text(path.read_text().replace("forty two", "seven"))
+                git(owned_repo, "commit", "-am", "docs: amend synced claim", "--amend")
+        return True
+
+    monkeypatch.setattr(done, "_gate_sync", sync)
+    result = done._run_completion_gates(
+        session_type="implementation",
+        config=ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        provider=MagicMock(),
+        repo_root=main,
+        worktree_root=owned_repo,
+        branch="feat/510-owner",
+        main_branch="main",
+        issue_number="510",
+        pre_sync_head=old,
+        skip_review=False,
+    )
+    assert result is (transition in {"clean-base-merge", "clean-base-knowledge"})
+
+
+def test_pinned_closing_push_never_delivers_a_concurrent_authored_commit(
+    owned_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from importlib import import_module
+
+    done = import_module("wade.services.implementation_service.done")
+    main = owned_repo.parent / "main"
+    remote = main.parent / "bare-remote"
+    remote.mkdir()
+    git(remote, "init", "--bare")
+    git(main, "remote", "add", "origin", str(remote))
+    approved = git(owned_repo, "rev-parse", "HEAD").strip()
+    original_push = done.git_repo.push_branch
+
+    def advance_then_push(*args: object, **kwargs: object) -> None:
+        with (owned_repo / "KNOWLEDGE.ratings.jsonl").open("a") as stream:
+            stream.write('{"id":"claim-a","dir":"up","event_id":"late-push"}\n')
+        git(owned_repo, "commit", "-am", "docs: concurrent authored commit before Git reads push")
+        original_push(*args, **kwargs)
+
+    monkeypatch.setattr(done.git_repo, "push_branch", advance_then_push)
+    assert not done._push_branch_with_recovery(
+        main,
+        "feat/510-owner",
+        owned_repo,
+        owned_repo,
+        ProjectConfig(knowledge=KnowledgeConfig(enabled=True)),
+        expected_head=approved,
+    )
+    assert git(remote, "rev-parse", "refs/heads/feat/510-owner").strip() == approved
+    assert git(owned_repo, "rev-parse", "HEAD").strip() != approved
+    assert not list((owned_repo / ".wade").glob("done@*"))
+    assert git(main, "config", "branch.feat/510-owner.remote").strip() == "origin"
+
+
+def test_stale_task_branch_cannot_be_reassigned_by_skill_refresh(owned_repo: Path) -> None:
+    from wade.models.workflow import SessionKind
+    from wade.services.session_composition_service import SessionCompositionError, compose_session
+
+    original = (owned_repo / ".wade/knowledge-author.json").read_bytes()
+    git(owned_repo, "checkout", "-b", "feat/532-other")
+    with pytest.raises(SessionCompositionError, match="original association"):
+        compose_session(
+            owned_repo,
+            owned_repo.parent / "main",
+            ProjectConfig(),
+            kind=SessionKind.IMPLEMENTATION,
+            task_id="510",
+            refresh=True,
+        )
+    assert (owned_repo / ".wade/knowledge-author.json").read_bytes() == original

@@ -21,6 +21,20 @@ def _write_knowledge_config(
     config["knowledge"] = {"enabled": enabled, "path": path}
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
+    # Enabling knowledge in an existing session requires an explicit refresh.
+    from wade.config.loader import load_config
+    from wade.models.workflow import SessionKind
+    from wade.services.session_composition_service import compose_session
+
+    compose_session(
+        project_root,
+        project_root,
+        load_config(project_root),
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+        refresh=True,
+    )
+
 
 @pytest.fixture
 def tmp_wade_project(tmp_wade_project: Path) -> Path:

@@ -14,6 +14,7 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.session import ClosingCandidate
 from wade.models.skill import SkillSlot
 from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
@@ -345,6 +346,11 @@ def done(
         console.error("Cannot resolve the branch tip to run the completion gates.")
         return False
 
+    candidate = (
+        ClosingCandidate(reviewed_commit=pre_sync_head, approved_commit=pre_sync_head)
+        if config.knowledge.enabled
+        else None
+    )
     if not _run_completion_gates(
         session_type=session_type,
         config=config,
@@ -356,6 +362,7 @@ def done(
         issue_number=issue_number,
         pre_sync_head=pre_sync_head,
         skip_review=skip_review,
+        candidate=candidate,
     ):
         return False
 
@@ -382,6 +389,8 @@ def done(
         worktree_path=wt_path,
         review_status=review_status,
         trigger_bots=trigger_bots,
+        expected_head=candidate.approved_commit if candidate is not None else None,
+        expected_base=candidate.effective_base_commit if candidate is not None else None,
     )
     if not ok:
         # Finalize failed — leave the worktree exactly as we found it (gitignore
@@ -433,6 +442,7 @@ def _run_completion_gates(
     issue_number: str,
     pre_sync_head: str,
     skip_review: bool,
+    candidate: ClosingCandidate | None = None,
 ) -> bool:
     """Run the gate set for ``session_type`` in the fixed order. True ⇒ proceed.
 
@@ -464,7 +474,7 @@ def _run_completion_gates(
             return False
         if not _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type):
             return False
-        return _gate_knowledge_valid(config, worktree_root, main_branch)
+        return _gate_synced_knowledge(config, worktree_root, main_branch, pre_sync_head, candidate)
 
     # Default: implementation session.
     if not _gate_pr_title(config, provider, issue_number):
@@ -482,7 +492,64 @@ def _run_completion_gates(
     # Runs LAST — after sync merges the base branch into the worktree, the local
     # `merge=union` point where a structural corruption of KNOWLEDGE.md could be
     # introduced. Validating here keeps a union-corrupted file from shipping.
-    return _gate_knowledge_valid(config, worktree_root, main_branch)
+    return _gate_synced_knowledge(config, worktree_root, main_branch, pre_sync_head, candidate)
+
+
+def _gate_synced_knowledge(
+    config: ProjectConfig,
+    root: Path,
+    base: str,
+    reviewed: str,
+    candidate: ClosingCandidate | None,
+) -> bool:
+    """Only the reviewed tip or its actual clean base merge may advance closing."""
+    if not config.knowledge.enabled:
+        return _gate_knowledge_valid(config, root, base)
+    from wade.git import knowledge as git_knowledge
+
+    try:
+        current = git_knowledge.resolve_commit(root, "HEAD")
+        resolved_base = git_knowledge.resolve_completion_base(root, base)
+        if current != reviewed:
+            parents = git_knowledge._run_git(
+                "rev-list", "--parents", "-n", "1", current, cwd=root
+            ).stdout.split()
+            available_bases = {resolved_base}
+            for ref in (base, f"origin/{base}"):
+                with contextlib.suppress(GitError, ValueError):
+                    available_bases.add(git_knowledge.resolve_commit(root, ref))
+            if len(parents) != 3 or parents[1] != reviewed or parents[2] not in available_bases:
+                console.error(
+                    "Authored commit arrived after review/documentation checks; "
+                    "repeat the existing closing workflow for current HEAD."
+                )
+                return False
+            # This is the actual base selected by the successful sync, including
+            # its documented local fallback after a failed fetch.
+            resolved_base = parents[2]
+        if not _gate_knowledge_valid(config, root, resolved_base):
+            return False
+        if current != reviewed:
+            from wade.services.knowledge_reconcile import unchanged_knowledge_sync
+
+            if not unchanged_knowledge_sync(
+                root, config.knowledge, reviewed, resolved_base, current
+            ):
+                console.error(
+                    "Knowledge content/history changed or is ambiguous during sync; "
+                    "repeat review and documentation checks for current HEAD."
+                )
+                return False
+        if git_knowledge.resolve_commit(root, "HEAD") != current:
+            console.error("HEAD changed during closing validation; re-run the closing workflow.")
+            return False
+    except (ValueError, GitError) as exc:
+        console.error(f"Cannot bind closing candidate: {exc}")
+        return False
+    if candidate is not None:
+        candidate.approved_commit = current
+        candidate.effective_base_commit = resolved_base
+    return True
 
 
 def _gate_documentation_decision(
@@ -1007,6 +1074,7 @@ def _push_branch_with_recovery(
     marker_root: Path,
     config: ProjectConfig | None = None,
     effective_base: str | None = None,
+    expected_head: str | None = None,
 ) -> bool:
     """Push *branch*, recovering interactively from a non-fast-forward rejection.
 
@@ -1033,7 +1101,23 @@ def _push_branch_with_recovery(
 
         config = load_config(push_root)
 
+    def candidate_matches() -> bool:
+        if expected_head is None:
+            return True
+        try:
+            matches = git_repo.rev_parse(push_root, "HEAD") == expected_head
+        except GitError:
+            matches = False
+        if not matches:
+            console.error(
+                "HEAD no longer matches the approved closing candidate; repeat review/docs."
+            )
+            markers.clear_markers(marker_root, "done")
+        return matches
+
     def ready() -> bool:
+        if not candidate_matches():
+            return False
         if not git_repo.is_clean(push_root):
             console.error("Working tree changed after completion gates; commit and re-run done.")
             markers.clear_markers(marker_root, "done")
@@ -1045,13 +1129,31 @@ def _push_branch_with_recovery(
             console.error("Working tree changed during reconciliation; commit and re-run done.")
             markers.clear_markers(marker_root, "done")
             return False
-        return True
+        return candidate_matches()
+
+    def mark_candidate() -> None:
+        if expected_head is not None:
+            markers.write_marker(marker_root, "done", expected_head)
+        else:
+            _write_done_marker(marker_root, repo_root, branch)
+
+    def push_candidate(*, force: bool = False) -> None:
+        if expected_head is not None:
+            git_repo.push_branch(
+                repo_root, branch, set_upstream=True, force=force, source_commit=expected_head
+            )
+        elif force:
+            git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
+        else:
+            git_repo.push_branch(repo_root, branch, set_upstream=True)
 
     if not ready():
         return False
-    _write_done_marker(marker_root, repo_root, branch)
+    mark_candidate()
     try:
-        git_repo.push_branch(repo_root, branch, set_upstream=True)
+        push_candidate()
+        if not candidate_matches():
+            return False
         console.success("Branch pushed.")
         return True
     except GitError as e:
@@ -1097,8 +1199,10 @@ def _push_branch_with_recovery(
             # retry push satisfies the backstop.
             if not ready():
                 return False
-            _write_done_marker(marker_root, repo_root, branch)
-            git_repo.push_branch(repo_root, branch, set_upstream=True)
+            mark_candidate()
+            push_candidate()
+            if not candidate_matches():
+                return False
             console.success("Merged the remote and pushed.")
             return True
         except GitError as e:
@@ -1111,7 +1215,9 @@ def _push_branch_with_recovery(
         try:
             if not ready():
                 return False
-            git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
+            push_candidate(force=True)
+            if not candidate_matches():
+                return False
             console.success("Force-pushed with lease.")
             return True
         except GitError as e:
@@ -1233,6 +1339,8 @@ def _done_via_pr(
     *,
     review_status: ReviewStatus | None = None,
     trigger_bots: bool | None = None,
+    expected_head: str | None = None,
+    expected_base: str | None = None,
 ) -> bool:
     """Finalize implementation — update existing draft PR or create a new one.
 
@@ -1287,7 +1395,13 @@ def _done_via_pr(
     marker_root = worktree_path or repo_root
     console.step("Pushing branch...")
     if not _push_branch_with_recovery(
-        repo_root, branch, worktree_path, marker_root, config, main_branch
+        repo_root,
+        branch,
+        worktree_path,
+        marker_root,
+        config,
+        expected_base or main_branch,
+        expected_head,
     ):
         return False
 
@@ -1485,6 +1599,17 @@ def _done_via_pr(
             console.success(f"PR created: {pr_url}")
         except Exception as e:
             console.error(f"PR creation failed: {e}")
+            return False
+
+    if expected_head is not None:
+        final_root = worktree_path or repo_root
+        try:
+            unchanged = git_repo.rev_parse(final_root, "HEAD") == expected_head
+        except GitError:
+            unchanged = False
+        if not unchanged:
+            markers.clear_markers(marker_root, "done")
+            console.error("HEAD changed during PR finalization; repeat the closing workflow.")
             return False
 
     # Remove in-progress label

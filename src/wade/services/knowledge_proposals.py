@@ -460,23 +460,48 @@ def accept_proposal(
             ),
             None,
         )
-        event = existing or ProposalAcceptanceEvent(
-            event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "knowledge-accept:" + proposal_id)),
-            entry_id=proposal.entry_id,
-            proposal_id=proposal_id,
-            body_digest=proposal.body_digest,
-            accepted_at=datetime.now(UTC),
-        )
-        if existing is None:
-            append_event(ratings, event.model_dump(mode="json"))
-        disposition(
-            root,
-            proposal_id,
-            "accepted",
-            "Owner/content verified; no correctness assessment granted. "
-            "Fresh committed-evidence check required.",
-            event.event_id,
-        )
+        common = git_knowledge.common_directory(root)
+        directories = ("knowledge", "acceptances")
+        filename = _key(proposal_id) + ".json"
+        with file_lock(
+            common / ".wade/knowledge/queue.lock", create_parent=False, resolve_path=False
+        ):
+            raw = read_state_file(common, directories, filename)
+            event = (
+                ProposalAcceptanceEvent.model_validate_json(raw)
+                if raw is not None
+                else existing
+                or ProposalAcceptanceEvent(
+                    event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, "knowledge-accept:" + proposal_id)),
+                    entry_id=proposal.entry_id,
+                    proposal_id=proposal_id,
+                    body_digest=proposal.body_digest,
+                    accepted_at=datetime.now(UTC),
+                )
+            )
+            if (
+                event.entry_id != proposal.entry_id
+                or event.proposal_id != proposal_id
+                or event.body_digest != proposal.body_digest
+                or event.event_id
+                != str(uuid.uuid5(uuid.NAMESPACE_URL, "knowledge-accept:" + proposal_id))
+                or (existing is not None and existing != event)
+            ):
+                raise ValueError("Conflicting immutable proposal acceptance; originals retained")
+            if raw is None and not atomic_write_state_file(
+                common, directories, filename, event.model_dump_json().encode()
+            ):
+                raise ValueError("Could not persist immutable shared acceptance before append")
+            if existing is None:
+                append_event(ratings, event.model_dump(mode="json"))
+            disposition(
+                root,
+                proposal_id,
+                "accepted",
+                "Owner/content verified; no correctness assessment granted. "
+                "Fresh committed-evidence check required.",
+                event.event_id,
+            )
         return event
 
 
@@ -624,6 +649,25 @@ def validate_queue_ownership(root: Path) -> None:
     for record in dispositions(root):
         if record.proposal_id not in pending:
             raise ValueError("Knowledge disposition names an unavailable original proposal")
+    acceptance_directory = common / ".wade/knowledge/acceptances"
+    if acceptance_directory.is_symlink():
+        raise ValueError("Unsafe immutable acceptance directory")
+    if acceptance_directory.exists():
+        for path in acceptance_directory.glob("*.json"):
+            raw = read_state_file(common, ("knowledge", "acceptances"), path.name)
+            if raw is None:
+                raise ValueError("Unreadable immutable acceptance")
+            accepted = ProposalAcceptanceEvent.model_validate_json(raw)
+            proposal = pending.get(accepted.proposal_id)
+            if (
+                proposal is None
+                or path.name != _key(accepted.proposal_id) + ".json"
+                or accepted.entry_id != proposal.entry_id
+                or accepted.body_digest != proposal.body_digest
+                or accepted.event_id
+                != str(uuid.uuid5(uuid.NAMESPACE_URL, "knowledge-accept:" + accepted.proposal_id))
+            ):
+                raise ValueError("Immutable acceptance differs from original proposal")
     detached_directory = common / ".wade/knowledge/detached-observers"
     if detached_directory.is_symlink():
         raise ValueError("Unsafe detached observer ownership directory")
