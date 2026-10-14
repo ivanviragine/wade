@@ -902,3 +902,19 @@ def test_fenced_example_does_not_reserve_task_id(
     assert task.id == ("12345679" if real_collision else "12345678")
     assert random.call_count == (2 if real_collision else 1)
     assert config_factory().read_task(task.id).body == example + "\nTrailing."
+
+
+@pytest.mark.parametrize(
+    "separator", ["\u2028", "\u2029", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85"]
+)
+def test_unicode_and_control_separators_do_not_create_fence_lines(separator: str) -> None:
+    inline = "Inline" + separator + "```"
+    outside = "## #1 Real\n\n" + inline + "\n\n## #2 Real\n\nBody\n"
+    sections = _parse_sections(outside)
+    assert [section.id for section in sections] == ["1", "2"]
+    assert sections[0].body == inline
+    body = "```\n" + inline + "\n## #99 Phantom\n```"
+    inside = "## #1 Real\n\n" + body + "\n\n## #2 Real\n\nBody\n"
+    sections = _parse_sections(inside)
+    assert [section.id for section in sections] == ["1", "2"]
+    assert sections[0].body == body

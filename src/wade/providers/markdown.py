@@ -187,8 +187,9 @@ def _task_headings(text: str) -> list[re.Match[str]]:
     headings: list[re.Match[str]] = []
     delimiter: str | None = None
     opening_length = 0
-    offset = 0
-    for line in text.splitlines(keepends=True):
+    # Markdown line endings are CR/LF, not Python's broader Unicode splitlines.
+    for source_line in re.finditer(r"[^\r\n]*(?:\r\n?|\n|$)", text):
+        line = source_line.group()
         marker = re.match(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)", line)
         if marker is not None:
             run, suffix = marker.groups()
@@ -197,12 +198,11 @@ def _task_headings(text: str) -> list[re.Match[str]]:
                     delimiter = None
             elif run[0] == "~" or "`" not in suffix:
                 delimiter, opening_length = run[0], len(run)
-        end = offset + len(line)
+        end = source_line.end()
         while heading is not None and heading.start() < end:
             if delimiter is None:
                 headings.append(heading)
             heading = next(matches, None)
-        offset = end
     return headings
 
 
