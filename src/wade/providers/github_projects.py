@@ -27,7 +27,7 @@ from wade.utils.process import CommandError, run
 _PAGE = "pageInfo { hasNextPage endCursor }"
 _FIELDS = (
     """nodes {
-  ... on ProjectV2FieldCommon { id name dataType }
+  ... on ProjectV2FieldCommon { id name dataType isIssueField }
   ... on ProjectV2SingleSelectField { options { id name } }
 } """
     + _PAGE
@@ -287,6 +287,11 @@ class GitHubProjectsProvider:
 
         parsed: list[ProjectField] = []
         for raw in self._connection(fetch):
+            if type(raw.get("isIssueField")) is not bool:
+                raise ProjectError(
+                    "Projects schema lacks valid isIssueField ownership metadata; "
+                    "update the target GitHub server."
+                )
             raw_options = raw.get("options", raw.get("multiSelectOptions", []))
             if not isinstance(raw_options, list):
                 raise ProjectError("Malformed Projects field options.")
@@ -304,6 +309,7 @@ class GitHubProjectsProvider:
                     id=raw["id"],
                     name=_text(raw.get("name"), "field name"),
                     type=_text(raw.get("dataType"), "field type"),
+                    is_issue_field=raw["isIssueField"],
                     options=options,
                 )
             )

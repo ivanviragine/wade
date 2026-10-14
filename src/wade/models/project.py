@@ -250,6 +250,7 @@ class ProjectField(ProjectModel):
     id: str
     name: str
     type: str
+    is_issue_field: bool | None = Field(default=None, strict=True)
     options: list[ProjectOption] = Field(default_factory=list)
 
 

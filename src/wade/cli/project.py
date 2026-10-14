@@ -8,6 +8,7 @@ import typer
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from wade.models.project import ProjectError, ProjectRequest, ProjectSort, ProjectTarget
 from wade.services.project_service import execute
@@ -90,11 +91,15 @@ def _run(
             f"({result.project.hostname}): {result.project.title}",
             markup=False,
         )
-        table = Table(*result.columns)
+        table = Table()
+        for column in result.columns:
+            table.add_column(Text(column))
         for row in result.rows:
             table.add_row(
                 *(
-                    str(row.values.get(column)) if row.values.get(column) is not None else "—"
+                    Text(str(row.values.get(column)))
+                    if row.values.get(column) is not None
+                    else Text("—")
                     for column in result.columns
                 )
             )
@@ -104,9 +109,9 @@ def _run(
             for row in result.rows:
                 for contribution in row.contributions:
                     factors.add_row(
-                        row.item.identity,
-                        contribution.field,
-                        str(contribution.raw),
+                        Text(row.item.identity),
+                        Text(contribution.field),
+                        Text(str(contribution.raw)),
                         str(contribution.normalized),
                         str(contribution.weight),
                         str(contribution.weighted),
@@ -116,13 +121,19 @@ def _run(
             changes = Table("Item", "Field", "Old", "New", "Outcome")
             for change in result.operations:
                 changes.add_row(
-                    change.identity,
-                    f"{change.field} ({change.field_id})",
+                    Text(change.identity),
+                    Text(f"{change.field} ({change.field_id})"),
                     str(change.old),
                     str(change.new),
                     change.status,
                 )
             output.print(changes)
+            for change in result.operations:
+                if change.message:
+                    typer.echo(
+                        f"{change.identity} {change.field} ({change.status}): {change.message}",
+                        err=True,
+                    )
         if result.current_wip is not None:
             output.print(
                 f"WIP {result.current_wip}/{result.wip_limit}; "

@@ -137,6 +137,9 @@ gh auth refresh -s project
 organization board. They currently require `provider.name: github`; other task
 providers and the existing best-effort startup Status move retain their behavior.
 Only `sync --apply` writes, and only to configured existing numeric fields.
+Outputs must have `isIssueField: false` in GitHub’s schema: organization issue
+fields and unknown ownership are rejected before any mutation, including when
+the output has no value yet.
 
 Configure optional top-level `github_projects` in `.wade.yml` (version stays 2):
 
@@ -230,7 +233,10 @@ it does not truncate WIP counts or sync rank positions. JSON stdout is one
 object containing resolved project identity, rows, contributions, exclusions,
 visibility limits and, for sync, operation outcomes. Human tables use the same
 rows and ordering. Valid empty results exit zero; validation/provider errors go
-to stderr and exit nonzero.
+to stderr and exit nonzero. Human apply output also sends operation-specific
+permission, drift and readback failures to stderr; its outcome table preserves
+confirmed/failed/unknown/not-attempted results. JSON retains these messages in
+the single stdout object.
 
 Ranking uses fixed bounds, never the current population or clock. Numeric values
 are normalized to [0,1], clamped, and optionally inverted; explicit single-select

@@ -107,8 +107,8 @@ def schema() -> ProjectSchema:
                     ProjectOption(id="DONE", name="Done"),
                 ],
             ),
-            ProjectField(id="O", name="Score", type="NUMBER"),
-            ProjectField(id="R", name="Rank", type="NUMBER"),
+            ProjectField(id="O", name="Score", type="NUMBER", is_issue_field=False),
+            ProjectField(id="R", name="Rank", type="NUMBER", is_issue_field=False),
             ProjectField(id="D", name="Due", type="DATE"),
             ProjectField(
                 id="T",
@@ -561,3 +561,16 @@ def test_explicit_option_names_need_unique_exact_matches_and_ids_remain_authorit
         bindings,
     )
     assert [row.item.number for row in result.rows] == [2]
+
+
+@pytest.mark.parametrize("ownership", [True, None])
+@pytest.mark.parametrize("apply", [False, True])
+def test_issue_backed_or_unknown_outputs_refuse_before_any_write(ownership, apply) -> None:
+    provider = FakeProvider([item(1)])
+    provider.board.fields = [
+        field.model_copy(update={"is_issue_field": ownership}) if field.id == "R" else field
+        for field in provider.board.fields
+    ]
+    with pytest.raises(ProjectError, match="project-owned"):
+        run_sync(provider, apply=apply)
+    assert provider.writes == []

@@ -1669,7 +1669,9 @@ it without introducing network calls.
 `providers/github_projects.py` is separate from AbstractTaskProvider and is
 constructed directly by the service. It owns explicit cwd/hostname gh transport,
 JSON stdin variables, bounded independent fields/items/fieldValues/content
-pagination, safe errors and one-number mutations. Label/assignee field values
+pagination, safe errors and one-number mutations. Field schemas retain the
+required Boolean `isIssueField`; sync rejects issue-backed or unknown output
+ownership before planning any write, even for unset numeric outputs. Label/assignee field values
 are not GraphQL Nodes: complete underlying content connections supply these
 values instead of assuming a value-node cursor. Unfetched connections have
 explicit completeness flags. Unknown selected unions and malformed pagination

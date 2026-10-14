@@ -56,7 +56,8 @@ class API:
             "viewerCanUpdate": True,
         }
         self.fields = [
-            {"id": f"F{n}", "name": f"Field {n}", "dataType": "NUMBER"} for n in range(101)
+            {"id": f"F{n}", "name": f"Field {n}", "dataType": "NUMBER", "isIssueField": False}
+            for n in range(101)
         ]
         self.items = [raw_item(n) for n in range(1, 102)]
         self.values = {"I1": [field_value(f"F{n}", n) for n in range(101)]}
@@ -339,3 +340,29 @@ def test_unmapped_multiselect_identity_does_not_require_new_union_payload() -> N
         values = client._values("I1", {"F0"})
     assert values["F0"].value == 1 and set(values) == {"F0"}
     assert not client._multi_select
+
+
+def test_schema_retains_issue_field_ownership() -> None:
+    api = API()
+    api.fields[0]["isIssueField"] = True
+    with patch("wade.providers.github_projects.run", side_effect=api):
+        provider = GitHubProjectsProvider(Path("/tmp/projects"), "ghe.example.com")
+        board = provider.schema(ProjectTarget(owner="org", kind="organization", number=1))
+    assert getattr(board.fields[0], "is_issue_field", None) is True
+    assert "isIssueField" in next(
+        call["query"] for call in api.calls if "fields(first:" in call["query"]
+    )
+
+
+@pytest.mark.parametrize("ownership", [None, "false", 0])
+def test_schema_refuses_missing_or_malformed_ownership(ownership) -> None:
+    api = API()
+    if ownership is None:
+        api.fields[0].pop("isIssueField")
+    else:
+        api.fields[0]["isIssueField"] = ownership
+    with patch("wade.providers.github_projects.run", side_effect=api):
+        provider = GitHubProjectsProvider(Path("/tmp/projects"), "ghe.example.com")
+        with pytest.raises(ProjectError, match="ownership metadata"):
+            provider.schema(ProjectTarget(owner="org", kind="organization", number=1))
+    assert not any(call["query"].startswith("mutation") for call in api.calls)

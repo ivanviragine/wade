@@ -81,15 +81,16 @@ def project_board(e2e_repo: Path, mock_gh_cli: MockGhCli, monkeypatch: pytest.Mo
             "viewerCanUpdate": True,
         },
         "fields": [
-            {"id": "IMPACT", "name": "Impact", "dataType": "NUMBER"},
+            {"id": "IMPACT", "name": "Impact", "dataType": "NUMBER", "isIssueField": False},
             {
                 "id": "STATUS",
                 "name": "Status",
                 "dataType": "SINGLE_SELECT",
+                "isIssueField": False,
                 "options": [{"id": "READY", "name": "Ready"}, {"id": "DOING", "name": "Doing"}],
             },
-            {"id": "SCORE", "name": "Score", "dataType": "NUMBER"},
-            {"id": "RANK", "name": "Rank", "dataType": "NUMBER"},
+            {"id": "SCORE", "name": "Score", "dataType": "NUMBER", "isIssueField": False},
+            {"id": "RANK", "name": "Rank", "dataType": "NUMBER", "isIssueField": False},
         ],
         "items": items,
         "values": values,
@@ -202,4 +203,39 @@ def test_valid_empty_board_and_invalid_paths_never_write(
     assert not any(
         json.loads(line)["query"].startswith("mutation")
         for line in project_board.read_text().splitlines()
+    )
+
+
+def test_issue_backed_numeric_output_refuses_before_any_mutation(
+    e2e_repo: Path, mock_gh_cli: MockGhCli, project_board: Path
+) -> None:
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    state["projects"]["fields"][-1]["isIssueField"] = True
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    result = _run(["project", "sync", "--apply", "--json"], e2e_repo)
+    assert result.returncode == 1 and result.stdout == ""
+    assert "project-owned" in result.stderr
+    requests = [json.loads(line) for line in project_board.read_text().splitlines()]
+    assert any("isIssueField" in request["query"] for request in requests)
+    assert not any(request["query"].startswith("mutation") for request in requests)
+    assert json.loads(mock_gh_cli["state_file"].read_text())["projects"]["writes"] == []
+
+
+@pytest.mark.parametrize("partial_failure", [False, True])
+def test_human_apply_preserves_external_title_and_write_outcomes(
+    e2e_repo: Path, mock_gh_cli: MockGhCli, project_board: Path, partial_failure: bool
+) -> None:
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    state["projects"]["items"][0]["content"]["title"] = "Handle [/bold]"
+    if partial_failure:
+        state["projects"]["fail_write_at"] = 1
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    result = _run(["project", "sync", "--apply"], e2e_repo)
+    assert result.returncode == (1 if partial_failure else 0)
+    assert "Handle [/bold]" in result.stdout and "confirmed" in result.stdout
+    if partial_failure:
+        assert "unknown" in result.stdout and "not_attempted" in result.stdout
+        assert "GitHub Projects request failed" in result.stderr
+    assert len(json.loads(mock_gh_cli["state_file"].read_text())["projects"]["writes"]) == (
+        1 if partial_failure else 4
     )

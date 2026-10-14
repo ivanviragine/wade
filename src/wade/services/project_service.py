@@ -403,6 +403,11 @@ def evaluate(
             raise ProjectError(
                 "Sync outputs must differ from ranking/filter/WIP inputs by resolved field ID."
             )
+        if any(bindings.fields[alias].is_issue_field is not False for alias in outputs):
+            raise ProjectError(
+                "Sync outputs must be confirmed project-owned fields; "
+                "issue-backed or unknown ownership is not writable."
+            )
     result = ProjectResult(
         operation=request.operation,
         project=snapshot.project,
