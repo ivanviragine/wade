@@ -269,8 +269,10 @@ def reset_worktree_hard(worktree_path: Path, start_point: str) -> None:
     Callers must first guard tracked edits. Pin the destination commit and inspect
     the complete tree immediately before resetting. An obstruction or unknown
     inspection result refuses without mutating the branch/index/worktree. This
-    also protects the scaffold rollback caller. Concurrent filesystem writers
-    after the inspection are outside this preflight's guarantees.
+    also protects the scaffold rollback caller. Explicitly disable recursive
+    submodule resets regardless of user configuration: gitlink contents are not
+    part of this preflight. Concurrent filesystem writers after the inspection
+    are outside its guarantees.
     """
     destination = _run_git(
         "rev-parse", "--verify", "--end-of-options", f"{start_point}^{{commit}}", cwd=worktree_path
@@ -285,7 +287,7 @@ def reset_worktree_hard(worktree_path: Path, start_point: str) -> None:
     log.info("branch.reset_worktree_hard", worktree=str(worktree_path), start_point=destination)
     # Do not retry a destructive operation using a stale preflight. A transient
     # lock failure is safe to retry through the guarded operation itself.
-    _run_git("reset", "--hard", destination, cwd=worktree_path)
+    _run_git("reset", "--hard", "--no-recurse-submodules", destination, cwd=worktree_path)
 
 
 def create_scaffold_commit(

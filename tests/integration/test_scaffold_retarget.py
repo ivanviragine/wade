@@ -293,3 +293,74 @@ def test_unchanged_submodule_does_not_block_safe_retarget(
     assert _snapshot(worktree / "module") == before
     assert _git(worktree, "rev-parse", "HEAD^") == _git(tmp_git_repo, "rev-parse", "develop")
     push.assert_called_once()
+
+
+@pytest.mark.parametrize("operation", ["retarget", "rollback"])
+@pytest.mark.parametrize("ignored", [False, True])
+def test_recursive_config_cannot_overwrite_submodule_user_data(
+    tmp_git_repo: Path, tmp_path: Path, operation: str, ignored: bool
+) -> None:
+    from wade.services.implementation_service.draft_pr import _restore_scaffold_head
+
+    module = tmp_path / "module-source"
+    module.mkdir()
+    _git(module, "init")
+    _git(module, "config", "user.email", "test@example.com")
+    _git(module, "config", "user.name", "Test User")
+    (module / "tracked").write_bytes(b"submodule baseline\n")
+    (module / ".gitignore").write_text("precious\n" if ignored else "")
+    _git(module, "add", ".")
+    _git(module, "commit", "-m", "old submodule")
+    old_module = _git(module, "rev-parse", "HEAD")
+    _git(
+        tmp_git_repo, "-c", "protocol.file.allow=always", "submodule", "add", str(module), "module"
+    )
+    _git(tmp_git_repo, "commit", "-am", "track old submodule")
+    worktree = _setup(tmp_git_repo, tmp_path, "new-base-file")
+    (module / "precious").write_bytes(b"destination submodule content\n")
+    _git(module, "add", "-f", "precious")
+    _git(module, "commit", "-m", "new submodule tracks precious")
+    new_module = _git(module, "rev-parse", "HEAD")
+    _git(tmp_git_repo, "checkout", "develop")
+    _git(tmp_git_repo / "module", "fetch", "origin")
+    _git(tmp_git_repo / "module", "checkout", new_module)
+    _git(tmp_git_repo, "add", "module")
+    _git(tmp_git_repo, "commit", "-m", "advance destination submodule")
+    _git(tmp_git_repo, "checkout", "main")
+    _git(worktree, "-c", "protocol.file.allow=always", "submodule", "update", "--init")
+    nested = worktree / "module"
+    assert _git(nested, "rev-parse", "HEAD") == old_module
+    if operation == "rollback":
+        # Begin with a clean scaffold on develop, then retarget to main. Its
+        # rollback destination will advance the nested module back to new_module.
+        _git(worktree, "reset", "--hard", "develop")
+        _git(nested, "checkout", new_module)
+        branch.create_scaffold_commit(tmp_git_repo, _BRANCH, "chore: scaffold rollback fixture")
+        rollback_sha = _git(worktree, "rev-parse", "HEAD")
+        with patch(f"{_D}.git_repo.push_branch"):
+            assert reroot_scaffold_branch_for_retarget(
+                tmp_git_repo, _BRANCH, "develop", "main", "488"
+            )
+        _git(nested, "checkout", old_module)
+    precious = nested / "precious"
+    precious.write_bytes(b"valuable submodule user bytes\x00\r\n")
+    before = _snapshot(nested)
+    nested_index = _git(nested, "write-tree")
+    _git(tmp_git_repo, "config", "submodule.recurse", "true")
+    assert _git(worktree, "status", "--porcelain", "--untracked-files=no") == ""
+    with patch(f"{_D}.git_repo.push_branch") as push:
+        if operation == "retarget":
+            assert reroot_scaffold_branch_for_retarget(
+                tmp_git_repo, _BRANCH, "main", "develop", "488"
+            )
+            assert _git(worktree, "rev-parse", "HEAD^") == _git(
+                tmp_git_repo, "rev-parse", "develop"
+            )
+        else:
+            _restore_scaffold_head(tmp_git_repo, _BRANCH, rollback_sha, 526)
+            assert _git(worktree, "rev-parse", "HEAD") == rollback_sha
+    assert precious.read_bytes() == b"valuable submodule user bytes\x00\r\n"
+    assert _snapshot(nested) == before
+    assert _git(nested, "rev-parse", "HEAD") == old_module
+    assert _git(nested, "write-tree") == nested_index
+    push.assert_called_once()

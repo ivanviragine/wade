@@ -1548,7 +1548,8 @@ Scaffold hard resets pin the destination commit and inspect its complete tree ag
 the index and filesystem before mutation. The git-layer guard includes ignored
 files, empty/nested directories, symlinks without following them, and filesystem
 case aliases; inspection errors refuse. Tree-entry modes distinguish gitlinks:
-non-recursive resets leave submodule directories and their contents alone.
+resets explicitly pass `--no-recurse-submodules` to leave submodule directories
+and their contents alone even when `submodule.recurse=true`.
 The same guard applies to scaffold
 rollback after a failed PR-base edit. An obstructed rollback preserves the new
 user data and reports the existing branch/PR divergence for manual recovery.
