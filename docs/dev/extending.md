@@ -64,7 +64,8 @@ uv run python scripts/auto_version.py minor --dry-run # preview only
 The script updates both files, synchronizes an existing `uv.lock` with checked
 `uv lock --project <script-root>` (without dependency upgrade flags), and includes
 the lock with generated `CHANGELOG.md` in the commit and annotated tag. Lock
-synchronization must succeed before staging, committing, tagging, or optional
+synchronization clears inherited `UV_FROZEN` in its child environment and must
+succeed before staging, committing, tagging, or optional
 push. Missing uv and lock failures leave visible partial edits but no release
 commit/tag; a missing tracked lock or unrelated staged paths fail before edits.
 Standalone copies without git and without a lock retain source-only behavior.

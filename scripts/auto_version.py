@@ -10,6 +10,7 @@ commits and tags the coherent release.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -104,10 +105,14 @@ def sync_lockfile() -> bool:
     """Refresh existing lock metadata before any release commit or tag."""
     if not LOCK_FILE.exists():
         return False
+    env = os.environ.copy()
+    # A release must refresh metadata even when the caller uses frozen installs.
+    env.pop("UV_FROZEN", None)
     try:
         subprocess.run(
             ["uv", "lock", "--project", str(ROOT_DIR)],
             cwd=ROOT_DIR,
+            env=env,
             check=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:

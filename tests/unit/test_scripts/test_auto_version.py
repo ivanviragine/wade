@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ def test_lock_precedes_staging_tagging_and_push_and_selects_script_root(
     project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UV_PROJECT", "/different/project")
+    monkeypatch.setenv("UV_FROZEN", "true")
     monkeypatch.setattr(auto_version, "is_git_repo", lambda: True)
     runner = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout=""))
     monkeypatch.setattr(auto_version.subprocess, "run", runner)
@@ -37,7 +39,11 @@ def test_lock_precedes_staging_tagging_and_push_and_selects_script_root(
     commands = [c.args[0] for c in calls]
     lock_index = next(i for i, cmd in enumerate(commands) if cmd[0] == "uv")
     assert commands[lock_index] == ["uv", "lock", "--project", str(project)]
-    assert calls[lock_index].kwargs == {"cwd": project, "check": True}
+    assert calls[lock_index].kwargs["cwd"] == project
+    assert calls[lock_index].kwargs["check"] is True
+    assert "UV_FROZEN" not in calls[lock_index].kwargs["env"]
+    assert calls[lock_index].kwargs["env"]["UV_PROJECT"] == "/different/project"
+    assert os.environ["UV_FROZEN"] == "true"
     assert commands[lock_index + 1] == [
         "git",
         "add",
@@ -112,9 +118,11 @@ def test_standalone_without_git_preserves_no_lock_compatibility(
     auto_version.main()
     assert 'version = "1.2.14"' in (project / "pyproject.toml").read_text()
     if with_lock:
-        runner.assert_called_once_with(
-            ["uv", "lock", "--project", str(project)], cwd=project, check=True
-        )
+        runner.assert_called_once()
+        assert runner.call_args.args[0] == ["uv", "lock", "--project", str(project)]
+        assert runner.call_args.kwargs["cwd"] == project
+        assert runner.call_args.kwargs["check"] is True
+        assert "UV_FROZEN" not in runner.call_args.kwargs["env"]
     else:
         runner.assert_not_called()
 

@@ -77,7 +77,9 @@ uv run python scripts/auto_version.py patch --push   # or minor / major
 This bumps the source and manifest versions, runs `uv lock` against the script's
 project root, and includes the synchronized `uv.lock` with `CHANGELOG.md` in the
 release commit before tagging and pushing. Compatible dependency resolutions
-are retained; no upgrade flags are used. uv must be on PATH, including for direct
+are retained; no upgrade flags are used. The lock child process clears inherited
+`UV_FROZEN` so frozen installation preferences cannot silently skip the refresh;
+the caller's environment is unchanged. uv must be on PATH, including for direct
 Python and pre-push-hook callers. A lock failure stops before staging, committing,
 tagging or pushing and leaves any partial edits visible for inspection. Unrelated
 staged paths are rejected before release edits; unrelated unstaged edits are

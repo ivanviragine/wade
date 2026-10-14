@@ -193,3 +193,20 @@ def test_missing_tracked_lock_cannot_be_deleted_from_release(
     assert run(repo, "git", "rev-parse", "HEAD").stdout == head
     assert (repo / "src/wade/__init__.py").read_text() == '__version__ = "1.2.13"\n'
     assert not run(repo, "git", "tag", "--list", "v1.2.14").stdout
+
+
+def test_inherited_frozen_setting_cannot_create_stale_release(release_repo: Path) -> None:
+    repo = release_repo
+    env = os.environ.copy()
+    env["UV_FROZEN"] = "true"
+    env["UV_OFFLINE"] = "true"
+    subprocess.run(
+        [sys.executable, "scripts/auto_version.py", "patch"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert_release(repo, "1.2.14")
+    assert run(repo, "git", "status", "--porcelain").stdout == ""
