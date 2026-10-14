@@ -206,6 +206,20 @@ _PARAGRAPH_INTERRUPT_RE = re.compile(r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|`{3,}|~{3,}|
 _THEMATIC_BREAK_RE = re.compile(r" {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})")
 
 
+def _list_paragraph_open(content: str, paragraph: bool = False) -> bool:
+    """Recognize text paragraphs inside list blockquotes, including lazy lines."""
+    while quote := re.match(r" {0,3}>[ \t]?", content):
+        content = content[quote.end() :]
+    if paragraph and re.fullmatch(r" {0,3}(?:=+|-+)[ \t]*", content):
+        return False
+    return (
+        bool(content.strip())
+        and (paragraph or not content.startswith("    "))
+        and not bool(_PARAGRAPH_INTERRUPT_RE.match(content))
+        and not bool(_THEMATIC_BREAK_RE.fullmatch(content))
+    )
+
+
 def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tuple[str, bool, bool]:
     """Track list content columns without treating contained examples as owners.
 
@@ -244,29 +258,13 @@ def _list_container_line(text: str, indents: list[int], paragraph: bool) -> tupl
         content_column = indent + len(item[2]) + padding
         indents.append(content_column)
         content = visual[content_column:]
-        starts_block = _PARAGRAPH_INTERRUPT_RE.match(content) or _THEMATIC_BREAK_RE.fullmatch(
-            content
-        )
-        return (
-            content,
-            True,
-            bool(content.strip()) and not content.startswith("    ") and not bool(starts_block),
-        )
+        return content, True, _list_paragraph_open(content)
     while len(indents) > 1 and indents[-2] <= indent < indents[-1]:
         indents.pop()
     if indents:
         if indent >= indents[-1]:
             content = visual[indents[-1] :]
-            starts_block = _PARAGRAPH_INTERRUPT_RE.match(content) or _THEMATIC_BREAK_RE.fullmatch(
-                content
-            )
-            return (
-                content,
-                True,
-                bool(content.strip())
-                and (paragraph or not content.startswith("    "))
-                and not bool(starts_block),
-            )
+            return content, True, _list_paragraph_open(content, paragraph)
         interrupts = _PARAGRAPH_INTERRUPT_RE.match(visual)
         if not paragraph or interrupts or thematic:
             indents.clear()
@@ -395,7 +393,9 @@ def replace_owned_section(
 
     Existing owned pairs keep their original position. Missing projections use
     real managed anchors from the scanner; fenced examples cannot be anchors.
-    Both the input and complete output must be structurally valid.
+    An empty owned pair remains when same-named human headings need protection
+    from legacy migration on a later retry. Otherwise empty projections remove
+    the owned pair. Both the input and complete output must be structurally valid.
     """
     structure = scan_markdown_structure(body)
     owned = structure.owned(name)
@@ -403,6 +403,14 @@ def replace_owned_section(
         f"<!-- wade:{name}:start -->\n{content}\n<!-- wade:{name}:end -->" if content else ""
     )
     if owned is not None:
+        if (
+            not content
+            and heading is not None
+            and any(item.level == 2 and item.title == heading for item in structure.headings)
+        ):
+            # Without this ownership evidence, an identical empty retry would
+            # misclassify a preserved human section as legacy and delete it.
+            projection = f"<!-- wade:{name}:start -->\n\n<!-- wade:{name}:end -->"
         candidate = body[: owned.start] + projection + body[owned.end :]
     else:
         section = legacy_section_range(body, heading, structure) if heading is not None else None

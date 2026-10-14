@@ -442,3 +442,42 @@ def test_finalizer_preserves_owned_summary_after_list_setext_heading(tmp_path: P
         calls.read.return_value = prefix + old
         assert run() is True
         assert calls.write.call_args.args[2] == expected
+
+
+def test_finalizer_empty_removal_preserves_human_summary_on_repeat(tmp_path: Path) -> None:
+    human = "Closes #42\n\n## Summary\nHuman requirements.\n"
+    old = "<!-- wade:summary:start -->\nOld.\n<!-- wade:summary:end -->"
+    expected = human + "<!-- wade:summary:start -->\n\n<!-- wade:summary:end -->"
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        summary = tmp_path / "worktree" / "PR-SUMMARY.md"
+        summary.unlink()
+        calls.read.return_value = human + old
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        calls.read.return_value = expected
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        summary.write_text("Restored projection.", encoding="utf-8")
+        assert run() is True
+        assert calls.write.call_args.args[2] == human + (
+            "<!-- wade:summary:start -->\n## Summary\n\n"
+            "Restored projection.\n<!-- wade:summary:end -->"
+        )
+
+
+def test_finalizer_preserves_blockquote_list_lazy_continuation(tmp_path: Path) -> None:
+    example = (
+        "Closes #42\n\n- > Example\nlazy continuation\n"
+        "  <!-- wade:summary:start -->\n  Keep.\n  <!-- wade:summary:end -->\n"
+    )
+    expected = example + (
+        "\n<!-- wade:summary:start -->\n## Summary\n\n"
+        "New implementation summary.\n<!-- wade:summary:end -->"
+    )
+    with _finalizer(tmp_path, review_enabled=False) as (run, calls):
+        calls.read.return_value = example
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected
+        calls.read.return_value = expected
+        assert run() is True
+        assert calls.write.call_args.args[2] == expected

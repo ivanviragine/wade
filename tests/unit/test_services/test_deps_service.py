@@ -1392,7 +1392,8 @@ def test_dependencies_owned_pair_preserves_unmarked_section_and_plan() -> None:
     provider.read_task.return_value = Task(id="2", title="UI", body=body)
     assert apply_deps_to_issues(provider, ["2"], []) == 1
     assert provider.update_task.call_args.kwargs["body"] == body.replace(
-        "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->", ""
+        "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->",
+        "<!-- wade:deps:start -->\n\n<!-- wade:deps:end -->",
     )
 
 
@@ -1416,3 +1417,43 @@ def test_dependency_update_repeat_and_changed_edges_preserve_full_body() -> None
     assert provider.update_task.call_args.kwargs["body"] == body.replace(
         "Old.", "## Dependencies\n\n**Depends on:** #3"
     )
+
+
+def test_empty_dependency_removal_preserves_human_section_on_repeat() -> None:
+    provider = MagicMock()
+    human = "## Dependencies\nHuman requirements.\n"
+    old = "<!-- wade:deps:start -->\nOld.\n<!-- wade:deps:end -->"
+    expected = human + "<!-- wade:deps:start -->\n\n<!-- wade:deps:end -->"
+    provider.read_task.return_value = Task(id="2", title="UI", body=human + old)
+    assert apply_deps_to_issues(provider, ["2"], []) == 1
+    assert provider.update_task.call_args.kwargs["body"] == expected
+    provider.read_task.return_value = Task(id="2", title="UI", body=expected)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+    edges = [DependencyEdge(from_task="1", to_task="2")]
+    assert apply_deps_to_issues(provider, ["2"], edges) == 1
+    assert provider.update_task.call_args.kwargs["body"] == human + (
+        "<!-- wade:deps:start -->\n## Dependencies\n\n**Depends on:** #1\n<!-- wade:deps:end -->"
+    )
+
+
+def test_dependency_update_preserves_blockquote_list_lazy_continuation() -> None:
+    provider = MagicMock()
+    example = (
+        "- > Example\nlazy continuation\n"
+        "  <!-- wade:deps:start -->\n  Keep.\n  <!-- wade:deps:end -->\n"
+    )
+    provider.read_task.return_value = Task(id="2", title="UI", body=example)
+    assert apply_deps_to_issues(provider, ["2"], []) == 0
+    provider.update_task.assert_not_called()
+    edges = [DependencyEdge(from_task="1", to_task="2")]
+    assert apply_deps_to_issues(provider, ["2"], edges) == 1
+    expected = example + (
+        "\n<!-- wade:deps:start -->\n## Dependencies\n\n**Depends on:** #1\n<!-- wade:deps:end -->"
+    )
+    assert provider.update_task.call_args.kwargs["body"] == expected
+    provider.read_task.return_value = Task(id="2", title="UI", body=expected)
+    provider.update_task.reset_mock()
+    assert apply_deps_to_issues(provider, ["2"], edges) == 0
+    provider.update_task.assert_not_called()

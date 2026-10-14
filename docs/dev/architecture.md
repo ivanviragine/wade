@@ -1074,12 +1074,21 @@ Backtick/tilde fences accept zero-to-three-space indentation and matching longer
 closing runs, including fences in list items. List-contained marker examples
 cannot supply owned pairs; fence contents cannot supply pairs or insertion
 anchors. Setext underlines finish list paragraphs, so later dedented prose and
-owned projections are not mistaken for lazy list continuations.
+owned projections are not mistaken for lazy list continuations. Text paragraphs
+inside list blockquotes also admit lazy continuations; quoted headings, blank
+quotes, code and setext underlines do not keep paragraph continuation open.
 
 Each owned pair is authoritative and replaced in place. Without a pair, a unique
 exact legacy H2 may migrate only up to the first H1/H2, managed range, fence, or
-EOF. Unmarked lookalikes elsewhere remain untouched when a pair exists. Missing
-Summary/review projections use real managed anchors: Summary precedes existing
+EOF. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
+empty update would remove the pair while a same-named human H2 remains, retain
+an empty owned pair at the original offset. This is necessary ownership evidence:
+without it, an identical retry misclassifies that human section as legacy. Empty
+pairs remain idempotent and accept later nonempty replacement; when no such
+human heading remains, removal still deletes the owned pair. This evidence-driven
+exception to the original plan's literal pair-removal wording satisfies its
+stronger human-content preservation and repeated-update acceptance criteria.
+Missing Summary/review projections use real managed anchors: Summary precedes existing
 review status or the first implementation usage; missing review status follows
 Summary, otherwise precedes usage. Repeated unrelated blocks remain opaque.
 Before applying the existing reference helper, remove legacy Summary text and

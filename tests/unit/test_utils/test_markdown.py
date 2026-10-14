@@ -303,7 +303,8 @@ def test_owned_pair_is_authoritative_and_stays_in_place() -> None:
     )
     assert (
         replace_owned_section(body, name="summary", heading="Summary", content="")
-        == "## Summary\nUser section.\n\n## Tasks\nKeep."
+        == "## Summary\nUser section.\n<!-- wade:summary:start -->\n\n"
+        "<!-- wade:summary:end -->\n## Tasks\nKeep."
     )
 
 
@@ -437,3 +438,41 @@ def test_setext_heading_ends_lazy_list_paragraph(
     old = f"  <!-- wade:{name}:start -->\n{payload_indent}Old.\n  <!-- wade:{name}:end -->"
     expected = prefix + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
     assert replace_owned_section(prefix + old, name=name, heading=None, content="New.") == expected
+
+
+@pytest.mark.parametrize("name,heading", [("summary", "Summary"), ("deps", "Dependencies")])
+@pytest.mark.parametrize("human_count", [1, 2])
+def test_empty_removal_retains_ownership_across_retries(
+    name: str, heading: str, human_count: int
+) -> None:
+    human = (f"## {heading}\nHuman requirement.\n") * human_count
+    old = f"<!-- wade:{name}:start -->\nOld projection.\n<!-- wade:{name}:end -->"
+    expected = human + f"<!-- wade:{name}:start -->\n\n<!-- wade:{name}:end -->"
+    once = replace_owned_section(human + old, name=name, heading=heading, content="")
+    assert once == expected
+    assert replace_owned_section(once, name=name, heading=heading, content="") == expected
+    assert replace_owned_section(once, name=name, heading=heading, content="New.") == (
+        human + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    )
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+@pytest.mark.parametrize("quote", ["> Example", "> > Nested example", "> Example\n  > continued"])
+def test_lazy_blockquote_list_continuations_preserve_marker_examples(name: str, quote: str) -> None:
+    example = (
+        f"- {quote}\nlazy continuation\n"
+        f"  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n"
+    )
+    assert scan_markdown_structure(example).blocks == []
+    result = replace_owned_section(example, name=name, heading=None, content="New.")
+    assert result == example + f"\n<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    assert replace_owned_section(result, name=name, heading=None, content="New.") == result
+
+
+@pytest.mark.parametrize("quote", ["> # Heading", ">", ">     Code.", "> Text.\n  > ==="])
+def test_nonparagraph_blockquotes_end_lazy_list_context(quote: str) -> None:
+    prefix = f"- {quote}\nHuman text.\n"
+    old = "  <!-- wade:summary:start -->\nOld.\n  <!-- wade:summary:end -->"
+    assert replace_owned_section(prefix + old, name="summary", heading=None, content="New.") == (
+        prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    )

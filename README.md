@@ -618,8 +618,10 @@ empty body remains valid. The branch may already have been pushed before this
 retryable failure.
 
 Summary and dependency updates preserve embedded plans, fenced examples, and
-unrelated sections. An existing managed block is replaced in place. Older
-unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
+unrelated sections. An existing managed block is replaced in place. When an
+empty update removes its content while a same-named human section remains, an
+empty marker pair retains ownership so retries cannot delete the human section.
+Otherwise the empty owned block is removed. Older unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
 column-zero heading, stopping at the next H1/H2 heading, managed block, or code
 fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
 unclosed fences stop the update with a repair message. This also applies to new
