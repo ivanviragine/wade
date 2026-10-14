@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.15] — 2026-10-14
+
+### Bug Fixes
+
+- preserve untracked files when retargeting scaffold branches (#526) (8c51aee)
+
 ## [v1.2.14] — 2026-10-14
 
 ### Bug Fixes
