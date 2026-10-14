@@ -67,11 +67,25 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ### Every release
 
+Merging a conventional-commit-titled PR into `main` runs Auto Version Bump.
+It uses the same script as this explicit local release command:
+
 ```bash
 uv run python scripts/auto_version.py patch --push   # or minor / major
 ```
 
-This bumps the version, generates `CHANGELOG.md`, commits, tags, and pushes. CI then:
+This bumps the source and manifest versions, runs `uv lock` against the script's
+project root, and includes the synchronized `uv.lock` with `CHANGELOG.md` in the
+release commit before tagging and pushing. Compatible dependency resolutions
+are retained; no upgrade flags are used. The lock child process clears inherited
+`UV_FROZEN` so frozen installation preferences cannot silently skip the refresh;
+the caller's environment is unchanged. uv must be on PATH, including for direct
+Python and pre-push-hook callers. A lock failure stops before staging, committing,
+tagging or pushing and leaves any partial edits visible for inspection. Unrelated
+staged paths are rejected before release edits; unrelated unstaged edits are
+preserved and can still prevent the later pull/rebase.
+
+CI then:
 
 1. Creates a **draft GitHub Release** with the changelog notes
 2. You review it on GitHub and click **Publish Release**
@@ -96,7 +110,20 @@ uv run python scripts/auto_version.py minor   # new features  0.1.0 → 0.2.0
 uv run python scripts/auto_version.py major   # breaking      0.1.0 → 1.0.0
 ```
 
-Add `--dry-run` to preview without making changes.
+For a preview without script writes or commands, run
+`python3 scripts/auto_version.py patch --dry-run`. An outer `uv run` can synchronize
+a stale lock before Python starts, even when the script receives `--dry-run`.
+
+uv may normalize the lock schema: uv 0.13.1 changes revision 3 to 5 without
+changing dependency resolutions. The resulting coherent lock was verified with
+`uv sync --all-extras --locked` under both uv 0.9.27 and 0.13.1. No global uv
+upgrade is required for this repair.
+
+If an automatic bump failed before push because a prior release omitted lock
+metadata, merge the reviewed release fix through the normal workflow and verify
+remote main, the tag target, postmerge CI and the draft release. Do not manually
+bump main, discard the lock edit, or rerun the unchanged failing workflow. The
+next generated changelog includes the pending conventional commits.
 
 ## Detailed Reference
 

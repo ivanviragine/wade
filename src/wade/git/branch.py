@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import stat
+import subprocess
 from pathlib import Path
 
 import structlog
 
-from wade.git.repo import _run_git, _run_git_with_retry
+from wade.git.repo import GitError, _run_git, _run_git_with_retry
 from wade.utils.slug import slugify
 
 log = structlog.get_logger(__name__)
@@ -153,26 +156,138 @@ def reset_branch(
     _run_git_with_retry("branch", "-f", branch_name, start_point, cwd=repo_root)
 
 
-def reset_worktree_hard(worktree_path: Path, start_point: str) -> None:
-    """Force-move the branch checked out in *worktree_path* to *start_point*.
+def _reset_inventory(worktree: Path, *args: str) -> tuple[str, ...]:
+    """Read a NUL-delimited Git inventory without newline or quoted-path conversion."""
+    try:
+        result = subprocess.run(["git", *args], cwd=worktree, capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise GitError(f"Cannot inspect reset paths in {worktree}: {exc}") from exc
+    if result.stdout and not result.stdout.endswith(b"\0"):
+        raise GitError(f"Invalid reset path inventory in {worktree}")
+    return tuple(os.fsdecode(path) for path in result.stdout.split(b"\0") if path)
 
-    ``git branch -f`` refuses to move a checked-out branch, so re-root such a branch by
-    running ``git reset --hard`` *inside its worktree* instead. This discards uncommitted
-    changes to **tracked** files in that worktree (untracked files are left in place), so
-    callers must confirm the worktree carries no tracked changes first (see
-    :func:`wade.git.repo.has_tracked_changes`). Used to re-root a scaffold-only branch
-    that is checked out — e.g. after ``wade implement --cd`` — before retargeting its PR,
-    so the old base's commits don't leak into the new base's diff (#376 review).
 
-    Args:
-        worktree_path: The worktree in which the target branch is checked out.
-        start_point: Commit, branch, or tag to move the branch (and worktree) onto.
+def _reset_collisions(worktree: Path, destination: str) -> tuple[str, ...]:
+    """Find occupied untracked/ignored nodes the complete destination would replace.
 
-    Raises:
-        GitError: If the reset fails.
+    Inspect filesystem occupancy rather than Git's ignored/untracked listing, which
+    can omit empty directories and collapse nested repositories. Never follow a
+    symlink. Resolve actual directory-entry spellings to handle case aliases on
+    filesystems that permit them, without conflating distinct hard-linked paths.
     """
-    log.info("branch.reset_worktree_hard", worktree=str(worktree_path), start_point=start_point)
-    _run_git_with_retry("reset", "--hard", start_point, cwd=worktree_path)
+    indexed = _reset_inventory(worktree, "ls-files", "-z")
+    target = _reset_inventory(worktree, "ls-tree", "-r", "-z", destination)
+    # Path equality case-folds on Windows even in case-sensitive directories.
+    # Use exact actual spellings for cache and tracked identity on every host.
+    directories: dict[str, tuple[Path, ...]] = {}
+
+    def children(directory: Path) -> tuple[Path, ...]:
+        key = os.fspath(directory)
+        if key not in directories:
+            with os.scandir(directory) as entries:
+                directories[key] = tuple(sorted(Path(e.path) for e in entries))
+        return directories[key]
+
+    def entry(directory: Path, name: str) -> Path | None:
+        requested = directory / name
+        try:
+            info = requested.lstat()
+        except FileNotFoundError:
+            return None
+        entries = children(directory)
+        exact = next((path for path in entries if path.name == name), None)
+        if exact is not None:
+            return exact
+        # The requested spelling exists, but isn't the actual entry spelling.
+        # This can happen with case/Unicode aliases. Multiple inode matches are
+        # ambiguous (hard links); refusing is safer than treating user data as tracked.
+        aliases = [
+            path
+            for path in entries
+            if (details := path.lstat()).st_ino == info.st_ino and details.st_dev == info.st_dev
+        ]
+        if len(aliases) != 1:
+            raise OSError(f"Cannot resolve filesystem spelling of {requested}")
+        return aliases[0]
+
+    def existing_index_path(name: str) -> Path | None:
+        parts = name.split("/")
+        node = worktree
+        for position, part in enumerate(parts):
+            found = entry(node, part)
+            if found is None:
+                return None
+            node = found
+            if position < len(parts) - 1 and not stat.S_ISDIR(node.lstat().st_mode):
+                return None
+        return node
+
+    collisions: set[str] = set()
+    try:
+        tracked = {
+            os.fspath(path) for name in indexed if (path := existing_index_path(name)) is not None
+        }
+
+        def inspect_replaced_directory(directory: Path) -> None:
+            contents = children(directory)
+            if not contents:
+                collisions.add(directory.relative_to(worktree).as_posix())
+            for child in contents:
+                if stat.S_ISDIR(child.lstat().st_mode):
+                    inspect_replaced_directory(child)
+                elif os.fspath(child) not in tracked:
+                    collisions.add(child.relative_to(worktree).as_posix())
+
+        for record in target:
+            header, delimiter, name = record.partition("\t")
+            mode = header.split(" ", 1)[0]
+            if not delimiter or mode not in {"100644", "100755", "120000", "160000"}:
+                raise GitError(f"Invalid reset tree inventory in {worktree}")
+            node = worktree
+            parts = name.split("/")
+            for position, part in enumerate(parts):
+                found = entry(node, part)
+                if found is None:
+                    break
+                node = found
+                if not stat.S_ISDIR(node.lstat().st_mode):
+                    if os.fspath(node) not in tracked:
+                        collisions.add(node.relative_to(worktree).as_posix())
+                    break
+                if position == len(parts) - 1 and mode != "160000":
+                    # A default (non-recursive) reset leaves submodule directories
+                    # and their contents in place. Gitlinks aren't file replacements.
+                    inspect_replaced_directory(node)
+    except OSError as exc:
+        raise GitError(f"Cannot safely inspect reset paths in {worktree}: {exc}") from exc
+    return tuple(sorted(collisions))
+
+
+def reset_worktree_hard(worktree_path: Path, start_point: str) -> None:
+    """Reset a checked-out scaffold without overwriting untracked or ignored data.
+
+    Callers must first guard tracked edits. Pin the destination commit and inspect
+    the complete tree immediately before resetting. An obstruction or unknown
+    inspection result refuses without mutating the branch/index/worktree. This
+    also protects the scaffold rollback caller. Explicitly disable recursive
+    submodule resets regardless of user configuration: gitlink contents are not
+    part of this preflight. Concurrent filesystem writers after the inspection
+    are outside its guarantees.
+    """
+    destination = _run_git(
+        "rev-parse", "--verify", "--end-of-options", f"{start_point}^{{commit}}", cwd=worktree_path
+    ).stdout.strip()
+    collisions = _reset_collisions(worktree_path, destination)
+    if collisions:
+        paths = ", ".join(repr(path) for path in collisions)
+        raise GitError(
+            f"Reset in {worktree_path} would overwrite untracked or ignored paths: {paths}. "
+            "Preserve or move these paths outside the affected worktree before retrying."
+        )
+    log.info("branch.reset_worktree_hard", worktree=str(worktree_path), start_point=destination)
+    # Do not retry a destructive operation using a stale preflight. A transient
+    # lock failure is safe to retry through the guarded operation itself.
+    _run_git("reset", "--hard", "--no-recurse-submodules", destination, cwd=worktree_path)
 
 
 def create_scaffold_commit(

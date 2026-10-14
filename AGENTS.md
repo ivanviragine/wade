@@ -72,6 +72,15 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 > GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
 > code still exists but is inert; removal is tracked as #357 C5.
 
+**Summary and dependency body replacement** share the offset-preserving scanner
+in `utils/markdown.py`. It protects standalone managed ranges and fenced code,
+limits legacy migration to unique column-zero H2 sections, and rejects malformed
+input or rendered output before writing. CommonMark container facts come from
+`markdown-it-py`; WADE keeps original byte slices and rejects incomplete parses.
+Other Markdown consumers retain their existing contracts; do not assume the
+older extraction/removal helpers are
+structural scanners. See `docs/dev/architecture.md` for ownership and boundaries.
+
 > **Closing-review state** lives in worktree files, not the immutable session
 > bundle: binding-aware receipts are under `.wade/reviews/`, and an active
 > PR-comment feedback cycle is under `.wade/review-cycles/`. The cycle preserves
@@ -113,6 +122,12 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
+
+Scaffold retargets use a guarded git-layer hard reset: tracked edits and
+untracked/ignored paths obstructing the pinned destination tree must refuse
+before mutation. Noncolliding session output remains allowed. The guard also
+applies to rollback; an obstructed rollback preserves data and reports manual
+recovery, rather than claiming branch/PR consistency was restored.
 
 ## Design Principles
 

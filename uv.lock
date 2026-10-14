@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1284,11 +1284,12 @@ wheels = [
 
 [[package]]
 name = "wade-cli"
-version = "1.2.12"
+version = "1.2.20"
 source = { editable = "." }
 dependencies = [
     { name = "crossby" },
     { name = "httpx" },
+    { name = "markdown-it-py" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
@@ -1312,6 +1313,7 @@ dev = [
 requires-dist = [
     { name = "crossby", specifier = ">=0.43.2,<0.44.0" },
     { name = "httpx", specifier = ">=0.27,<1.0" },
+    { name = "markdown-it-py", specifier = ">=4.2,<5" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "pydantic", specifier = ">=2.0" },

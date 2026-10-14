@@ -351,6 +351,8 @@ wade implement 42 --base develop   # branch from, target, and merge into develop
 
 `--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value is rejected up front — whether declared in the plan (fails `wade plan-session done`) or passed as `--base` (fails fast when you run `wade implement`); a well-formed base branch that does not exist fails draft-PR creation with an actionable message. Changing the base of a PR whose work is already in flight — whether by re-running planning or by `wade implement --base` — is not applied silently: it requires explicit confirmation, because the branch's existing history cannot be moved onto the new base without discarding it.
 
+A scaffold branch checked out in a worktree can be moved onto a different base only when its tracked files are clean and no untracked or ignored paths obstruct the destination tree. Colliding files, symlinks, and directories cause refusal before the branch or PR base changes; noncolliding generated session files remain allowed. Preserve or move the reported paths outside the affected worktree before retrying. Ignored files receive the same protection as ordinary untracked work. Retarget and rollback explicitly leave submodule worktrees unchanged, including when `submodule.recurse` is enabled; update submodules separately when needed.
+
 ## Reviews & bot triggers
 
 WADE splits review into an **AI review pass** you or the agent can invoke, and
@@ -615,6 +617,22 @@ body again and preserves existing plan and user content. A successfully read
 empty body remains valid. The branch may already have been pushed before this
 retryable failure.
 
+Summary and dependency updates preserve embedded plans, fenced examples, and
+unrelated sections. An existing managed block is replaced in place. When an
+empty update removes its content while a same-named human section remains, an
+empty marker pair retains ownership so retries cannot delete the human section,
+including headings exposed by removing old HTML content. Summary and review-status
+changes are assembled together, so preservation and empty-pair decisions reflect
+the complete update.
+Otherwise the empty owned block is removed. Older unmarked `## Summary` and `## Dependencies` sections migrate only from a unique,
+column-zero heading, stopping at the next top-level H1/H2 heading (including
+indented and setext headings), managed block, or code fence. Ambiguous headings, broken or nested markers, duplicate owned blocks, and
+unclosed fences, excessive nesting, or context changes that invalidate unrelated
+managed ownership stop the update with a repair message. This also applies to new
+`PR-SUMMARY.md` content: close its fences and keep marker examples inside fenced
+code. Repair the indicated input and retry; dependency batches skip the affected
+issue and continue with the others.
+
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is
 refused, so committing-and-pushing straight past `done` doesn't work. It is
@@ -629,6 +647,19 @@ review outcome — reviewed at `<sha>`, reviewer changed, skipped via
 `ai.review_implementation.enabled: false`), or completed at the active review
 binding's pass cap. A skipped, stale-reviewer, or never-run review is therefore
 visible to reviewers rather than hidden in worktree state.
+
+After a PR merge, WADE updates the main checkout and restores any tracked local
+changes using the exact stash SHA it captured, even if another worktree pushes
+its own stash meanwhile. WADE preserves any remaining owned stash entry after
+restoration because removing a positional stash entry can race with another push.
+Recovery commands are printed on separate copyable lines, with shell-quoted
+checkout paths and intact arguments even in narrow terminals. Inspect the
+reported checkout using the printed stash-list command, compare SHA/ref/message,
+and verify the current ref still names the intended SHA before manual cleanup.
+Resolve conflicts before retrying the printed apply command; if the stash object
+is unavailable, recover it first. Sync's apply command runs from the checkout
+named in its explanation. Local recovery warnings do not mean the remote PR
+merge failed.
 
 ## Task Providers
 
@@ -678,15 +709,33 @@ Description body here. Sub-headings, code blocks, anything markdown.
     name: markdown
     settings:
       path: ISSUES.md      # relative to repo root, or absolute
-      auto_commit: false   # if true, close_task auto-commits the change
+      auto_commit: false   # attempt a close-only commit for a clean tracked file
   ```
 
 - After a PR merges, `provider.close_task` flips the section's `state` to
   `closed` in `ISSUES.md`. By default the file is left modified in your
   working tree — commit it yourself. Set `auto_commit: true` to have
-  wade commit the change with a `chore: close #N` message; failures
-  (not a git repo, hook rejection, signing required) are logged and
-  swallowed so the close itself never blocks.
+  wade attempt a `chore: close #N` commit containing only the selected task's
+  state and `in-progress` label changes. Other file content and line endings
+  remain intact, and unrelated staged or unstaged work stays untouched.
+- Auto-commit requires the task file to be a clean tracked regular file with
+  matching HEAD, index, and disk contents. Preexisting staged, partially staged,
+  or unstaged task-file edits, hidden index flags, replacement objects, and
+  uncertain repository state cause a warning and skip the commit. The task still closes on disk;
+  its original staged version and flags remain intact. Optional task comments
+  are separate edits and follow this same skip policy.
+- Ordinary hooks and signing remain enabled. An invocation-local guard rejects
+  a hook-expanded candidate before HEAD advances; it does not change installed
+  hooks or persistent Git configuration. Unsupported Git hook dispatch
+  (Git older than 2.36), hook rejection, signing failure, and Git errors are
+  logged without undoing the disk closure. Hooks that directly edit other
+  files or refs retain their own side effects.
+- Task-like headings inside backtick or tilde fenced code blocks remain body
+  or prelude examples. A real heading after a valid closing fence starts the
+  next task; an unclosed fence continues through the end of the file. Fences
+  use zero to three leading spaces and at least three matching delimiters;
+  closing runs use the same delimiter, at least the opening length, and only
+  spaces or tabs afterward.
 - Tracking tasks with `- [ ] #N` checklist bodies work the same as with
   GitHub Issues — markdown's `find_parent_issue` scans every section's
   body for child refs.
