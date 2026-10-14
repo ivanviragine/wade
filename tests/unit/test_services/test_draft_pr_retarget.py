@@ -395,8 +395,7 @@ class TestBootstrapRetargetReroots:
         update_body.assert_called_once_with(
             Path("/repo"),
             5,
-            "Implements #42\n\n<!-- wade:plan:start -->\n\n"
-            "revised plan body\n\n<!-- wade:plan:end -->",
+            "Implements #42\n\n<!-- wade:plan:start -->\nrevised plan body\n<!-- wade:plan:end -->",
         )
 
     @patch(f"{_D}.git_pr.update_pr_body")

@@ -365,3 +365,122 @@ class TestPlanSandboxProfileContract:
         combined = result.stdout + result.stderr
         assert "--sandbox" in combined
         assert "--no-sandbox" in combined
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_native_normal_replan_persists_exact_plan_and_next_implementation_consumes_it(
+    e2e_repo: Path,
+    mock_gh_cli: MockGhCli,
+    retry: bool,
+) -> None:
+    """Fake runtime, real CLI/native receipt/finalization/recovery/worktrees."""
+    import subprocess
+
+    _init_origin_remote(e2e_repo)
+    binary = mock_gh_cli["mock_bin"] / "opencode"
+    binary.write_text("""#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+from wade.services import interactive_plan_service as interactive
+if "--version" in sys.argv:
+    print("1.18.29")
+    sys.exit(0)
+assert "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "plan"
+root = Path.cwd()
+markdown = os.environ["WADE_MOCK_REPLACEMENT_PLAN"]
+interactive.import_artifact(root, markdown)
+# Supported deterministic test receipt, never a claim of real model inference.
+interactive.record_review(root / ".wade/plans/PLAN.md", markdown, self_review=False)
+result = subprocess.run(
+    [sys.executable, "-m", "wade", "plan-session", "done", ".wade/plans"],
+    capture_output=True, text=True,
+)
+print(result.stdout)
+print(result.stderr, file=sys.stderr)
+if result.returncode:
+    sys.exit(result.returncode)
+state_path = Path(os.environ["WADE_MOCK_GH_STATE"])
+state = json.loads(state_path.read_text())
+state["native_calls"] = state.get("native_calls", 0) + 1
+if "1" in state["issues"]:
+    state["issues"]["1"]["body"] += "\\nHuman edit during native planning."
+state_path.write_text(json.dumps(state))
+""")
+    binary.chmod(0o755)
+    old = "# fix: initial plan\n\n## Complexity\neasy\n\n## Tasks\n- Obsolete requirement.\n"
+    replacement = (
+        "# fix: replacement plan\n\n## Complexity\ncomplex\n\n"
+        "## Context\nNew requirements.\n\n## Summary\nPreserve later tasks.\n\n"
+        "## Tasks\n- Replacement requirement.\n\n## Acceptance Criteria\n- It is durable.\n\n"
+        "```markdown\n## Summary\n<!-- wade:summary:end -->\n<!-- wade:plan:end -->\n```\n"
+    )
+    result = _run(
+        ["plan", "--ai", "opencode", "--model", "test-model", "--yolo"],
+        cwd=e2e_repo,
+        env={"WADE_MOCK_REPLACEMENT_PLAN": old},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    assert len(state["issues"]) == len(state["prs"]) == 1
+    assert old.split("\n", 1)[1].strip() in state["prs"]["1"]["body"]
+    original_head = state["prs"]["1"]["head"]
+    state["issues"]["1"]["title"] = "fix: renamed issue"
+    state["issues"]["1"]["body"] += "\nHuman edit before replanning."
+    preserved = (
+        "\n\n## Human Requirements\nKeep this section.\n"
+        "<!-- wade:future:start -->\nKeep unknown owner.\n<!-- wade:future:end -->"
+    )
+    state["prs"]["1"]["body"] = (
+        "```markdown\n<!-- wade:plan:start -->\n```\n\n" + state["prs"]["1"]["body"] + preserved
+    )
+    state["fail_pr_body_write"] = retry
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    result = _run(
+        ["plan", "--issue", "1", "--ai", "opencode", "--model", "test-model", "--yolo"],
+        cwd=e2e_repo,
+        env={"WADE_MOCK_REPLACEMENT_PLAN": replacement},
+    )
+    assert result.returncode == (1 if retry else 0), result.stdout + result.stderr
+    if retry:
+        records = subprocess.check_output(
+            ["git", "worktree", "list", "--porcelain"], cwd=e2e_repo, text=True
+        ).split("\n\n")
+        detached = next(record for record in records if "\ndetached" in record)
+        root = Path(detached.splitlines()[0].removeprefix("worktree "))
+        assert (root / ".wade/plans/PLAN.md").read_text() == replacement
+        assert (root / ".wade/plans/interactive-reviews.json").is_file()
+        assert (root / ".wade/session/manifest.json").is_file()
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        state["fail_pr_body_write"] = False
+        state["issues"]["1"]["body"] += "\nHuman edit before recovery."
+        mock_gh_cli["state_file"].write_text(json.dumps(state))
+        result = _run(
+            ["plan", "--recover", str(root)],
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not root.exists()
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    assert state["native_calls"] == 2
+    assert len(state["issues"]) == len(state["prs"]) == 1
+    pr = state["prs"]["1"]
+    assert pr["head"] == original_head
+    assert pr["title"] == "fix: renamed issue"
+    expected_body = replacement.split("\n", 1)[1].strip()
+    expected_block = "<!-- wade:plan:start -->\n" + expected_body + "\n<!-- wade:plan:end -->"
+    assert expected_block in pr["body"]
+    assert preserved in pr["body"]
+    assert "Obsolete requirement." not in pr["body"]
+    assert state["issues"]["1"]["body"].count("**Full plan**: PR #1") == 1
+    assert "Human edit before replanning." in state["issues"]["1"]["body"]
+    assert "Human edit during native planning." in state["issues"]["1"]["body"]
+    result = _run(
+        ["implement", "1", "--cd", "--ai", "opencode", "--model", "test-model"], cwd=e2e_repo
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = Path(result.stdout.strip())
+    assert (root / "PLAN.md").read_text() == (
+        "# Issue #1: fix: renamed issue\n\n"
+        + expected_body
+        + "\n\nURL: https://github.com/test/e2e-project/issues/1\n"
+    )

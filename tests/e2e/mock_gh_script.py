@@ -391,6 +391,9 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
             return 1
         body = _find_flag(args, "--body")
         if body is not None:
+            if state.get("fail_pr_body_write"):
+                print("fixture PR body write rejected", file=sys.stderr)
+                return 1
             pr["body"] = body
         title = _find_flag(args, "--title")
         if title is not None:

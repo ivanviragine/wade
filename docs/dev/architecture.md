@@ -298,12 +298,36 @@ failure therefore
 leaves a retry reusing those tasks — and the original model for `planned-by`
 provenance — instead of creating duplicates; a partial finalization with a
 pending marker retains the original worktree for the same reconciliation path.
-Attaching a plan to an existing issue is idempotent for the same reason:
-`bootstrap_draft_pr` reuses the open PR, and the plan link is appended only when
-the issue body lacks it. Recovery refreshes that PR's managed plan body before
-accepting the attachment, so an approved recovery edit cannot be lost. A binding
-or progress file that is unsafe, invalid, missing required data, or bound to
-another session aborts recovery rather than being silently replaced.
+Ordinary single-plan replanning and retained-handoff recovery explicitly refresh
+the existing PR before accepting attachment. Generic bootstrap/resume still
+defaults to reuse without replacing its plan. `DraftPRTarget` fixes the stable
+task-number branch and verified open PR once, using the existing branch policy
+and complete open-PR fallback. Lookup/listing errors, incomplete fallback results,
+or an unverifiable selected PR fail closed. Retarget safety, bootstrap and pin
+reconciliation consume that same identity rather than re-slugifying a changed
+title; fresh creation follows only trustworthy absence.
+
+Explicit refresh uses `replace_owned_section(name="plan", heading=None)` over a
+fresh body through the shared read/transform/budget/write helper. The stored
+content is exactly `PlanFile.body` (the artifact H1 is omitted). The plan extractor
+uses the same scanner-owned span so next startup materializes that body even with
+fenced marker examples before or inside it. Its public result remains `str | None`,
+including empty string for a valid empty pair and None for absent/unsafe ownership;
+interior bytes and the established outer-strip behavior are retained. Unrelated
+source slices/owners remain intact, including unknown and legacyPlan blocks; no legacy
+plan migration occurs. Empty-body reads are valid; unreadable bodies, malformed
+ownership/fences and oversized composition refuse before a body write. The size
+check runs before budget trimming so replacement cannot discard unrelated usage.
+The task is reread after required PR work; an exact plain Full plan link is
+appended only if absent, preserving current edits and distinguishing PR #7 from
+PR #70. Required issue read/link-write failures propagate even after partial PR
+success. All explicit-refresh attachment failures retain the original registered
+worktree, frozen bundle, native state, binding/progress, and plan files; filesystem
+fallback output stays at its original path. Supported recovery reruns the gates
+and current reads, then finalizes/cleans only after persistence succeeds. A copied
+cleaned-up archive cannot replace the original registered recovery authority.
+A binding or progress file that is unsafe, invalid, missing required data, or
+bound to another session aborts recovery rather than being silently replaced.
 
 ## Hook Guard Layer
 
