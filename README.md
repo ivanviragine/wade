@@ -635,12 +635,15 @@ visible to reviewers rather than hidden in worktree state.
 After a PR merge, WADE updates the main checkout and restores any tracked local
 changes using the exact stash SHA it captured, even if another worktree pushes
 its own stash meanwhile. WADE preserves any remaining owned stash entry after
-restoration because removing a positional stash entry can race with another push. Inspect the
-reported checkout with `git stash list --format='%H %gd %gs'` and verify the
-selected entry matches the reported SHA before manually dropping its ref. If
-restoration conflicts or its object is unavailable, follow the printed recovery
-instructions; resolve conflicts before retrying the reported `stash apply <sha>`
-command. Local recovery warnings do not mean the remote PR merge failed.
+restoration because removing a positional stash entry can race with another push.
+Recovery commands are printed on separate copyable lines, with shell-quoted
+checkout paths and intact arguments even in narrow terminals. Inspect the
+reported checkout using the printed stash-list command, compare SHA/ref/message,
+and verify the current ref still names the intended SHA before manual cleanup.
+Resolve conflicts before retrying the printed apply command; if the stash object
+is unavailable, recover it first. Sync's apply command runs from the checkout
+named in its explanation. Local recovery warnings do not mean the remote PR
+merge failed.
 
 ## Task Providers
 
