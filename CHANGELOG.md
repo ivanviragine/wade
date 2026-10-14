@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.17] — 2026-10-14
+
+### Bug Fixes
+
+- preserve copyable stash recovery commands at narrow terminal widths (#541) (f39e0a1)
+
 ## [v1.2.16] — 2026-10-14
 
 ### Bug Fixes
