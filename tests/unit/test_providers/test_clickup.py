@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -34,6 +34,7 @@ def _make_raw_task(
     name: str = "Test task",
     description: str = "Some body",
     status: str = "open",
+    status_type: str | None = "open",
     tags: list[dict[str, str]] | None = None,
     url: str = "https://app.clickup.com/t/abc123",
     date_created: str | None = "1704067200000",
@@ -45,7 +46,8 @@ def _make_raw_task(
         "name": name,
         "description": description,
         "markdown_description": description,
-        "status": {"status": status, "type": "open", "color": "#87909e"},
+        "status": {"status": status, "type": status_type, "color": "#87909e"},
+        "list": {"id": "901"},
         "tags": tags or [],
         "url": url,
         "date_created": date_created,
@@ -69,19 +71,19 @@ class TestParseClickupTask:
         assert task.url == "https://app.clickup.com/t/abc123"
 
     def test_closed_task(self) -> None:
-        raw = _make_raw_task(status="closed")
+        raw = _make_raw_task(status="closed", status_type="closed")
         task = _parse_clickup_task(raw)
         assert task.state == TaskState.CLOSED
 
     def test_complete_task(self) -> None:
-        raw = _make_raw_task(status="complete")
+        raw = _make_raw_task(status="complete", status_type="closed")
         task = _parse_clickup_task(raw)
         assert task.state == TaskState.CLOSED
 
     def test_done_task(self) -> None:
-        raw = _make_raw_task(status="done")
+        raw = _make_raw_task(status="done", status_type="done")
         task = _parse_clickup_task(raw)
-        assert task.state == TaskState.CLOSED
+        assert task.state == TaskState.OPEN
 
     def test_tags_parsed_as_labels(self) -> None:
         raw = _make_raw_task(
@@ -193,7 +195,7 @@ class TestListTasks:
             {
                 "tasks": [
                     _make_raw_task(status="open"),
-                    _make_raw_task(task_id="closed1", status="closed"),
+                    _make_raw_task(task_id="closed1", status="closed", status_type="closed"),
                 ]
             },
             {"tasks": []},
@@ -351,30 +353,136 @@ class TestUpdateTask:
 
 
 class TestCloseTask:
-    def test_close_task(self, provider: ClickUpProvider) -> None:
-        provider._client = MagicMock()
-        provider._client.get.return_value = _make_raw_task(status="closed")
-
-        task = provider.close_task("abc123")
-
-        provider._client.put.assert_called_once()
-        call_json = provider._client.put.call_args[1]["json"]
-        assert call_json["status"] == "closed"
-        assert task.state == TaskState.CLOSED
-
-    def test_close_task_ignores_reason(self, provider: ClickUpProvider) -> None:
-        """ClickUp has no close-reason concept — reason is accepted and ignored."""
+    @pytest.mark.parametrize("name", ["Shipped", "complete", " Closed "])
+    @pytest.mark.parametrize("reason", [None, "not planned"])
+    def test_discovers_home_list_and_preserves_status_name(
+        self, provider: ClickUpProvider, name: str, reason: str | None
+    ) -> None:
         from wade.models.task import CloseReason
 
+        before = _make_raw_task()
+        before["list"] = {"id": "home-list"}
         provider._client = MagicMock()
-        provider._client.get.return_value = _make_raw_task(status="closed")
-
-        task = provider.close_task("abc123", reason=CloseReason.NOT_PLANNED)
-
-        provider._client.put.assert_called_once()
-        call_json = provider._client.put.call_args[1]["json"]
-        assert call_json == {"status": "closed"}
+        provider._client.get.side_effect = [
+            before,
+            {
+                "override_statuses": False,
+                "statuses": [
+                    {"status": "Done", "type": "done"},
+                    {"status": name, "type": "closed"},
+                ],
+            },
+            _make_raw_task(status=name, status_type="closed"),
+        ]
+        task = provider.close_task("abc123", reason=CloseReason(reason) if reason else None)
         assert task.state == TaskState.CLOSED
+        assert provider._client.get.call_args_list == [
+            call("/api/v2/task/abc123", params={"include_markdown_description": "true"}),
+            call("/api/v2/list/home-list"),
+            call("/api/v2/task/abc123", params={"include_markdown_description": "true"}),
+        ]
+        provider._client.put.assert_called_once_with("/api/v2/task/abc123", json={"status": name})
+        assert provider._client.method_calls == [
+            call.get("/api/v2/task/abc123", params={"include_markdown_description": "true"}),
+            call.get("/api/v2/list/home-list"),
+            call.put("/api/v2/task/abc123", json={"status": name}),
+            call.get("/api/v2/task/abc123", params={"include_markdown_description": "true"}),
+        ]
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {},
+            {"statuses": None},
+            {"statuses": []},
+            {"statuses": [{"status": "done", "type": "done"}]},
+            {"statuses": [{"status": "closed"}]},
+            {
+                "statuses": [
+                    {"status": "shipped", "type": "closed"},
+                    {"status": "complete", "type": "closed"},
+                ]
+            },
+            {"statuses": [{"type": "closed"}]},
+            {"statuses": [{"status": "   ", "type": "closed"}]},
+        ],
+    )
+    def test_unusable_destinations_do_not_write(
+        self, provider: ClickUpProvider, metadata: dict
+    ) -> None:
+        provider._client = MagicMock()
+        provider._client.get.side_effect = [_make_raw_task(), metadata]
+        with pytest.raises(ValueError, match="Closed status"):
+            provider.close_task("abc123")
+        provider._client.put.assert_not_called()
+
+    @pytest.mark.parametrize("home", [None, {}, {"id": None}, {"id": ""}])
+    def test_missing_home_list_does_not_guess(
+        self, provider: ClickUpProvider, home: dict | None
+    ) -> None:
+        raw = _make_raw_task()
+        raw["list"] = home
+        provider._client = MagicMock()
+        provider._client.get.return_value = raw
+        with pytest.raises(ValueError, match="home List"):
+            provider.close_task("abc123")
+        provider._client.put.assert_not_called()
+
+    def test_canonical_closed_is_idempotent(self, provider: ClickUpProvider) -> None:
+        provider._client = MagicMock()
+        provider._client.get.return_value = _make_raw_task(status="shipped", status_type="closed")
+        assert provider.close_task("abc123").state == TaskState.CLOSED
+        assert provider._client.get.call_count == 1
+        provider._client.put.assert_not_called()
+
+    def test_legacy_closed_name_still_requires_canonical_closure(
+        self, provider: ClickUpProvider
+    ) -> None:
+        provider._client = MagicMock()
+        provider._client.get.side_effect = [
+            _make_raw_task(status="closed", status_type=None),
+            {"statuses": [{"status": "Shipped", "type": "closed"}]},
+            _make_raw_task(status="Shipped", status_type="closed"),
+        ]
+        assert provider.close_task("abc123").state == TaskState.CLOSED
+        provider._client.put.assert_called_once_with(
+            "/api/v2/task/abc123", json={"status": "Shipped"}
+        )
+
+    @pytest.mark.parametrize("status_type", ["done", "open", None])
+    def test_final_read_must_be_canonically_closed(
+        self, provider: ClickUpProvider, status_type: str | None
+    ) -> None:
+        provider._client = MagicMock()
+        provider._client.get.side_effect = [
+            _make_raw_task(),
+            {"statuses": [{"status": "Shipped", "type": "closed"}]},
+            _make_raw_task(status="closed", status_type=status_type),
+        ]
+        with pytest.raises(ValueError, match="not canonically closed"):
+            provider.close_task("abc123")
+        provider._client.put.assert_called_once()
+
+    @pytest.mark.parametrize("step", ["task", "list", "put", "verify"])
+    def test_api_failures_propagate(self, provider: ClickUpProvider, step: str) -> None:
+        error = APIError(503, "unavailable")
+        provider._client = MagicMock()
+        replies = [
+            _make_raw_task(),
+            {"statuses": [{"status": "Shipped", "type": "closed"}]},
+            _make_raw_task(status="Shipped", status_type="closed"),
+        ]
+        if step == "put":
+            provider._client.put.side_effect = error
+        else:
+            replies[{"task": 0, "list": 1, "verify": 2}[step]] = error
+        provider._client.get.side_effect = replies
+        with pytest.raises(APIError):
+            provider.close_task("abc123")
+        if step in {"task", "list"}:
+            provider._client.put.assert_not_called()
+        else:
+            assert provider._client.put.call_count == 1
 
 
 class TestCommentOnTask:
@@ -574,3 +682,89 @@ class TestPRReviewDelegation:
         gh = provider._pr_gh()
         assert gh is not None
         assert provider._pr_gh() is gh
+
+
+@pytest.mark.parametrize(
+    "name,kind,expected",
+    [
+        ("shipped", "closed", TaskState.CLOSED),
+        ("Complete", " CLOSED ", TaskState.CLOSED),
+        ("done", "done", TaskState.OPEN),
+        ("Ready to publish", "done", TaskState.OPEN),
+        ("closed", "open", TaskState.OPEN),
+        ("complete", "custom", TaskState.OPEN),
+        ("done", "unstarted", TaskState.OPEN),
+        ("closed", "future-type", TaskState.OPEN),
+        ("active", "active", TaskState.OPEN),
+        ("CLOSED", None, TaskState.CLOSED),
+        ("complete", "", TaskState.CLOSED),
+        (" DONE ", "   ", TaskState.CLOSED),
+        ("shipped", None, TaskState.OPEN),
+    ],
+)
+def test_status_type_precedence_and_legacy_fallback(
+    name: str, kind: str | None, expected: TaskState
+) -> None:
+    assert _parse_clickup_task(_make_raw_task(status=name, status_type=kind)).state == expected
+
+
+@pytest.mark.parametrize("status", [None, {}, {"status": "closed"}, {"status": "open"}])
+def test_missing_status_or_type_compatibility(status: dict | None) -> None:
+    raw = _make_raw_task()
+    raw["status"] = status
+    expected = TaskState.CLOSED if status and status.get("status") == "closed" else TaskState.OPEN
+    assert _parse_clickup_task(raw).state == expected
+
+
+@pytest.mark.parametrize(
+    "state,expected",
+    [
+        (TaskState.OPEN, ["done", "misleading"]),
+        (TaskState.CLOSED, ["shipped"]),
+        (None, ["shipped", "done", "misleading"]),
+    ],
+)
+@pytest.mark.parametrize("marker_scan", [False, True])
+def test_list_and_recovery_share_canonical_filtering(
+    provider: ClickUpProvider, state: TaskState | None, expected: list[str], marker_scan: bool
+) -> None:
+    provider._client = MagicMock()
+    provider._client.get.return_value = {
+        "tasks": [
+            _make_raw_task(task_id="shipped", status="Shipped", status_type="closed"),
+            _make_raw_task(task_id="done", status="Ready", status_type="done"),
+            _make_raw_task(task_id="misleading", status="closed", status_type="custom"),
+        ]
+    }
+    tasks = (
+        provider.find_tasks_by_body_marker("Some body", state=state)
+        if marker_scan
+        else provider.list_tasks(state=state)
+    )
+    assert [task.id for task in tasks] == expected
+    assert provider._client.get.call_args.kwargs["params"]["include_closed"] == (
+        "false" if state == TaskState.OPEN else "true"
+    )
+
+
+@pytest.mark.parametrize("marker_scan", [False, True])
+def test_filtered_full_page_does_not_hide_later_matches(
+    provider: ClickUpProvider, marker_scan: bool
+) -> None:
+    provider._client = MagicMock()
+    provider._client.get.side_effect = [
+        {
+            "tasks": [
+                _make_raw_task(task_id=f"closed-{index}", status="Shipped", status_type="closed")
+                for index in range(100)
+            ]
+        },
+        {"tasks": [_make_raw_task(task_id="retained-done", status="Ready", status_type="done")]},
+    ]
+    tasks = (
+        provider.find_tasks_by_body_marker("Some body")
+        if marker_scan
+        else provider.list_tasks(limit=1)
+    )
+    assert [task.id for task in tasks] == ["retained-done"]
+    assert [c.kwargs["params"]["page"] for c in provider._client.get.call_args_list] == ["0", "1"]
