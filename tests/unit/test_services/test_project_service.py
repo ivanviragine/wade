@@ -13,6 +13,7 @@ from wade.models.project import (
     ProjectDescriptor,
     ProjectError,
     ProjectField,
+    ProjectFieldRef,
     ProjectItem,
     ProjectOption,
     ProjectRequest,
@@ -611,3 +612,26 @@ def test_repository_filters_follow_github_identity_case_rules(options) -> None:
         ).rows
         == []
     )
+
+
+@pytest.mark.parametrize("alias", ["repository", "repo_alias"])
+def test_pick_explicit_repository_filter_never_injects_origin(alias: str) -> None:
+    config = settings()
+    provider = FakeProvider([item(1, repository="other/repo"), item(2, status="DOING")])
+    if alias == "repo_alias":
+        config.fields[alias] = ProjectFieldRef(id="REPO", type="REPOSITORY")
+        provider.board.fields.append(ProjectField(id="REPO", name="Repository", type="REPOSITORY"))
+    with (
+        patch(
+            "wade.services.project_service.repo.get_remote_url",
+            side_effect=AssertionError("Explicit repository filter must not infer origin"),
+        ),
+        patch("wade.services.check_service._github_hostname", return_value="github.com"),
+    ):
+        result = execute(
+            ProjectRequest(operation="pick", filters=[f"{alias}=other/repo"]),
+            project_config=ProjectConfig(github_projects=config),
+            provider=provider,
+        )
+    assert [row.item.repository for row in result.rows] == ["other/repo"]
+    assert result.current_wip == 1 and result.available_slots == 2 and provider.writes == []

@@ -256,7 +256,10 @@ remain available for supported display/filter operations.
 
 `pick` is advisory: it neither reserves a slot nor starts implementation. It
 returns ranked ready open issues in the current repository unless
-`--repository owner/repo` selects another. PRs, drafts and closed/archived issues
+`--repository owner/repo`, `--filter repository=owner/repo`, or a filter on a
+mapped repository field explicitly selects another. Explicit filters retain AND
+semantics; the current-repository default is added only without a repository
+constraint. PRs, drafts and closed/archived issues
 are never candidates. The nonarchived in-progress WIP denominator includes all
 content kinds and repositories before candidate filters; an assignee pool counts
 that assignee across the whole board. Missing status, unavailable content or an

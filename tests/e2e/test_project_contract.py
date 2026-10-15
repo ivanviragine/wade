@@ -258,3 +258,23 @@ def test_default_pick_preserves_canonical_repository_case_without_mutations(
         json.loads(line)["query"].startswith("mutation")
         for line in project_board.read_text().splitlines()
     )
+
+
+def test_generic_repository_pick_filter_overrides_current_repository(
+    e2e_repo: Path, mock_gh_cli: MockGhCli, project_board: Path
+) -> None:
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    for item in state["projects"]["items"]:
+        item["content"]["repository"]["nameWithOwner"] = "Other/Repo"
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    generic = _run(["project", "pick", "--filter", "repository=other/repo", "--json"], e2e_repo)
+    dedicated = _run(["project", "pick", "--repository", "other/repo", "--json"], e2e_repo)
+    assert generic.returncode == dedicated.returncode == 0
+    selected = _parse_json_output(generic.stdout)["rows"]
+    assert selected == _parse_json_output(dedicated.stdout)["rows"] and len(selected) == 1
+    assert selected[0]["item"]["repository"] == "Other/Repo"
+    assert json.loads(mock_gh_cli["state_file"].read_text())["projects"]["writes"] == []
+    assert not any(
+        json.loads(line)["query"].startswith("mutation")
+        for line in project_board.read_text().splitlines()
+    )

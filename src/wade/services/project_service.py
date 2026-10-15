@@ -572,8 +572,6 @@ def execute(
         raise ProjectError(
             "Explicit target hostname conflicts with GH_HOST; select matching gh authentication."
         )
-    if request.operation == "pick" and request.repository is None:
-        request = request.model_copy(update={"repository": _repository(cwd, hostname)})
     provider = provider or GitHubProjectsProvider(cwd, hostname)
     multi = any(field.type == ProjectFieldType.MULTI_SELECT for field in config.fields.values())
     schema = provider.schema(target, multi_select=multi)
@@ -581,6 +579,17 @@ def execute(
     # Validate syntax and resolved contracts before reading item data.
     _sorts(config, request, bindings)
     filters = _filters(config, request, bindings)
+    if (
+        request.operation == "pick"
+        and request.repository is None
+        and not any(
+            alias == "repository"
+            or (alias in bindings.fields and bindings.fields[alias].type == "REPOSITORY")
+            for alias, _ in filters
+        )
+    ):
+        request = request.model_copy(update={"repository": _repository(cwd, hostname)})
+        filters = _filters(config, request, bindings)
     aliases = (
         set(request.columns or config.columns)
         | {s.field for s in (request.sort if request.sort is not None else config.sort)}
