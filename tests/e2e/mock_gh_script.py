@@ -405,6 +405,9 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         return 0
 
     if action == "ready":
+        if os.environ.get("WADE_MOCK_PR_READY_FAIL") == "1":
+            print("permission denied: mock PR ready operation", file=sys.stderr)
+            return 1
         if len(args) < 2:
             return 1
         target = args[1]

@@ -83,6 +83,13 @@ The AI merges the latest main into the branch, resolves any conflicts, writes th
 PR description from what it built, and marks it ready for review — you get a
 clean, already-integrated diff with no noise for your reviewer.
 
+Both session `done` commands promote draft PRs by default. If promotion fails,
+completion fails too: restore GitHub access and retry the same command. Pushed
+work, PR-body updates, and review evidence remain available. Use `--draft` to
+create or preserve a draft without promoting it; an already-ready PR stays ready.
+Automatic bot reviews are deferred while the resulting PR is draft, including
+with `--trigger-bots`, and can run after a later ready-for-review completion.
+
 Working on multiple tasks at once:
 
 ```bash
