@@ -63,6 +63,7 @@ src/wade/
 │   ├── hook.py          # `wade hook` — write-guard entry point for AI tool hooks
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
+│   ├── init_setup.py   # Typed transient init-wizard answers
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy

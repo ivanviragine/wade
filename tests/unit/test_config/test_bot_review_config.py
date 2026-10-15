@@ -304,6 +304,6 @@ class TestBotReviewTimeouts:
         """The ``wade init`` bot_review block includes and round-trips the timeouts."""
         from wade.services.init_service.config_io import _bot_review_config_dict
 
-        block = _bot_review_config_dict(auto_trigger=False)
+        block = _bot_review_config_dict(BotReviewConfig(auto_trigger=False))
         assert block["arrival_timeout"] == 300
         assert block["ack_timeout"] == 900
