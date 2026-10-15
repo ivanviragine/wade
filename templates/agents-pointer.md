@@ -10,3 +10,8 @@ Critical rules you must always follow:
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
    the session's `done` command (`wade implementation-session done` or
    `wade review-pr-comments-session done`)
+
+Default session completion promotes draft PRs to ready for review. Promotion
+failure blocks completion: restore access and retry the same done command.
+`--draft` creates or preserves a draft without demoting a ready PR; automatic
+bot reviews are deferred while the result is draft, even with `--trigger-bots`.

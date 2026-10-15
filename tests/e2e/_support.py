@@ -295,3 +295,102 @@ def _remote_has_branch(remote_repo: Path, branch_name: str) -> bool:
         text=True,
     )
     return result.returncode == 0
+
+
+def _assert_done_readiness_contract(
+    repo: Path, gh: MockGhCli, *, session: str, scenario: str, bot_mode: str
+) -> None:
+    """Exercise finalization state and retry through either public done command."""
+    from wade.services.review_cycle_service import (
+        initialize_or_refresh_review_cycle,
+        read_review_cycle,
+    )
+
+    issue = 94
+    title = "fix: enforce PR readiness"
+    branch = "feat/94-fix-enforce-pr-readiness"
+    if bot_mode == "auto":
+        config = repo / ".wade.yml"
+        config.write_text(config.read_text() + "\nbot_review:\n  auto_trigger: true\n")
+        _git(["add", ".wade.yml"], cwd=repo)
+        _git(["commit", "-m", "chore: configure fixture bots"], cwd=repo)
+    _seed_mock_issue(
+        gh["state_file"], issue_number=issue, title=title, body="## Tasks\n- Complete work\n"
+    )
+    _init_origin_remote(repo)
+    start = _run(["implement", str(issue), "--cd"], cwd=repo)
+    assert start.returncode == 0, start.stdout + start.stderr
+    root = Path(start.stdout.strip())
+    pr = _find_mock_pr_number_by_head(gh["state_file"], branch)
+    (root / "PR-SUMMARY.md").write_text("Verified PR handoff.\n")
+    (root / "work.txt").write_text("implementation\n")
+    _git(["add", "-A"], cwd=root)
+    _git(["commit", "-m", "fix: complete fixture work"], cwd=root)
+    sha = _git(["rev-parse", "HEAD"], cwd=root).stdout.strip()
+    docs = _run([session, "docs", "--not-needed", "Fixture only"], cwd=root)
+    assert docs.returncode == 0, docs.stdout + docs.stderr
+    if session == "review-pr-comments-session":
+        cycle = initialize_or_refresh_review_cycle(
+            root,
+            issue_number=str(issue),
+            pr_number=int(pr),
+            baseline_commit=sha,
+            feedback="Verified fixture feedback",
+        )
+        assert cycle.context is not None, cycle.diagnostic
+    if scenario == "ready":
+        state = json.loads(gh["state_file"].read_text())
+        state["prs"][pr]["isDraft"] = False
+        gh["state_file"].write_text(json.dumps(state))
+    args = [session, "done", "--skip-review"]
+    if scenario in ("draft", "ready"):
+        args.append("--draft")
+    if bot_mode == "explicit":
+        args.append("--trigger-bots")
+    if scenario == "failure":
+        result = _run(args, cwd=root, env={"WADE_MOCK_PR_READY_FAIL": "1"})
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "SESSION COMPLETE" not in result.stdout + result.stderr
+        state = json.loads(gh["state_file"].read_text())
+        assert state["prs"][pr]["isDraft"] is True
+        assert "in-progress" in state["issues"][str(issue)]["labels"]
+        assert not list((root / ".wade").glob("done@*"))
+        assert _count_gh_calls(gh["log_file"], ["pr", "comment"]) == 0
+        assert "Bot review triggers NOT posted" not in result.stdout + result.stderr
+        assert "# wade:worktree:start" in (root / ".gitignore").read_text()
+        if session == "review-pr-comments-session":
+            assert (
+                read_review_cycle(root, issue_number=str(issue), pr_number=int(pr)).context
+                is not None
+            )
+    result = _run(args, cwd=root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(gh["state_file"].read_text())
+    assert state["prs"][pr]["isDraft"] is (scenario == "draft")
+    assert "in-progress" not in state["issues"][str(issue)]["labels"]
+    assert list((root / ".wade").glob("done@*"))
+    assert "Implementation done" in result.stdout + result.stderr
+    assert _count_gh_calls(gh["log_file"], ["pr", "create"]) == 1
+    if session == "review-pr-comments-session":
+        assert read_review_cycle(root, issue_number=str(issue), pr_number=int(pr)).context is None
+    if scenario == "draft":
+        assert "automatic bot reviews deferred" in result.stdout + result.stderr
+        assert "Bot review triggers NOT posted" not in result.stdout + result.stderr
+        assert "reviewers are notified" not in result.stdout + result.stderr
+        assert _count_gh_calls(gh["log_file"], ["pr", "comment"]) == 0
+        assert not list((root / ".wade").glob("bot-trigger*@*"))
+        # A later ordinary completion can promote and trigger without a new PR.
+        reenter = _run(["implement", str(issue), "--cd"], cwd=repo)
+        assert reenter.returncode == 0, reenter.stdout + reenter.stderr
+        retry_args = [session, "done", "--skip-review", "--trigger-bots"]
+        retry_docs = _run([session, "docs", "--not-needed", "Fixture retry only"], cwd=root)
+        assert retry_docs.returncode == 0
+        retry = _run(retry_args, cwd=root)
+        assert retry.returncode == 0, retry.stdout + retry.stderr
+        assert json.loads(gh["state_file"].read_text())["prs"][pr]["isDraft"] is False
+        assert _count_gh_calls(gh["log_file"], ["pr", "comment", pr]) == 3
+    elif bot_mode in ("auto", "explicit"):
+        assert _count_gh_calls(gh["log_file"], ["pr", "comment", pr]) == 3
+    else:
+        assert "Bot review triggers NOT posted" in " ".join((result.stdout + result.stderr).split())
+        assert _count_gh_calls(gh["log_file"], ["pr", "comment", pr]) == 0

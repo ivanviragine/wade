@@ -1348,8 +1348,11 @@ def _done_via_pr(
     1. Pushes the branch
     2. Appends PR-SUMMARY content to the existing PR body
     3. Writes the review-status block (#367) into the PR body
-    4. Marks the draft PR as ready for review
-    5. Posts (or offers) the configured bot-review triggers
+    4. Requires draft-to-ready promotion unless explicitly completing as draft
+    5. Posts (or offers) configured bot-review triggers only for ready PRs
+
+    Fallback creation/recovery must establish the returned PR's open/draft state.
+    Failed readiness revokes only active done markers and preserves retry evidence.
 
     ``review_status`` is optional so direct callers/tests need not build one;
     ``done()`` always supplies it, so a real PR always carries the block.
@@ -1556,13 +1559,7 @@ def _done_via_pr(
             return False
         console.success("PR body updated with summary.")
 
-        # Mark draft as ready — but only if the caller did not request a draft.
         is_draft = existing_pr.is_draft
-        if is_draft and not draft:
-            if git_pr.mark_pr_ready(repo_root, pr_number):
-                console.success("PR marked as ready for review.")
-            else:
-                console.warn("Could not mark PR as ready — do it manually.")
     else:
         # No existing PR — create one (fallback)
         console.warn("No existing draft PR found — creating new PR.")
@@ -1597,14 +1594,46 @@ def _done_via_pr(
                 draft=draft,
             )
             if pr_info is None:
+                markers.clear_markers(marker_root, "done")
                 console.error("PR creation failed — could not determine the new PR number.")
                 return False
             pr_url = str(pr_info.get("url", ""))
             pr_number = int(pr_info["number"])
             console.success(f"PR created: {pr_url}")
         except Exception as e:
+            markers.clear_markers(marker_root, "done")
             console.error(f"PR creation failed: {e}")
             return False
+
+        # Creation may have recovered an existing PR. Requested flags do not
+        # establish its identity, open state or readiness; require observed data.
+        try:
+            recovered = git_pr.get_pr_for_branch(repo_root, branch, require_draft_state=True)
+        except (GitError, OSError, ValueError):
+            logger.debug("done.recovered_pr_lookup_failed", exc_info=True)
+            recovered = git_pr.PRLookup(lookup_failed=True)
+        if not recovered.is_open or recovered.number != pr_number or recovered.lookup_failed:
+            markers.clear_markers(marker_root, "done")
+            console.error(f"Could not verify the open/draft state of PR #{pr_number}.")
+            console.hint("Restore PR access/state, then re-run this session's done command.")
+            return False
+        is_draft = recovered.is_draft
+
+    # Required readiness is one completion boundary for existing and recovered
+    # PRs. Only explicit draft completion opts out; ready PRs are never demoted.
+    if is_draft and not draft:
+        try:
+            ready = git_pr.mark_pr_ready(repo_root, pr_number)
+        except (GitError, OSError):
+            logger.debug("done.pr_ready_failed", exc_info=True)
+            ready = False
+        if not ready:
+            markers.clear_markers(marker_root, "done")
+            console.error(f"Could not mark PR #{pr_number} as ready for review.")
+            console.hint("Restore PR access, then re-run this session's done command.")
+            return False
+        is_draft = False
+        console.success("PR marked as ready for review.")
 
     if expected_head is not None:
         final_root = worktree_path or repo_root
@@ -1627,9 +1656,12 @@ def _done_via_pr(
     # as the push marker) keep repeated done/sync runs from re-spamming the PR (or
     # re-asking). `pr_number` is bound by both branches above (existing PR or
     # freshly created).
-    _maybe_trigger_bot_reviews(
-        config, repo_root, branch, pr_number, marker_root, issue_number, trigger_bots
-    )
+    if is_draft:
+        console.info("PR remains draft; automatic bot reviews deferred until ready.")
+    else:
+        _maybe_trigger_bot_reviews(
+            config, repo_root, branch, pr_number, marker_root, issue_number, trigger_bots
+        )
 
     lines = []
     lines.append(f"  PR      [url]{pr_url}[/]")

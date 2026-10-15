@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from wade.git.pr import PRLookup
+from wade.git.pr import PRLookup, PRRef
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.task import Task
 from wade.services.implementation_service import _done_via_pr
@@ -41,7 +41,10 @@ class TestPrSummaryPathResolution:
             patch("wade.services.implementation_service.done.git_pr.create_pr") as mock_create_pr,
             patch(
                 "wade.services.implementation_service.done.git_pr.get_pr_for_branch",
-                return_value=PRLookup(found=False),
+                side_effect=[
+                    PRLookup(found=False),
+                    PRLookup(found=True, pr=PRRef(number=1, state="OPEN", isDraft=False)),
+                ],
             ),
             patch("wade.services.implementation_service.done.remove_in_progress_label"),
         ):
@@ -94,7 +97,10 @@ class TestPrSummaryPathResolution:
             patch("wade.services.implementation_service.done.git_pr.create_pr") as mock_create_pr,
             patch(
                 "wade.services.implementation_service.done.git_pr.get_pr_for_branch",
-                return_value=PRLookup(found=False),
+                side_effect=[
+                    PRLookup(found=False),
+                    PRLookup(found=True, pr=PRRef(number=1, state="OPEN", isDraft=False)),
+                ],
             ),
             patch("wade.services.implementation_service.done.remove_in_progress_label"),
         ):

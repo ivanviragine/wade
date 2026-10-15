@@ -1291,3 +1291,29 @@ class TestReviewPrCommentsSessionCommands:
             )
             == 1
         )
+
+
+@pytest.mark.parametrize(
+    "scenario,bot_mode",
+    [
+        ("failure", "explicit"),
+        ("failure", "offer"),
+        ("draft", "auto"),
+        ("draft", "explicit"),
+        ("draft", "offer"),
+        ("ready", "explicit"),
+        ("default", "auto"),
+    ],
+)
+def test_done_enforces_actual_readiness(
+    e2e_repo: Path, mock_gh_cli: MockGhCli, scenario: str, bot_mode: str
+) -> None:
+    from tests.e2e._support import _assert_done_readiness_contract
+
+    _assert_done_readiness_contract(
+        e2e_repo,
+        mock_gh_cli,
+        session="review-pr-comments-session",
+        scenario=scenario,
+        bot_mode=bot_mode,
+    )
