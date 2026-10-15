@@ -19,6 +19,7 @@ def _run_git(
     *args: str,
     cwd: Path,
     check: bool = True,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a git command and return the CompletedProcess result.
 
@@ -36,13 +37,12 @@ def _run_git(
     cmd = ["git", *args]
     log.debug("git.run", cmd=cmd, cwd=str(cwd))
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+        if input_text is None:
+            result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
+        else:
+            result = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, check=check, input=input_text
+            )
     except subprocess.CalledProcessError as exc:
         raise GitError(
             f"git {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"

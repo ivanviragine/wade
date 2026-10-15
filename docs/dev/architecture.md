@@ -73,6 +73,7 @@ src/wade/
 │   ├── permission.py    # PermissionMode (autonomy axis), launch-kwargs helpers
 │   ├── readiness.py     # phase capability requirements + stable failure IDs
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
+│   ├── review_recovery.py # Typed guarded-recovery phases and incomplete record
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
@@ -83,6 +84,7 @@ src/wade/
 │   ├── native_plan_service.py # Public collected-session boundary and safe artifact import
 │   ├── interactive_plan_service.py # Explicit native-terminal import/review/completion state
 │   ├── review_service.py           # PR review session lifecycle
+│   ├── review_recovery.py          # Remote snapshot recovery and incomplete-state gating
 │   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
 │   ├── session_composition_service.py # Resolve/freeze/refresh interactive bindings
@@ -1210,6 +1212,37 @@ the exact buffered stdin) rather than silently shadowing it. The same
 and `commit-msg` in one call so their chaining stays correct. **Honesty:**
 `git push --no-verify` bypasses it in one flag — a quality/backstop layer, not a
 boundary.
+
+## Removed review-worktree recovery
+
+`services/review_recovery.py` fetches only into the remote-tracking ref and pins
+its commit for the entire recovery operation. Cached tracking refs establish
+neither a fresh PR head after a failed fetch nor live remote absence:
+`git/branch.py:live_remote_head_exists` accepts absence only from an exact
+`ls-remote --exit-code --refs` no-match response. Only that result permits a
+warned local-only fallback; query and fetch failures remain distinct.
+
+`git/worktree.py:recover_branch_worktree` reserves an unused destination with
+ordinary `worktree add --no-checkout`, rechecks ownership and reads the actual
+local tip. A single expected-old `update-ref --stdin` transaction preserves a
+differing tip under `refs/wade/recovery/<branch>/<old-OID>` and aligns the task
+head. Existing backups are verified, never overwritten; lock or CAS failures
+stop without retrying an unconditional update. Index-only `read-tree` and
+non-forcing `checkout-index` populate the pinned tree without discarding ignored
+or untracked collisions. Local fallback reserves detached first, then attaches
+with `checkout --no-guess --no-overwrite-ignore <branch> --`; the trailing `--`
+prevents a deleted branch from becoming a tracked-path restoration. Final
+verification checks the branch, HEAD, index and working files against the pin.
+
+A destination-keyed Pydantic record in `<git-common-dir>/.wade/review-recovery/`
+is atomically persisted before reservation and updated through the recovery
+phases under a shared lock. Only verified success clears it. Failure or
+interruption retains all partial files and refs. `review_service.start` checks
+this record before accepting an existing worktree, looking up its PR or taking
+the quiet-success path; corrupt, unreadable and unsafe markers fail closed.
+This mutable state is separate from frozen session bundles and scaffold
+retarget recovery. Existing ordinary worktrees and shared checkout helpers keep
+their previous behavior.
 
 ## Command Dispatch
 

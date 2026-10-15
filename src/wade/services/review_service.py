@@ -7,6 +7,7 @@ post-session token tracking, and label management.
 from __future__ import annotations
 
 import contextlib
+import shlex
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from pathlib import Path
 import structlog
 from crossby.ai_tools import AbstractAITool
 from crossby.models.ai import AIToolID
+from rich.markup import escape
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
@@ -71,6 +73,12 @@ from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.review_cycle_service import (
     initialize_or_refresh_review_cycle,
     read_review_cycle,
+)
+from wade.services.review_recovery import (
+    RecoveryFailure,
+    RecoveryOutcome,
+    inspect_incomplete_recovery,
+    recover_worktree,
 )
 from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 from wade.services.task_service import add_review_addressed_by_labels
@@ -1070,17 +1078,18 @@ def start(
     )
 
     if existing_wt:
+        blocked = inspect_incomplete_recovery(repo_root, existing_wt, branch_name)
+        if blocked is not None:
+            _report_recovery_failure(blocked, task.id, repo_root)
+            return False
         worktree_path = existing_wt
     else:
-        # Try to recover: create worktree from the remote branch
         recovered = _recover_worktree(repo_root, branch_name, config)
-        if not recovered:
-            console.error_with_fix(
-                f"No worktree or remote branch found for issue #{task.id}",
-                f"Run `wade implement {task.id}` first to create a worktree",
-            )
+        if not recovered.succeeded:
+            _report_recovery_failure(recovered, task.id, repo_root)
             return False
-        worktree_path = recovered
+        assert recovered.path is not None
+        worktree_path = recovered.path
 
     console.kv("Worktree", str(worktree_path))
 
@@ -1584,50 +1593,42 @@ def _recover_worktree(
     repo_root: Path,
     branch_name: str,
     config: object,
-) -> Path | None:
-    """Try to recover a worktree from an existing remote branch.
-
-    If the branch exists on the remote (e.g. from a PR), fetch it and
-    create a new worktree pointing at it.
-
-    Returns the worktree path on success, or None if the branch doesn't exist.
-    """
-    from wade.models.config import ProjectConfig
-
+) -> RecoveryOutcome:
+    """Recover a fresh remote snapshot with durable local-tip preservation."""
     assert isinstance(config, ProjectConfig)
+    target = (
+        _resolve_worktrees_dir(config, repo_root) / repo_root.name / branch_name.replace("/", "-")
+    )
+    result = recover_worktree(repo_root, branch_name, target)
+    if result.succeeded:
+        console.success(f"Recovered worktree at {result.path}")
+        if result.detail:
+            console.warn(escape(result.detail))
+        if result.backup_ref:
+            console.info(escape(f"Preserved displaced local commit at {result.backup_ref}"))
+            _show_recovery_command(repo_root, result.backup_ref)
+    return result
 
-    # Fetch the branch from remote
-    try:
-        git_repo.fetch_ref(repo_root, "origin", f"{branch_name}:{branch_name}")
-    except GitError:
-        logger.debug("review.fetch_branch_failed", branch=branch_name)
-        return None
 
-    # Verify the branch exists locally after fetch
-    try:
-        git_repo.rev_parse(repo_root, branch_name)
-    except GitError:
-        return None
+def _show_recovery_command(repo_root: Path, backup_ref: str) -> None:
+    name = "recovered-" + backup_ref.rsplit("/", 1)[-1][:12]
+    console.command(shlex.join(["git", "-C", str(repo_root), "branch", name, backup_ref]))
 
-    # Build worktree path
-    worktrees_dir = _resolve_worktrees_dir(config, repo_root)
-    repo_name = repo_root.name
-    worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
 
-    if worktree_path.exists():
-        logger.debug("review.worktree_dir_exists", path=str(worktree_path))
-        return None
-
-    console.step(f"Recovering worktree from remote branch {branch_name}...")
-    try:
-        result = git_worktree.checkout_existing_branch_worktree(
-            repo_root, branch_name, worktree_path
+def _report_recovery_failure(result: RecoveryOutcome, issue_id: str, repo_root: Path) -> None:
+    if result.failure == RecoveryFailure.NO_BRANCH:
+        console.error_with_fix(
+            f"No worktree or remote/local branch found for issue #{issue_id}",
+            f"Run `wade implement {issue_id}` first to create a worktree",
         )
-        console.success(f"Recovered worktree at {result}")
-        return result
-    except Exception as e:
-        logger.warning("review.worktree_recovery_failed", error=str(e))
-        return None
+        return
+    console.error(f"Review recovery refused ({result.failure}): {result.detail}", markup=False)
+    if result.path is not None:
+        console.info(escape(f"Retained recovery target: {result.path}"))
+    if result.marker is not None:
+        console.info(escape(f"Incomplete recovery marker: {result.marker}"))
+    if result.backup_ref is not None:
+        _show_recovery_command(repo_root, result.backup_ref)
 
 
 def _quiet_next_steps_prompt(
