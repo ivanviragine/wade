@@ -128,6 +128,17 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 
 > Full package structure, command dispatch, config system, and subsystem details: see `docs/dev/architecture.md`
 
+### GitHub Projects v2
+
+`project_service.py` directly composes the separate `GitHubProjectsProvider`;
+Projects operations are not AbstractTaskProvider methods. Pure `models/project.py`
+models define the optional top-level `github_projects` settings and typed results.
+Keep project identity, project-item ID, content ID and qualified repository/task
+identity distinct. Read/default sync never writes; only explicit `sync --apply`
+can update configured existing numeric fields, with full baseline refresh and
+sequential drift/readback checks. Preserve the independent best-effort startup
+Status move. See README and developer architecture/testing docs for contracts.
+
 ### Key Design Patterns
 
 - **AI Tool Adapters via crossby**: `AbstractAITool` and every tool-specific adapter (Claude, Cursor, Copilot, Codex, OpenCode, Antigravity, Antigravity CLI, VS Code) live in the external `crossby` dependency, not this repo. Wade's services import `crossby.ai_tools` and `crossby.models.ai` directly. Adding a new AI tool means contributing to crossby, not wade.

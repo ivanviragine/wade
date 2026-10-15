@@ -131,6 +131,168 @@ also grant the `project` scope. This is optional — everything else works witho
 gh auth refresh -s project
 ```
 
+## GitHub Projects v2
+
+`wade project items`, `rank`, `pick`, and `sync` operate on one explicit user or
+organization board. They currently require `provider.name: github`; other task
+providers and the existing best-effort startup Status move retain their behavior.
+Only `sync --apply` writes, and only to configured existing numeric fields.
+Outputs must have `isIssueField: false` in GitHub’s schema: organization issue
+fields and unknown ownership are rejected before any mutation, including when
+the output has no value yet.
+
+Configure optional top-level `github_projects` in `.wade.yml` (version stays 2):
+
+```yaml
+github_projects:
+  target:
+    owner: my-org
+    kind: organization             # or user
+    number: 7
+    hostname: github.com           # optional: selected gh/GH_HOST/origin host
+  fields:
+    impact: {name: Impact, type: NUMBER}
+    effort: {name: Effort, type: NUMBER}
+    priority:
+      name: Priority
+      type: SINGLE_SELECT
+      options:
+        high: {id: YOUR_HIGH_OPTION_ID, name: High}
+        low: {id: YOUR_LOW_OPTION_ID, name: Low}
+      option_order: [high, low]
+    status: {name: Status, type: SINGLE_SELECT}
+    computed_score: {name: Score, type: NUMBER}
+    computed_rank: {name: Rank, type: NUMBER}
+  columns: [repository, number, title, impact, effort, priority]
+  sort: [{field: impact, direction: desc}]
+  ranking:
+    factors:
+      - field: impact
+        weight: 2
+        minimum: 0
+        maximum: 10
+        missing: {policy: exclude}
+      - field: effort
+        weight: 1
+        minimum: 0
+        maximum: 10
+        lower_is_better: true
+        missing: {policy: value, normalized: 0.5}
+      - field: priority
+        weight: 1
+        options: {high: 10, low: 0}
+        missing: {policy: exclude}
+  wip:
+    status: status
+    ready: [Ready]                  # exact option names, IDs or configured aliases
+    in_progress: [Doing]
+    pool: project                  # assignee requires --assignee
+    limit: 3                       # zero deliberately permits no selections
+  outputs:
+    score: computed_score
+    rank: computed_rank
+```
+
+Discover actual project/field/option IDs with `gh project list --owner my-org`
+and `gh project field-list 7 --owner my-org --format json` (check `gh --help` for
+Enterprise host setup). Replace example option IDs before use. A field reference
+needs an ID or exact unique name and its expected type. IDs are authoritative;
+when both ID and name are supplied, both must match. Option aliases follow the
+same rules. Renames, ambiguous names, stale IDs, unknown nested settings and
+present-null sections fail explicitly. Init/update preserves this optional section
+without querying GitHub. It does not create a board or fields.
+
+```bash
+wade project items --columns repository,number,title,impact --sort impact:desc --json
+wade project items --filter 'priority=high' --label bug --assignee octocat
+wade project rank --repository my-org/my-repo --limit 10 --json
+wade project pick --count 2 --json
+wade project sync --dry-run --json
+wade project sync --apply --json
+# A complete CLI target overrides the configured target:
+wade project items --owner octocat --owner-kind user --number 3 --hostname github.com
+```
+
+Filters are exact `alias=value`, repeatable with AND semantics; quote shell spaces.
+`--repository` requires `owner/repo`; repository identity filters follow GitHub’s
+case-insensitive owner/name rules. Assignee filters and assignee-pool WIP counts
+likewise compare GitHub logins without case; output retains canonical API
+spelling. Other text and label filters remain case-sensitive. `--kind` accepts
+Issue, PullRequest or DraftIssue. `--status` uses the explicit `wip.status` mapping. Selected option
+filters accept IDs, unique exact names or configured aliases. Labels, assignees
+and multiselect fields support membership filters. Numeric filters reject
+nonfinite values; date filters require canonical `YYYY-MM-DD`. Listing can
+include archived items with `--include-archived`; ranking, selection and sync
+always exclude them.
+
+Listing sorts numbers numerically, canonical dates chronologically, and text
+case-sensitively by ordinal order. Single-select sorts use `option_order`, then
+remaining options by name and ID. Nulls sort last in both directions. Multivalue
+and iteration scalar sorts fail. Repeat `--sort alias:asc|desc` for listing keys;
+ranking commands always order by reported score descending. Final ties use
+qualified repository/content identity and item node ID, independent of API order.
+`--limit` is positive and applies only after the complete snapshot is evaluated;
+it does not truncate WIP counts or sync rank positions. JSON stdout is one
+object containing resolved project identity, rows, contributions, exclusions,
+visibility limits and, for sync, operation outcomes. Human tables use the same
+rows and ordering. Valid empty results exit zero; validation/provider errors go
+to stderr and exit nonzero. Human apply output also sends operation-specific
+permission, drift and readback failures to stderr; its outcome table preserves
+confirmed/failed/unknown/not-attempted results. JSON retains these messages in
+the single stdout object.
+
+Ranking uses fixed bounds, never the current population or clock. Numeric values
+are normalized to [0,1], clamped, and optionally inverted; explicit single-select
+scores are normalized using the minimum/maximum of the **configured score map**,
+which requires at least two distinct scores. Missing inputs explicitly exclude
+an item or supply its configured normalized value. Scores are
+`100 * sum(weight * normalized) / sum(weight)`, rounded half-even to six decimals;
+ordering uses that reported rounded score. In the example above, Impact=10,
+Effort=10 and Priority=low yields **50**; Impact=5, Effort=0 and Priority=high
+yields **75** (contributions 1, 1 and 1 over weight total 4). JSON reports
+raw inputs, normalized values, weights and weighted contributions. Initially,
+only NUMBER and SINGLE_SELECT fields can be ranking factors; text, date,
+iteration, multiselect, labels, assignees, repository and milestone mappings
+remain available for supported display/filter operations.
+
+`pick` is advisory: it neither reserves a slot nor starts implementation. It
+returns ranked ready open issues in the current repository unless
+`--repository owner/repo`, `--filter repository=owner/repo`, or a filter on a
+mapped repository field explicitly selects another. Explicit filters retain AND
+semantics; the current-repository default is added only without a repository
+constraint. PRs, drafts and closed/archived issues
+are never candidates. The nonarchived in-progress WIP denominator includes all
+content kinds and repositories before candidate filters; an assignee pool counts
+that assignee across the whole board. Missing status, unavailable content or an
+incomplete required connection fails instead of inventing capacity. GitHub may
+hide resources entirely from the authenticated principal; reported visibility is
+limited to that principal, never a guarantee of global board completeness.
+
+All reads use gh authentication for the selected hostname, bounded independent
+connection pagination and bounded read retry. Classic/OAuth credentials need
+`read:project` for reads and `project` for apply, plus underlying repository
+visibility. Apps/fine-grained credentials need the corresponding project and
+repository permissions. WADE does not refresh credentials automatically; a
+configured host conflicting with `GH_HOST` fails. Older Enterprise schemas may
+lack required unions/archive metadata and fail clearly rather than falling back
+to classic Projects. Errors with HTTP-success partial GraphQL data are errors,
+never successful partial boards.
+
+Sync preview reports numeric old/new values and exact item/field IDs. Score/rank
+outputs must differ from each other and every ranking/filter/WIP input by alias
+**and resolved field ID**. Excluded/filtered-out items retain their existing
+values; narrowed cohorts can intentionally leave stale values outside the cohort.
+Exactly equal stored numeric values are no-ops. `--apply` and `--dry-run` conflict;
+no config setting enables writes. Before apply, WADE refreshes the board and
+schema and sends zero writes if the baseline changed. It re-reads each affected
+item before its write and verifies identity and numeric readback afterward.
+This narrows races; GitHub does not provide a conditional-write transaction here.
+Writes are sequential, paced and never blindly retried. A failure exits nonzero
+and reports confirmed, failed/unknown and not-attempted operations; confirmed
+writes remain, with no automatic rollback. Re-run from current truth to converge;
+a second unchanged apply sends no mutations. Sync cannot create/remove/archive
+items, edit issues/status/schema, clear fields or reorder the board.
+
 ## Quick Start
 
 Initialize WADE in your project (once):

@@ -102,6 +102,7 @@ src/wade/
 ├── providers/           # Task backend providers (ABC + registry)
 │   ├── base.py          # AbstractTaskProvider
 │   ├── github.py        # GitHubProvider (gh CLI subprocess)
+│   ├── github_projects.py # Strict Projects v2 GraphQL snapshots/numeric mutations
 │   ├── clickup.py       # ClickUpProvider (REST API)
 │   ├── markdown.py      # MarkdownIssueProvider (single central task file)
 │   ├── _pr_delegate.py  # GitHubPRDelegateMixin (routes PR/review APIs through gh)
@@ -1681,3 +1682,33 @@ Dev:
 - `ruff>=0.4` — Linting and formatting
 - `pre-commit>=3.7` — Git hook management
 - `types-PyYAML>=6.0` — Type stubs for PyYAML
+
+
+## GitHub Projects v2 commands
+
+`cli/project.py` exposes items/rank/pick/sync as thin parsers/renderers.
+`services/project_service.py` resolves the optional top-level `github_projects`
+configuration and schema, evaluates deterministic fixed-bound scoring/filtering,
+counts the complete WIP pool before candidate filters, and orchestrates explicit
+numeric write-back. `models/project.py` contains pure typed configuration,
+connection results, contributions and operation outcomes. Loader, check-config
+and the schema re-export all accept the same nested model; init patching preserves
+it without introducing network calls.
+
+`providers/github_projects.py` is separate from AbstractTaskProvider and is
+constructed directly by the service. It owns explicit cwd/hostname gh transport,
+JSON stdin variables, bounded independent fields/items/fieldValues/content
+pagination, safe errors and one-number mutations. Field schemas retain the
+required Boolean `isIssueField`; sync rejects issue-backed or unknown output
+ownership before planning any write, even for unset numeric outputs. Label/assignee field values
+are not GraphQL Nodes: complete underlying content connections supply these
+values instead of assuming a value-node cursor. Unfetched connections have
+explicit completeness flags. Unknown selected unions and malformed pagination
+fail, and observed inaccessible content cannot imply available WIP capacity.
+
+Read/default sync never mutates; apply alone performs full baseline refresh,
+affected-item drift checks and sequential readback-verified numeric updates.
+No new task-provider ABC methods, lifecycle hooks, database state or writes to
+issue-owned fields are introduced. Existing best-effort move_to_in_progress
+behavior remains independent. See README for credentials, schema compatibility,
+visibility, scoring and non-atomic partial-failure contracts.
