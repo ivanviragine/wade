@@ -403,9 +403,13 @@ lane; no provider credentials are needed.
 WADE_LIVE_PROJECT_REPO identifies a configured, authorized disposable board.
 Actual numeric writes additionally require WADE_LIVE_PROJECT_WRITES=1 and an
 exact WADE_LIVE_PROJECT_ITEM. Its configured output fields must already contain
-numeric values and require a change. Cleanup restores only those prior numeric
-values when the fields still match this test's expected writes, preserving
-concurrent edits and every pre-existing resource. Use the existing prescribed
+numeric values and require a change. Cleanup unwinds confirmed/unknown operations
+from each actual apply result in reverse order, using that apply’s old/new values
+rather than the earlier
+preview. It skips no-op/rejected/unattempted writes and preserves current values
+that no longer match; an unavailable apply result or baseline requires manual
+inspection instead of guessed restoration. Deterministic unit tests simulate
+these races without enabling live access. Use the existing prescribed
 live-gh script only with these explicit opt-ins; ordinary CI must never execute
 live writes.
 

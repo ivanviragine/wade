@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from wade.config.loader import load_config
-from wade.models.project import ProjectRequest
+from wade.models.project import ProjectRequest, ProjectResult
 from wade.providers.github_projects import GitHubProjectsProvider
 from wade.services.project_service import execute
 
@@ -56,25 +56,45 @@ def test_live_wade_numeric_apply_and_idempotent_rerun() -> None:
     )
     settings = load_config(cwd)
     provider = GitHubProjectsProvider(cwd, preview.project.hostname)
-    required = {operation.field_id for operation in preview.operations}
+    attempts: list[ProjectResult] = []
+    apply_pending = False
     try:
+        apply_pending = True
         applied = execute(request.model_copy(update={"apply": True}), cwd=cwd)
+        attempts.append(applied)
+        apply_pending = False
         assert applied.success and all(
             operation.status in {"confirmed", "noop"} for operation in applied.operations
         )
+        apply_pending = True
         again = execute(request.model_copy(update={"apply": True}), cwd=cwd)
+        attempts.append(again)
+        apply_pending = False
         assert again.success and all(operation.status == "noop" for operation in again.operations)
     finally:
         assert settings.github_projects is not None
-        for operation in preview.operations:
-            current = provider.item(preview.project.id, item_id, required)
-            value = current.values.get(operation.field_id)
-            if value is not None and value.value == operation.new and operation.old is not None:
-                provider.update_number(
-                    preview.project.id, item_id, operation.field_id, operation.old
-                )
-            elif value is None or value.value != operation.old:
-                pytest.fail(
-                    f"Concurrent change on {item_id}/{operation.field_id}; preserved it. "
-                    "Inspect the disposable board manually."
-                )
+        if apply_pending:
+            pytest.fail(
+                "Apply outcome unavailable; preserved board state. "
+                "Inspect the disposable board manually."
+            )
+        for attempt in reversed(attempts):
+            required = {operation.field_id for operation in attempt.operations}
+            for operation in reversed(attempt.operations):
+                if operation.status not in {"confirmed", "unknown"}:
+                    continue
+                current = provider.item(attempt.project.id, item_id, required)
+                value = current.values.get(operation.field_id)
+                actual = value.value if value is not None else None
+                if actual == operation.old:
+                    continue
+                if actual == operation.new and operation.old is not None:
+                    provider.update_number(
+                        attempt.project.id, item_id, operation.field_id, operation.old
+                    )
+                else:
+                    pytest.fail(
+                        "Concurrent change or unavailable baseline on "
+                        f"{item_id}/{operation.field_id}; preserved it. "
+                        "Inspect the disposable board manually."
+                    )
