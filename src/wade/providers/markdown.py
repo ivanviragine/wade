@@ -58,6 +58,11 @@ from wade.models.task import (
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
 from wade.utils.filelock import file_lock
+from wade.utils.git_close_commit import (
+    CloseCommitEligibility,
+    commit_close,
+    inspect_close_commit,
+)
 from wade.utils.process import run
 
 if TYPE_CHECKING:
@@ -171,13 +176,43 @@ def _join_labels(names: list[str]) -> str:
     return ", ".join(name for name in names if name)
 
 
+def _task_headings(text: str) -> list[re.Match[str]]:
+    """Keep ordinary heading matches outside top-level fenced examples.
+
+    Scan original lines and retain regex offsets; neither code examples nor
+    source line endings are reconstructed. Container Markdown is out of scope.
+    """
+    matches = iter(_HEADING_RE.finditer(text))
+    heading = next(matches, None)
+    headings: list[re.Match[str]] = []
+    delimiter: str | None = None
+    opening_length = 0
+    # Markdown line endings are CR/LF, not Python's broader Unicode splitlines.
+    for source_line in re.finditer(r"[^\r\n]*(?:\r\n?|\n|$)", text):
+        line = source_line.group()
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)", line)
+        if marker is not None:
+            run, suffix = marker.groups()
+            if delimiter is not None:
+                if run[0] == delimiter and len(run) >= opening_length and not suffix.strip(" \t"):
+                    delimiter = None
+            elif run[0] == "~" or "`" not in suffix:
+                delimiter, opening_length = run[0], len(run)
+        end = source_line.end()
+        while heading is not None and heading.start() < end:
+            if delimiter is None:
+                headings.append(heading)
+            heading = next(matches, None)
+    return headings
+
+
 def _parse_sections(text: str) -> list[_Section]:
     """Split a markdown file into issue sections.
 
     Returns sections in document order. Anything before the first ``## ``
     heading is preserved in the file as a prelude (handled by the writer).
     """
-    headings = list(_HEADING_RE.finditer(text))
+    headings = _task_headings(text)
     if not headings:
         return []
 
@@ -208,6 +243,76 @@ def _parse_sections(text: str) -> list[_Section]:
             )
         )
     return sections
+
+
+def _close_metadata(text: str, section: _Section) -> str:
+    """Map the ordinary universal-newline parse back to unchanged raw bytes."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Each normalized character has one raw boundary; CRLF consumes two characters
+    # of decoded text while lone CR/LF consume one. No general parser change.
+    offsets = [0, *(match.end() for match in re.finditer(r"\r\n|[\s\S]", text))]
+    section_start, section_end = section.span
+    start, end = offsets[section_start], offsets[section_end]
+    chunk = text[start:end]
+    view = normalized[section_start:section_end]
+    heading = _HEADING_RE.match(view)
+    if heading is None:
+        raise MarkdownProviderError("Parsed task heading could not be located")
+    after_heading = heading.end()
+    while after_heading < len(view) and view[after_heading] == "\n":
+        after_heading += 1
+    metadata = _META_RE.match(view, after_heading)
+    line_ending = re.search(r"\r\n|\r|\n", chunk)
+    newline = line_ending.group() if line_ending else "\n"
+    if metadata is None:
+        position = line_ending.end() if line_ending else len(chunk)
+        prefix = "" if line_ending else newline
+        insertion = (
+            prefix + newline + "<!-- wade" + newline + "state: closed" + newline + "-->" + newline
+        )
+        changed = chunk[:position] + insertion + chunk[position:]
+    else:
+        body_start = offsets[section_start + metadata.start("body")] - start
+        body_end = offsets[section_start + metadata.end("body")] - start
+        lines = chunk[body_start:body_end].splitlines(keepends=True)
+        keys: dict[str, int] = {}
+        for index, line in enumerate(lines):
+            if ":" in line:
+                keys[line.partition(":")[0].strip().lower()] = index
+
+        def replace_value(index: int, value: str) -> None:
+            line = lines[index]
+            ending = (
+                "\r\n"
+                if line.endswith("\r\n")
+                else "\n"
+                if line.endswith("\n")
+                else "\r"
+                if line.endswith("\r")
+                else ""
+            )
+            raw = line[: -len(ending)] if ending else line
+            key, _, old = raw.partition(":")
+            spacing = old[: len(old) - len(old.lstrip(" \t"))]
+            trailing = old[len(old.rstrip(" \t")) :]
+            lines[index] = key + ":" + spacing + value + trailing + ending
+
+        if "state" in keys:
+            replace_value(keys["state"], "closed")
+        else:
+            lines.insert(0, "state: closed" + newline)
+            keys = {key: index + 1 for key, index in keys.items()}
+        if "labels" in keys:
+            index = keys["labels"]
+            raw_value = lines[index].partition(":")[2].rstrip("\r\n")
+            if "in-progress" in _split_labels(raw_value):
+                kept = ",".join(
+                    part for part in raw_value.split(",") if part.strip() != "in-progress"
+                )
+                # The value's outer spacing is retained by replace_value.
+                replace_value(index, kept.strip(" \t"))
+        changed = chunk[:body_start] + "".join(lines) + chunk[body_end:]
+    return text[:start] + changed + text[end:]
 
 
 def _format_section(section: _Section) -> str:
@@ -274,7 +379,7 @@ def _resolve_main_worktree(start: Path) -> Path | None:
     return candidate
 
 
-def _atomic_write(path: Path, content: str) -> None:
+def _atomic_write(path: Path, content: str, *, newline: str | None = None) -> None:
     """Write ``content`` to ``path`` atomically (write tmp + rename).
 
     Preserves the destination's existing permission bits across writes —
@@ -292,7 +397,7 @@ def _atomic_write(path: Path, content: str) -> None:
         dir=str(path.parent),
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as f:
             f.write(content)
         os.chmod(tmp_name, target_mode)
         os.replace(tmp_name, path)
@@ -466,6 +571,25 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
         return tasks
 
+    def find_tasks_by_body_marker(
+        self,
+        marker: str,
+        label: str | None = None,
+        state: TaskState | None = TaskState.OPEN,
+    ) -> list[Task]:
+        """Exhaustively scan the central Markdown file for one recovery marker."""
+        _, sections = self._load_sections()
+        matches: list[Task] = []
+        for section in sections:
+            task = _section_to_task(section)
+            if state is not None and task.state != state:
+                continue
+            if label and label not in {item.name for item in task.labels}:
+                continue
+            if marker in task.body:
+                matches.append(task)
+        return matches
+
     def create_task(
         self,
         title: str,
@@ -520,71 +644,62 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         return _section_to_task(section)
 
     def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
-        """Mark a task ``closed`` and strip the in-progress label.
+        """Close only this task's metadata while preserving user bytes and staging.
 
-        If ``auto_commit`` is set in provider settings, commits the change
-        to git so the merge flow doesn't leave the working tree dirty.
-
-        The markdown provider has no close-reason concept — ``reason`` is
-        accepted for interface parity with other providers and ignored.
+        Auto-commit is optional and nonfatal. Only a proven clean tracked task
+        file is eligible; dirty/partially staged files close on disk without
+        staging or committing them. The provider lock covers the entire cycle.
         """
         with self._lock():
-            prelude, sections = self._load_sections()
-            section = self._find_section(sections, task_id)
-            section.meta["state"] = TaskState.CLOSED.value
-            # Closing implies leaving in-progress.
-            labels = _split_labels(section.meta.get("labels", ""))
-            labels = [name for name in labels if name != "in-progress"]
-            if labels:
-                section.meta["labels"] = _join_labels(labels)
-            else:
-                section.meta.pop("labels", None)
-            self._persist(prelude, sections)
-        logger.info("markdown.task_closed", task_id=task_id, path=str(self._path))
-        if self._auto_commit:
-            self._git_commit_close(task_id)
-        return _section_to_task(section)
+            original = self._path.read_bytes() if self._path.exists() else b""
+            text = original.decode("utf-8")
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            section = self._find_section(_parse_sections(normalized), task_id)
+            if _section_to_task(
+                section
+            ).state == TaskState.CLOSED and "in-progress" not in _split_labels(
+                section.meta.get("labels", "")
+            ):
+                logger.info("markdown.task_close_unchanged", task_id=task_id, path=str(self._path))
+                return _section_to_task(section)
+            eligibility = CloseCommitEligibility()
+            if self._auto_commit:
+                try:
+                    eligibility = inspect_close_commit(self._path, original)
+                except Exception as exc:
+                    eligibility = CloseCommitEligibility(reason=f"eligibility probe failed: {exc}")
+            closed_text = _close_metadata(text, section)
+            closed = closed_text.encode("utf-8")
+            # newline="" preserves CRLF, lone CR and noncanonical raw content.
+            _atomic_write(self._path, closed_text, newline="")
+            logger.info("markdown.task_closed", task_id=task_id, path=str(self._path))
+            if self._auto_commit:
+                self._git_commit_close(task_id, eligibility, closed)
+            return _section_to_task(
+                self._find_section(
+                    _parse_sections(closed_text.replace("\r\n", "\n").replace("\r", "\n")),
+                    task_id,
+                )
+            )
 
-    def _git_commit_close(self, task_id: str) -> None:
-        """Stage and commit the ISSUES.md change announcing a task close.
-
-        Non-fatal: any failure (not a git repo, file untracked, hook
-        rejection, signing failure) is logged at WARNING and swallowed —
-        the close itself already succeeded on disk.
-        """
-        cwd = self._path.parent
+    def _git_commit_close(
+        self, task_id: str, eligibility: CloseCommitEligibility, closed: bytes
+    ) -> None:
+        """Attempt the guarded close-only commit without staging user changes."""
         try:
-            add = run(
-                ["git", "add", str(self._path)],
-                cwd=cwd,
-                check=False,
-            )
-            if add.returncode != 0:
+            outcome = commit_close(eligibility, closed, task_id)
+            if outcome.committed:
+                logger.info("markdown.auto_committed", task_id=task_id)
+            else:
                 logger.warning(
-                    "markdown.auto_commit_add_failed",
+                    "markdown.auto_commit_failed"
+                    if outcome.attempted
+                    else "markdown.auto_commit_skipped",
                     task_id=task_id,
-                    stderr=add.stderr.strip() if add.stderr else "",
+                    reason=outcome.reason,
                 )
-                return
-            commit = run(
-                ["git", "commit", "-m", f"chore: close #{task_id}"],
-                cwd=cwd,
-                check=False,
-            )
-            if commit.returncode != 0:
-                logger.warning(
-                    "markdown.auto_commit_failed",
-                    task_id=task_id,
-                    stderr=commit.stderr.strip() if commit.stderr else "",
-                )
-                return
-            logger.info("markdown.auto_committed", task_id=task_id)
-        except Exception as exc:  # log + continue; close already succeeded on disk
-            logger.warning(
-                "markdown.auto_commit_exception",
-                task_id=task_id,
-                error=str(exc),
-            )
+        except Exception as exc:
+            logger.warning("markdown.auto_commit_exception", task_id=task_id, error=str(exc))
 
     def comment_on_task(self, task_id: str, body: str) -> None:
         """Append a timestamped ``### Comment`` block to the task body."""

@@ -4,11 +4,13 @@
 Usage: python scripts/auto_version.py <patch|minor|major> [--dry-run]
 
 Updates __version__ in src/wade/__init__.py and version in pyproject.toml
-to the next semver value. Optionally commits and tags the release.
+to the next semver value, synchronizes an existing uv.lock, and optionally
+commits and tags the coherent release.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -17,6 +19,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 INIT_FILE = ROOT_DIR / "src" / "wade" / "__init__.py"
 PYPROJECT_FILE = ROOT_DIR / "pyproject.toml"
+LOCK_FILE = ROOT_DIR / "uv.lock"
 
 
 def read_version() -> str:
@@ -62,10 +65,64 @@ def is_git_repo() -> bool:
     """Check if we're inside a git repo."""
     result = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=ROOT_DIR,
         capture_output=True,
         text=True,
     )
     return result.returncode == 0
+
+
+def check_release_index() -> None:
+    """Reject unrelated staged files without rejecting ordinary lock drift."""
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "-z"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    allowed = {"src/wade/__init__.py", "pyproject.toml", "uv.lock", "CHANGELOG.md"}
+    unrelated = sorted(set(result.stdout.split("\0")) - allowed - {""})
+    if unrelated:
+        print(
+            "Cannot bump version with unrelated staged paths: " + ", ".join(unrelated),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not LOCK_FILE.exists():
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--with-tree=HEAD", "uv.lock"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            check=False,
+        )
+        if tracked.returncode == 0:
+            print("Cannot bump version: tracked uv.lock is missing.", file=sys.stderr)
+            sys.exit(1)
+
+
+def sync_lockfile() -> bool:
+    """Refresh existing lock metadata before any release commit or tag."""
+    if not LOCK_FILE.exists():
+        return False
+    env = os.environ.copy()
+    # A release must refresh metadata even when the caller uses frozen installs.
+    env.pop("UV_FROZEN", None)
+    try:
+        subprocess.run(
+            ["uv", "lock", "--project", str(ROOT_DIR)],
+            cwd=ROOT_DIR,
+            env=env,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(
+            f"Could not synchronize uv.lock; no release commit/tag created: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print("Synchronized uv.lock")
+    return True
 
 
 def main() -> None:
@@ -98,6 +155,10 @@ def main() -> None:
         print("(dry run — no changes made)")
         return
 
+    in_git = is_git_repo()
+    if in_git:
+        check_release_index()
+
     # Update version in source files
     update_init_file(current, new)
     print(f"Updated __version__ in {INIT_FILE.relative_to(ROOT_DIR)}")
@@ -105,10 +166,15 @@ def main() -> None:
     update_pyproject(current, new)
     print(f"Updated version in {PYPROJECT_FILE.relative_to(ROOT_DIR)}")
 
+    has_lock = sync_lockfile()
+
     # Commit and tag if in a git repo
-    if is_git_repo():
+    if in_git:
+        release_files = [str(INIT_FILE), str(PYPROJECT_FILE)]
+        if has_lock:
+            release_files.append(str(LOCK_FILE))
         subprocess.run(
-            ["git", "add", str(INIT_FILE), str(PYPROJECT_FILE)],
+            ["git", "add", *release_files],
             cwd=ROOT_DIR,
             check=True,
         )

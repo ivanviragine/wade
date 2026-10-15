@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import shutil
 import subprocess
@@ -716,180 +715,37 @@ def _is_durable_event_spool(lines: list[str]) -> bool:
 
 
 def _carry_forward_pending_votes(
-    worktree_path: Path, repo_root: Path, config: ProjectConfig
+    worktree_path: Path,
+    repo_root: Path,
+    config: ProjectConfig,
 ) -> None:
-    """Flush main's uncommitted ratings votes into the new worktree, then clean main.
+    """Never adopt or drain unowned feedback during bootstrap.
 
-    A throwaway (plan / ``task deps``) ``wade knowledge rate`` appends its vote line
-    to **main's** working-copy ratings log — that is where a detached session's
-    knowledge writes are redirected. Those lines are uncommitted, so they never reach
-    origin on their own. At the next attached worktree's bootstrap we move them into
-    the new worktree's log (so they ride into that branch's PR to origin) and restore
-    main's ratings file to its committed state, returning main to clean.
-
-    Votes are additive, so this is "late but lossless" — the vote lands in origin one
-    attached session later. Serialized by ``file_lock`` on main's ratings file so two
-    concurrent bootstraps can't double-carry: the first carries + clears, the rest see
-    a clean main.
+    Existing tracked main-spool bytes and legacy session logs are recovery
+    artifacts. Explicit proposal recovery/acceptance owns their disposition.
     """
-    from wade.utils.filelock import file_lock
+    if not config.knowledge.enabled:
+        return
+    from wade.services.knowledge_proposals import proposals
+    from wade.ui.console import console
     from wade.utils.knowledge_file import resolve_knowledge_path, resolve_ratings_path
 
     try:
-        main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config.knowledge))
-    except ValueError:
-        return
-    if not main_ratings.is_file():
-        return
-    try:
-        relpath = main_ratings.relative_to(repo_root).as_posix()
-    except ValueError:
-        return
-    tracked_in_main = git_repo.is_file_tracked(repo_root, relpath)
-    main_legacy = main_ratings.with_suffix(".yml")
-    try:
-        legacy_relpath = main_legacy.relative_to(repo_root).as_posix()
-    except ValueError:
-        legacy_relpath = None
-    # Tri-state on purpose. ``show_file_at_head`` returns None both for "absent
-    # at HEAD" and "git call failed", and the untracked branch below deletes
-    # main's spool based on this answer: a transient git failure read as "no
-    # legacy file" would skip the HEAD restore and leave main's staged legacy
-    # deletion behind. ``None`` therefore means "unresolvable" and aborts the
-    # carry instead of guessing.
-    legacy_at_head: bool | None = (
-        git_repo.path_exists_at_head(repo_root, legacy_relpath)
-        if legacy_relpath is not None
-        else False
-    )
-    legacy_tracked_in_main = legacy_at_head is True
-
-    with file_lock(main_ratings):
-        if not main_ratings.is_file():
-            return
-        # Snapshot main's exact bytes so the whole carry is recoverable: if any step of
-        # the worktree transfer fails AFTER we reset main below, we restore these bytes
-        # so the pending votes survive for a later bootstrap to retry — never lost.
-        original_main_bytes = main_ratings.read_bytes()
-        working_lines = [
-            ln for ln in main_ratings.read_text(encoding="utf-8").splitlines() if ln.strip()
-        ]
-        if tracked_in_main:
-            committed_text = git_repo.show_file_at_head(repo_root, relpath)
-            committed = committed_text.splitlines() if committed_text is not None else []
-        else:
-            # #462's parent handoff can create the ratings sidecar before any
-            # attached session has ever committed one.  Treat it as a WADE spool
-            # only when every record has a durable event ID; never move an
-            # arbitrary untracked user file merely because it has this name.
-            if not _is_durable_event_spool(working_lines):
-                logger.warning("implementation.ratings_untracked_spool_rejected", path=relpath)
-                return
-            committed = []
-        # Multiset (not set) difference: the append-only log may legitimately repeat a
-        # serialized line, so subtracting the committed lines as a set would drop a
-        # genuinely-new duplicate vote whose identical twin already lives in HEAD.
-        pending = _multiset_difference(working_lines, committed)
-        if not pending:
-            return
-
-        # Restore main's tracked ratings (or remove the verified untracked
-        # #462 spool) FIRST, and only carry into the worktree if that succeeds.
-        # Otherwise the same events remain pending and could be delivered twice.
-        if tracked_in_main:
-            restored = git_repo.checkout_paths(repo_root, relpath)
-        elif legacy_at_head is None:
-            # Cannot tell whether main owes a legacy-file restore. Leave the
-            # spool intact; the next bootstrap retries once git answers.
-            logger.warning("implementation.ratings_carry_legacy_state_unresolved", path=relpath)
-            return
-        else:
-            try:
-                if legacy_tracked_in_main:
-                    assert legacy_relpath is not None
-                    restored = git_repo.restore_paths_to_head(repo_root, legacy_relpath)
-                else:
-                    restored = True
-                # Keep the pending spool intact unless every prerequisite for
-                # resetting main has succeeded.  ``restore_paths_to_head``
-                # deliberately returns False rather than raising when git
-                # cannot restore the staged legacy migration.
-                if restored:
-                    main_ratings.unlink()
-            except OSError:
-                restored = False
-        if not restored:
-            logger.warning("implementation.ratings_carry_restore_failed", path=relpath)
-            return
-
-        # main is now reset to HEAD (pending removed). Any failure persisting the
-        # worktree copy from here must roll main back to its snapshot so the votes are
-        # not lost from BOTH locations. The transfer is only "successful" once the
-        # worktree write completes.
-        worktree_ratings: Path | None = None
-        original_worktree_bytes: bytes | None = None
-        try:
-            worktree_ratings = resolve_ratings_path(
-                resolve_knowledge_path(worktree_path, config.knowledge)
+        path = resolve_ratings_path(resolve_knowledge_path(repo_root, config.knowledge))
+        relative = path.relative_to(repo_root.resolve()).as_posix()
+        if git_repo.status_porcelain_paths(repo_root, relative):
+            console.warn(
+                "Legacy pending main knowledge feedback remains intact; "
+                "explicit owner recovery is required."
             )
-            worktree_ratings.parent.mkdir(parents=True, exist_ok=True)
-            # Snapshot the worktree side too. The append below completes before
-            # the legacy removal, so a failure there must undo BOTH halves —
-            # otherwise the same votes sit in main and in the branch, and the
-            # next bootstrap carries main's copy across a second time.
-            original_worktree_bytes = (
-                worktree_ratings.read_bytes() if worktree_ratings.is_file() else None
+        count = len(proposals(worktree_path))
+        if count:
+            console.info(
+                f"{count} owner-bound knowledge proposal(s) retained; "
+                "inspect `wade knowledge proposals list`."
             )
-            content = (
-                original_worktree_bytes.decode("utf-8")
-                if original_worktree_bytes is not None
-                else ""
-            )
-            # Append EVERY pending vote — do NOT dedupe against the worktree's committed
-            # records. ``pending`` is already exactly main's uncommitted votes (working
-            # minus main's HEAD), and a rating event can serialize IDENTICALLY to a line
-            # the worktree already committed while still being a genuinely-distinct event.
-            # Subtracting the worktree's copy here would drop that vote, yet the main
-            # restore above already removed it — losing it from both places. Transferring
-            # the same physical line twice is impossible regardless: main is reset to HEAD
-            # (pending removed) BEFORE this append, and any failure below rolls BOTH sides
-            # back, so each pending line rides across at most once.
-            prefix = "" if (content == "" or content.endswith("\n")) else "\n"
-            with worktree_ratings.open("a", encoding="utf-8") as fd:
-                fd.write(prefix + "".join(f"{ln}\n" for ln in pending))
-            if legacy_tracked_in_main:
-                worktree_legacy = worktree_ratings.with_suffix(".yml")
-                worktree_legacy_relpath = worktree_legacy.relative_to(worktree_path).as_posix()
-                if not git_repo.rm_file(worktree_path, worktree_legacy_relpath):
-                    raise OSError(
-                        f"Could not stage legacy ratings removal: {worktree_legacy_relpath}"
-                    )
-        except OSError:
-            # Undo the worktree append first, then restore main, so the votes
-            # end up in exactly one place — main, where they started.
-            if worktree_ratings is not None:
-                with contextlib.suppress(OSError):
-                    if original_worktree_bytes is not None:
-                        worktree_ratings.write_bytes(original_worktree_bytes)
-                    elif worktree_ratings.exists():
-                        worktree_ratings.unlink()
-            with contextlib.suppress(OSError):
-                main_ratings.write_bytes(original_main_bytes)
-            if legacy_tracked_in_main and legacy_relpath is not None:
-                try:
-                    if not git_repo.rm_file(repo_root, legacy_relpath):
-                        logger.warning(
-                            "implementation.ratings_carry_legacy_restage_failed",
-                            path=legacy_relpath,
-                        )
-                except OSError:
-                    logger.warning(
-                        "implementation.ratings_carry_legacy_restage_failed",
-                        path=legacy_relpath,
-                    )
-            logger.warning("implementation.ratings_carry_transfer_failed", path=relpath)
-            return
-        logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))
+    except (ValueError, OSError, git_repo.GitError) as exc:
+        console.warn(f"Knowledge proposal inspection failed without adoption: {exc}")
 
 
 def _get_info_exclude_path(worktree_path: Path) -> Path | None:
@@ -1250,12 +1106,9 @@ def bootstrap_worktree(
         worktree_path, guard_type="plan" if plan_mode else "worktree", sandbox=sandbox
     )
 
-    # Every session gets a Stop-hook completion reminder, but the guard differs:
-    # plan sessions nudge to write a valid plan; impl/review sessions nudge to run
-    # `done` (and also get the pre-push backstop that hard-enforces it).
-    if plan_mode:
-        _install_stop_hook(worktree_path, guard=StopGuard.PLAN_COMPLETE)
-    else:
+    # Planning uses explicit handoff or collection gates. A file-existence Stop
+    # nudge cannot establish a current review or an authoritative native artifact.
+    if not plan_mode:
         _install_stop_hook(worktree_path)
 
         # Managed git hooks: the pre-push backstop (makes `done` hard to skip) plus

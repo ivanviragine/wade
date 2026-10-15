@@ -21,13 +21,13 @@ logger = structlog.get_logger()
 # Printed next to every "worktree preserved for retry" error, because "retry"
 # is only actionable if the user knows what performs it.
 RETAINED_VOTE_RECOVERY_HINT = (
-    "The votes stay in that worktree — the next `wade plan` or `wade task deps` "
-    "hands them off automatically once access is restored."
+    "Original feedback remains pending. Explicitly recover its verified owner with "
+    "`wade knowledge proposals recover --worktree <original-parent>`; no automatic delivery."
 )
 
 
 def report_retained_vote_recovery(repo_root: Path, config: ProjectConfig) -> None:
-    """Flush votes retained by earlier throwaway sessions and report the outcome.
+    """Report legacy feedback retained by earlier throwaway sessions and report the outcome.
 
     A no-op when knowledge is disabled or nothing was retained — the common
     case must stay silent. Never raises: recovering an *earlier* session's votes
@@ -46,13 +46,13 @@ def report_retained_vote_recovery(repo_root: Path, config: ProjectConfig) -> Non
     for outcome in outcomes:
         if outcome.success:
             console.info(
-                f"Recovered {outcome.appended_count} staged knowledge vote(s) from a "
+                f"Preserved {outcome.appended_count} knowledge proposal(s) from a "
                 f"retained session worktree at {console.escape_markup(str(outcome.worktree))}."
             )
         else:
             # Still retained, still retryable — say so instead of going quiet.
             console.warn(
-                "Staged knowledge votes at "
+                "Legacy pending knowledge feedback at "
                 f"{console.escape_markup(str(outcome.worktree))} could not be handed off: "
                 f"{console.escape_markup(outcome.message or 'unknown error')}"
             )

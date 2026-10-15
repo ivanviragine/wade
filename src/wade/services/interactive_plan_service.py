@@ -1,0 +1,456 @@
+"""Explicit plan handoff from native terminals, without parsing tool storage."""
+
+from __future__ import annotations
+
+import errno
+import hashlib
+import os
+import shlex
+import stat
+import uuid
+from pathlib import Path
+from typing import Literal
+
+from wade.models.interactive_plan import (
+    InteractivePlanReview,
+    InteractivePlanReviews,
+    InteractivePlanState,
+)
+from wade.models.plan_bundle import PlanBundle, PlanMember
+from wade.models.skill import SkillSlot
+from wade.models.workflow import SessionKind
+from wade.services import native_plan_service as native
+from wade.services.session_composition_service import (
+    SessionCompositionError,
+    load_session_manifest_strict,
+    validate_frozen_session_bundle,
+)
+from wade.utils.plan_validation import load_plan_file, plan_done
+from wade.utils.safe_state import (
+    StateFileAccessError,
+    StateFileIOError,
+    StateFileUnsafeError,
+    atomic_write_state_file,
+    delete_state_file,
+    exclusive_write_state_file,
+    list_state_files,
+    list_state_files_strict,
+    read_state_file,
+    read_state_file_strict,
+    state_file_present,
+)
+
+STATE = "interactive-session.json"
+REVIEWS = "interactive-reviews.json"
+MAX_HANDOFF_BYTES = 4_000_000
+
+
+class InteractivePlanAccessError(ValueError):
+    """Parent collection was blocked by an external filesystem access denial."""
+
+    def __init__(self, root: Path, cause: StateFileAccessError) -> None:
+        self.root = root
+        self.path = cause.path
+        recovery = shlex.join(["wade", "plan", "--recover", str(root)])
+        super().__init__(
+            f"Filesystem permission denied while collecting the planning handoff at "
+            f"{cause.path}. Restore access, then recover the retained handoff with "
+            f"`{recovery}`."
+        )
+
+
+def read_artifact(path: Path) -> str:
+    """Read one explicitly named native artifact, bounded and without following a link."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("Plan source must be a regular file")
+        data = stream.read(2_000_001)
+    if len(data) > 2_000_000:
+        raise ValueError("Plan source exceeds the 2 MB import limit")
+    return data.decode("utf-8")
+
+
+def active(root: Path) -> bool:
+    return state_file_present(root, ("plans",), STATE)
+
+
+def _frozen_bundle_state_error(
+    root: Path, error: SessionCompositionError
+) -> StateFileAccessError | StateFileIOError | None:
+    """Recover an I/O failure wrapped by frozen-bundle validation."""
+
+    current = error.__cause__
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (StateFileAccessError, StateFileIOError)):
+            return current
+        if isinstance(current, OSError):
+            path = (
+                Path(os.fsdecode(current.filename))
+                if current.filename is not None
+                else root / ".wade" / "session"
+            )
+            if current.errno in {errno.EACCES, errno.EPERM}:
+                return StateFileAccessError(path, current)
+            if current.errno not in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EINVAL}:
+                return StateFileIOError(path, current)
+        current = current.__cause__
+    return None
+
+
+def _binding_digest(root: Path) -> str:
+    try:
+        manifest = load_session_manifest_strict(root)
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        raise ValueError("Interactive planning requires its frozen session bundle") from exc
+    try:
+        validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
+    except SessionCompositionError as exc:
+        if state_error := _frozen_bundle_state_error(root, exc):
+            raise state_error from exc
+        raise ValueError(str(exc)) from exc
+    return manifest.bundle_digest
+
+
+def begin(
+    root: Path,
+    tool: str,
+    *,
+    review_required: bool,
+    knowledge_required: bool = False,
+    model: str | None = None,
+    effort: str | None = None,
+    sandbox: bool | None = None,
+) -> None:
+    state = InteractivePlanState(
+        session_id=str(uuid.uuid4()),
+        tool=tool,
+        model=model,
+        effort=effort,
+        sandbox=sandbox,
+        review_required=review_required,
+        knowledge_required=knowledge_required,
+        bundle_digest=_binding_digest(root),
+    )
+    if not exclusive_write_state_file(root, ("plans",), STATE, state.model_dump_json()):
+        raise ValueError("Cannot safely create the interactive planning handoff")
+
+
+def _load(root: Path) -> InteractivePlanState:
+    try:
+        raw = read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        raise ValueError("Interactive planning handoff is absent or unsafe") from exc
+    if raw is None:  # pragma: no cover - strict reads return bytes or raise
+        raise ValueError("Interactive planning handoff is absent or unsafe")
+    state = InteractivePlanState.model_validate_json(raw)
+    if state.refresh_pending:
+        raise ValueError(
+            "Planning refresh interrupted; rerun plan-session refresh on the original directory"
+        )
+    if state.bundle_digest != _binding_digest(root):
+        raise ValueError("Interactive planning bindings changed; restart the planning session")
+    return state
+
+
+def _save(root: Path, state: InteractivePlanState) -> None:
+    if not atomic_write_state_file(
+        root, ("plans",), STATE, state.model_dump_json().encode(), max_bytes=MAX_HANDOFF_BYTES
+    ):
+        raise ValueError("Cannot safely save the interactive planning handoff")
+
+
+def import_artifact(root: Path, markdown: str) -> None:
+    """Materialize explicitly supplied content; replace only this run's own members."""
+    state = _load(root)
+    bundle = native.parse_artifact(markdown)
+    previous = {member.filename for member in state.bundle.plans} if state.bundle else set()
+    files = list_state_files(root, ("plans",))
+    if files is None:
+        raise ValueError("Unsafe planning directory")
+    existing = {name for name in files if name.startswith("PLAN") and name.endswith(".md")}
+    if existing - previous:
+        raise ValueError("Plan import conflicts with existing files; nothing was overwritten")
+    for name in existing:
+        if read_state_file(root, ("plans",), name) is None:
+            raise ValueError("Cannot replace an unsafe planning artifact")
+    # A failed or partial revision must never leave an earlier completion valid.
+    state.completed = False
+    _save(root, state)
+    for member in bundle.plans:
+        if member.filename in existing:
+            written = atomic_write_state_file(
+                root, ("plans",), member.filename, member.markdown.encode()
+            )
+        else:
+            written = exclusive_write_state_file(root, ("plans",), member.filename, member.markdown)
+        if not written:
+            raise ValueError("Plan import failed; the session output was retained")
+    for name in previous - {member.filename for member in bundle.plans}:
+        if name in existing and not delete_state_file(root, ("plans",), name):
+            raise ValueError("Cannot safely remove a superseded plan member")
+    state.bundle = bundle
+    _save(root, state)
+
+
+def _current_bundle(root: Path, state: InteractivePlanState) -> PlanBundle:
+    if state.bundle is None:
+        files = list_state_files_strict(root, ("plans",))
+        names = [name for name in files if name.startswith("PLAN") and name.endswith(".md")]
+        members = tuple(PlanMember(filename=name, markdown=_content(root, name)) for name in names)
+        return PlanBundle(plans=members)
+    files = list_state_files_strict(root, ("plans",))
+    if {name for name in files if name.startswith("PLAN") and name.endswith(".md")} != {
+        member.filename for member in state.bundle.plans
+    }:
+        raise ValueError("Imported plan members changed; recover the retained native artifact")
+    return PlanBundle(
+        plans=tuple(
+            PlanMember(
+                filename=member.filename,
+                markdown=_content(root, member.filename),
+                depends_on=member.depends_on,
+            )
+            for member in state.bundle.plans
+        ),
+        knowledge_votes=state.bundle.knowledge_votes,
+        knowledge_proposals=state.bundle.knowledge_proposals,
+    )
+
+
+def _content(root: Path, name: str) -> str:
+    # Also require a valid task boundary before handing content to a reviewer.
+    load_plan_file(root / ".wade/plans" / name, strict=True)
+    raw = read_state_file_strict(root, ("plans",), name)
+    return raw.decode("utf-8")
+
+
+def _reviews(root: Path) -> InteractivePlanReviews:
+    try:
+        raw = read_state_file_strict(root, ("plans",), REVIEWS)
+    except StateFileAccessError:
+        raise
+    except StateFileUnsafeError as exc:
+        if state_file_present(root, ("plans",), REVIEWS):
+            raise ValueError("Plan review state is unsafe or unreadable") from exc
+        return InteractivePlanReviews()
+    return InteractivePlanReviews.model_validate_json(raw)
+
+
+def _save_reviews(root: Path, reviews: InteractivePlanReviews) -> None:
+    if not atomic_write_state_file(root, ("plans",), REVIEWS, reviews.model_dump_json().encode()):
+        raise ValueError("Cannot safely record the plan review")
+
+
+def review_root(path: Path) -> Path | None:
+    path = path.absolute()
+    if path.parent.name != "plans" or path.parent.parent.name != ".wade":
+        return None
+    root = path.parent.parent.parent
+    return root if active(root) else None
+
+
+def record_review(path: Path, content: str, *, self_review: bool) -> None:
+    root = review_root(path)
+    if root is None:
+        return
+    state = _load(root)
+    reviews = _reviews(root)
+    reviews.plans[path.name] = InteractivePlanReview(
+        session_id=state.session_id,
+        bundle_digest=state.bundle_digest,
+        content_digest=hashlib.sha256(content.encode()).hexdigest(),
+        self_review_pending=self_review,
+    )
+    _save_reviews(root, reviews)
+
+
+def invalidate_review(path: Path) -> None:
+    """A new review attempt cannot reuse an older success if it fails."""
+    root = review_root(path)
+    if root is None:
+        return
+    state = _load(root)
+    state.completed = False
+    _save(root, state)
+    reviews = _reviews(root)
+    reviews.plans.pop(path.name, None)
+    _save_reviews(root, reviews)
+
+
+def acknowledge_self_review(path: Path) -> None:
+    root = review_root(path)
+    if root is None:
+        raise ValueError("Self-review acknowledgement requires an interactive planning session")
+    state = _load(root)
+    reviews = _reviews(root)
+    review = reviews.plans.get(path.name)
+    if review is None or not review.self_review_pending:
+        raise ValueError("Run wade review plan first, then perform its emitted self-review")
+    if not _matches(state, review, _content(root, path.name)):
+        raise ValueError("The plan or review binding changed; run wade review plan again")
+    review.self_review_pending = False
+    _save_reviews(root, reviews)
+
+
+def _matches(state: InteractivePlanState, review: InteractivePlanReview, markdown: str) -> bool:
+    return (
+        review.session_id == state.session_id
+        and review.bundle_digest == state.bundle_digest
+        and review.content_digest == hashlib.sha256(markdown.encode()).hexdigest()
+    )
+
+
+def _validate_reviews(root: Path, state: InteractivePlanState, bundle: PlanBundle) -> None:
+    if not state.review_required:
+        return
+    reviews = _reviews(root)
+    for member in bundle.plans:
+        review = reviews.plans.get(member.filename)
+        command = f"wade review plan .wade/plans/{member.filename}"
+        if review is None or not _matches(state, review, member.markdown):
+            raise ValueError(f"Review is required for the current plan: {command}")
+        if review.self_review_pending:
+            raise ValueError(
+                f"Perform the emitted self-review, then run {command} --ack-self-review"
+            )
+
+
+def complete(root: Path) -> None:
+    state = _load(root)
+    state.completed = False
+    _save(root, state)
+    bundle = _current_bundle(root, state)
+    if plan_done(root / ".wade/plans").has_errors:
+        raise ValueError("Fix plan validation errors before completing the session")
+    if (
+        state.knowledge_required
+        and bundle.knowledge_votes is None
+        and bundle.knowledge_proposals is None
+    ):
+        raise ValueError(
+            "Knowledge-enabled planning requires knowledge_proposals "
+            "(legacy knowledge_votes remain historical); "
+            "use an explicit empty list when no entries were evaluated"
+        )
+    _validate_reviews(root, state, bundle)
+    state.bundle = bundle
+    state.completed = True
+    _save(root, state)
+
+
+def collect(root: Path) -> PlanBundle:
+    """Accept only a completed submission whose files and reviews are still current."""
+    return collect_with_state(root)[1]
+
+
+def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
+    """Collect a completed handoff and return its validated launch metadata."""
+
+    try:
+        state = _load(root)
+        if not state.completed or state.bundle is None:
+            raise ValueError("No completed plan handoff; run wade plan-session done before exiting")
+        bundle = _current_bundle(root, state)
+        if bundle != state.bundle:
+            raise ValueError("Plans changed after completion; run wade plan-session done again")
+        _validate_reviews(root, state, bundle)
+        return state, bundle
+    except StateFileAccessError as exc:
+        raise InteractivePlanAccessError(root, exc) from exc
+
+
+def refresh_handoff(root: Path) -> Literal["native", "collected"]:
+    """Refresh an intact original handoff without promoting an old review.
+
+    The original plans, session identity, launch binding and persistence progress
+    remain unchanged. Native refresh closes completion/review with a durable
+    pending flag. Collected recovery already reviews every materialized plan
+    before persistence; no synthetic native state is created for that path.
+    No provider operation or new review is dispatched here.
+    """
+    from wade.config.loader import load_config
+    from wade.git import repo as git_repo
+    from wade.services.session_composition_service import compose_session
+    from wade.skills.materializer import compute_session_bundle_digest, validate_session_bundle
+    from wade.utils.filelock import file_lock
+
+    root = root.resolve()
+    if not git_repo.is_worktree(root) or git_repo.is_head_attached(root):
+        raise ValueError("Refresh requires the original registered detached planning worktree")
+    with file_lock(root / ".wade/plans/refresh.lock", create_parent=False):
+        raw = (
+            read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
+            if state_file_present(root, ("plans",), STATE)
+            else None
+        )
+        state = InteractivePlanState.model_validate_json(raw) if raw is not None else None
+        if state is None:
+            # The public collected artifact must validate before its contracts
+            # change. Its normal recovery path still performs the parent review.
+            native.load_artifact(root)
+        manifest = load_session_manifest_strict(root)
+        if manifest.session is not SessionKind.PLAN:
+            raise ValueError("Original planning session composition is required")
+        validate_session_bundle(root, manifest)
+        if (
+            state is not None
+            and not state.refresh_pending
+            and state.bundle_digest != manifest.bundle_digest
+        ):
+            raise ValueError("Native handoff does not match its original frozen bundle")
+        # Archive the validated old bundle before any replacement. It remains a
+        # recovery artifact; never claim its prior reviews cover the new bundle.
+        archive_name = "session-refresh-" + manifest.bundle_digest.split(":", 1)[1]
+        archive = root / ".wade/plans" / archive_name
+        if archive.is_symlink():
+            raise ValueError("Unsafe session refresh archive")
+        for source in sorted((root / ".wade/session").rglob("*")):
+            if source.is_symlink():
+                raise ValueError("Unsafe frozen session archive source")
+            if not source.is_file():
+                continue
+            relative = source.relative_to(root / ".wade/session")
+            parts = ("plans", archive_name, *relative.parent.parts)
+            original = source.read_bytes()
+            previous = read_state_file(root, parts, relative.name)
+            if previous is not None and previous != original:
+                raise ValueError("Original session refresh archive conflicts; preserve it")
+            if previous is None and not atomic_write_state_file(
+                root, parts, relative.name, original
+            ):
+                raise ValueError("Could not durably archive frozen session before refresh")
+        if compute_session_bundle_digest(archive) != manifest.bundle_digest:
+            raise ValueError("Original frozen session archive is incomplete or changed")
+        if state is not None:
+            state.completed = False
+            state.refresh_pending = True
+            state.review_required = True
+            _save(root, state)
+            _save_reviews(root, InteractivePlanReviews())
+        config = load_config(root)
+        main = git_repo.main_checkout_root(root)
+        refreshed = compose_session(
+            root,
+            main,
+            config,
+            kind=SessionKind.PLAN,
+            task_id=manifest.task_id,
+            refresh=True,
+            work_skills=[skill.canonical_ref for skill in manifest.bindings[SkillSlot.WORK].skills],
+            review_skills=[
+                skill.canonical_ref for skill in manifest.bindings[SkillSlot.REVIEW].skills
+            ],
+        )
+        if state is not None:
+            state.bundle_digest = refreshed.manifest.bundle_digest
+            state.refresh_pending = False
+            _save(root, state)
+            return "native"
+        return "collected"

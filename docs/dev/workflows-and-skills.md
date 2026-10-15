@@ -40,7 +40,7 @@ Interactive sessions:
 |---|---|---|---|
 | `plan` | `builtin:planning` | `builtin:plan-review` | `plan.md` |
 | `implementation` | `builtin:implementation` | `builtin:code-review` | `implementation.md` |
-| `review-pr-comments` | `builtin:review-comments` | `builtin:code-review` | `review-pr-comments.md` |
+| `review-pr-comments` | `builtin:review-comments` | `builtin:feedback-fix-review` | `review-pr-comments.md` |
 
 The `deps` session owns detached-worktree readiness and recovery but is explicitly
 non-interactive: it has no workflow template, launch prompt, SessionStart phase,
@@ -52,7 +52,7 @@ Delegations:
 | Delegation | Host behavior | Default method |
 |---|---|---|
 | `plan-review` | maps to a plan session's frozen REVIEW slot | `builtin:plan-review` |
-| `code-review` | maps to implementation/review session REVIEW | `builtin:code-review` |
+| `code-review` | maps to implementation/review session REVIEW | `builtin:code-review` when standalone; the mapped session's frozen REVIEW binding otherwise |
 | `batch-review` | always foreign; no worktree is privileged | `builtin:batch-review` |
 | `dependency-analysis` | always foreign, including inside planning | `builtin:dependency-analysis` |
 
@@ -60,6 +60,23 @@ Mapped reviews load the active session reviewer exactly. A CLI `--skill` cannot
 replace that reviewer during the review command; refresh the session binding
 explicitly. Foreign operations resolve independently and never inherit an
 unrelated host slot.
+
+The default roles are deliberately distinct: planning WORK creates a plan,
+plan REVIEW tests whether that plan can safely meet its goal, implementation
+REVIEW examines material defects introduced by the planned change,
+review-comment WORK verifies incoming claims before editing, and feedback-fix
+REVIEW checks only those corrections and their directly affected behavior.
+
+Native terminal planning uses the full CLI in Plan mode. Its fixed workflow
+submits explicit native file/stdin content through `plan-session done`, reviews
+WADE's canonical copies with `review plan`, and finishes the validated handoff
+before exit. Review receipts bind to exact content, the frozen bundle, and the
+current run. Prompt review requires actual self-review and `--ack-self-review`.
+Revisions require current receipts. The command loads the REVIEW method; WORK
+does not activate it directly. Tools without terminal Plan support retain
+native artifact collection and parent review, including explicit prompt-review
+acknowledgement. Both paths leave task persistence and implementation decisions
+to the parent. The legacy file-presence Stop hook remains uninstalled.
 
 ## Fixed workflow rendering
 
@@ -102,6 +119,7 @@ sessions:
   review_pr_comments:
     skills:
       work: [builtin:review-comments]
+      # Omit review to use builtin:feedback-fix-review.
 
 delegations:
   plan_review:
@@ -139,6 +157,14 @@ A standalone/foreign delegation uses CLI, then
 and mapped delegation configure different reviewers, the session value wins for
 that session and diagnostics report the shadowed candidate.
 
+The shared `delegations.code_review.skills.work` binding is deliberately the
+fallback for both implementation and PR-comment session REVIEW slots. An
+explicit value there therefore replaces their stage-specific built-in defaults,
+including `builtin:feedback-fix-review` for PR-comment sessions, unless the
+corresponding `sessions.<session>.skills.review` binding is configured. This
+does not affect an already frozen session; refresh it explicitly to resolve a
+new binding.
+
 Session commands accept repeatable `--skill` and `--review-skill` flags. Bounded
 review, batch, and deps commands accept repeatable `--skill`. Use `builtin:`,
 `project:`, or an exact repository-relative `path:` ref.
@@ -175,6 +201,14 @@ An implementation-to-PR-comment transition is a new session and replaces the
 manifest/workflow. Durable review records survive outside the session bundle,
 but apply only if the new session's review binding is identical.
 
+The implementation and PR-comment definitions currently use workflow revision
+3 (planning uses4 for typed owner-bound knowledge proposals). Their authoritative order is verification, documentation decision, knowledge,
+then closing method review; an old frozen revision is rejected until an explicit
+refresh replaces it. Expected tracked documentation and knowledge changes are
+therefore normally present in the final review. If a review finding creates a
+new tracked commit, the session repeats affected verification/documentation work
+and reviews that new final commit.
+
 ## Bounded invocation contract
 
 `skill_invocation_service.py` composes bounded prompts structurally in this
@@ -191,6 +225,17 @@ so a skill may refer to copied resources even when bundle resolution and the
 reviewer's repository working directory differ. Headless execution does not
 depend on native tool discovery. The fixed service owns tool/model selection,
 permissions, timeout, input collection, parsing, and side effects.
+
+For mapped closing reviews, the service also supplies the frozen host-session
+identity after the untrusted method text. That fixed result contract applies
+the common finding-admission rule—concrete, material, evidenced failures only—
+and narrows `code-review` to either implementation review or feedback-fix
+review. Feedback-fix scope applies only when a PR-comment cycle has a validated
+baseline; otherwise the full-branch result contract overrides the narrow method
+and reviews the complete branch diff. A custom reviewer cannot turn a
+feedback-fix review into whole-PR redesign when that validated scope exists,
+and optional preferences, speculative hardening, pre-existing problems, and
+unrelated cleanup are omitted rather than labeled as findings.
 
 Foreign operations persist a narrower delegation manifest below
 `.wade/operations/`. A successful synchronous operation removes its own bundle;
@@ -228,7 +273,26 @@ active binding. Switching A to B preserves A's history but makes it inapplicable
 switching back to byte-identical A at the same commit reuses its record. Refresh
 of only WORK does not invalidate a REVIEW record.
 
-Manifest, review, and documentation-gate state uses descriptor-relative,
+The first implementation review for a REVIEW binding uses the full branch diff.
+A later one may use the nearest same-binding satisfying record that is a safe
+ancestor of `HEAD`, reviewing only its committed delta while retaining staged and
+unstaged sections. Git errors, malformed or other-binding records, non-ancestors,
+and any merge on the selected ancestry path fail open to the full branch diff.
+The record is only an input baseline: every completed review still writes the
+normal exact-`HEAD`, binding-aware receipt.
+
+PR-comment cycles persist separately at
+`.wade/review-cycles/review-cycle@<issue>.json`, rather than in immutable
+`.wade/session/` methodology snapshots. A cycle captures the open PR identity,
+the pre-edit baseline, and normalized fetched feedback. Starting or resuming a
+cycle preserves its baseline and retains prior feedback while adding newly
+fetched feedback; successful `review-pr-comments-session done` removes the
+context. The closing review uses that accumulated feedback plus the cycle delta
+only after identity, ancestry, and merge-path validation; unreadable, mismatched,
+malformed, or unsafe state falls back to a full diff and the full-branch result
+contract, which takes precedence over the feedback-fix methodology.
+
+Manifest, review, review-cycle, and documentation-gate state uses descriptor-relative,
 no-follow filesystem operations. Unsafe/malformed/unreadable state is absent for
 gate purposes and fails toward re-review, never toward completion. SHA marker
 files are never accepted as review evidence. The completion classifier also
@@ -258,9 +322,12 @@ summary, synchronization, conventional title, resolved threads, current-binding
 review, documentation decision, and knowledge validity according to project
 policy.
 
-Planning remains independently strict: the parent service always parses and
-validates produced plan files, including salvage paths. `plan-session done` is
-helpful session telemetry, not authority over parent consumption.
+Planning remains independently strict: the parent always parses and validates
+plans, including salvage paths. Managed native terminal sessions additionally
+require a completed `plan-session done` handoff and current content/binding review
+receipts. `review plan --ack-self-review` confirms a performed prompt-mode review;
+it cannot acknowledge changed content. Standalone plan review retains its ordinary
+behavior; the collector fallback retains parent-side review.
 
 ## Extension rules
 
@@ -299,3 +366,19 @@ This is a qualitative, repository-evidence review rather than a claim that a
 particular model will always produce identical output. The defaults provide the
 missing generic method; fixed workflows, deterministic gates, and tests remain
 the authority when output quality varies.
+
+## Evidence-bound knowledge compatibility
+
+Plan workflow4 and implementation/PR-comment workflow3 use the knowledge
+contracts in [knowledge.md](knowledge.md). Typed v2 plan observations and schema1
+owner-bound proposals replace generic next-worktree delivery; v1 votes remain
+historical input. Explicit refresh/recovery must validate frozen current workflow
+and handoff/review bindings. `plan-session refresh <original .wade/plans>`
+durably archives an intact original parent's old bundle. Native refresh closes
+old review/completion; fresh independent review/done precedes `plan --recover`.
+Collected artifacts/progress remain unchanged, and recovery performs its normal
+parent review before persistence without creating native completion state.
+Interrupted refresh is explicitly retryable and never invents a receipt.
+Bootstrap/review/done never auto-accept proposals.
+Commit owned knowledge before review; post-sync and recovery-push reconciliation
+are deterministic fixed gates, not methodology or agent discretion.

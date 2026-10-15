@@ -32,6 +32,7 @@ from wade.models.config import (
     SkillsConfig,
 )
 from wade.models.permission import coerce_permission_mode
+from wade.models.project import GitHubProjectsConfig
 from wade.models.session import MergeStrategy
 
 logger = structlog.get_logger()
@@ -349,12 +350,19 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     sessions = SessionsConfig.model_validate(_section_mapping(raw, "sessions"))
     delegations = DelegationsConfig.model_validate(_section_mapping(raw, "delegations"))
 
+    github_projects = None
+    if "github_projects" in raw:
+        if not isinstance(raw["github_projects"], dict):
+            raise TypeError("github_projects must be a mapping, not null")
+        github_projects = GitHubProjectsConfig.model_validate(raw["github_projects"])
+
     return ProjectConfig(
         version=version,
         project=project,
         ai=ai,
         models=models,
         provider=provider,
+        github_projects=github_projects,
         permissions=permissions,
         hooks=hooks,
         knowledge=knowledge,

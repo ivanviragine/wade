@@ -129,6 +129,38 @@ class GitHubProvider(AbstractTaskProvider):
         raw_list = json.loads(result.stdout)
         return [_parse_gh_task(item) for item in raw_list]
 
+    def find_tasks_by_body_marker(
+        self,
+        marker: str,
+        label: str | None = None,
+        state: TaskState | None = TaskState.OPEN,
+    ) -> list[Task]:
+        """Exhaustively scan matching GitHub issues for one recovery marker."""
+        nwo = self.get_repo_nwo()
+        state_value = "all" if state is None else state.value
+        query = f"repos/{nwo}/issues?state={state_value}&per_page=100"
+        if label:
+            query += f"&labels={quote(label, safe='')}"
+        result = run(
+            ["gh", "api", "--paginate", "--slurp", query],
+            check=True,
+            retries=3,
+        )
+        pages = json.loads(result.stdout)
+        tasks: list[Task] = []
+        for page in pages:
+            for raw in page:
+                # GitHub's REST issues endpoint includes pull requests. The
+                # issue-list command used elsewhere excludes them, so preserve
+                # that task-provider contract here too.
+                if "pull_request" in raw or marker not in (raw.get("body") or ""):
+                    continue
+                raw["url"] = raw.get("html_url", raw.get("url", ""))
+                raw["createdAt"] = raw.get("created_at")
+                raw["updatedAt"] = raw.get("updated_at")
+                tasks.append(_parse_gh_task(raw))
+        return tasks
+
     def create_task(
         self,
         title: str,

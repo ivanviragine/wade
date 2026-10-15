@@ -1,152 +1,122 @@
 ---
 name: knowledge
 description: >
-  Instructions for contextual knowledge retrieval, tagging, search, and rating.
-  Referenced by fixed planning, implementation, and review workflow bundles.
+  Retrieve project knowledge, inspect committed evidence, and preserve owner-bound observations.
 ---
 
-# Knowledge Operations
+# Knowledge operations
 
-## Purpose
+Search relevant entries with `wade knowledge get --search "worktree safety"`
+or `--tag git`. Search and tag combine with OR. `--raw` prints original Markdown;
+`--all-history` includes each exact-duplicate member and its own receipts.
+Default visibility never hides a claim because of legacy negative/stale votes.
+`--min-score N` and `--no-filter` remain explicit usefulness filters.
 
-Knowledge captures **gotchas, buried constraints, hidden invariants, and facts not in `AGENTS.md`/`CLAUDE.md`** — things a future agent would otherwise waste time rediscovering. It is not a work log, a changelog, or a duplicate of documentation that already exists. If the fact is in `AGENTS.md`, `CLAUDE.md`, or derivable from `git log`/`git blame`, do not add it.
+Treat these dimensions separately:
 
-## Contextual retrieval
+- Assessment: unverified, checked-current, contradicted, or needs-recheck.
+- Publication: branch-local, integrated, or unavailable, independently for claim
+  and each assessment. Integrated means matching ID/content in locally available
+  configured main; an intermediate PR base is not publication.
+- Usefulness: useful/not-useful and historical up/down/stale counts.
+- Historical relationships: superseded/retired and exact-duplicate membership.
 
-Do **not** dump all knowledge at session start. Instead, search for entries
-relevant to your current task:
+Dates, utility votes, aliases, and publication never establish correctness.
+Plain entries remain unverified until the owning implementation explicitly runs
+`wade knowledge identify <one-based-position>`.
 
-```bash
-wade knowledge get --search "worktree safety"
-wade knowledge get --tag git
-wade knowledge get --search "error handling" --tag testing
+## Check committed proof in the owning worktree
+
+```
+wade knowledge check <id> current --file src/example.py#L1-L20 --note "Observed invariant"
+wade knowledge check <id> contradicted --file src/example.py --note "Observed contradiction"
+wade knowledge check <id> current --evidence-file proof.json --note "Captured decision"
 ```
 
-When both `--search` and `--tag` are provided, entries matching **either**
-criterion are returned (OR semantics).
+Repeat `--file` for multiple ordinary tracked blobs. Dirty/staged/untracked,
+missing, symlink and submodule sources are rejected. WADE derives HEAD, blob ID,
+body digest and timestamp. A receipt committed after its source remains valid
+when the compared blob is unchanged, including rebase/squash and unavailable
+historical commits. Changed/renamed/missing paths require rechecking. Resolve
+incompatible live assessments explicitly with repeatable `--replaces <event-id>`;
+line order and newer timestamps do not decide authority.
 
-Only fall back to `wade knowledge get` (no filters) if you need a broad overview
-or the knowledge base is small.
+`--evidence-file` contains a JSON array of tagged evidence:
 
-## Search syntax
+- `git_file`: path, checked_commit, blob, optional start_line/end_line. Supplied
+  file evidence must match freshly derived HEAD proof.
+- `test_run`: check, command, checked_commit, outcome (passed/failed), optional
+  result_digest. WADE records supplied results; it does not execute the command.
+  Another commit makes test-only proof historical/needs-recheck. Unchanged mixed
+  code proof can remain applicable while the old test is explicitly historical.
+- `external_url`: url, timezone-aware fetched_at, content_digest. This is a supplied
+  fetched snapshot, never a claim that reconciliation fetched current remote bytes.
+- `decision`: reference to a PR, issue or ADR. It remains applicable until the
+  entry is explicitly superseded/retired; an ADR may also have file evidence.
 
-The `--search` flag accepts boolean queries:
+Digests use `sha256:<64 lowercase hex>`; commits/blob IDs use full Git object IDs.
+Evidence paths with skip-worktree/assume-unchanged flags are refused, including
+injected AGENTS/gitignore paths. Other unflagged source remains usable without
+editing generated files. Local proof ignores replacement objects and never fetches.
 
-| Syntax | Meaning |
-|--------|---------|
-| `term` | Entries containing the term (case-insensitive) |
-| `"exact phrase"` | Entries containing the exact phrase |
-| `term1 AND term2` | Both terms must appear |
-| `term1 OR term2` | Either term may appear |
-| `NOT term` | Exclude entries containing the term |
-| `(a OR b) AND c` | Parentheses for grouping |
-| `worktree safety` | Bare space = implicit AND |
+## Utility and historical feedback
 
-## Tagging
+`wade knowledge feedback <id> useful|not-useful --note <reason>` records usefulness.
+Deprecated `wade knowledge rate <id> up|down|stale` remains historical feedback only.
+An observation in planning, dependency analysis, main, a detached checkout, or a
+bounded reviewer goes to an ignored owner-bound proposal queue. It never writes
+tracked knowledge in main or another branch.
 
-### When to tag
+## Proposals and recovery
 
-Tag entries when they relate to specific topics that future sessions might
-search for. Good tags describe the **domain** (e.g. `git`, `testing`,
-`ci`, `error-handling`), not the action (avoid `fix`, `add`, `update`).
-
-### Tag format
-
-- Lowercase kebab-case: `git`, `worktree-safety`, `error-handling`
-- Alphanumeric + hyphens only, no spaces
-- Max 30 characters per tag
-
-### Adding tags
-
-When creating an entry:
-```bash
-echo "Learning" | wade knowledge add --session plan --tag git --tag worktree
+```
+wade knowledge proposals list
+wade knowledge proposals retain <proposal-id> --note "Awaiting original task"
+wade knowledge proposals discard <proposal-id> --note "No longer relevant"
+wade knowledge proposals accept <proposal-id>
+wade knowledge check <id> current --proposal <proposal-id> --file src/example.py --note "Fresh check"
+wade knowledge proposals recover --worktree <original-retained-parent>
+wade knowledge proposals recover --worktree <original-retained-parent> --from-main
 ```
 
-Managing tags on existing entries:
-```bash
-wade knowledge tag add <entry-id> <tag>
-wade knowledge tag remove <entry-id> <tag>
-wade knowledge tag list              # all unique tags
-wade knowledge tag list <entry-id>   # tags for one entry
+Acceptance requires the original completed parent's persisted task/member
+association, matching repository/provider/task and unchanged claim content.
+The original worktree/branch/provider/task author association must also match;
+branch switching or refresh cannot transfer authority. Legacy sessions lacking
+that association need explicit skill refresh. Repeated same-task acceptance reuses
+canonical shared event bytes. It grants no correctness: assess fresh committed evidence separately. Multi-plan
+observations without a specific member remain pending. Bounded plan/dependency
+workers retain their original parent or service-verified task association before
+launch; ambiguous multi-task destinations remain pending after cleanup.
+Queue originals and
+auditable dispositions survive worktree cleanup. Recovery preserves original
+legacy bytes, never drains/reset main's old spool, and never guesses ownership
+from the next worktree or a caller-supplied task number.
+
+## Add, tag and reconcile
+
+Capture only non-obvious durable facts, at most three sentences per claim; omit
+work logs, changelogs and facts already documented. In the owning implementation:
+
+```
+echo "Durable fact" | wade knowledge add --session implementation --kind invariant --claim-key domain-rule --tag git
+wade knowledge tag add <id> <tag>
+wade knowledge tag remove <id> <tag>
+wade knowledge add --session implementation --supersedes <old-id>
+wade knowledge reconcile --against HEAD --check --json
+wade knowledge reconcile --against HEAD --apply
 ```
 
-## Rating
-
-**For each entry you open and evaluate, make an explicit decision per the decision tree below** — not per search call. A broad search returning many results does not force you to rate all of them; only entries you actually read and assessed require a decision. Rate up/down when appropriate; otherwise intentionally leave the entry unrated.
-
-```bash
-wade knowledge rate <entry-id> up     # entry was useful
-wade knowledge rate <entry-id> down   # entry is incorrect or misleading
-wade knowledge rate <entry-id> stale  # entry is outdated / no longer applies
-```
-
-Votes are recorded to an **append-only vote log** (`KNOWLEDGE.ratings.jsonl`), so concurrent sessions never lose a vote when their branches merge — each vote is one appended line and merging is pure concatenation. `wade knowledge rate` is available in **every** session type, including planning: a plan/deps session's vote is carried forward into the next implementation session's PR automatically. Run `wade knowledge status` to see uncommitted knowledge/ratings changes.
-
-**How to decide:**
-
-1. **Was your search appropriate (correct tags/text)?**
-   - **No** → do not rate. The issue is your search, not the entry.
-
-2. Search was appropriate; entry came back legitimately:
-   - **Useful for your task** → rate **up**.
-   - **Correct content but not applicable to your task** → do **not** rate (entry is fine; refine future searches).
-   - **Outdated / no longer applies** → rate **stale**. Two stale votes hide the entry by default; `--no-filter` still shows it.
-   - **Incorrect or misleading** → rate **down**.
-   - **Tags or terminology are wrong/missing (content itself is correct)** → do **not** rate down — fix tags via `wade knowledge tag add/remove <id> <tag>`. Downvoting good content for tag problems mis-signals the auto-pruner.
-
-3. **Entry surfaced due to a known parser/search bug** → do not rate; flag as a system issue.
-
-## Entry style
-
-Write entries that are easy to scan and reuse across sessions:
-
-- **One insight per entry** — no multi-topic dumps; split if needed
-- **Lead with the key fact** — state the finding first, context second
-- **≤3 sentences** — if longer, split into separate entries
-- **No preamble or hedging** — omit "I noticed that…", "It turned out that…"
-- **Active voice, present tense** — "Use X when Y", not "It was found that X should be used"
-
-**Before (verbose, hedged):**
-> I noticed during testing that it turned out the sync command needs to be run after all commits are staged, otherwise it may fail with a dirty-tree error in some cases.
-
-**After (concise, direct):**
-> Run `wade implementation-session sync` only after all changes are committed — a dirty worktree causes exit code 4.
-
-## Adding entries
-
-Knowledge is **not a changelog** — it is a searchable store of facts, gotchas, and limitations that help future agents avoid scanning the codebase. Only capture what is non-obvious or hard to derive from the code or git history:
-
-- Non-obvious constraints, gotchas, and footguns
-- Known limitations and their workarounds
-- Patterns with a WHY that code alone can't explain
-- Pointers to where a rule or config lives when the location isn't obvious
-
-**DO NOT capture:**
-
-- Completed-work summaries: "We added X feature in this session", "Implemented Y in PR #N" — this duplicates `git log`.
-- Refactor or fix histories: "Fixed bug Z by doing W" — derivable from `git blame` / `git log`.
-- Content already in `AGENTS.md` or `CLAUDE.md`: anything that is documented there does not need a knowledge entry.
-- Anything reconstructable from `git log`, `git blame`, or reading the current source — if a future agent can find it in 10 seconds, it doesn't belong here.
-
-Entry dates (shown in search results) indicate freshness — rate an entry stale if it no longer applies (two stale votes hide it by default; use `--no-filter` to still show it).
-
-```bash
-echo "Your learnings here" | wade knowledge add --session <type> --issue <number> --tag <topic>
-```
-
-A new entry becomes part of your branch and merges to main with your PR — there is nothing separate to commit or copy. `wade knowledge add`, `tag add`, and `tag remove` are **not** available in a planning or `task deps` session (that worktree is discarded and has no PR); record the learning in the plan file instead so the implementation session captures it.
-
-If a new entry corrects or replaces an existing one:
-```bash
-echo "Corrected info" | wade knowledge add --session <type> --supersedes <old-entry-id>
-```
-
-## Filtering
-
-By default, entries with enough negative votes are automatically pruned
-(statistical auto-filter), and entries with `stale >= 2` votes are hidden.
-Override with:
-
-- `--min-score N` — hard cutoff on net score (bypasses auto-filter)
-- `--no-filter` — show everything, bypasses both score filtering and stale filtering
+Tag names use lowercase kebab-case, at most30 characters. Semantic kind defaults
+to neutral `note`; a session label is not a semantic kind. Exact duplicates require
+identical normalized claim text, kind and optional key; only line endings and
+outer whitespace normalize. The smallest ID represents the group for display.
+Apply appends deterministic digest-bound links, preserves all prose/events, and
+never transfers a member's assessment. Repeated/concurrent applies converge.
+Check is the default and leaves HEAD, index and working files unchanged, never
+fetching. Unverified/needs-recheck/duplicate entries are valid; structural event
+conflicts and invalid references are errors. Commit knowledge before final review;
+closing gates reconcile after sync, pin the approved tip, and push its explicit
+SHA. Late authored commits, ambiguous knowledge merges or a recovery merge after
+that pin require fresh closing review/documentation. Displayed local claim edits
+cannot inherit committed publication or assessment labels.

@@ -49,6 +49,13 @@ Crossby's `SKILLS_DIR` mapping and symlinked to that canonical root. Runtime
 code derives each selection from `SessionDefinition.support_skills` through
 `support_skills_for_session()`.
 
+The fixed knowledge support skill describes evidence, historical usefulness,
+owner-bound proposals and explicit recovery; it grants no write authority.
+Bounded operations remain observation-only even when their cwd is an author's
+worktree. Ownership comes from the frozen task/session and trusted original
+parent association, never the methodology digest. See [Knowledge evidence and
+ownership](knowledge.md) for proof semantics and explicit contract refresh.
+
 Installation rules:
 
 - target projects receive copies;

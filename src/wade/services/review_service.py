@@ -68,6 +68,10 @@ from wade.services.implementation_service import (
     extract_issue_from_branch,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
+from wade.services.review_cycle_service import (
+    initialize_or_refresh_review_cycle,
+    read_review_cycle,
+)
 from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
@@ -84,17 +88,101 @@ from wade.utils.terminal import (
 
 logger = structlog.get_logger()
 
-# ``None`` means no caller choice, which lets ``resolve_effort`` read config.
-# The review confirmation UI also offers a distinct "none — use tool default"
-# choice; its value must survive a wait/relaunch without being mistaken for the
-# unset case. This string is accepted by the same ``--effort`` option used in
-# the recovery command, but is private to this review-session handoff.
+# ``None`` means no caller or retry choice, which lets ``resolve_effort`` read
+# config. The review confirmation UI also offers a distinct "none — use tool
+# default" choice; its value must survive a wait/relaunch without being
+# mistaken for the unset case. This string is accepted by the public
+# ``--effort`` option used in a recovery command, but is private to this
+# review-session handoff.
 _EXPLICIT_DEFAULT_EFFORT = "none"
 
 
 # ---------------------------------------------------------------------------
 # Simple subcommands — used by AI agents during review sessions
 # ---------------------------------------------------------------------------
+
+
+def _review_feedback_snapshot(status: PRReviewStatus) -> str | None:
+    """Render the actionable feedback a closing reviewer must be able to inspect."""
+
+    all_threads = status.effective_unresolved_threads
+    parts: list[str] = []
+    if all_threads:
+        parts.append(format_review_threads_markdown(all_threads))
+
+    if status.changes_requested_by:
+        pr_level_reviews = [
+            review
+            for review in status.latest_reviews_by_author.values()
+            if review.state == ReviewState.CHANGES_REQUESTED and review.body
+        ]
+        if pr_level_reviews:
+            parts.append(
+                "\n".join(
+                    [
+                        "## PR-Level Changes Requested\n",
+                        *[
+                            f"### @{review.author}'s review\n\n{review.body}\n"
+                            for review in pr_level_reviews
+                        ],
+                    ]
+                ).strip()
+            )
+        else:
+            names = ", ".join(f"@{author}" for author in status.changes_requested_by)
+            parts.append(
+                f"> **Note:** Changes also requested by {names} (PR-level review, no body)."
+            )
+
+    outdated = [thread for thread in all_threads if thread.is_outdated]
+    if outdated:
+        parts.append(
+            f"> **Note:** {len(outdated)} thread(s) above are outdated "
+            "— they reference code that has since changed."
+        )
+    snapshot = "\n\n".join(part.strip() for part in parts if part.strip()).strip()
+    return snapshot or None
+
+
+def _record_review_cycle(
+    worktree_path: Path,
+    *,
+    issue_number: str,
+    pr_number: int,
+    status: PRReviewStatus,
+    create: bool = True,
+) -> None:
+    """Persist a cycle before edits, retaining its original baseline on resume."""
+
+    feedback = _review_feedback_snapshot(status)
+    if feedback is None:
+        return
+    if not create:
+        existing = read_review_cycle(
+            worktree_path,
+            issue_number=issue_number,
+            pr_number=pr_number,
+        )
+        if existing.diagnostic is not None:
+            console.warn(
+                f"{existing.diagnostic}; closing review will use the complete branch diff."
+            )
+        if existing.context is None:
+            return
+    try:
+        head = git_repo.rev_parse(worktree_path, "HEAD")
+    except GitError as exc:
+        console.warn(f"Could not record the PR-comment review cycle ({exc}).")
+        return
+    result = initialize_or_refresh_review_cycle(
+        worktree_path,
+        issue_number=issue_number,
+        pr_number=pr_number,
+        baseline_commit=head,
+        feedback=feedback,
+    )
+    if result.diagnostic is not None:
+        console.warn(f"{result.diagnostic}; closing review will use the complete branch diff.")
 
 
 def _find_existing_branch_for_issue(
@@ -232,6 +320,17 @@ def fetch_reviews(
     # HEAD. ``repo_root`` is the worktree here (cwd), so its ``.wade/`` trigger
     # markers seed the arrival windows.
     annotate_bot_expectations(status, config, marker_root=repo_root)
+
+    # When called from a PR-comment session this refreshes the feedback snapshot
+    # while preserving the baseline captured before its first edit. It is a
+    # best-effort context aid, not a reason to hide successfully fetched feedback.
+    _record_review_cycle(
+        repo_root,
+        issue_number=task.id,
+        pr_number=pr_number,
+        status=status,
+        create=False,
+    )
 
     # all_unresolved_threads covers both actionable (non-outdated) and outdated threads;
     # falls back to actionable_threads for providers that don't set it.
@@ -1131,6 +1230,16 @@ def start(
         names = ", ".join(f"@{a}" for a in status.changes_requested_by)
         console.info(f"Changes requested by {names} (PR-level review) — launching review session")
 
+    # Establish (or resume) the cycle before bootstrap and any editor can make a
+    # feedback fix. Re-running the command only refreshes feedback; it never
+    # advances the original pre-edit baseline.
+    _record_review_cycle(
+        worktree_path,
+        issue_number=task.id,
+        pr_number=pr_number,
+        status=status,
+    )
+
     # 5. Resolve AI tool, model, effort, autonomy, and sandbox profile under the
     # dedicated ``review_pr_comments`` config key (#389) so this auto-launched
     # session honors ``ai.review_pr_comments.*`` rather than inheriting
@@ -1158,9 +1267,15 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
+    # A retry payload and a CLI override deliberately mean different things.
+    # ``effort_explicit`` says this invocation received ``--effort`` and locks
+    # the selector; a non-None ``effort`` can also be a prior UI selection that
+    # must remain editable. Its presence, rather than CLI explicitness, decodes
+    # the UI's retained "none — use tool default" sentinel.
+    effort_payload_present = effort is not None
     resolved_effort = (
         None
-        if effort_explicit and effort == _EXPLICIT_DEFAULT_EFFORT
+        if effort == _EXPLICIT_DEFAULT_EFFORT
         else resolve_effort(
             effort,
             config,
@@ -1233,13 +1348,13 @@ def start(
         )
 
     # Configuration-derived effort should continue to re-resolve when the user
-    # waits for a later review. Preserve a caller's explicit override, or an
-    # actual change made in the confirmation UI, without promoting an implicit
-    # default to an explicit argument.
-    retained_effort_explicit = effort_explicit or resolved_effort != initial_effort
+    # waits for a later review. Preserve a retry/CLI payload, or an actual
+    # confirmation-UI change, without promoting either a retained UI choice or
+    # an implicit configuration value into a CLI override.
+    should_retain_effort_payload = effort_payload_present or resolved_effort != initial_effort
     retained_effort = (
         (resolved_effort.value if resolved_effort is not None else _EXPLICIT_DEFAULT_EFFORT)
-        if retained_effort_explicit
+        if should_retain_effort_payload
         else None
     )
 
@@ -1423,7 +1538,7 @@ def start(
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 effort=retained_effort,
-                effort_explicit=retained_effort_explicit,
+                effort_explicit=effort_explicit,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 sandbox=sandbox,
@@ -1657,9 +1772,11 @@ def _post_review_lifecycle(
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
 
-    Explicit effort and sandbox selections must survive a "wait for new
-    reviews" re-launch rather than re-resolving from configuration. ``None``
-    (unset) still re-resolves, matching the non-explicit permission-mode path.
+    A retained effort payload and sandbox selection must survive a "wait for
+    new reviews" re-launch rather than re-resolving from configuration.
+    ``effort_explicit`` separately records a real CLI override, which is the
+    only source that locks the effort selector. ``None`` (unset) still
+    re-resolves, matching the non-explicit permission-mode path.
     """
     from wade.ui import prompts
 
