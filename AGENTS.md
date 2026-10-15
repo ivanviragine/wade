@@ -151,6 +151,13 @@ Status move. See README and developer architecture/testing docs for contracts.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
 
+Worktree cleanup and staleness share operation-scoped typed Git merge evidence
+in `git/merge_evidence.py`. Non-ancestral cleanup requires origin-bound exact
+recorded merged-PR head and fresh base ancestry, never patch-ID/tree equivalence
+or remote disappearance. Revalidate worktree HEAD/branch, base, origin and dirty
+state before non-forced removal; retain safe `git branch -d` refusals. See
+`docs/dev/architecture.md`.
+
 Scaffold retargets use a guarded git-layer hard reset: tracked edits and
 untracked/ignored paths obstructing the pinned destination tree must refuse
 before mutation. Noncolliding session output remains allowed. The guard also

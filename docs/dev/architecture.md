@@ -1717,6 +1717,31 @@ This preflight does not provide isolation from concurrent filesystem writers.
 
 **`wade worktree remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).
+- `--force` skips confirmation; `--discard-dirty` explicitly permits data loss.
+
+Cleanup and staleness share typed operation-scoped `MergeAssessment` results
+from `git/merge_evidence.py`. Local branch containment permits offline cleanup.
+Otherwise `git/pr.py` exhausts paginated closed-PR records for the configured
+origin's explicit host/owner/repository, validating source repository/branch,
+base repository/name, recorded final `head.sha` and `merge_commit_sha`. It ignores
+`GH_REPO` and live source refs, so deleted/reused branches cannot substitute a
+new tip. Unknown, malformed, ambiguous and failed queries remain distinct from
+no exact match. Individual patch IDs and equal trees do not authorize removal.
+
+The PR path pins the configured origin URL and fetches only the selected base
+into its remote-tracking ref with an isolated explicit refspec. Failed refreshes
+never reuse cached PR proof; the recorded merge must be an ancestor of the fresh
+base. Later edits/reverts are allowed, base rewrites excluding the merge are not.
+Commit/object checks disable Git replacement objects. Cleanup normalizes the
+worktree inventory path, binds its branch and actual HEAD, and rechecks the head,
+base, origin and cleanliness after queries/session-data preservation. Git's
+non-forced worktree removal provides the final dirty-file refusal. These checks
+bound revalidation; they do not promise atomicity against arbitrary writers.
+Stale listing is only a snapshot: cleanup revalidates its operation-scoped proof,
+open/unknown tasks remain ACTIVE, and remote disappearance alone proves no merge.
+Safe branch deletion remains `-d`; a squash/rebase branch may remain after its
+worktree is removed. No refusal escalates to `-D` without explicit discard.
+
 
 **`wade update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.

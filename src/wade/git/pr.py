@@ -6,12 +6,20 @@ import json
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import structlog
 from pydantic import BaseModel, Field
 
-from wade.git.repo import GitError
+from wade.git.repo import GitError, _run_git
+from wade.models.merge_evidence import (
+    GitHubRepository,
+    MergedPR,
+    MergedPRLookup,
+    MergeEvidenceState,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -822,4 +830,160 @@ def comment_on_pr(repo_root: Path, pr_number: int, body: str) -> None:
         "--body",
         body,
         cwd=repo_root,
+    )
+
+
+def origin_github_repository(repo_root: Path) -> GitHubRepository:
+    """Resolve one configured origin, independently of gh defaults and GH_REPO.
+
+    Read the configured URL rather than an insteadOf transport rewrite. Local
+    transport rewrites do not change the declared GitHub repository identity.
+    """
+    result = _run_git("config", "--get-all", "remote.origin.url", cwd=repo_root, check=False)
+    urls = result.stdout.splitlines()
+    if result.returncode != 0 or len(urls) != 1:
+        raise GitError("origin must have exactly one configured repository URL")
+    raw = urls[0]
+    scp = re.fullmatch(r"git@([A-Za-z0-9.-]+):([^/]+)/([^/]+)", raw)
+    if scp:
+        host, owner, name = scp.groups()
+    else:
+        parsed = urlsplit(raw)
+        if (
+            parsed.scheme not in {"https", "ssh"}
+            or not parsed.hostname
+            or parsed.port is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.password is not None
+            or (parsed.scheme == "https" and parsed.username is not None)
+            or (parsed.scheme == "ssh" and parsed.username not in {None, "git"})
+        ):
+            raise GitError("unsupported origin URL; expected a GitHub SSH or HTTPS repository")
+        host = parsed.hostname
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) != 2:
+            raise GitError("origin URL must identify exactly one owner/repository")
+        owner, name = parts
+    name = name.removesuffix(".git")
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", host) or not all(
+        re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in {".", ".."} for part in (owner, name)
+    ):
+        raise GitError("unsupported origin repository identity")
+    return GitHubRepository(host=host.lower(), owner=owner, name=name, origin_url=raw)
+
+
+class _CleanupRepository(BaseModel):
+    model_config = {"strict": True}
+    full_name: str
+    html_url: str
+
+
+class _CleanupRef(BaseModel):
+    model_config = {"strict": True}
+    ref: str
+    sha: str
+    repo: _CleanupRepository
+
+
+class _CleanupPR(BaseModel):
+    model_config = {"strict": True}
+    number: int
+    state: str
+    merged_at: str | None
+    merge_commit_sha: str | None
+    head: _CleanupRef
+    base: _CleanupRef
+
+
+def find_exact_merged_pr(
+    repo_root: Path, repository: GitHubRepository, branch: str, head: str, base: str
+) -> MergedPRLookup:
+    """Find a unique recorded final PR head, including deleted/reused branches.
+
+    REST pull records retain head.sha, unlike live branch refs. Exhaust explicit
+    pages (bounded at 10000 records); partial/malformed/ambiguous results never
+    establish proof. See GitHub's REST list-pull-requests contract.
+    """
+    candidates: list[MergedPR] = []
+    seen: set[int] = set()
+    slug = f"{repository.owner}/{repository.name}"
+    expected_url = f"https://{repository.host}/{slug}".lower()
+    try:
+        for page in range(1, 101):
+            result = _run_gh(
+                "api",
+                "--hostname",
+                repository.host,
+                f"repos/{slug}/pulls",
+                "--method",
+                "GET",
+                "-f",
+                "state=closed",
+                "-f",
+                f"head={repository.owner}:{branch}",
+                "-f",
+                f"base={base}",
+                "-f",
+                "per_page=100",
+                "-f",
+                f"page={page}",
+                cwd=repo_root,
+            )
+            payload = json.loads(result.stdout)
+            if not isinstance(payload, list) or len(payload) > 100:
+                raise ValueError("invalid PR page")
+            for raw in payload:
+                pr = _CleanupPR.model_validate(raw)
+                if pr.number <= 0 or pr.number in seen:
+                    raise ValueError("invalid or repeated PR identity")
+                seen.add(pr.number)
+                # Validate returned identities even though the server filters.
+                if (
+                    pr.head.ref != branch
+                    or pr.base.ref != base
+                    or pr.head.repo.full_name.lower() != slug.lower()
+                    or pr.base.repo.full_name.lower() != slug.lower()
+                    or pr.head.repo.html_url.rstrip("/").lower() != expected_url
+                    or pr.base.repo.html_url.rstrip("/").lower() != expected_url
+                ):
+                    continue
+                if not re.fullmatch(r"[0-9a-f]{40}", pr.head.sha):
+                    raise ValueError("missing or malformed recorded PR head")
+                if pr.state != "closed":
+                    raise ValueError("unexpected PR state")
+                if pr.merged_at is None:
+                    continue
+                if (
+                    not pr.merged_at
+                    or not pr.merge_commit_sha
+                    or not re.fullmatch(r"[0-9a-f]{40}", pr.merge_commit_sha)
+                ):
+                    raise ValueError("missing or malformed merged PR identity")
+                merged_at = datetime.fromisoformat(pr.merged_at)
+                if merged_at.tzinfo is None:
+                    raise ValueError("merged PR timestamp has no timezone")
+                if pr.head.sha == head:
+                    candidates.append(
+                        MergedPR(number=pr.number, head=head, merge_commit=pr.merge_commit_sha)
+                    )
+            if len(payload) < 100:
+                break
+        else:
+            raise ValueError("PR pagination limit reached; lookup is incomplete")
+    except (GitError, ValueError, TypeError) as exc:
+        return MergedPRLookup(
+            state=MergeEvidenceState.UNKNOWN, reason=f"merged PR lookup failed: {exc}"
+        )
+    if len(candidates) > 1:
+        return MergedPRLookup(
+            state=MergeEvidenceState.UNKNOWN, reason="ambiguous exact merged PR heads"
+        )
+    if not candidates:
+        return MergedPRLookup(
+            state=MergeEvidenceState.NOT_MATCHED,
+            reason="no merged PR matches this exact head, origin repository and base",
+        )
+    return MergedPRLookup(
+        state=MergeEvidenceState.VERIFIED, reason="recorded final PR head matches", pr=candidates[0]
     )

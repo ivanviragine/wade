@@ -396,6 +396,18 @@ Interactive pickers (the arrow-key menus commands like `wade task create` show)
 wrap long choices to the terminal width instead of cropping them, so no option
 text is lost in narrow terminals and the list reflows automatically on resize.
 
+`wade worktree remove <N> --force` skips confirmation while protecting uncommitted
+changes and unmerged local history. Clean squash/rebase leftovers can be removed
+when GitHub records that exact local branch tip as the final merged PR head for
+origin's repository and the configured base. WADE fetches that base and verifies
+its history still contains the PR merge commit; deleted source branches and later
+base edits are supported. Repository/head mismatches, unavailable API/fetches,
+and unverified cherry-picks remain protected. Ordinary ancestor-contained
+branches can still be cleaned up offline. The worktree may be removed while
+`git branch -d` conservatively retains its non-ancestral local branch.
+`--discard-dirty` is the separate explicit opt-in to discard work; `--force`
+never grants that permission.
+
 ### Session commands the AI runs
 
 These are invoked by the AI during a session — you normally don't run them by hand.
