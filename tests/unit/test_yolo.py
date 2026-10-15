@@ -133,11 +133,11 @@ class TestAdapterYoloArgs:
         result = CursorAdapter().yolo_args()
         assert result == ["--force"]
 
-    def test_opencode_yolo_args_empty(self) -> None:
+    def test_opencode_yolo_uses_native_auto_flag(self) -> None:
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
         result = OpenCodeAdapter().yolo_args()
-        assert result == []
+        assert result == ["--auto"]
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +171,10 @@ class TestAdapterSupportsYolo:
 
         assert CursorAdapter().capabilities().supports_yolo is True
 
-    def test_opencode_does_not_support_yolo(self) -> None:
+    def test_opencode_supports_yolo(self) -> None:
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
-        assert OpenCodeAdapter().capabilities().supports_yolo is False
+        assert OpenCodeAdapter().capabilities().supports_yolo is True
 
 
 # ---------------------------------------------------------------------------
@@ -224,31 +224,22 @@ class TestBuildLaunchCommandYolo:
         cmd = ClaudeAdapter().build_launch_command(yolo=False)
         assert "--dangerously-skip-permissions" not in cmd
 
-    def test_yolo_supersedes_plan_mode(self) -> None:
-        """When yolo=True and plan_mode=True, YOLO flags should be used
-        instead of plan_mode flags (for tools that support yolo)."""
+    def test_yolo_cannot_displace_plan_mode(self) -> None:
+        """The published adapter preserves Plan while allowing native bypass."""
         from crossby.ai_tools.claude import ClaudeAdapter
 
-        cmd = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
-        assert "--dangerously-skip-permissions" in cmd
-        assert "--permission-mode" not in cmd
+        with patch("crossby.utils.versioning.detect_binary_version", return_value=(2, 1, 263)):
+            command = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
+        assert command[command.index("--permission-mode") + 1] == "plan"
+        assert "--allow-dangerously-skip-permissions" in command
+        assert "--dangerously-skip-permissions" not in command
 
-    def test_yolo_unsupported_falls_back_to_plan_mode(self) -> None:
-        """When yolo=True but tool doesn't support it, plan_mode_args should
-        still be used."""
+    def test_unsupported_plan_auto_does_not_silently_fall_back(self) -> None:
+        from crossby.ai_tools import PlanModeConflictError
         from crossby.ai_tools.opencode import OpenCodeAdapter
 
-        with pytest.warns(
-            UserWarning,
-            match=r"does not support YOLO mode; falling back to plan mode",
-        ):
-            cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
-        # OpenCode doesn't support yolo → should fall back to plan mode
-        # OpenCode has no plan_mode_args, so plan_mode flag has no effect,
-        # but the key assertion is that yolo_args are NOT in the command
-        assert "--force" not in cmd
-        assert "--dangerously-skip-permissions" not in cmd
-        assert "--yolo" not in cmd
+        with pytest.raises(PlanModeConflictError):
+            OpenCodeAdapter().build_launch_command(plan_mode=True, auto=True)
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +399,7 @@ class TestConfirmPermissionMode:
         assert "Change permission mode" in menu_items_seen[0]
 
     def test_menu_excludes_permission_mode_for_unsupported_tool(self) -> None:
-        """OpenCode supports no autonomy tier → no permission-mode option."""
+        """A GUI launcher without autonomy tiers has no permission-mode option."""
         from wade.services.ai_resolution import confirm_ai_selection
 
         menu_items_seen: list[list[str]] = []
@@ -420,11 +411,11 @@ class TestConfirmPermissionMode:
         with (
             patch(_IS_TTY, return_value=True),
             patch(_SELECT, side_effect=fake_select),
-            patch(_DETECT, return_value=_make_installed("opencode")),
+            patch(_DETECT, return_value=_make_installed("vscode")),
             patch(_CONSOLE_KV),
         ):
             confirm_ai_selection(
-                "opencode",
+                "vscode",
                 None,
                 tool_explicit=False,
                 model_explicit=False,

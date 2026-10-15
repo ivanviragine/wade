@@ -41,7 +41,7 @@ class AutonomyLaunchKwargs(TypedDict):
 PERMISSION_MODE_DESCRIPTIONS: dict[PermissionMode, str] = {
     PermissionMode.DEFAULT: "tool prompts before edits & commands",
     PermissionMode.ACCEPT_EDITS: "auto-applies edits, prompts for commands",
-    PermissionMode.AUTO: "classifier decides per action (Claude only)",
+    PermissionMode.AUTO: "classifier decides per action (Claude and Cursor)",
     PermissionMode.YOLO: "skips all permission prompts",
 }
 """Short, human-readable descriptor per autonomy tier.

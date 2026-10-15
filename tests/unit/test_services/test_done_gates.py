@@ -23,7 +23,7 @@ from wade.models.session import SyncResult
 from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, SessionManifest
 from wade.models.skill import ResolvedSkill, SkillSlot
 from wade.models.task import Task
-from wade.models.workflow import AICommandKey, DelegationKind, SessionKind
+from wade.models.workflow import SESSION_DEFINITIONS, AICommandKey, DelegationKind, SessionKind
 from wade.services.implementation_service.done import (
     _behind_count,
     _gate_knowledge_valid,
@@ -81,7 +81,7 @@ def _record_review(
     binding = _materialize_review_bundle(root)
     manifest = SessionManifest(
         session=session_kind,
-        workflow_revision=1,
+        workflow_revision=SESSION_DEFINITIONS[session_kind].workflow_revision,
         bundle_digest=compute_session_bundle_digest(session),
         task_id="42",
         ai_command=(
@@ -737,6 +737,12 @@ class TestKnowledgeValidGate:
     def _config(self, tmp_path: Path, *, enabled: bool) -> ProjectConfig:
         from wade.models.config import KnowledgeConfig
 
+        if not (tmp_path / ".git").exists():
+            _git(tmp_path, "init", "-b", "main")
+            _git(tmp_path, "config", "user.name", "Knowledge gate fixture")
+            _git(tmp_path, "config", "user.email", "gate@example.invalid")
+            _git(tmp_path, "add", ".")
+            _git(tmp_path, "commit", "--allow-empty", "-m", "test: committed gate fixture")
         return ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=enabled, path="KNOWLEDGE.md"),

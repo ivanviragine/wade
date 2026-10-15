@@ -283,6 +283,11 @@ class PlanFile(BaseModel):
         A base branch is parsed from an optional `## Base Branch` section.
         """
         content = path.read_text(encoding="utf-8")
+        return cls.from_text(path, content)
+
+    @classmethod
+    def from_text(cls, path: Path, content: str) -> PlanFile:
+        """Parse already-read Markdown, including descriptor-safe native imports."""
         lines = content.split("\n")
 
         # Extract title from first heading

@@ -171,6 +171,42 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
         return tasks
 
+    def find_tasks_by_body_marker(
+        self,
+        marker: str,
+        label: str | None = None,
+        state: TaskState | None = TaskState.OPEN,
+    ) -> list[Task]:
+        """Exhaustively scan the configured list for one recovery marker."""
+        matches: list[Task] = []
+        page = 0
+        while True:
+            params: dict[str, Any] = {
+                "page": str(page),
+                "subtasks": "false",
+                "include_closed": "true" if state is None or state == TaskState.CLOSED else "false",
+                "list_ids[]": self._list_id,
+            }
+            if label:
+                params["tags[]"] = label
+            data = self._client.get(
+                f"/api/v2/team/{self._team_id}/task",
+                params=params,
+            )
+            raw_tasks: list[dict[str, Any]] = data.get("tasks", [])
+            if not raw_tasks:
+                break
+            for raw in raw_tasks:
+                task = _parse_clickup_task(raw)
+                if state is not None and task.state != state:
+                    continue
+                if marker in task.body:
+                    matches.append(task)
+            if len(raw_tasks) < self._PAGE_SIZE:
+                break
+            page += 1
+        return matches
+
     def create_task(
         self,
         title: str,

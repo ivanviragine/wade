@@ -175,6 +175,46 @@ class TestImplementTaskCommand:
         base_file = expected_worktree / ".wade" / "base_branch"
         assert base_file.read_text(encoding="utf-8").strip() == "develop"
 
+    def test_implement_cd_retarget_collision_preserves_user_work_and_pr(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        """A real scaffold reset must refuse before local/remote/PR/base-pin mutation."""
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=42,
+            title="Add base branch support",
+            body="## Tasks\n- do it\n",
+        )
+        origin = _init_origin_remote(e2e_repo)
+        _git(["checkout", "-b", "develop"], cwd=e2e_repo)
+        (e2e_repo / "precious.py").write_text("from new base\n")
+        _git(["add", "precious.py"], cwd=e2e_repo)
+        _git(["commit", "-m", "develop-only path"], cwd=e2e_repo)
+        _git(["push", "origin", "develop"], cwd=e2e_repo)
+        _git(["checkout", "main"], cwd=e2e_repo)
+        branch = "feat/42-add-base-branch-support"
+        first = _run(["implement", "42", "--cd"], cwd=e2e_repo)
+        assert first.returncode == 0, first.stderr
+        worktree = Path(first.stdout.strip())
+        precious = worktree / "precious.py"
+        precious.write_bytes(b"valuable untracked work\x00\n")
+        pin = worktree / ".wade/base_branch"
+        pin.write_text("main\n")
+        head = _git(["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+        index = _git(["write-tree"], cwd=worktree).stdout.strip()
+        remote_head = _git(["rev-parse", f"refs/heads/{branch}"], cwd=origin).stdout.strip()
+        pr = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch)
+        second = _run(["implement", "42", "--base", "develop", "--cd"], cwd=e2e_repo)
+        assert second.returncode != 0
+        assert precious.read_bytes() == b"valuable untracked work\x00\n"
+        assert pin.read_text() == "main\n"
+        assert _git(["rev-parse", "HEAD"], cwd=worktree).stdout.strip() == head
+        assert _git(["write-tree"], cwd=worktree).stdout.strip() == index
+        assert _git(["rev-parse", f"refs/heads/{branch}"], cwd=origin).stdout.strip() == remote_head
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["prs"][pr]["base"] == "main"
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "edit", str(pr), "--base"]) == 0
+
     def test_implement_task_fails_for_unknown_issue_without_pr_side_effects(
         self,
         e2e_repo: Path,
@@ -666,6 +706,12 @@ class TestWorkDoneCommand:
         assert ack2.returncode == 0, ack2.stdout + ack2.stderr
 
         _commit("v3\n")  # still a newer, un-reviewed commit — but the cap is hit
+        capped_review = _run(["review", "implementation"], cwd=worktree_path)
+        capped_out = " ".join((capped_review.stdout + capped_review.stderr).split())
+        assert capped_review.returncode == 0, capped_out
+        assert "safety limit reached (2 of 2)" in capped_out
+        assert "no additional implementation review was launched" in capped_out.lower()
+        assert "wade implementation-session done" in capped_out
         _record_implementation_docs(worktree_path)
         done2 = _run(["implementation-session", "done"], cwd=worktree_path)
         out2 = " ".join((done2.stdout + done2.stderr).split())

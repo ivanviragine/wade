@@ -32,9 +32,9 @@ Review methodology (loaded only by the bounded review step):
 5. **Verify.** Run the repository-prescribed focused and full checks appropriate
    to the risk. Fix failures caused by the change and distinguish unrelated
    baseline failures with evidence.
-6. **Method review.** {review_step_state}
-7. **Documentation [mandatory decision].** {documentation_step}
-8. **Knowledge.** {knowledge_step}
+6. **Documentation [mandatory decision].** {documentation_step}
+7. **Knowledge.** {knowledge_step}
+8. **Method review.** {review_step_state}
 9. **PR summary.** Write or update `PR-SUMMARY.md` using
    `reference/pr-summary-format.md`; never commit this session artifact.
 10. **Sync.** Re-run the readiness check after any resume or permission change,

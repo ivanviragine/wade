@@ -84,6 +84,22 @@ class AbstractTaskProvider(ABC):
     ) -> Task:
         """Update task title and/or body."""
 
+    def find_tasks_by_body_marker(
+        self,
+        marker: str,
+        label: str | None = None,
+        state: TaskState | None = TaskState.OPEN,
+    ) -> list[Task]:
+        """Exhaustively find tasks whose body contains an exact durable marker.
+
+        Implementations must not apply a caller-visible task-list limit. This is
+        used only for recovery markers, where silently missing a matching task
+        could create a duplicate external task.
+        """
+        raise NotImplementedError(
+            "This task provider cannot safely reconcile planning handoff markers"
+        )
+
     @abstractmethod
     def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
         """Close a task, optionally with a typed reason (e.g. GitHub's "not planned").

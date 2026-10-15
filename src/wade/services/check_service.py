@@ -43,6 +43,7 @@ from wade.models.config import (
     is_valid_bot_name,
 )
 from wade.models.delegation import DelegationMode
+from wade.models.project import GitHubProjectsConfig
 from wade.models.readiness import (
     PLAN_DIR_ENV_VAR,
     READINESS_REQUIREMENTS,
@@ -1047,6 +1048,14 @@ def _validate_config_file(config_path: Path, warnings: list[str] | None = None) 
     _validate_pydantic_section(raw.get("skills"), "skills", SkillsConfig, errors)
     _validate_pydantic_section(raw.get("sessions"), "sessions", SessionsConfig, errors)
     _validate_pydantic_section(raw.get("delegations"), "delegations", DelegationsConfig, errors)
+
+    if "github_projects" in raw:
+        if raw["github_projects"] is None:
+            errors.append("github_projects: must be a mapping, not null")
+        else:
+            _validate_pydantic_section(
+                raw["github_projects"], "github_projects", GitHubProjectsConfig, errors
+            )
 
     # Check for unsupported top-level keys.
     for key in raw:

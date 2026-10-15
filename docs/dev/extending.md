@@ -16,6 +16,24 @@ The task CLI is in `src/wade/cli/task.py`, business logic in `src/wade/services/
 
 AI tool adapters (`AbstractAITool` subclasses, using `__init_subclass__` auto-registration) live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, not in this repo — see `docs/dev/architecture.md` for the full list of what moved there. Adding a new AI tool means adding an adapter in crossby, then in wade: bump the `crossby` pin in `pyproject.toml`, and add the tool's binary name to `README.md`'s "Supported AI Tools" table. No changes to wade's `services/` or `cli/` are needed unless the tool needs command-specific handling.
 
+### Native planning collectors
+
+For **planning collectors**, activation-only `supports_plan_mode` is insufficient.
+Adopt a published Crossby release with complete-session metadata, public
+`preflight_plan_session`, `run_plan_session`, and supported `PlanCommandPolicy`.
+Update `pyproject.toml`, the tracked `uv.lock`, and the Crossby contract tripwire
+together, then verify without local sources or PR overrides. Do not manually
+bump WADE's version. Temporary isolated development must record the full SHA.
+WADE must not add tool-specific flags, protocol parsing, private collectors,
+storage scraping, or an editing-mode fallback to make a collector eligible.
+
+Extend tests at the public request/result/interaction boundary, plus deterministic
+CLI handoff tests. An artifact source need not support a requested output path:
+WADE imports returned Markdown using the same explicit one/multi-plan contract.
+Validate native regressions against the adopted release (see
+[testing](testing.md#native-planning-dependency-validation)); do not equate mocked
+success with installed/authenticated all-tool success.
+
 ## Adding a New Provider
 
 The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider`, `ClickUpProvider`, and `MarkdownIssueProvider` as current implementations. Unlike AI tools (which are external, via crossby), providers are local to wade and use a registry pattern. To add a new provider (e.g., Linear, Jira):
@@ -24,6 +42,11 @@ The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py
 2. Implement all abstract methods from `AbstractTaskProvider`
 3. Add the provider ID to `ProviderID` enum in `models/config.py`
 4. Register the provider in `providers/__init__.py` via `register_provider(ProviderID.YOUR_ID, YourProvider)` (use a lazy loader for optional dependencies)
+
+Providers that support planning handoff recovery must also implement
+`find_tasks_by_body_marker`. It must exhaustively search the provider's open
+tasks for the exact durable marker; a bounded task-list page can miss a task
+created before a local recovery-progress write failed, causing a duplicate.
 
 Non-GitHub providers (ClickUp, Markdown) still need PRs and PR-review APIs, which are GitHub-only. They get these by composing `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), which routes PR/review calls through `gh` while task CRUD stays on the provider's own backend.
 
@@ -38,7 +61,19 @@ uv run python scripts/auto_version.py major           # breaking changes (0.1.0 
 uv run python scripts/auto_version.py minor --dry-run # preview only
 ```
 
-The script updates both files, generates `CHANGELOG.md`, commits, and creates an annotated git tag.
+The script updates both files, synchronizes an existing `uv.lock` with checked
+`uv lock --project <script-root>` (without dependency upgrade flags), and includes
+the lock with generated `CHANGELOG.md` in the commit and annotated tag. Lock
+synchronization clears inherited `UV_FROZEN` in its child environment and must
+succeed before staging, committing, tagging, or optional
+push. Missing uv and lock failures leave visible partial edits but no release
+commit/tag; a missing tracked lock or unrelated staged paths fail before edits.
+Standalone copies without git and without a lock retain source-only behavior.
+
+Use direct Python for a strictly inert `--dry-run`: an outer ordinary `uv run`
+may update lock metadata before the script starts. See [Releasing](../../CONTRIBUTING.md#releasing)
+for tool-version/schema compatibility and recovery through the normal
+merge-triggered release workflow.
 
 ### Changelog Generation
 
