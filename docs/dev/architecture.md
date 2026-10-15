@@ -280,8 +280,11 @@ Interactive collection (including the second parent collection), collector
 metadata loading, and launch/progress validation classify these failures before
 `plan_service` can enter copy-and-cleanup salvage. Required review metadata is
 validated against the stored completed bundle before editable files: invalid
-Markdown must not mask an unsupported receipt and destroy its owner. Valid
-metadata retains the separate editable-content validation/salvage contract.
+Markdown must not mask an unsupported receipt and destroy its owner. A read-only
+parent callback also validates original launch and any present progress metadata
+against that stored session before editable content is read, at both native
+collection passes. Missing progress is initialized only after valid collection.
+Valid metadata retains the separate editable-content validation/salvage contract.
 The failure handler does not
 parse state, enumerate plans, stage knowledge or mutate providers; it keeps the
 registered detached owner, frozen session, raw output, launch binding and existing

@@ -46,7 +46,11 @@ from crossby.models.ai import (
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig, with_wade_base_pattern
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
-from wade.models.interactive_plan import PlanHandoffBinding, PlanHandoffProgress
+from wade.models.interactive_plan import (
+    InteractivePlanState,
+    PlanHandoffBinding,
+    PlanHandoffProgress,
+)
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle, PlanKnowledgeProposal, PlanKnowledgeVote
 from wade.models.task import CloseReason, PlanFile, Task, TaskState
@@ -276,16 +280,21 @@ def _config_for_handoff_recovery(
     )
 
 
-def _ensure_handoff_progress_validated(
-    root: Path,
-    session_id: str,
-    model: str | None,
-    config: ProjectConfig,
-    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
-    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None,
-) -> PlanHandoffProgress:
-    """Return one handoff's durable metadata, creating it before mutations."""
+def _validated_handoff_metadata(
+    root: Path, session_id: str, model: str | None, config: ProjectConfig
+) -> tuple[PlanHandoffBinding, PlanHandoffProgress | None]:
+    """Validate original parent metadata without initializing missing progress."""
+    try:
+        return _load_validated_handoff_metadata(root, session_id, model, config)
+    except (UncollectableHandoffError, StateFileAccessError, StateFileIOError):
+        raise
+    except ValueError as exc:
+        raise UncollectableHandoffError(root, "progress", exc) from exc
 
+
+def _load_validated_handoff_metadata(
+    root: Path, session_id: str, model: str | None, config: ProjectConfig
+) -> tuple[PlanHandoffBinding, PlanHandoffProgress | None]:
     binding = _load_handoff_binding(root)
     _validate_handoff_binding(binding, config)
     if binding.model != model:
@@ -307,6 +316,28 @@ def _ensure_handoff_progress_validated(
                 "Planning handoff progress does not match its original launch binding; "
                 "cannot safely recover"
             )
+    return binding, progress
+
+
+def _preflight_handoff_metadata(
+    root: Path, state: InteractivePlanState, model: str | None, config: ProjectConfig
+) -> None:
+    """Reject uncollectable parent metadata before editable content can be salvaged."""
+    _validated_handoff_metadata(root, state.session_id, model, config)
+
+
+def _ensure_handoff_progress_validated(
+    root: Path,
+    session_id: str,
+    model: str | None,
+    config: ProjectConfig,
+    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
+    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None,
+) -> PlanHandoffProgress:
+    """Return one handoff's durable metadata, creating it before mutations."""
+
+    binding, progress = _validated_handoff_metadata(root, session_id, model, config)
+    if progress is not None:
         return progress
 
     progress = PlanHandoffProgress(
@@ -720,6 +751,7 @@ def run_interactive_planning_session(
     issue_context: str | None,
     session_bundle: str,
     source_root: str,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
 ) -> tuple[PlanBundle, TokenUsage | None]:
     """Leave questions and review inside the native terminal; collect an explicit handoff."""
     prompt = render_plan_prompt(plan_dir, issue_context, session_bundle, source_root)
@@ -786,7 +818,7 @@ def run_interactive_planning_session(
         raise ValueError(f"Native planning CLI exited with code {exit_code}; output was retained")
     if deferred_input and not submitted:
         raise ValueError("Native Plan task submission was not confirmed; output was retained")
-    bundle = interactive_plan.collect(request.working_dir)
+    bundle = interactive_plan.collect(request.working_dir, before_content=before_content)
     usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
     return bundle, usage
 
@@ -1714,6 +1746,13 @@ def plan(
                     issue_context=issue_context,
                     session_bundle=session_bundle,
                     source_root=str(planning_worktree or repo_root or cwd),
+                    before_content=(
+                        lambda state: _preflight_handoff_metadata(
+                            session_cwd, state, resolved_model, config
+                        )
+                    )
+                    if planning_worktree is not None
+                    else None,
                 )
             else:
                 request = request.model_copy(
@@ -1747,7 +1786,16 @@ def plan(
                         bundle.knowledge_proposals,
                     )
         if interactive:
-            handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
+            handoff_id = interactive_plan.collect_with_state(
+                session_cwd,
+                before_content=(
+                    lambda state: _preflight_handoff_metadata(
+                        session_cwd, state, resolved_model, config
+                    )
+                )
+                if planning_worktree is not None
+                else None,
+            )[0].session_id
             if planning_worktree is not None:
                 handoff_progress = _ensure_handoff_progress(
                     planning_worktree,

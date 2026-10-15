@@ -499,7 +499,9 @@ OS privacy or sandbox settings for you.
 
 Malformed or unsupported persisted handoff/review metadata and incompatible
 frozen contracts also retain the intact original planning owner, including raw
-output, launch binding and existing progress. WADE reports bounded public field
+output, launch binding and existing progress. Required metadata is validated
+before editable Markdown; an invalid plan cannot mask a launch/progress failure
+and trigger owner cleanup. WADE reports bounded public field
 locations/error codes, the current reader version and available declared schema
 and workflow versions; an unrecorded writer version remains unavailable. Strict
 unknown-field/version rejection stays in force. This differs from editable plan

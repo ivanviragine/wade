@@ -8,6 +8,7 @@ import os
 import shlex
 import stat
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -348,12 +349,20 @@ def complete(root: Path) -> None:
     _save(root, state)
 
 
-def collect(root: Path) -> PlanBundle:
+def collect(
+    root: Path,
+    *,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
+) -> PlanBundle:
     """Accept only a completed submission whose files and reviews are still current."""
-    return collect_with_state(root)[1]
+    return collect_with_state(root, before_content=before_content)[1]
 
 
-def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
+def collect_with_state(
+    root: Path,
+    *,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
+) -> tuple[InteractivePlanState, PlanBundle]:
     """Collect a completed handoff and return its validated launch metadata."""
 
     try:
@@ -381,6 +390,8 @@ def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
             raise UncollectableHandoffError(
                 root, "review-metadata", exc, raw=read_state_file(root, ("plans",), REVIEWS)
             ) from exc
+        if before_content is not None:
+            before_content(state)
         bundle = _current_bundle(root, state)
         if bundle != state.bundle:
             raise ValueError("Plans changed after completion; run wade plan-session done again")

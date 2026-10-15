@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -714,7 +714,9 @@ def test_schema_rejection_retains_registered_original_before_progress_and_recove
     original_collect = interactive.collect
     snapshots: dict[str, bytes] = {}
 
-    def legacy_collect(root: Path) -> object:
+    def legacy_collect(
+        root: Path, *, before_content: Callable[[InteractivePlanState], None] | None = None
+    ) -> object:
         (root / ".wade/plans/raw-native-output.txt").write_text("Public synthetic native output.\n")
         snapshots.update(_owned_bytes(root))
         with patch.object(
@@ -722,7 +724,7 @@ def test_schema_rejection_retains_registered_original_before_progress_and_recove
             "model_validate_json",
             side_effect=_LegacyState.model_validate_json,
         ):
-            return original_collect(root)
+            return original_collect(root, before_content=before_content)
 
     with patch.object(interactive, "collect", side_effect=legacy_collect):
         assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
@@ -767,6 +769,12 @@ def test_schema_rejection_retains_registered_original_before_progress_and_recove
         "future-reviews-invalid-plan",
         "malformed-reviews-invalid-plan",
         "future-reviews-invalid-member-set",
+        "future-binding-invalid-plan",
+        "malformed-binding-invalid-plan",
+        "missing-binding-invalid-plan",
+        "future-progress-invalid-plan",
+        "malformed-progress-invalid-plan",
+        "mismatched-progress-invalid-plan",
     ],
 )
 @pytest.mark.parametrize("knowledge_enabled", [False, True])
@@ -793,18 +801,35 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
     snapshots: dict[str, bytes] = {}
     original_collect = interactive.collect
 
-    def corrupt_collect(root: Path) -> object:
-        path = (
-            root
-            / ".wade/plans"
-            / (interactive.REVIEWS if "reviews" in corruption else interactive.STATE)
-        )
-        if corruption.startswith("malformed"):
+    def corrupt_collect(
+        root: Path, *, before_content: Callable[[InteractivePlanState], None] | None = None
+    ) -> object:
+        plans = root / ".wade/plans"
+        if "binding" in corruption:
+            path = plans / plan_service.HANDOFF_BINDING_FILE
+        elif "progress" in corruption:
+            current, bundle = interactive.collect_with_state(root)
+            plan_service._ensure_handoff_progress(
+                root,
+                current.session_id,
+                None,
+                config,
+                bundle.knowledge_votes,
+                bundle.knowledge_proposals,
+            )
+            path = plans / plan_service.HANDOFF_PROGRESS_FILE
+        else:
+            path = plans / (interactive.REVIEWS if "reviews" in corruption else interactive.STATE)
+        if corruption.startswith("missing"):
+            path.unlink()
+        elif corruption.startswith("malformed"):
             path.write_text('{"SECRET-JSON-KEY": SECRET-JSON-VALUE')
         else:
             payload = json.loads(path.read_text())
             if corruption == "future-version":
                 payload["version"] = 999
+            elif corruption == "mismatched-progress-invalid-plan":
+                payload["session_id"] = "different-session"
             else:
                 payload["SECRET-EXTRA-KEY"] = "SECRET-EXTRA-VALUE"
             path.write_text(json.dumps(payload))
@@ -813,7 +838,7 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
         elif corruption.endswith("invalid-member-set"):
             (root / ".wade/plans/PLAN-extra.md").write_text(_PLAN)
         snapshots.update(_owned_bytes(root))
-        return original_collect(root)
+        return original_collect(root, before_content=before_content)
 
     with (
         patch.object(interactive, "collect", side_effect=corrupt_collect),
@@ -827,7 +852,8 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
     assert root is not None and root.exists()
     assert _owned_bytes(root) == snapshots
     assert str(root) in _git(repo, "worktree", "list", "--porcelain")
-    assert not (root / ".wade/plans/handoff-progress.json").exists()
+    if "progress" not in corruption:
+        assert not (root / ".wade/plans/handoff-progress.json").exists()
     prepare.assert_not_called()
     stage.assert_not_called()
     provider.update_task.assert_not_called()
@@ -835,7 +861,7 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
     provider.comment_on_task.assert_not_called()
     assert state.pr_writes == 0 and state.pr_creates == 0
     output = capsys.readouterr()
-    combined = output.out + output.err
+    combined = " ".join((output.out + output.err).split())
     assert "SECRET" not in combined
     assert "Uncollectable" in combined
     assert "writer version unavailable" in combined
@@ -844,6 +870,8 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
         assert "json_invalid" in combined
     elif corruption == "future-version":
         assert "literal_error" in combined
+    elif corruption.startswith("missing") or corruption == "mismatched-progress-invalid-plan":
+        assert "invalid persisted metadata" in combined
     else:
         assert "extra_forbidden" in combined
 
@@ -869,7 +897,9 @@ def test_second_parent_collection_and_launch_progress_failures_retain_original(
     collections = 0
     snapshot: dict[str, bytes] = {}
 
-    def corrupt_second(root: Path) -> object:
+    def corrupt_second(
+        root: Path, *, before_content: Callable[[InteractivePlanState], None] | None = None
+    ) -> object:
         nonlocal collections
         collections += 1
         if collections == 2:
@@ -906,7 +936,7 @@ def test_second_parent_collection_and_launch_progress_failures_retain_original(
                         payload["PRIVATE-KEY"] = "PRIVATE-VALUE"
                     path.write_text(json.dumps(payload))
             snapshot.update(_owned_bytes(root))
-        return original_collect(root)
+        return original_collect(root, before_content=before_content)
 
     with (
         patch.object(interactive, "collect_with_state", side_effect=corrupt_second),
@@ -946,13 +976,15 @@ def test_retained_owner_explicit_refresh_requires_new_service_review_and_done(
     state.service_review = True
     original_collect = interactive.collect
 
-    def legacy_collect(root: Path) -> object:
+    def legacy_collect(
+        root: Path, *, before_content: Callable[[InteractivePlanState], None] | None = None
+    ) -> object:
         with patch.object(
             InteractivePlanState,
             "model_validate_json",
             side_effect=_LegacyState.model_validate_json,
         ):
-            return original_collect(root)
+            return original_collect(root, before_content=before_content)
 
     with patch.object(interactive, "collect", side_effect=legacy_collect):
         assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
@@ -1013,13 +1045,15 @@ def test_retention_never_authorizes_copied_or_attached_owner(
     state.service_review = True
     original_collect = interactive.collect
 
-    def legacy_collect(root: Path) -> object:
+    def legacy_collect(
+        root: Path, *, before_content: Callable[[InteractivePlanState], None] | None = None
+    ) -> object:
         with patch.object(
             InteractivePlanState,
             "model_validate_json",
             side_effect=_LegacyState.model_validate_json,
         ):
-            return original_collect(root)
+            return original_collect(root, before_content=before_content)
 
     with patch.object(interactive, "collect", side_effect=legacy_collect):
         assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")

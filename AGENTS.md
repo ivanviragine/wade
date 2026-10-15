@@ -153,7 +153,8 @@ Status move. See README and developer architecture/testing docs for contracts.
 
 Uncollectable planning metadata uses `planning_handoff_errors.UncollectableHandoffError`.
 Parent collection retains the intact original registered owner before editable-plan
-salvage; diagnostics expose bounded public fields/codes and declared versions,
+salvage, including read-only launch/progress checks before editable content;
+diagnostics expose bounded public fields/codes and declared versions,
 never payload-bearing exceptions. Retention grants no recovery or review authority.
 A fresh compatible process must still pass original-owner, launch/progress,
 frozen-contract, content and review gates; absent progress may initialize only
