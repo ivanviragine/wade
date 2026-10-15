@@ -239,3 +239,22 @@ def test_human_apply_preserves_external_title_and_write_outcomes(
     assert len(json.loads(mock_gh_cli["state_file"].read_text())["projects"]["writes"]) == (
         1 if partial_failure else 4
     )
+
+
+def test_default_pick_preserves_canonical_repository_case_without_mutations(
+    e2e_repo: Path, mock_gh_cli: MockGhCli, project_board: Path
+) -> None:
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    for item in state["projects"]["items"]:
+        item["content"]["repository"]["nameWithOwner"] = "Test/E2E-Project"
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    result = _run(["project", "pick", "--json"], e2e_repo)
+    assert result.returncode == 0, result.stderr
+    assert [row["item"]["repository"] for row in _parse_json_output(result.stdout)["rows"]] == [
+        "Test/E2E-Project"
+    ]
+    assert json.loads(mock_gh_cli["state_file"].read_text())["projects"]["writes"] == []
+    assert not any(
+        json.loads(line)["query"].startswith("mutation")
+        for line in project_board.read_text().splitlines()
+    )

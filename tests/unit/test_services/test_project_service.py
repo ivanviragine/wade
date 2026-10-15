@@ -574,3 +574,40 @@ def test_issue_backed_or_unknown_outputs_refuse_before_any_write(ownership, appl
     with pytest.raises(ProjectError, match="project-owned"):
         run_sync(provider, apply=apply)
     assert provider.writes == []
+
+
+@pytest.mark.parametrize(
+    "remote", ["https://github.com/org/repo.git", "git@github.com:ORG/repo.git"]
+)
+def test_default_pick_matches_current_repository_identity_without_case_loss(remote: str) -> None:
+    provider = FakeProvider(
+        [item(1, repository="Org/Repo"), item(2, repository="other/repo", status="DOING")]
+    )
+    with (
+        patch("wade.services.project_service.repo.get_remote_url", return_value=remote),
+        patch("wade.services.check_service._github_hostname", return_value="github.com"),
+    ):
+        result = execute(
+            ProjectRequest(operation="pick"),
+            project_config=ProjectConfig(github_projects=settings()),
+            provider=provider,
+        )
+    assert [row.item.repository for row in result.rows] == ["Org/Repo"]
+    assert result.current_wip == 1 and result.available_slots == 2 and provider.writes == []
+
+
+@pytest.mark.parametrize(
+    "options", [{"repository": "ORG/REPO"}, {"filters": ["repository=ORG/REPO"]}]
+)
+def test_repository_filters_follow_github_identity_case_rules(options) -> None:
+    result = evaluate_items(
+        [item(1, repository="Org/Repo")],
+        ProjectRequest.model_validate({"operation": "pick", **options}),
+    )
+    assert [row.item.repository for row in result.rows] == ["Org/Repo"]
+    assert (
+        evaluate_items(
+            [item(1, title="Task")], ProjectRequest(operation="items", filters=["title=task"])
+        ).rows
+        == []
+    )

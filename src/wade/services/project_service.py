@@ -271,6 +271,12 @@ def _matches(
                 return False
         else:
             value = _value(item, alias, bindings)
+            if (
+                isinstance(value, str)
+                and isinstance(expected, str)
+                and (alias == "repository" or (field is not None and field.type == "REPOSITORY"))
+            ):
+                value, expected = value.casefold(), expected.casefold()
             if isinstance(value, list):
                 if expected not in value:
                     return False
