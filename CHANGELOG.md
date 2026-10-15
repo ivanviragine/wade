@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.6] — 2026-10-15
+
+### Bug Fixes
+
+- classify ClickUp task state using canonical status types (#530) (f91926d)
+
 ## [v1.4.5] — 2026-10-15
 
 ### Bug Fixes
