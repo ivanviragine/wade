@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.7] — 2026-10-15
+
+### Refactoring
+
+- type init-wizard setup carriers as Pydantic models instead of dicts (#498) (f3fc21d)
+
 ## [v1.4.6] — 2026-10-15
 
 ### Bug Fixes
