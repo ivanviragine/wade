@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import typer
 
 import wade
 from wade.config.loader import ConfigError
+from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
 
 app = typer.Typer(
     name="wade",
@@ -232,6 +234,11 @@ _SANDBOX_OPT = typer.Option(
 @app.command("plan", rich_help_panel="Workflow")
 def plan_cmd(
     issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
+    recover: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--recover",
+        help="Revalidate and consume a retained completed planning worktree.",
+    ),
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
     ),
@@ -244,9 +251,38 @@ def plan_cmd(
         help="Reasoning effort level: low, medium, high, max.",
         autocompletion=complete_effort_levels,
     ),
-    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
-    permission_mode: str | None = _PERMISSION_MODE_OPT,
-    sandbox: bool | None = _SANDBOX_OPT,
+    yolo: bool = typer.Option(
+        False, "--yolo", help="Request native skip-approval mode and automate WADE confirmations."
+    ),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Native approvals: default, yolo, auto, or accept-edits where supported. "
+        "Codex is collector-only.",
+    ),
+    sandbox: bool | None = typer.Option(
+        None,
+        "--sandbox/--no-sandbox",
+        help="Require native confinement or unrestricted execution; unsupported requirements fail.",
+    ),
+    network_access: bool | None = typer.Option(
+        None,
+        "--network-access/--no-network-access",
+        help="Require native network on/off; default adds no grant, not universal isolation.",
+    ),
+    approval_policy: str = typer.Option(
+        "on-request",
+        "--approval-policy",
+        help="Collector-only approval policy: on-request, untrusted, or never.",
+    ),
+    trusted_dir: list[Path] | None = typer.Option(  # noqa: B008
+        None, "--trusted-dir", help="Explicit native trusted directory; repeat as needed."
+    ),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        help="Collector-only deadline: 1-3600 seconds (default: ai.plan.timeout or 600).",
+    ),
     skill: list[str] | None = typer.Option(  # noqa: B008
         None, "--skill", help="WORK methodology skill ref. Repeat for an ordered binding."
     ),
@@ -257,7 +293,7 @@ def plan_cmd(
         False, "--refresh-skills", help="Explicitly replace a resumed session's frozen skills."
     ),
 ) -> None:
-    """Start a planning session with AI."""
+    """Plan in the selected tool's native CLI (Codex retains its collector)."""
     from wade.services.plan_service import plan as do_plan
 
     success = do_plan(
@@ -274,6 +310,11 @@ def plan_cmd(
         work_skills=skill,
         review_skills=review_skill,
         refresh_skills=refresh_skills,
+        network_access=network_access,
+        approval_policy=approval_policy,
+        trusted_dirs=trusted_dir,
+        timeout=timeout,
+        recover=recover,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -586,6 +627,7 @@ def smart_start_cmd(
 @app.command("p", hidden=True)
 def plan_alias(
     issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
+    recover: Path | None = typer.Option(None, "--recover"),  # noqa: B008
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
     ),
@@ -606,18 +648,32 @@ def plan_alias(
     refresh_skills: bool = typer.Option(False, "--refresh-skills"),
 ) -> None:
     """Alias for plan."""
-    plan_cmd(
-        issue=issue,
-        ai=ai,
+    from wade.services.plan_service import plan as do_plan
+
+    success = do_plan(
+        ai_tool=ai,
         model=model,
+        issue_id=issue,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
         effort=effort,
-        yolo=yolo,
+        effort_explicit=effort is not None,
+        yolo=yolo or None,
         permission_mode=permission_mode,
         sandbox=sandbox,
-        skill=skill,
-        review_skill=review_skill,
+        work_skills=skill,
+        review_skills=review_skill,
         refresh_skills=refresh_skills,
+        recover=recover,
+        # The short alias preserves the retired collector launch default, but
+        # must not turn it into an unsupported native-terminal requirement.
+        network_access=None,
+        collector_network_access=None if recover is not None else LAUNCH_NETWORK_ACCESS,
+        approval_policy="on-request",
+        trusted_dirs=None,
+        timeout=None,
     )
+    raise typer.Exit(0 if success else 1)
 
 
 @app.command("i", hidden=True)
@@ -724,6 +780,7 @@ from wade.cli.hook import hook_command  # noqa: E402
 from wade.cli.implementation_session import implementation_session_app  # noqa: E402
 from wade.cli.knowledge import knowledge_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
+from wade.cli.project import project_app  # noqa: E402
 from wade.cli.review import review_app  # noqa: E402
 from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
 from wade.cli.session import session_app  # noqa: E402
@@ -738,6 +795,7 @@ app.add_typer(
     rich_help_panel="Task Management",
 )
 app.add_typer(task_app, name="tasks", hidden=True)  # alias
+app.add_typer(project_app, name="project", rich_help_panel="Task Management")
 app.add_typer(
     worktree_app,
     name="worktree",

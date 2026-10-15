@@ -13,6 +13,7 @@ from wade.services.skill_diagnostics_service import (
     resolve_delegation_report,
     resolve_session_report,
 )
+from wade.skills.catalog import BUILTIN_METHODOLOGY_SKILLS
 
 
 def _config(root: Path, body: str) -> None:
@@ -78,7 +79,7 @@ def test_skill_check_validates_project_refs_and_reports_counts(tmp_path: Path) -
     )
     report = check_project_skills(tmp_path)
     assert report.valid
-    assert report.builtins == 7
+    assert report.builtins == len(BUILTIN_METHODOLOGY_SKILLS)
     assert report.project_skills == 1
 
 

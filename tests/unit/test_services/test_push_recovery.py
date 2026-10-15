@@ -37,6 +37,8 @@ class TestPushRecovery:
     def _patches(self, stack: ExitStack, *, is_tty: bool, select: int = 0) -> dict[str, MagicMock]:
         stack.enter_context(patch(f"{_DONE}.console"))
         stack.enter_context(patch(f"{_DONE}.git_sync"))
+        # This policy unit fakes Git; real reconciliation/late-dirt coverage is integration-tested.
+        stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
         stack.enter_context(patch(f"{_DONE}.git_branch.commits_ahead", return_value=1))
         mock_push = stack.enter_context(patch(f"{_DONE}.git_repo.push_branch"))
         stack.enter_context(patch(f"{_DONE}.prompts.is_tty", return_value=is_tty))
@@ -88,6 +90,8 @@ class TestPushRecoveryMarkerLifecycle:
     def _patches(self, stack: ExitStack, *, is_tty: bool, select: int = 0) -> dict[str, MagicMock]:
         stack.enter_context(patch(f"{_DONE}.console"))
         mock_git_sync = stack.enter_context(patch(f"{_DONE}.git_sync"))
+        # This policy unit fakes Git; real reconciliation/late-dirt coverage is integration-tested.
+        stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
         stack.enter_context(patch(f"{_DONE}.git_branch.commits_ahead", return_value=1))
         mock_push = stack.enter_context(patch(f"{_DONE}.git_repo.push_branch"))
         stack.enter_context(patch(f"{_DONE}.prompts.is_tty", return_value=is_tty))

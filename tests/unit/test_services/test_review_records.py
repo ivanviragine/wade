@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -19,12 +19,13 @@ from wade.models.session_manifest import (
     SessionManifest,
 )
 from wade.models.skill import ResolvedSkill, SkillSlot
-from wade.models.workflow import AICommandKey, DelegationKind, SessionKind
+from wade.models.workflow import SESSION_DEFINITIONS, AICommandKey, DelegationKind, SessionKind
 from wade.services.implementation_service.done import _classify_review
 from wade.services.implementation_service.lifecycle import ReviewStatusKind
 from wade.services.review_record_service import (
     count_binding_passes,
     list_review_records,
+    nearest_satisfying_review_baseline,
     read_review_record,
     review_record_filename,
     write_review_record,
@@ -80,7 +81,7 @@ def _write_manifest(
 
     manifest = SessionManifest(
         session=SessionKind.IMPLEMENTATION,
-        workflow_revision=1,
+        workflow_revision=SESSION_DEFINITIONS[SessionKind.IMPLEMENTATION].workflow_revision,
         bundle_digest=compute_session_bundle_digest(session),
         task_id="123",
         ai_command=AICommandKey.IMPLEMENT,
@@ -309,6 +310,84 @@ def test_exact_record_reader_requires_the_requested_binding(tmp_path: Path) -> N
             delegation=DelegationKind.CODE_REVIEW,
             commit=HEAD,
             binding=reviewer_b,
+        )
+        is None
+    )
+
+
+@patch("wade.services.review_record_service.git_repo.has_merge_commit_between", return_value=False)
+@patch("wade.services.review_record_service.git_branch.commits_ahead")
+@patch("wade.services.review_record_service.git_branch.is_merged_into", return_value=True)
+def test_nearest_satisfying_same_binding_ancestor_is_selected_by_git_distance(
+    _merged: MagicMock,
+    ahead: MagicMock,
+    merge_on_path: MagicMock,
+    tmp_path: Path,
+) -> None:
+    binding = _binding("review-a")
+    other = _binding("review-b")
+    older = "b" * 40
+    nearer = "c" * 40
+    head = "d" * 40
+    for commit, outcome, selected_binding in (
+        (older, ReviewOutcome.REVIEWED, binding),
+        (nearer, ReviewOutcome.NO_DIFF, binding),
+        ("e" * 40, ReviewOutcome.TIMED_OUT, binding),
+        ("f" * 40, ReviewOutcome.REVIEWED, other),
+    ):
+        assert (
+            write_review_record(
+                tmp_path,
+                delegation=DelegationKind.CODE_REVIEW,
+                commit=commit,
+                binding=selected_binding,
+                outcome=outcome,
+            )
+            is not None
+        )
+
+    ahead.side_effect = [5, 1]
+
+    assert (
+        nearest_satisfying_review_baseline(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            head=head,
+            binding=binding,
+        )
+        == nearer
+    )
+    merge_on_path.assert_called_once_with(tmp_path, nearer, head)
+
+
+@patch("wade.services.review_record_service.git_repo.has_merge_commit_between", return_value=True)
+@patch("wade.services.review_record_service.git_branch.commits_ahead", return_value=1)
+@patch("wade.services.review_record_service.git_branch.is_merged_into", return_value=True)
+def test_incremental_baseline_fails_open_when_a_merge_is_on_the_path(
+    _merged: MagicMock,
+    _ahead: MagicMock,
+    _merge_on_path: MagicMock,
+    tmp_path: Path,
+) -> None:
+    binding = _binding("review-a")
+    baseline = "b" * 40
+    assert (
+        write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=baseline,
+            binding=binding,
+            outcome=ReviewOutcome.REVIEWED,
+        )
+        is not None
+    )
+
+    assert (
+        nearest_satisfying_review_baseline(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            head="c" * 40,
+            binding=binding,
         )
         is None
     )

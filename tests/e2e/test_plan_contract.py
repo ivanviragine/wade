@@ -21,74 +21,127 @@ pytestmark = [
 ]
 
 
-def _install_fake_claude(mock_bin: Path) -> None:
-    """Install a deterministic fake `claude` binary into the mocked PATH."""
-    claude_script = mock_bin / "claude"
-    claude_script.write_text(
+def _install_fake_codex(mock_bin: Path) -> None:
+    """Speak native app-server wire output; the published collector is not mocked."""
+    codex_script = mock_bin / "codex"
+    codex_script.write_text(
         """#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
+import json
+import os
 from pathlib import Path
 
-
-def _find_plan_dir(argv: list[str]) -> Path | None:
-    add_dirs: list[Path] = []
-    i = 0
-    while i < len(argv):
-        if argv[i] == "--add-dir" and i + 1 < len(argv):
-            add_dirs.append(Path(argv[i + 1]))
-            i += 2
-            continue
-        i += 1
-
-    for path in reversed(add_dirs):
-        if path.name == "plans" and path.parent.name == ".wade":
-            return path
-    for path in reversed(add_dirs):
-        if "wade-plan-" in str(path):
-            return path
-    if add_dirs:
-        return add_dirs[-1]
-    return None
-
-
-plan_dir = _find_plan_dir(sys.argv[1:])
-if plan_dir is not None:
-    plan_dir.mkdir(parents=True, exist_ok=True)
-    (plan_dir / "PLAN-001-deterministic-plan.md").write_text(
-        "\\n".join(
-            [
-                "# feat: deterministic plan from fake claude",
-                "",
-                "## Complexity",
-                "easy",
-                "",
-                "## Context / Problem",
-                "Create one deterministic issue and draft PR.",
-                "",
-                "## Tasks",
-                "- Generate a task from this plan file",
-                "",
-                "## Acceptance Criteria",
-                "- The issue and draft PR are created",
-            ]
-        )
-        + "\\n",
-        encoding="utf-8",
-    )
-
-print("Session ID: fake-claude-session-001")
-print("Total tokens: 256")
-sys.exit(0)
+if "--version" in sys.argv:
+    print(os.environ.get("WADE_MOCK_CODEX_VERSION", "codex-cli 0.154.0"))
+    sys.exit(0)
+assert "app-server" in sys.argv
+plan = "# feat: deterministic native plan\\n\\n## Complexity\\neasy\\n\\n## Tasks\\n- Test it.\\n"
+plans = [{"filename": "PLAN-one.md", "markdown": plan}]
+if os.environ.get("WADE_MOCK_MULTI"):
+    plans.append({"filename": "PLAN-two.md", "markdown": plan.replace("native plan", "second plan"),
+                  "depends_on": ["PLAN-one.md"]})
+artifact = '<!-- wade:plan-bundle:v1 -->\\n```json\\n' + json.dumps(
+    {"plans": plans, "knowledge_votes": []}) + '\\n```'
+artifact = os.environ.get("WADE_MOCK_ARTIFACT", artifact)
+def emit(message):
+    print(json.dumps(message), flush=True)
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if "id" not in msg:
+        continue
+    result = {}
+    if method == "collaborationMode/list":
+        result = {"data": [{"mode": "plan", "name": "Plan"}]}
+    elif method == "thread/start":
+        p = msg["params"]
+        assert p["sandbox"] == "workspace-write"
+        assert p["approvalPolicy"] == "on-request"
+        assert p["config"]["sandbox_workspace_write"] == {
+            "network_access": False, "writable_roots": []}
+        assert Path(p["cwd"]) == Path.cwd()
+        result = {"thread": {"id": "native-thread"}, "model": "gpt-5.4"}
+    elif method == "turn/start":
+        assert msg["params"]["collaborationMode"]["mode"] == "plan"
+        prompt = msg["params"]["input"][0]["text"]
+        assert not prompt.startswith("/plan") and "WORKFLOW.md" in prompt
+        result = {"turn": {"id": "native-turn"}}
+    emit({"id": msg["id"], "result": result})
+    if method == "turn/start":
+        emit({"method": "item/completed", "params": {"threadId": "native-thread",
+              "turnId": "native-turn", "item": {"type": "plan", "id": "native-artifact",
+              "text": artifact}}})
+        emit({"method": "turn/completed", "params": {"threadId": "native-thread",
+              "turn": {"id": "native-turn", "status": "completed"}}})
 """,
         encoding="utf-8",
     )
-    claude_script.chmod(0o755)
+    codex_script.chmod(0o755)
+    # Keep the collector lane explicit now that production Codex prefers its TUI.
+    # Only capability selection is overridden; real CLI, collector, and provider run.
+    collector_wade = mock_bin / "wade"
+    collector_wade.write_text(
+        """#!/usr/bin/env python3
+from crossby.ai_tools.codex import CodexAdapter
+from crossby.models.ai import PlanModeActivation
+from wade.cli.main import cli_main
+original = CodexAdapter.capabilities
+def collected_capabilities(self):
+    caps = original(self)
+    return caps.model_copy(update={"plan_mode": caps.plan_mode.model_copy(
+        update={"activation": PlanModeActivation.UNSUPPORTED})})
+CodexAdapter.capabilities = collected_capabilities
+cli_main()
+"""
+    )
+    collector_wade.chmod(0o755)
+
+
+def _disable_plan_review(repo: Path) -> None:
+    """Explicit policy opt-out, not a fabricated prompt-mode review receipt."""
+    config = repo / ".wade.yml"
+    config.write_text(config.read_text() + "  review_plan:\n    enabled: false\n")
 
 
 class TestPlanCommand:
     """Test `wade plan` deterministic workflow using mocked gh + fake AI."""
+
+    def test_native_cli_submits_plan_through_real_completion_command(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        _init_origin_remote(e2e_repo)
+        _disable_plan_review(e2e_repo)
+        binary = mock_gh_cli["mock_bin"] / "opencode"
+        binary.write_text(
+            """#!/usr/bin/env python3
+import subprocess
+import sys
+if "--version" in sys.argv:
+    print("1.18.29")
+    sys.exit(0)
+assert "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "plan"
+assert "--auto" in sys.argv
+assert "run" not in sys.argv and "serve" not in sys.argv
+assert "WORKFLOW.md" in sys.argv[sys.argv.index("--prompt") + 1]
+plan = "# fix: native CLI handoff\\n\\n## Complexity\\neasy\\n\\n## Tasks\\n- Test it.\\n"
+result = subprocess.run(
+    [sys.executable, "-m", "wade", "plan-session", "done", ".wade/plans", "--from-stdin"],
+    input=plan, text=True, capture_output=True,
+)
+print(result.stdout)
+print(result.stderr, file=sys.stderr)
+sys.exit(result.returncode)
+"""
+        )
+        binary.chmod(0o755)
+        result = _run(["plan", "--ai", "opencode", "--yolo"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert len(state["issues"]) == 1
+        assert state["issues"]["1"]["title"] == "fix: native CLI handoff"
+        assert len(state["prs"]) == 1
 
     def test_plan_creates_issue_and_draft_pr_from_generated_plan(
         self,
@@ -97,10 +150,11 @@ class TestPlanCommand:
     ) -> None:
         """plan should create issue/PR side effects from AI-generated plan files."""
         _init_origin_remote(e2e_repo)
-        _install_fake_claude(mock_gh_cli["mock_bin"])
+        _install_fake_codex(mock_gh_cli["mock_bin"])
+        _disable_plan_review(e2e_repo)
 
-        result = _run(["plan", "--ai", "claude", "--model", "claude-haiku-4.5"], cwd=e2e_repo)
-        assert result.returncode == 0
+        result = _run(["plan", "--ai", "codex", "--model", "gpt-5.4"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stdout + result.stderr
 
         state_data = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
         issues = state_data.get("issues", {})
@@ -112,7 +166,10 @@ class TestPlanCommand:
 
         issue = issues.get("1")
         assert isinstance(issue, dict)
-        assert issue.get("title") == "feat: deterministic plan from fake claude"
+        assert issue.get("title") == "feat: deterministic native plan"
+        assert '"artifact_source": "protocol_event"' in issue["body"]
+        assert "native-thread" in issue["body"]
+        assert "token usage are unavailable" in issue["body"]
         labels = issue.get("labels", [])
         assert isinstance(labels, list)
         assert "feature-plan" in labels
@@ -124,7 +181,7 @@ class TestPlanCommand:
 
         _assert_gh_called_with(
             mock_gh_cli["log_file"],
-            ["issue", "create", "--title", "feat: deterministic plan from fake claude"],
+            ["issue", "create", "--title", "feat: deterministic native plan"],
         )
         _assert_gh_called_with(
             mock_gh_cli["log_file"],
@@ -134,6 +191,86 @@ class TestPlanCommand:
             mock_gh_cli["log_file"],
             ["issue", "edit", "1", "--body-file"],
         )
+
+    def test_native_bundle_creates_two_tasks_and_declared_dependency(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        _init_origin_remote(e2e_repo)
+        _install_fake_codex(mock_gh_cli["mock_bin"])
+        _disable_plan_review(e2e_repo)
+        result = _run(
+            ["plan", "--ai", "codex", "--model", "gpt-5.4", "--yolo"],
+            cwd=e2e_repo,
+            env={"WADE_MOCK_MULTI": "1"},
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert len(state["prs"]) == 2
+        assert len(state["issues"]) == 3  # Two tasks plus their dependency tracking issue.
+        assert "#1" in state["issues"]["2"]["body"]
+        assert "native-thread" in state["issues"]["1"]["body"]
+
+    @pytest.mark.parametrize("version", ["unknown", "codex-cli 0.1.0"])
+    def test_version_preflight_has_no_worktree_or_provider_mutations(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli, version: str
+    ) -> None:
+        _install_fake_codex(mock_gh_cli["mock_bin"])
+        before = json.loads(mock_gh_cli["state_file"].read_text())
+        result = _run(
+            ["plan", "--ai", "codex", "--model", "gpt-5.4"],
+            cwd=e2e_repo,
+            env={"WADE_MOCK_CODEX_VERSION": version},
+        )
+        assert result.returncode == 1
+        assert "preflight failed" in result.stderr
+        assert json.loads(mock_gh_cli["state_file"].read_text()) == before
+        assert not (e2e_repo.parent / ".worktrees").exists()
+
+    def test_malformed_returned_artifact_creates_nothing_and_is_recoverable(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        _init_origin_remote(e2e_repo)
+        _install_fake_codex(mock_gh_cli["mock_bin"])
+        before = json.loads(mock_gh_cli["state_file"].read_text())
+        result = _run(
+            ["plan", "--ai", "codex", "--model", "gpt-5.4"],
+            cwd=e2e_repo,
+            env={"WADE_MOCK_ARTIFACT": "Not a valid WADE plan"},
+        )
+        assert result.returncode == 1
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["issues"] == before["issues"]
+        assert state["prs"] == before["prs"]
+        assert "Plan files:" in result.stdout + result.stderr
+
+    def test_native_terminal_failure_retains_output_without_persisting_tasks(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        binary = mock_gh_cli["mock_bin"] / "claude"
+        binary.write_text('#!/bin/sh\n[ "$1" = "--version" ] || exit 9\necho "2.1.263"\n')
+        binary.chmod(0o755)
+        before = json.loads(mock_gh_cli["state_file"].read_text())
+        result = _run(["plan", "--ai", "claude", "--model", "claude-sonnet-4.6"], cwd=e2e_repo)
+        assert result.returncode == 1
+        assert "Native planning CLI exited with code 9" in " ".join(result.stderr.split())
+        assert (e2e_repo.parent / ".worktrees").exists()
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["issues"] == before["issues"]
+        assert state["prs"] == before["prs"]
+
+    def test_explicit_no_network_cannot_be_ignored_by_unrestricted_collection(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        _install_fake_codex(mock_gh_cli["mock_bin"])
+        before = json.loads(mock_gh_cli["state_file"].read_text())
+        result = _run(
+            ["plan", "--ai", "codex", "--model", "gpt-5.4", "--no-sandbox", "--no-network-access"],
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 1
+        assert "cannot guarantee --no-network-access" in " ".join(result.stderr.split())
+        assert json.loads(mock_gh_cli["state_file"].read_text()) == before
+        assert not (e2e_repo.parent / ".worktrees").exists()
 
 
 class TestPlanSessionDoneCommand:
@@ -228,3 +365,122 @@ class TestPlanSandboxProfileContract:
         combined = result.stdout + result.stderr
         assert "--sandbox" in combined
         assert "--no-sandbox" in combined
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_native_normal_replan_persists_exact_plan_and_next_implementation_consumes_it(
+    e2e_repo: Path,
+    mock_gh_cli: MockGhCli,
+    retry: bool,
+) -> None:
+    """Fake runtime, real CLI/native receipt/finalization/recovery/worktrees."""
+    import subprocess
+
+    _init_origin_remote(e2e_repo)
+    binary = mock_gh_cli["mock_bin"] / "opencode"
+    binary.write_text("""#!/usr/bin/env python3
+import json, os, subprocess, sys
+from pathlib import Path
+from wade.services import interactive_plan_service as interactive
+if "--version" in sys.argv:
+    print("1.18.29")
+    sys.exit(0)
+assert "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "plan"
+root = Path.cwd()
+markdown = os.environ["WADE_MOCK_REPLACEMENT_PLAN"]
+interactive.import_artifact(root, markdown)
+# Supported deterministic test receipt, never a claim of real model inference.
+interactive.record_review(root / ".wade/plans/PLAN.md", markdown, self_review=False)
+result = subprocess.run(
+    [sys.executable, "-m", "wade", "plan-session", "done", ".wade/plans"],
+    capture_output=True, text=True,
+)
+print(result.stdout)
+print(result.stderr, file=sys.stderr)
+if result.returncode:
+    sys.exit(result.returncode)
+state_path = Path(os.environ["WADE_MOCK_GH_STATE"])
+state = json.loads(state_path.read_text())
+state["native_calls"] = state.get("native_calls", 0) + 1
+if "1" in state["issues"]:
+    state["issues"]["1"]["body"] += "\\nHuman edit during native planning."
+state_path.write_text(json.dumps(state))
+""")
+    binary.chmod(0o755)
+    old = "# fix: initial plan\n\n## Complexity\neasy\n\n## Tasks\n- Obsolete requirement.\n"
+    replacement = (
+        "# fix: replacement plan\n\n## Complexity\ncomplex\n\n"
+        "## Context\nNew requirements.\n\n## Summary\nPreserve later tasks.\n\n"
+        "## Tasks\n- Replacement requirement.\n\n## Acceptance Criteria\n- It is durable.\n\n"
+        "```markdown\n## Summary\n<!-- wade:summary:end -->\n<!-- wade:plan:end -->\n```\n"
+    )
+    result = _run(
+        ["plan", "--ai", "opencode", "--model", "test-model", "--yolo"],
+        cwd=e2e_repo,
+        env={"WADE_MOCK_REPLACEMENT_PLAN": old},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    assert len(state["issues"]) == len(state["prs"]) == 1
+    assert old.split("\n", 1)[1].strip() in state["prs"]["1"]["body"]
+    original_head = state["prs"]["1"]["head"]
+    state["issues"]["1"]["title"] = "fix: renamed issue"
+    state["issues"]["1"]["body"] += "\nHuman edit before replanning."
+    preserved = (
+        "\n\n## Human Requirements\nKeep this section.\n"
+        "<!-- wade:future:start -->\nKeep unknown owner.\n<!-- wade:future:end -->"
+    )
+    state["prs"]["1"]["body"] = (
+        "```markdown\n<!-- wade:plan:start -->\n```\n\n" + state["prs"]["1"]["body"] + preserved
+    )
+    state["fail_pr_body_write"] = retry
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    result = _run(
+        ["plan", "--issue", "1", "--ai", "opencode", "--model", "test-model", "--yolo"],
+        cwd=e2e_repo,
+        env={"WADE_MOCK_REPLACEMENT_PLAN": replacement},
+    )
+    assert result.returncode == (1 if retry else 0), result.stdout + result.stderr
+    if retry:
+        records = subprocess.check_output(
+            ["git", "worktree", "list", "--porcelain"], cwd=e2e_repo, text=True
+        ).split("\n\n")
+        detached = next(record for record in records if "\ndetached" in record)
+        root = Path(detached.splitlines()[0].removeprefix("worktree "))
+        assert (root / ".wade/plans/PLAN.md").read_text() == replacement
+        assert (root / ".wade/plans/interactive-reviews.json").is_file()
+        assert (root / ".wade/session/manifest.json").is_file()
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        state["fail_pr_body_write"] = False
+        state["issues"]["1"]["body"] += "\nHuman edit before recovery."
+        mock_gh_cli["state_file"].write_text(json.dumps(state))
+        result = _run(
+            ["plan", "--recover", str(root)],
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not root.exists()
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    assert state["native_calls"] == 2
+    assert len(state["issues"]) == len(state["prs"]) == 1
+    pr = state["prs"]["1"]
+    assert pr["head"] == original_head
+    assert pr["title"] == "fix: renamed issue"
+    expected_body = replacement.split("\n", 1)[1].strip()
+    expected_block = "<!-- wade:plan:start -->\n" + expected_body + "\n<!-- wade:plan:end -->"
+    assert expected_block in pr["body"]
+    assert preserved in pr["body"]
+    assert "Obsolete requirement." not in pr["body"]
+    assert state["issues"]["1"]["body"].count("**Full plan**: PR #1") == 1
+    assert "Human edit before replanning." in state["issues"]["1"]["body"]
+    assert "Human edit during native planning." in state["issues"]["1"]["body"]
+    result = _run(
+        ["implement", "1", "--cd", "--ai", "opencode", "--model", "test-model"], cwd=e2e_repo
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = Path(result.stdout.strip())
+    assert (root / "PLAN.md").read_text() == (
+        "# Issue #1: fix: renamed issue\n\n"
+        + expected_body
+        + "\n\nURL: https://github.com/test/e2e-project/issues/1\n"
+    )

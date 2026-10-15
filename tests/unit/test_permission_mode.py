@@ -14,6 +14,28 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+def test_native_selection_does_not_promise_tool_managed_confinement() -> None:
+    from wade.models.permission import PermissionMode
+    from wade.services.ai_resolution import display_ai_selection
+
+    with patch("wade.ui.console.console") as output:
+        display_ai_selection(
+            "claude",
+            None,
+            None,
+            permission_mode=PermissionMode.YOLO,
+            sandbox=True,
+            native_plan=True,
+        )
+    text = str(output.method_calls)
+    assert "Native Plan" in text
+    assert "Native interactive CLI" in text
+    assert "Permission mode" in text
+    assert "preflight" in text
+    assert "confined" not in text
+
+
 # ---------------------------------------------------------------------------
 # PermissionMode model + helpers
 # ---------------------------------------------------------------------------
@@ -411,6 +433,46 @@ class TestCliParsing:
         assert result.exit_code == 0
         # --yolo forwards yolo=True; permission_mode stays None (resolver maps it).
         assert mock_plan.call_args.kwargs["yolo"] is True
+
+    def test_plan_recovery_path_forwarded(self, tmp_path: Path) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        worktree = tmp_path / "retained-plan"
+        with patch("wade.services.plan_service.plan", return_value=True) as mock_plan:
+            result = CliRunner().invoke(app, ["plan", "--recover", str(worktree)])
+        assert result.exit_code == 0
+        assert mock_plan.call_args.kwargs["recover"] == worktree
+
+    def test_plan_alias_recovery_forwards_recovery_safe_defaults(self, tmp_path: Path) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        worktree = tmp_path / "retained-plan"
+        with patch("wade.services.plan_service.plan", return_value=True) as mock_plan:
+            result = CliRunner().invoke(app, ["p", "--recover", str(worktree)])
+
+        assert result.exit_code == 0
+        assert mock_plan.call_args.kwargs["network_access"] is None
+        assert mock_plan.call_args.kwargs["collector_network_access"] is None
+        assert mock_plan.call_args.kwargs["approval_policy"] == "on-request"
+        assert mock_plan.call_args.kwargs["trusted_dirs"] is None
+        assert mock_plan.call_args.kwargs["timeout"] is None
+
+    def test_plan_alias_keeps_collector_network_policy_out_of_native_preflight(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+        from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS
+
+        with patch("wade.services.plan_service.plan", return_value=True) as mock_plan:
+            result = CliRunner().invoke(app, ["p"])
+
+        assert result.exit_code == 0
+        assert mock_plan.call_args.kwargs["network_access"] is None
+        assert mock_plan.call_args.kwargs["collector_network_access"] is LAUNCH_NETWORK_ACCESS
 
     def test_review_pr_comments_permission_mode_forwarded(self) -> None:
         from typer.testing import CliRunner

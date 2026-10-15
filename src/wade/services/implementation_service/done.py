@@ -14,6 +14,7 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.session import ClosingCandidate
 from wade.models.skill import SkillSlot
 from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
@@ -33,19 +34,14 @@ from wade.services.implementation_service.bootstrap import (
 )
 from wade.services.implementation_service.core import _resolve_worktree_from_plan
 from wade.services.implementation_service.lifecycle import (
-    REVIEW_STATUS_MARKER_END,
-    REVIEW_STATUS_MARKER_START,
-    SUMMARY_MARKER_END,
-    SUMMARY_MARKER_START,
     ReviewStatus,
     ReviewStatusKind,
     SessionType,
     _apply_pr_refs,
     _build_pr_body,
     _render_review_status,
-    _strip_summary_section,
 )
-from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
+from wade.services.review_cycle_service import clear_review_cycle
 from wade.services.review_record_service import (
     count_binding_passes,
     has_other_satisfying_binding,
@@ -60,12 +56,17 @@ from wade.services.task_service import remove_in_progress_label
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import markers
-from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
+from wade.utils.body_markers import update_body_preserving_markers
 from wade.utils.conventional import (
     conventional_title_error,
     is_conventional_title,
 )
-from wade.utils.markdown import remove_marker_block
+from wade.utils.markdown import (
+    MarkdownStructureError,
+    OwnedSectionReplacement,
+    replace_owned_sections,
+    scan_markdown_structure,
+)
 
 logger = structlog.get_logger()
 
@@ -344,6 +345,11 @@ def done(
         console.error("Cannot resolve the branch tip to run the completion gates.")
         return False
 
+    candidate = (
+        ClosingCandidate(reviewed_commit=pre_sync_head, approved_commit=pre_sync_head)
+        if config.knowledge.enabled
+        else None
+    )
     if not _run_completion_gates(
         session_type=session_type,
         config=config,
@@ -355,6 +361,7 @@ def done(
         issue_number=issue_number,
         pre_sync_head=pre_sync_head,
         skip_review=skip_review,
+        candidate=candidate,
     ):
         return False
 
@@ -381,10 +388,24 @@ def done(
         worktree_path=wt_path,
         review_status=review_status,
         trigger_bots=trigger_bots,
+        expected_head=candidate.approved_commit if candidate is not None else None,
+        expected_base=candidate.effective_base_commit if candidate is not None else None,
     )
     if not ok:
         # Finalize failed — leave the worktree exactly as we found it (gitignore
         # block + skip-worktree still in place) so the user can fix and re-run.
+        return False
+
+    if session_type == "review-pr-comments" and not clear_review_cycle(
+        worktree_root, issue_number=issue_number
+    ):
+        # The PR may already be finalized, but completion remains retryable
+        # until the active review-cycle state is gone or durably invalidated.
+        # Otherwise a later feedback cycle could inherit an obsolete baseline.
+        console.error(
+            "Could not clear the completed PR-comment review-cycle state safely; "
+            "restore filesystem access and re-run done."
+        )
         return False
 
     # Success only: strip the worktree gitignore block and restore .gitignore
@@ -420,6 +441,7 @@ def _run_completion_gates(
     issue_number: str,
     pre_sync_head: str,
     skip_review: bool,
+    candidate: ClosingCandidate | None = None,
 ) -> bool:
     """Run the gate set for ``session_type`` in the fixed order. True ⇒ proceed.
 
@@ -451,7 +473,7 @@ def _run_completion_gates(
             return False
         if not _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type):
             return False
-        return _gate_knowledge_valid(config, worktree_root)
+        return _gate_synced_knowledge(config, worktree_root, main_branch, pre_sync_head, candidate)
 
     # Default: implementation session.
     if not _gate_pr_title(config, provider, issue_number):
@@ -469,7 +491,64 @@ def _run_completion_gates(
     # Runs LAST — after sync merges the base branch into the worktree, the local
     # `merge=union` point where a structural corruption of KNOWLEDGE.md could be
     # introduced. Validating here keeps a union-corrupted file from shipping.
-    return _gate_knowledge_valid(config, worktree_root)
+    return _gate_synced_knowledge(config, worktree_root, main_branch, pre_sync_head, candidate)
+
+
+def _gate_synced_knowledge(
+    config: ProjectConfig,
+    root: Path,
+    base: str,
+    reviewed: str,
+    candidate: ClosingCandidate | None,
+) -> bool:
+    """Only the reviewed tip or its actual clean base merge may advance closing."""
+    if not config.knowledge.enabled:
+        return _gate_knowledge_valid(config, root, base)
+    from wade.git import knowledge as git_knowledge
+
+    try:
+        current = git_knowledge.resolve_commit(root, "HEAD")
+        resolved_base = git_knowledge.resolve_completion_base(root, base)
+        if current != reviewed:
+            parents = git_knowledge._run_git(
+                "rev-list", "--parents", "-n", "1", current, cwd=root
+            ).stdout.split()
+            available_bases = {resolved_base}
+            for ref in (base, f"origin/{base}"):
+                with contextlib.suppress(GitError, ValueError):
+                    available_bases.add(git_knowledge.resolve_commit(root, ref))
+            if len(parents) != 3 or parents[1] != reviewed or parents[2] not in available_bases:
+                console.error(
+                    "Authored commit arrived after review/documentation checks; "
+                    "repeat the existing closing workflow for current HEAD."
+                )
+                return False
+            # This is the actual base selected by the successful sync, including
+            # its documented local fallback after a failed fetch.
+            resolved_base = parents[2]
+        if not _gate_knowledge_valid(config, root, resolved_base):
+            return False
+        if current != reviewed:
+            from wade.services.knowledge_reconcile import unchanged_knowledge_sync
+
+            if not unchanged_knowledge_sync(
+                root, config.knowledge, reviewed, resolved_base, current
+            ):
+                console.error(
+                    "Knowledge content/history changed or is ambiguous during sync; "
+                    "repeat review and documentation checks for current HEAD."
+                )
+                return False
+        if git_knowledge.resolve_commit(root, "HEAD") != current:
+            console.error("HEAD changed during closing validation; re-run the closing workflow.")
+            return False
+    except (ValueError, GitError) as exc:
+        console.error(f"Cannot bind closing candidate: {exc}")
+        return False
+    if candidate is not None:
+        candidate.approved_commit = current
+        candidate.effective_base_commit = resolved_base
+    return True
 
 
 def _gate_documentation_decision(
@@ -503,37 +582,40 @@ def _gate_documentation_decision(
     return False
 
 
-def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
-    """Refuse when the knowledge file is structurally corrupt (e.g. a union merge).
-
-    ``merge=union`` keeps both sides of a conflict with no structural awareness, so a
-    rewrite-in-place knowledge edit diverging from an append can leave a malformed
-    ``KNOWLEDGE.md`` (duplicate entry headings) that merges cleanly and would ship
-    undetected. This gate runs :func:`validate_knowledge_file` on the worktree's own
-    knowledge file — the one about to be pushed and merged — so such corruption is
-    caught before it reaches main. No-op when knowledge is disabled.
-    """
+def _gate_knowledge_valid(
+    config: ProjectConfig,
+    worktree_root: Path,
+    effective_base: str | None = None,
+) -> bool:
+    """Read-only committed-tree reconciliation after sync, fail closed on corruption."""
     if not config.knowledge.enabled:
         return True
-    from wade.utils.knowledge_file import (
-        resolve_knowledge_path,
-        validate_knowledge_file,
-    )
+    from wade.services.knowledge_reconcile import reconcile_knowledge, render_report
 
     try:
-        path = resolve_knowledge_path(worktree_root, config.knowledge)
-    except ValueError:
-        return True  # misconfigured knowledge.path is not this gate's concern
-    problems = validate_knowledge_file(path)
-    if not problems:
-        return True
-    console.error(
-        f"{config.knowledge.path} failed structural validation — a merge may have corrupted it."
-    )
-    for problem in problems:
-        console.detail(problem)
-    console.hint("Repair the knowledge file (dedupe entries / fix headings), commit, then re-run.")
-    return False
+        from wade.git.knowledge import resolve_completion_base
+
+        resolved_base = (
+            resolve_completion_base(worktree_root, effective_base) if effective_base else None
+        )
+        report = reconcile_knowledge(
+            worktree_root,
+            config.knowledge,
+            main_ref=config.project.main_branch,
+            effective_base=resolved_base,
+        )
+        checked_head = git_repo.rev_parse(worktree_root, "HEAD")
+    except (ValueError, OSError, GitError) as exc:
+        console.error(f"Knowledge reconciliation failed: {exc}")
+        return False
+    console.detail(render_report(report))
+    if report.checked_commit != checked_head:
+        console.error("HEAD changed during knowledge reconciliation; re-run done.")
+        return False
+    if not report.valid or report.local_dirty_paths:
+        console.error("Knowledge history is corrupt or uncommitted; repair/commit and re-run done.")
+        return False
+    return True
 
 
 def _title_fix_hint(config: ProjectConfig, issue_number: str) -> str:
@@ -989,6 +1071,9 @@ def _push_branch_with_recovery(
     branch: str,
     worktree_path: Path | None,
     marker_root: Path,
+    config: ProjectConfig | None = None,
+    effective_base: str | None = None,
+    expected_head: str | None = None,
 ) -> bool:
     """Push *branch*, recovering interactively from a non-fast-forward rejection.
 
@@ -1009,9 +1094,65 @@ def _push_branch_with_recovery(
       no stale ``done@<sha>`` may linger (which would tell the Stop hook the
       session finished and let the next push skip the backstop).
     """
-    _write_done_marker(marker_root, repo_root, branch)
+    push_root = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
+    if config is None:
+        from wade.config.loader import load_config
+
+        config = load_config(push_root)
+
+    def candidate_matches() -> bool:
+        if expected_head is None:
+            return True
+        try:
+            matches = git_repo.rev_parse(push_root, "HEAD") == expected_head
+        except GitError:
+            matches = False
+        if not matches:
+            console.error(
+                "HEAD no longer matches the approved closing candidate; repeat review/docs."
+            )
+            markers.clear_markers(marker_root, "done")
+        return matches
+
+    def ready() -> bool:
+        if not candidate_matches():
+            return False
+        if not git_repo.is_clean(push_root):
+            console.error("Working tree changed after completion gates; commit and re-run done.")
+            markers.clear_markers(marker_root, "done")
+            return False
+        if not _gate_knowledge_valid(config, push_root, effective_base):
+            markers.clear_markers(marker_root, "done")
+            return False
+        if not git_repo.is_clean(push_root):
+            console.error("Working tree changed during reconciliation; commit and re-run done.")
+            markers.clear_markers(marker_root, "done")
+            return False
+        return candidate_matches()
+
+    def mark_candidate() -> None:
+        if expected_head is not None:
+            markers.write_marker(marker_root, "done", expected_head)
+        else:
+            _write_done_marker(marker_root, repo_root, branch)
+
+    def push_candidate(*, force: bool = False) -> None:
+        if expected_head is not None:
+            git_repo.push_branch(
+                repo_root, branch, set_upstream=True, force=force, source_commit=expected_head
+            )
+        elif force:
+            git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
+        else:
+            git_repo.push_branch(repo_root, branch, set_upstream=True)
+
+    if not ready():
+        return False
+    mark_candidate()
     try:
-        git_repo.push_branch(repo_root, branch, set_upstream=True)
+        push_candidate()
+        if not ready():
+            return False
         console.success("Branch pushed.")
         return True
     except GitError as e:
@@ -1055,8 +1196,12 @@ def _push_branch_with_recovery(
                 return False
             # The merge advanced the branch tip — re-key the marker to it so the
             # retry push satisfies the backstop.
-            _write_done_marker(marker_root, repo_root, branch)
-            git_repo.push_branch(repo_root, branch, set_upstream=True)
+            if not ready():
+                return False
+            mark_candidate()
+            push_candidate()
+            if not ready():
+                return False
             console.success("Merged the remote and pushed.")
             return True
         except GitError as e:
@@ -1067,7 +1212,11 @@ def _push_branch_with_recovery(
         # Force-push sends the same local tip, so the marker from the initial
         # write still matches — no re-write needed.
         try:
-            git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
+            if not ready():
+                return False
+            push_candidate(force=True)
+            if not ready():
+                return False
             console.success("Force-pushed with lease.")
             return True
         except GitError as e:
@@ -1189,6 +1338,8 @@ def _done_via_pr(
     *,
     review_status: ReviewStatus | None = None,
     trigger_bots: bool | None = None,
+    expected_head: str | None = None,
+    expected_base: str | None = None,
 ) -> bool:
     """Finalize implementation — update existing draft PR or create a new one.
 
@@ -1238,10 +1389,19 @@ def _done_via_pr(
     # `.wade/done@<pushed sha>` right before each push (so `done`'s own push
     # satisfies the pre-push backstop and the Stop hook reads the session as
     # finalized) and clears it on any push failure. A new commit changes the sha
-    # and invalidates the marker.
+    # and invalidates the marker. A later PR-body read/write failure also clears
+    # it, because a successful push alone does not complete finalization.
     marker_root = worktree_path or repo_root
     console.step("Pushing branch...")
-    if not _push_branch_with_recovery(repo_root, branch, worktree_path, marker_root):
+    if not _push_branch_with_recovery(
+        repo_root,
+        branch,
+        worktree_path,
+        marker_root,
+        config,
+        expected_base or main_branch,
+        expected_head,
+    ):
         return False
 
     # Check for existing PR (expected from plan or implement bootstrap).
@@ -1331,57 +1491,68 @@ def _done_via_pr(
             logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         def _transform(body: str) -> str:
-            # Keep existing content; refresh close/parent refs; rewrite ONLY
-            # wade's own marker blocks so a concurrent edit elsewhere survives (A4).
-            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
-            # Remove the prior marked blocks FIRST: the legacy heading stripper is
-            # not marker-aware, so running it on a body that still contains the
-            # marked block would match the `## Summary` *inside* the block,
-            # orphan the start marker, and drop the end marker (leaving an
-            # unbalanced pair remove_marker_block can no longer clean). Removing
-            # both wade blocks up front also keeps re-runs idempotent (the
-            # review-status block is replaced in place, never duplicated). After
-            # the marked blocks are gone, strip any genuinely legacy unmarked
-            # heading.
-            body = remove_marker_block(body, SUMMARY_MARKER_START, SUMMARY_MARKER_END)
-            body = remove_marker_block(body, REVIEW_STATUS_MARKER_START, REVIEW_STATUS_MARKER_END)
-            body = _strip_summary_section(body)
-
-            # Compose wade-owned blocks in order: summary, then review-status.
-            blocks: list[str] = []
+            # Select both outgoing ranges from the same original parse. Never
+            # authorize or reject an intermediate cleared projection.
             if summary_content:
-                blocks.append(
-                    build_marked_block(
-                        SUMMARY_MARKER_START, SUMMARY_MARKER_END, f"## Summary\n\n{summary_content}"
+                try:
+                    projection_structure = scan_markdown_structure(
+                        "<!-- wade:summary:start -->\n"
+                        + summary_content
+                        + "\n<!-- wade:summary:end -->"
                     )
-                )
-            if review_status is not None:
-                blocks.append(
-                    build_marked_block(
-                        REVIEW_STATUS_MARKER_START,
-                        REVIEW_STATUS_MARKER_END,
-                        _render_review_status(review_status),
-                    )
-                )
-            if not blocks:
-                return body.rstrip("\n") + "\n"
-            joined = "\n\n".join(blocks)
-            # Keep ordering content → [summary, review-status] → impl-usage.
-            marker_pos = body.find(IMPL_USAGE_MARKER_START)
-            if marker_pos != -1:
-                before = body[:marker_pos].rstrip("\n")
-                after = body[marker_pos:]
-                return f"{before}\n\n{joined}\n\n{after}\n"
-            return body.rstrip("\n") + "\n\n" + joined + "\n"
+                    projection_structure.owned("summary")
+                except MarkdownStructureError as exc:
+                    raise MarkdownStructureError(f"PR-SUMMARY.md: {exc}") from exc
+            return replace_owned_sections(
+                body,
+                [
+                    OwnedSectionReplacement(
+                        name="summary",
+                        heading="Summary",
+                        content=f"## Summary\n\n{summary_content}" if summary_content else "",
+                        before=("review-status", "impl-usage"),
+                    ),
+                    OwnedSectionReplacement(
+                        name="review-status",
+                        content=_render_review_status(review_status)
+                        if review_status is not None
+                        else "",
+                        after=("summary",),
+                        before=("impl-usage",),
+                    ),
+                ],
+                transform_survivors=lambda surviving: _apply_pr_refs(
+                    surviving, issue_number, close_issue, parent_issue
+                ),
+            )
 
-        if not update_body_preserving_markers(
-            read_body=lambda: git_pr.get_pr_body(repo_root, pr_number) or "",
-            write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
-            transform=_transform,
-            warn=console.warn,
-            label=f"PR #{pr_number} body",
-        ):
-            console.error("Could not update the PR body.")
+        def _write_body(body: str) -> bool:
+            # Budget trimming runs after the transform; validate its result too.
+            try:
+                scan_markdown_structure(body)
+            except MarkdownStructureError as exc:
+                raise MarkdownStructureError(f"generated PR body: {exc}") from exc
+            return git_pr.update_pr_body(repo_root, pr_number, body)
+
+        try:
+            body_updated = update_body_preserving_markers(
+                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                write_body=_write_body,
+                transform=_transform,
+                warn=console.warn,
+                label=f"PR #{pr_number} body",
+            )
+        except MarkdownStructureError as exc:
+            console.error(f"Unsafe PR body or new summary: {exc}", markup=False)
+            console.hint("Repair the current PR body or PR-SUMMARY.md, then retry done.")
+            body_updated = False
+        if not body_updated:
+            # Push needs the marker for its backstop, but a body read/write
+            # failure means this finalization has not completed. Retrying must
+            # read the current remote body again, never synthesize an empty one.
+            markers.clear_markers(marker_root, "done")
+            console.error("Could not read or update the current PR body.")
+            console.hint("Re-run this session's done command to retry after resolving access.")
             return False
         console.success("PR body updated with summary.")
 
@@ -1433,6 +1604,17 @@ def _done_via_pr(
             console.success(f"PR created: {pr_url}")
         except Exception as e:
             console.error(f"PR creation failed: {e}")
+            return False
+
+    if expected_head is not None:
+        final_root = worktree_path or repo_root
+        try:
+            unchanged = git_repo.rev_parse(final_root, "HEAD") == expected_head
+        except GitError:
+            unchanged = False
+        if not unchanged:
+            markers.clear_markers(marker_root, "done")
+            console.error("HEAD changed during PR finalization; repeat the closing workflow.")
             return False
 
     # Remove in-progress label
