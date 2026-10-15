@@ -278,3 +278,32 @@ def test_generic_repository_pick_filter_overrides_current_repository(
         json.loads(line)["query"].startswith("mutation")
         for line in project_board.read_text().splitlines()
     )
+
+
+def test_assignee_login_case_keeps_complete_wip_count_and_selection(
+    e2e_repo: Path, mock_gh_cli: MockGhCli, project_board: Path
+) -> None:
+    config = yaml.safe_load((e2e_repo / ".wade.yml").read_text())
+    config["github_projects"]["wip"].update(pool="assignee", limit=2)
+    (e2e_repo / ".wade.yml").write_text(yaml.safe_dump(config))
+    state = json.loads(mock_gh_cli["state_file"].read_text())
+    for item in state["projects"]["items"]:
+        item["content"]["assignees"] = {
+            "nodes": [{"id": "U_DEV", "login": "Dev"}],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }
+    state["projects"]["values"]["I2"][1].update(optionId="DOING", name="Doing")
+    mock_gh_cli["state_file"].write_text(json.dumps(state))
+    canonical = _run(["project", "pick", "--assignee", "Dev", "--json"], e2e_repo)
+    lower = _run(["project", "pick", "--assignee", "dev", "--json"], e2e_repo)
+    assert canonical.returncode == lower.returncode == 0
+    expected = _parse_json_output(canonical.stdout)
+    assert _parse_json_output(lower.stdout) == expected
+    assert expected["current_wip"] == 1 and expected["available_slots"] == 1
+    assert [row["item"]["number"] for row in expected["rows"]] == [1]
+    assert expected["rows"][0]["item"]["assignees"] == ["Dev"]
+    assert json.loads(mock_gh_cli["state_file"].read_text())["projects"]["writes"] == []
+    assert not any(
+        json.loads(line)["query"].startswith("mutation")
+        for line in project_board.read_text().splitlines()
+    )

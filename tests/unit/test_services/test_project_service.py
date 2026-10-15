@@ -635,3 +635,43 @@ def test_pick_explicit_repository_filter_never_injects_origin(alias: str) -> Non
         )
     assert [row.item.repository for row in result.rows] == ["other/repo"]
     assert result.current_wip == 1 and result.available_slots == 2 and provider.writes == []
+
+
+@pytest.mark.parametrize("login", ["Dev", "dev", "DEV"])
+def test_assignee_identity_case_preserves_wip_capacity_and_selection(login: str) -> None:
+    config = settings()
+    config.wip.pool = "assignee"
+    config.wip.limit = 2
+    result = evaluate_items(
+        [item(1, assignees=["Dev"]), item(2, status="DOING", assignees=["Dev"])],
+        ProjectRequest(operation="pick", repository="org/repo", assignee=login),
+        config,
+    )
+    assert result.current_wip == 1 and result.available_slots == 1
+    assert [row.item.number for row in result.rows] == [1]
+    assert result.rows[0].item.assignees == ["Dev"]
+
+
+@pytest.mark.parametrize("alias", ["assignees", "owners"])
+def test_generic_assignee_identity_filters_preserve_api_spelling(alias: str) -> None:
+    config = settings()
+    provider = FakeProvider(
+        [item(1, assignees=["Dev"]), item(2, status="DOING", assignees=["Dev"])]
+    )
+    if alias == "owners":
+        config.fields[alias] = ProjectFieldRef(id="USERS", type="ASSIGNEES")
+        provider.board.fields.append(ProjectField(id="USERS", name="Assignees", type="ASSIGNEES"))
+    with patch("wade.services.check_service._github_hostname", return_value="github.com"):
+        result = execute(
+            ProjectRequest(operation="pick", repository="org/repo", filters=[f"{alias}=dev"]),
+            project_config=ProjectConfig(github_projects=config),
+            provider=provider,
+        )
+    assert [row.item.assignees for row in result.rows] == [["Dev"]]
+    assert result.current_wip == 1 and provider.writes == []
+    assert (
+        evaluate_items(
+            [item(1, labels=["Bug"])], ProjectRequest(operation="items", label=["bug"])
+        ).rows
+        == []
+    )

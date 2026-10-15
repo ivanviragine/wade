@@ -278,6 +278,11 @@ def _matches(
             ):
                 value, expected = value.casefold(), expected.casefold()
             if isinstance(value, list):
+                if isinstance(expected, str) and (
+                    alias == "assignees" or (field is not None and field.type == "ASSIGNEES")
+                ):
+                    value = [login.casefold() for login in value]
+                    expected = expected.casefold()
                 if expected not in value:
                     return False
             elif value != expected:
@@ -437,7 +442,9 @@ def evaluate(
             if wip.pool == "assignee":
                 if not item.assignees_complete:
                     raise ProjectError("Incomplete assignee data prevents a complete WIP pool.")
-                if request.assignee not in item.assignees:
+                assert request.assignee is not None
+                requested_login = request.assignee.casefold()
+                if requested_login not in {login.casefold() for login in item.assignees}:
                     continue
             value = _value(item, wip.status, bindings)
             field_value = item.values.get(bindings.fields[wip.status].id)

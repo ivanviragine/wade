@@ -215,9 +215,10 @@ wade project items --owner octocat --owner-kind user --number 3 --hostname githu
 
 Filters are exact `alias=value`, repeatable with AND semantics; quote shell spaces.
 `--repository` requires `owner/repo`; repository identity filters follow GitHub’s
-case-insensitive owner/name rules, while output retains canonical API spelling
-and other text filters remain case-sensitive. `--kind` accepts Issue, PullRequest
-or DraftIssue. `--status` uses the explicit `wip.status` mapping. Selected option
+case-insensitive owner/name rules. Assignee filters and assignee-pool WIP counts
+likewise compare GitHub logins without case; output retains canonical API
+spelling. Other text and label filters remain case-sensitive. `--kind` accepts
+Issue, PullRequest or DraftIssue. `--status` uses the explicit `wip.status` mapping. Selected option
 filters accept IDs, unique exact names or configured aliases. Labels, assignees
 and multiselect fields support membership filters. Numeric filters reject
 nonfinite values; date filters require canonical `YYYY-MM-DD`. Listing can
