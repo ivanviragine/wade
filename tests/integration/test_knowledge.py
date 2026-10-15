@@ -21,6 +21,48 @@ def _write_knowledge_config(
     config["knowledge"] = {"enabled": enabled, "path": path}
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
+    # Enabling knowledge in an existing session requires an explicit refresh.
+    from wade.config.loader import load_config
+    from wade.models.workflow import SessionKind
+    from wade.services.session_composition_service import compose_session
+
+    compose_session(
+        project_root,
+        project_root,
+        load_config(project_root),
+        kind=SessionKind.IMPLEMENTATION,
+        task_id="42",
+        refresh=True,
+    )
+
+
+@pytest.fixture
+def tmp_wade_project(tmp_wade_project: Path) -> Path:
+    """Exercise CLI writes in a genuinely composed owning linked worktree."""
+    import subprocess
+
+    from wade.config.loader import load_config
+    from wade.models.workflow import SessionKind
+    from wade.services.session_composition_service import compose_session
+
+    main = tmp_wade_project
+    subprocess.run(["git", "add", ".wade.yml"], cwd=main, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "chore: fixture configuration"],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    root = main.parent / "owned-knowledge"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "feat/42-owned", str(root)],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    compose_session(root, main, load_config(root), kind=SessionKind.IMPLEMENTATION, task_id="42")
+    return root
+
 
 class TestKnowledgeAdd:
     def test_add_appends_knowledge_entry(
@@ -39,7 +81,7 @@ class TestKnowledgeAdd:
         knowledge_path = tmp_wade_project / "docs" / "KNOWLEDGE.md"
         assert knowledge_path.exists()
         text = knowledge_path.read_text(encoding="utf-8")
-        assert "| plan | Issue #7" in text
+        assert "| plan | kind: note | Issue #7" in text
         assert "Prefer task labels over body metadata." in text
 
     def test_add_invalid_path_exits_cleanly(

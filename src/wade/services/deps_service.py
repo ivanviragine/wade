@@ -176,21 +176,12 @@ def parse_deps_output(
 # Cross-reference injection
 # ---------------------------------------------------------------------------
 
-_DEPS_SECTION_RE = re.compile(
-    r"## Dependencies\n.*?(?=\n## (?!Dependencies\n)|\Z)",
-    re.DOTALL,
-)
-
 
 def strip_deps_section(body: str) -> str:
-    """Remove existing ## Dependencies section from issue body."""
-    # Try regex first (handles Dependencies followed by another section)
-    result = _DEPS_SECTION_RE.sub("", body)
-    # Handle case where Dependencies is the last section
-    idx = result.find("## Dependencies")
-    if idx != -1:
-        result = result[:idx]
-    return result.rstrip("\n") + "\n" if result.strip() else ""
+    """Remove only a uniquely verified unmarked top-level legacy Dependencies."""
+    from wade.utils.markdown import strip_legacy_section
+
+    return strip_legacy_section(body, "Dependencies")
 
 
 def build_deps_section(
@@ -238,8 +229,12 @@ def apply_deps_to_issues(
     rewrites only wade's own block and preserves any concurrent edit to the rest
     of the issue body (A4). Returns number of successfully updated issues.
     """
-    from wade.utils.body_markers import enforce_body_budget, upsert_marked_block
-    from wade.utils.markdown import remove_marker_block
+    from wade.utils.body_markers import enforce_body_budget
+    from wade.utils.markdown import (
+        MarkdownStructureError,
+        replace_owned_section,
+        scan_markdown_structure,
+    )
 
     updated = 0
 
@@ -249,27 +244,25 @@ def apply_deps_to_issues(
         try:
             task = provider.read_task(issue_id)
             body = task.body
-            has_legacy = "## Dependencies" in body
-            has_marked = DEPS_MARKER_START in body
-            if not deps_inner and not has_legacy and not has_marked:
+            new_body = replace_owned_section(
+                body,
+                name="deps",
+                heading="Dependencies",
+                content=deps_inner,
+            )
+            if new_body == body:
                 continue
-
-            # Remove the prior marked block FIRST: strip_deps_section is not
-            # marker-aware, so running it on a body that still contains the block
-            # would cut at the ## Dependencies heading *inside* the markers and
-            # leave them unbalanced. After the marked block is gone, drop any
-            # genuinely legacy unmarked ## Dependencies, then upsert the fresh
-            # block — everything else is preserved verbatim.
-            cleaned = remove_marker_block(body, DEPS_MARKER_START, DEPS_MARKER_END)
-            cleaned = strip_deps_section(cleaned)
-            new_body = upsert_marked_block(cleaned, DEPS_MARKER_START, DEPS_MARKER_END, deps_inner)
             new_body = enforce_body_budget(
                 new_body, warn=console.warn, label=f"issue #{issue_id} body"
             )
 
+            scan_markdown_structure(new_body)
             provider.update_task(issue_id, body=new_body)
             console.detail(f"Updated #{issue_id} with dependency refs")
             updated += 1
+        except MarkdownStructureError as e:
+            console.warn(f"Skipped #{issue_id}: unsafe dependency body ({e}). Repair it and retry.")
+            logger.warning("deps.update_failed", issue=issue_id, error=str(e))
         except Exception as e:
             logger.warning("deps.update_failed", issue=issue_id, error=str(e))
 
@@ -388,6 +381,9 @@ def _run_delegation(
     sandbox: bool = DEFAULT_SANDBOX,
     operation: str | None = None,
     relaunch_command: str | None = None,
+    knowledge_task_ids: tuple[str, ...] = (),
+    knowledge_delegation_digest: str | None = None,
+    invocation_id: str | None = None,
 ) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -409,6 +405,9 @@ def _run_delegation(
         explicit_timeout=explicit_timeout,
         operation=operation,
         relaunch_command=relaunch_command,
+        knowledge_task_ids=knowledge_task_ids,
+        knowledge_delegation_digest=knowledge_delegation_digest,
+        invocation_id=invocation_id,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
@@ -728,11 +727,13 @@ def analyze_deps(
 
     valid_numbers = set(issue_numbers)
     task_titles: dict[str, str] = {}
+    verified_task_ids: list[str] = []
     if delegation_mode != DelegationMode.PROMPT:
         for num in issue_numbers:
             try:
                 task = provider.read_task(num)
                 task_titles[num] = task.title
+                verified_task_ids.append(task.id)
                 console.step(f"#{num}: {console.escape_markup(task.title)}")
             except Exception:
                 logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
@@ -787,6 +788,14 @@ def analyze_deps(
         # the dispatcher is common to every delegated operation, so it can only
         # name this one if the caller hands it the exact command to re-run.
         operation="the dependency analysis",
+        knowledge_delegation_digest=prepared_method.binding.digest,
+        invocation_id=(
+            prepared_method.operation_bundle.name if prepared_method.operation_bundle else None
+        ),
+        # A failed lookup or multiple destinations must remain unresolved.
+        knowledge_task_ids=(
+            tuple(verified_task_ids) if len(verified_task_ids) == len(issue_numbers) else ()
+        ),
         relaunch_command=build_relaunch_command(
             ["wade", "task", "deps", *issue_numbers],
             ai_tool=resolved_tool,

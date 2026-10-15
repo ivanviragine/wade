@@ -77,6 +77,27 @@ from wade.utils.safe_state import StateFileAccessError, StateFileIOError
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def isolate_parent_proposal_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, dict[str, object]]:
+    """Fake queue I/O in orchestration units; real durability/ownership has integration coverage."""
+    from types import SimpleNamespace
+
+    records: dict[str, dict[str, object]] = {}
+
+    def stage(
+        root: Path, config: object, entry_id: str, payload: dict[str, object], **kwargs: object
+    ) -> SimpleNamespace:
+        identity = str(payload.get("event_id", (kwargs.get("operation_id"), entry_id)))
+        records.setdefault(identity, payload)
+        return SimpleNamespace(original_payload=records[identity])
+
+    monkeypatch.setattr("wade.services.knowledge_proposals.bind_completed_parent", lambda *_: None)
+    monkeypatch.setattr("wade.services.knowledge_proposals.stage_proposal", stage)
+    return records
+
+
 class TestPromptTemplate:
     def test_get_template_exists(self) -> None:
         template = get_plan_prompt_template()
@@ -415,6 +436,7 @@ def collected_harness(
             return_value={"number": "12", "url": "https://example.test/pull/12"},
         ),
         patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=True),
+        patch("wade.git.pr.list_prs", return_value=[]),
         patch("wade.services.plan_service.set_terminal_title"),
         patch("wade.services.plan_service.start_title_keeper"),
         patch("wade.services.plan_service.stop_title_keeper"),
@@ -1356,10 +1378,10 @@ class TestPlanOrchestrator:
         self,
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
+        isolate_parent_proposal_binding: dict[str, dict[str, object]],
     ) -> None:
         from wade.models.workflow import SessionKind
         from wade.services import interactive_plan_service as interactive
-        from wade.services.knowledge_service import staged_ratings_path
         from wade.services.session_composition_service import compose_session
 
         config, provider, _, root = collected_harness
@@ -1391,18 +1413,12 @@ class TestPlanOrchestrator:
             ),
         ):
             assert not plan(project_root=tmp_path, recover=root)
-            first_attempt = [
-                json.loads(line)
-                for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
-            ]
+            first_attempt = dict(isolate_parent_proposal_binding)
             assert len(first_attempt) == 1
 
             assert plan(project_root=tmp_path, recover=root)
 
-        retries = [
-            json.loads(line)
-            for line in staged_ratings_path(root).read_text(encoding="utf-8").splitlines()
-        ]
+        retries = isolate_parent_proposal_binding
         assert retries == first_attempt
         provider.create_task.assert_called_once()
 
@@ -2402,6 +2418,7 @@ class TestAttachPlanToExistingIssue:
     def test_attaches_single_plan_file_preserving_original_body(self, tmp_path: Path) -> None:
         provider = MagicMock()
         issue = Task(id="42", title="Some issue", body="Original body")
+        provider.read_task.return_value = issue
         plan_path = tmp_path / "PLAN.md"
         plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
         plan_file = PlanFile.from_markdown(plan_path)
@@ -2440,6 +2457,7 @@ class TestAttachPlanToExistingIssue:
             title="Some issue",
             body="Original body\n\n**Full plan**: PR #99",
         )
+        provider.read_task.return_value = issue
         plan_path = tmp_path / "PLAN.md"
         plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
         plan_file = PlanFile.from_markdown(plan_path)
@@ -3375,13 +3393,20 @@ class TestPlanExistingIssueBranch:
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
     ) -> None:
-        _, provider, _, _ = collected_harness
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
         with (
             patch("wade.services.plan_service._attach_plan_to_existing_issue", return_value=False),
-            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
         ):
             assert not plan(project_root=tmp_path, issue_id="330")
-        preserve.assert_called_once()
+        cleanup.assert_not_called()
+        assert (root / ".wade/plans/PLAN.md").is_file()
+        assert (root / ".wade/plans/handoff-binding.json").is_file()
+        assert (root / ".wade/session/manifest.json").is_file()
         provider.create_task.assert_not_called()
 
     def test_handoff_cleanup_failure_requires_recovery(

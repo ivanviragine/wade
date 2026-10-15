@@ -72,12 +72,38 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 > GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
 > code still exists but is inert; removal is tracked as #357 C5.
 
+**Knowledge authority** lives in typed append-only receipts and committed Git
+snapshots. Main/detached/bounded workers observe via ignored Git-common-dir
+owner-bound proposals; never drain generic main feedback into a worktree.
+Acceptance requires original parent/task/content proof and grants no correctness.
+Keep assessment, publication, usefulness and historical relationships separate.
+Pure knowledge parsers/folds in `utils/knowledge_file.py` and
+`utils/knowledge_events.py` may import leaf models, never services; Git proof
+queries stay in `git/knowledge.py`. See `docs/dev/knowledge.md`.
+
+**Summary, dependency, and explicit plan-body replacement** share the
+offset-preserving scanner in `utils/markdown.py`. It protects standalone managed
+ranges and fenced code,
+limits legacy migration to unique column-zero H2 sections, and rejects malformed
+input or rendered output before writing. CommonMark container facts come from
+`markdown-it-py`; WADE keeps original byte slices and rejects incomplete parses.
+Plan refresh selects a stable task PR identity once for retarget, replacement,
+and pin reconciliation; the plan extractor uses the same verified owned span.
+Generic resume retains its existing plan.
+Other Markdown consumers retain their existing contracts; do not assume the
+older extraction/removal helpers are
+structural scanners. See `docs/dev/architecture.md` for ownership and boundaries.
+
 > **Closing-review state** lives in worktree files, not the immutable session
 > bundle: binding-aware receipts are under `.wade/reviews/`, and an active
 > PR-comment feedback cycle is under `.wade/review-cycles/`. The cycle preserves
 > its pre-edit baseline and feedback history across refreshes and is cleared
 > only after a successful PR-comment completion; unsafe state must fall back to
-> a full review.
+> a full review. Launched reviewer failures consume one commit-and-binding pass
+> without certifying completion; never-launched, prompt/preflight, skipped, and
+> explicitly cancelled results are exempt. Failed receipts cannot become review
+> baselines; only the existing implementation cap policy permits completion without
+> a satisfying receipt.
 
 > **Deterministic git-hook install/reconcile/build logic lives in `git/hooks.py`**
 > (git layer), not `skills/installer.py`. Packaged template-asset loaders
@@ -106,6 +132,17 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 
 > Full package structure, command dispatch, config system, and subsystem details: see `docs/dev/architecture.md`
 
+### GitHub Projects v2
+
+`project_service.py` directly composes the separate `GitHubProjectsProvider`;
+Projects operations are not AbstractTaskProvider methods. Pure `models/project.py`
+models define the optional top-level `github_projects` settings and typed results.
+Keep project identity, project-item ID, content ID and qualified repository/task
+identity distinct. Read/default sync never writes; only explicit `sync --apply`
+can update configured existing numeric fields, with full baseline refresh and
+sequential drift/readback checks. Preserve the independent best-effort startup
+Status move. See README and developer architecture/testing docs for contracts.
+
 ### Key Design Patterns
 
 - **AI Tool Adapters via crossby**: `AbstractAITool` and every tool-specific adapter (Claude, Cursor, Copilot, Codex, OpenCode, Antigravity, Antigravity CLI, VS Code) live in the external `crossby` dependency, not this repo. Wade's services import `crossby.ai_tools` and `crossby.models.ai` directly. Adding a new AI tool means contributing to crossby, not wade.
@@ -113,6 +150,26 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
+
+Scaffold retargets use a guarded git-layer hard reset: tracked edits and
+untracked/ignored paths obstructing the pinned destination tree must refuse
+before mutation. Noncolliding session output remains allowed. The guard also
+applies to rollback; an obstructed rollback preserves data and reports manual
+recovery, rather than claiming branch/PR consistency was restored.
+
+Review worktree recovery stores destination-bound incomplete records under the
+shared Git directory's `.wade/review-recovery/`, outside frozen session files.
+Startup must refuse a retained or unsafe marker before PR lookup, quiet success
+or agent bootstrap. Guarded recovery reserves Git branch ownership before its
+atomic old-tip backup and expected-old alignment; partial worktrees and recovery
+refs are never automatically removed. See `docs/dev/architecture.md`.
+
+Both session done commands require successful draft-to-ready promotion by
+default. Failed readiness revokes only the active root's done markers and retains
+pushed work, PR-body updates and feedback/review evidence for retry. Fallback PR
+creation must verify the returned PR's actual identity, open state and Boolean
+draft status. `--draft` preserves drafts without demoting ready PRs; completion-time
+bot offers/posts are deferred for actual drafts, including with `--trigger-bots`.
 
 ## Design Principles
 

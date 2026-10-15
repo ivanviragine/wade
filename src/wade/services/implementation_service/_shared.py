@@ -11,6 +11,8 @@ import contextlib
 import re
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
@@ -18,10 +20,12 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 
 __all__ = [
+    "DraftPRTarget",
     "extract_issue_from_branch",
     "find_existing_branch_for_issue",
     "find_open_pr_branch_for_issue",
     "find_worktree_path",
+    "resolve_draft_pr_target",
     "resolve_task_branch",
 ]
 
@@ -156,7 +160,9 @@ def resolve_task_branch(
 _OPEN_PR_SCAN_LIMIT = 1000
 
 
-def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str | None:
+def find_open_pr_branch_for_issue(
+    repo_root: Path, issue_id: int | str, *, require_complete: bool = False
+) -> str | None:
     """Head branch of the OPEN PR that belongs to *issue_id*, or ``None``.
 
     Where :func:`find_existing_branch_for_issue` matches branches by name, this
@@ -171,12 +177,15 @@ def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str |
     trusted as complete — either the listing failed, or a full page came back so an
     open PR could exist beyond it. Callers MUST NOT treat those as absence (a live
     PR may exist on another same-issue branch) and should abort/report rather than
-    bootstrap a duplicate.
+    bootstrap a duplicate. With ``require_complete=True``, even a full page
+    containing a match refuses: replanning must not select from a truncated set.
     """
     issue = str(int(issue_id))
     open_prs = git_pr.list_prs(
         repo_root, state="open", limit=_OPEN_PR_SCAN_LIMIT, raise_on_error=True
     )
+    if require_complete and len(open_prs) >= _OPEN_PR_SCAN_LIMIT:
+        raise git_pr.GhCliError("open PR listing is incomplete; retry with a complete result")
     matches = [pr for pr in open_prs if extract_issue_from_branch(pr.head_ref_name) == issue]
     if matches:
         # Deterministic when several open PRs carry the issue number (rare): the
@@ -191,3 +200,32 @@ def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str |
             f"more than {_OPEN_PR_SCAN_LIMIT} open PRs — cannot rule out an open PR for #{issue}"
         )
     return None
+
+
+class DraftPRTarget(BaseModel):
+    """One task identity decision carried through guarded planning persistence."""
+
+    branch_name: str
+    lookup: git_pr.PRLookup
+
+
+def resolve_draft_pr_target(
+    repo_root: Path, issue_id: str, title: str, branch_prefix: str
+) -> DraftPRTarget:
+    """Resolve a live task PR without allowing title drift or failed lookup reuse."""
+    branch = resolve_task_branch(repo_root, issue_id, title, branch_prefix)
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.lookup_failed:
+        raise git_pr.GhCliError(f"Could not look up the PR for branch {branch}")
+    if lookup.is_open:
+        return DraftPRTarget(branch_name=branch, lookup=lookup)
+    live_branch = find_open_pr_branch_for_issue(repo_root, issue_id, require_complete=True)
+    if live_branch is not None:
+        live_lookup = git_pr.get_pr_for_branch(repo_root, live_branch)
+        if live_lookup.lookup_failed or not live_lookup.is_open:
+            raise git_pr.GhCliError(f"Could not verify the open PR for branch {live_branch}")
+        return DraftPRTarget(branch_name=live_branch, lookup=live_lookup)
+    return DraftPRTarget(
+        branch_name=git_branch.make_branch_name(branch_prefix, int(issue_id), title),
+        lookup=git_pr.PRLookup(),
+    )

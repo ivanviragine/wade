@@ -19,6 +19,18 @@ from wade.services.knowledge_service import (
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def isolate_owned_cli_formatting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dispatch/format units isolate ownership, covered by real-Git integration."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("wade.services.knowledge_ownership.assert_author", MagicMock())
+    monkeypatch.setattr("wade.services.knowledge_ownership.assert_author_path", MagicMock())
+    monkeypatch.setattr(
+        "wade.services.knowledge_ownership.actor", MagicMock(return_value=MagicMock(author=True))
+    )
+
+
 def _write_ratings(ratings_path: Path, counters: dict[str, dict[str, int]]) -> None:
     """Write a JSONL vote log that folds to the given per-entry counter dict.
 
@@ -142,7 +154,7 @@ class TestKnowledgeGetCommand:
         with patch("wade.config.loader.load_config", return_value=config):
             result = runner.invoke(app, ["knowledge", "get"])
         assert result.exit_code == 0
-        assert "[+3/-1]" in result.output
+        assert "[utility:+3/-1; unverified; unavailable]" in result.output
 
     def test_search_on_empty_file_prints_no_results(self, tmp_path: Path) -> None:
         # Create knowledge file with only template header
@@ -227,7 +239,7 @@ class TestKnowledgeGetCommand:
         assert "Plain content." in result.output
         assert "[+" not in result.output
 
-    def test_stale_filter_hides_entry_by_default(self, tmp_path: Path) -> None:
+    def test_stale_feedback_never_hides_entry_by_default(self, tmp_path: Path) -> None:
         content = (
             KNOWLEDGE_TEMPLATE
             + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nStale content.\n\n---\n"
@@ -243,7 +255,7 @@ class TestKnowledgeGetCommand:
         with patch("wade.config.loader.load_config", return_value=config):
             result = runner.invoke(app, ["knowledge", "get"])
         assert result.exit_code == 0
-        assert "Stale content." not in result.output
+        assert "Stale content." in result.output
         assert "Fresh content." in result.output
 
     def test_no_filter_bypasses_stale_filter(self, tmp_path: Path) -> None:
@@ -274,7 +286,7 @@ class TestKnowledgeGetCommand:
         with patch("wade.config.loader.load_config", return_value=config):
             result = runner.invoke(app, ["knowledge", "get", "--no-filter"])
         assert result.exit_code == 0
-        assert "[+2/-0/stale:1]" in result.output
+        assert "[utility:+2/-0/stale:1; unverified; unavailable]" in result.output
 
 
 class TestKnowledgeRateCommand:
@@ -660,61 +672,24 @@ class TestThrowawaySessionGate:
             )
         assert result.exit_code == 0
 
-    def test_rate_stages_vote_instead_of_writing_canonical_sidecar(self, tmp_path: Path) -> None:
-        from wade.services.knowledge_service import mark_throwaway_knowledge_session
+    @pytest.mark.parametrize("worktree,attached", [(True, False), (False, False), (False, True)])
+    def test_observers_queue_feedback_without_tracked_writes(
+        self, tmp_path: Path, worktree: bool, attached: bool
+    ) -> None:
+        from unittest.mock import MagicMock
 
         config = self._config(tmp_path)
-        mark_throwaway_knowledge_session(tmp_path)
         with (
             patch("wade.config.loader.load_config", return_value=config),
-            patch("wade.git.repo.is_worktree", return_value=True),
-            patch("wade.git.repo.is_head_attached", return_value=False),
-            patch(
-                "wade.services.knowledge_service.resolve_canonical_knowledge_path",
-                side_effect=AssertionError("detached rating must not access the main checkout"),
-            ),
+            patch("wade.services.knowledge_ownership.actor", return_value=MagicMock(author=False)),
+            patch("wade.services.knowledge_proposals.stage_proposal") as stage,
         ):
             result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
-
         assert result.exit_code == 0
-        assert (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").is_file()
+        assert "historical" in result.output
+        stage.assert_called_once()
+        assert stage.call_args.args[2] == "a1b2c3d4"
         assert not (tmp_path / "KNOWLEDGE.ratings.jsonl").exists()
-
-    def test_rate_in_unmarked_detached_checkout_writes_the_local_sidecar(
-        self, tmp_path: Path
-    ) -> None:
-        # A primary checkout parked on a detached HEAD (CI checkout, bisect,
-        # `git checkout <sha>`) has no WADE parent to flush a staged vote — a
-        # vote staged there would be stranded forever, so it must land in the
-        # ordinary ratings sidecar instead (#462 review).
-        config = self._config(tmp_path)
-        with (
-            patch("wade.config.loader.load_config", return_value=config),
-            patch("wade.git.repo.is_worktree", return_value=False),
-            patch("wade.git.repo.is_head_attached", return_value=False),
-        ):
-            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
-
-        assert result.exit_code == 0
-        assert not (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").exists()
-        assert (tmp_path / "KNOWLEDGE.ratings.jsonl").is_file()
-
-    def test_rate_in_unmarked_detached_worktree_writes_the_local_sidecar(
-        self, tmp_path: Path
-    ) -> None:
-        # Same for a hand-made `git worktree add --detach`: no marker, no parent
-        # that would ever flush it, so never stage.
-        config = self._config(tmp_path)
-        with (
-            patch("wade.config.loader.load_config", return_value=config),
-            patch("wade.git.repo.is_worktree", return_value=True),
-            patch("wade.git.repo.is_head_attached", return_value=False),
-        ):
-            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
-
-        assert result.exit_code == 0
-        assert not (tmp_path / ".wade" / "knowledge-ratings-staged.jsonl").exists()
-        assert (tmp_path / "KNOWLEDGE.ratings.jsonl").is_file()
 
 
 class TestKnowledgeStatusCommand:
