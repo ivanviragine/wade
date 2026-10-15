@@ -6,6 +6,7 @@ Also hosts worktree staleness classification, shared by the cleanup module.
 from __future__ import annotations
 
 import json
+import shlex
 from collections import Counter
 from collections.abc import Callable
 from enum import StrEnum
@@ -17,11 +18,13 @@ from pydantic import BaseModel, Field
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
+from wade.git import merge_evidence as git_merge
 from wade.git import repo as git_repo
 from wade.git import stash as git_stash
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.merge_evidence import MergeAssessmentCache, MergeEvidenceState
 from wade.models.session import (
     SyncEvent,
     SyncEventType,
@@ -59,6 +62,7 @@ def classify_staleness(
     task: Task | None = None,
     task_lookup_attempted: bool = False,
     task_lookup_failed: bool = False,
+    merge_cache: MergeAssessmentCache | None = None,
 ) -> WorktreeState:
     """Classify a worktree's staleness.
 
@@ -107,14 +111,11 @@ def classify_staleness(
     if ahead == 0:
         return WorktreeState.STALE_EMPTY
 
-    # 3. Check if merged (merge-base equals branch tip)
-    try:
-        mb = git_repo.merge_base(repo_root, branch, main_branch)
-        tip = git_repo.rev_parse(repo_root, branch)
-        if mb == tip:
-            return WorktreeState.STALE_MERGED
-    except GitError:
-        logger.debug("staleness.merge_base_check_failed", exc_info=True)
+    # Exact merged-PR evidence handles squash/rebase without equating content
+    # similarity or a vanished tracking branch with historical merge proof.
+    assessment = git_merge.assess_branch(repo_root, branch, main_branch, merge_cache)
+    if assessment.state == MergeEvidenceState.VERIFIED:
+        return WorktreeState.STALE_MERGED
 
     # 4. Check if remote tracking branch gone
     try:
@@ -302,7 +303,11 @@ def _handle_stash_restoration(
     if apply_result.returncode == 0:
         if not git_stash.drop_stash_by_sha(stash_sha, cwd) and not json_output:
             console.warn(f"Restored the changes, but the stash entry {stash_sha} remains.")
-            console.hint(f"Remove it with: git stash drop {stash_sha}")
+            console.hint(
+                "Inspect SHA, ref and message; verify the current ref still names this "
+                "SHA before manually removing the selected entry."
+            )
+            console.command(f"git -C {shlex.quote(str(cwd))} stash list --format='%H %gd %gs'")
         emit(SyncEventType.STASH_RESTORED, stash_ref=stash_sha)
         if not json_output:
             console.success("Restored stashed changes.")
@@ -321,7 +326,11 @@ def _handle_stash_restoration(
             console.error(
                 "Could not restore stash after failed merge \N{EM DASH} changes preserved:"
             )
-        console.hint(f"Recover with: {recovery_cmd}")
+        console.hint(
+            "Resolve conflicts before retrying; recover an unavailable stash object first. "
+            "Run the apply command from this checkout: " + console.escape_markup(str(cwd))
+        )
+        console.command(recovery_cmd)
     return False
 
 

@@ -4,6 +4,198 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.5] — 2026-10-15
+
+### Bug Fixes
+
+- allow safe cleanup after multi-commit squash merges (#535) (d9e9665)
+
+## [v1.4.4] — 2026-10-15
+
+### Bug Fixes
+
+- preserve planning ownership across active runtime schema upgrades (#546) (dc55a53)
+
+## [v1.4.3] — 2026-10-15
+
+### Bug Fixes
+
+- _recover_worktree fetch fails on a diverged/force-pushed open-PR branch (#486) (49b3639)
+
+## [v1.4.2] — 2026-10-15
+
+### Bug Fixes
+
+- distinguish a reviewer that never launched from one that crashed (#485) (576cc61)
+
+## [v1.4.1] — 2026-10-15
+
+### Bug Fixes
+
+- enforce ready-for-review PR completion (#484) (626db05)
+
+## [v1.4.0] — 2026-10-15
+
+### Features
+
+- add GitHub Projects (v2) support: field-aware prioritization, sorting, and sync (#543) (1122e74)
+
+## [v1.3.1] — 2026-10-14
+
+### Bug Fixes
+
+- persist replacement plans when replanning an existing task (#536) (31c3e89)
+
+## [v1.3.0] — 2026-10-14
+
+### Features
+
+- make project knowledge evidence-bound and reconcile it at PR integration (#537) (5e0888c)
+
+## [v1.2.20] — 2026-10-14
+
+### Bug Fixes
+
+- preserve embedded plan sections during PR summary replacement (#533) (0756c6a)
+
+## [v1.2.19] — 2026-10-14
+
+### Bug Fixes
+
+- ignore fenced code examples when parsing Markdown tasks (#531) (ff9afcd)
+
+## [v1.2.18] — 2026-10-14
+
+### Bug Fixes
+
+- isolate Markdown task auto-commits from unrelated staged work (#529) (b9f6658)
+
+## [v1.2.17] — 2026-10-14
+
+### Bug Fixes
+
+- preserve copyable stash recovery commands at narrow terminal widths (#541) (f39e0a1)
+
+## [v1.2.16] — 2026-10-14
+
+### Bug Fixes
+
+- restore post-merge stashes by identity across worktrees (#528) (d141f0b)
+
+## [v1.2.15] — 2026-10-14
+
+### Bug Fixes
+
+- preserve untracked files when retargeting scaffold branches (#526) (8c51aee)
+
+## [v1.2.14] — 2026-10-14
+
+### Bug Fixes
+
+- commit synchronized uv.lock with automatic version bumps (#534) (3ff2e97)
+- refuse PR body updates when the current body cannot be read (#525) (d3e3be5)
+
+## [v1.2.13] — 2026-10-14
+
+### Bug Fixes
+
+- adopt Crossby native planning startup repair for Codex 0.162.1 (#527) (dd74170)
+
+## [v1.2.12] — 2026-10-13
+
+### Chores
+
+- bump Crossby to 0.38.2 for unpinned Codex Plan startup (#523) (a9bc7b8)
+
+## [v1.2.11] — 2026-10-12
+
+### Chores
+
+- bump Crossby to 0.38.1 for GPT-6.1 Sol and Claude 5.5 models (#522) (39f24a3)
+
+## [v1.2.10] — 2026-09-25
+
+### Chores
+
+- lock Crossby 0.37.2 for Codex Plan handoff (#521) (6dd4aa6)
+- prepare Crossby 0.37.2 Plan handoff bump (#519) (304f5df)
+
+### Other Changes
+
+- Bump Wade to 1.2.9 (#520) (324d626)
+
+## [v1.2.8] — 2026-09-25
+
+### Chores
+
+- bump Crossby dependency to 0.37.1 (#518) (d1253ff)
+
+## [v1.2.7] — 2026-09-25
+
+### Bug Fixes
+
+- preserve and recover completed handoffs after filesystem access denial (#516) (dc83f62)
+
+## [v1.2.6] — 2026-09-23
+
+### Chores
+
+- adopt Crossby 0.36 model catalogs and defaults (#517) (cc9ae47)
+
+## [v1.2.5] — 2026-09-16
+
+### Bug Fixes
+
+- launch Codex native UI with deferred prompt delivery (#514) (8424a77)
+
+## [v1.2.4] — 2026-09-16
+
+### Bug Fixes
+
+- restore native interactive planning for CLI tools (#513) (51ec787)
+
+## [v1.2.3] — 2026-09-15
+
+### Bug Fixes
+
+- integrate Crossby native planning sessions (#512) (c58ea77)
+
+## [v1.2.2] — 2026-09-09
+
+### Bug Fixes
+
+- keep retained effort editable in PR-comment retry sessions (#507) (8daabc8)
+
+## [v1.2.1] — 2026-09-08
+
+### Chores
+
+- use sol high for planning (beec132)
+
+## [v1.2.0] — 2026-09-08
+
+### Features
+
+- specialize review methodologies by lifecycle stage (#505) (75caed3)
+
+## [v1.1.3] — 2026-09-08
+
+### Chores
+
+- configure wade workflow defaults (8062a91)
+
+## [v1.1.2] — 2026-09-08
+
+### Bug Fixes
+
+- make closing reviews converge on final incremental changes (#503) (5599fb1)
+
+## [v1.1.1] — 2026-09-08
+
+### Bug Fixes
+
+- review limitation on reviews (#500) (3479794)
+
 ## [v1.1.0] — 2026-09-04
 
 ### Features

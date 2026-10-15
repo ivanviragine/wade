@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shlex
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,13 +13,15 @@ from crossby.models.ai import EffortLevel
 from rich.markup import escape
 
 from wade.config.loader import load_config
+from wade.git import branch as git_branch
+from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import DEFAULT_SANDBOX, AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode
 from wade.models.session_manifest import ReviewOutcome
-from wade.models.workflow import DelegationKind
+from wade.models.workflow import DelegationKind, SessionKind
 from wade.services.ai_resolution import (
     SandboxCapabilityError,
     build_relaunch_command,
@@ -35,11 +39,16 @@ from wade.services.delegation_service import (
     extended_timeout,
     resolve_mode,
 )
+from wade.services.review_cycle_service import read_review_cycle
 from wade.services.review_record_service import (
+    binding_pass_reservation,
     count_binding_passes,
+    has_other_satisfying_binding,
+    nearest_satisfying_review_baseline,
     read_review_record,
     write_review_record,
 )
+from wade.services.session_composition_service import load_session_manifest
 from wade.services.skill_invocation_service import (
     PreparedDelegationMethod,
     SkillInvocationError,
@@ -59,6 +68,8 @@ from wade.utils.runtime_env import (
 
 logger = structlog.get_logger()
 
+_MAX_OPTIONAL_PLAN_BYTES = 256 * 1024
+
 
 def _announce_review_pass_budget(passes: int, limit: int) -> None:
     """Surface the implementation-session review-pass budget from the command (#384).
@@ -66,8 +77,9 @@ def _announce_review_pass_budget(passes: int, limit: int) -> None:
     The ``done`` cap stops requiring re-review of new commits after
     ``done.max_review_passes`` passes. Printing the running count here means an
     agent sees its remaining budget directly from ``wade review implementation``
-    rather than from buried skill/prompt prose. Informational only — the cap is
-    enforced (and scoped to implementation sessions) at ``done`` time.
+    rather than from buried skill/prompt prose. ``done`` remains the
+    authoritative completion classifier, while the review command prevents an
+    implementation session from dispatching a review beyond the same cap.
     """
     remaining = max(0, limit - passes)
     if remaining > 0:
@@ -83,6 +95,65 @@ def _announce_review_pass_budget(passes: int, limit: int) -> None:
             "review-pass cap is now reached. `done` will complete without requiring "
             "re-review of further commits. Configure with `done.max_review_passes`."
         )
+
+
+def _skip_exhausted_implementation_review(
+    repo_root: Path,
+    head: str,
+    prepared: PreparedDelegationMethod,
+    config: ProjectConfig,
+) -> DelegationResult | None:
+    """Skip an implementation review that has exhausted its frozen binding budget.
+
+    The completion gate owns the final decision for an unreviewed HEAD, but
+    launching another reviewer cannot change that decision once this binding has
+    consumed all of its available review→fix passes. The exception is a HEAD
+    satisfied only by another binding while the active binding lacks a
+    satisfying receipt: ``done`` requires the active reviewer to repair that
+    state, even when it has already exhausted its ordinary budget.
+    Counting through the validated record service is deliberately fail-safe:
+    unreadable or malformed state counts as zero, never as an exhausted budget.
+    """
+
+    if prepared.host_session is not SessionKind.IMPLEMENTATION:
+        return None
+
+    passes = count_binding_passes(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        binding=prepared.binding,
+    )
+    limit = config.done.max_review_passes
+    if passes < limit:
+        return None
+    active_receipt = read_review_record(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        commit=head,
+        binding=prepared.binding,
+    )
+    if has_other_satisfying_binding(
+        repo_root,
+        delegation=DelegationKind.CODE_REVIEW,
+        commit=head,
+        binding=prepared.binding,
+    ) and (active_receipt is None or not active_receipt.satisfies_review):
+        return None
+
+    message = (
+        f"Review-pass safety limit reached ({passes} of {limit}) for the active frozen "
+        "review binding. No additional implementation review was launched. Run "
+        "`wade implementation-session done`; its completion classifier remains "
+        "authoritative and projects the PR review status."
+    )
+    console.info(message)
+    cleanup_delegation_bundle(prepared, preserve=False)
+    return DelegationResult(
+        success=True,
+        feedback=message,
+        mode=DelegationMode.PROMPT,
+        skipped=True,
+    )
 
 
 def _load_review_config(
@@ -212,12 +283,15 @@ def _run_review_delegation(
     sandbox: bool | None = None,
     delegation_kind: DelegationKind | None = None,
     method_section: str = "",
+    host_session: SessionKind | None = None,
+    feedback_fix_scope: bool = False,
     input_label: str = "Operation input",
     cwd: Path | None = None,
     trusted_dirs: list[str] | None = None,
     relaunch_operand: str | None = None,
     relaunch_skills: list[str] | None = None,
     relaunch_staged: bool = False,
+    knowledge_plan_filename: str | None = None,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
 
@@ -246,6 +320,8 @@ def _run_review_delegation(
                 input_label=input_label,
                 input_content=content,
                 budget_line=budget_line,
+                host_session=host_session,
+                feedback_fix_scope=feedback_fix_scope,
             )
         trusted = base.replace(
             "{review_budget}", budget_line or "No hard deadline — take the time you need."
@@ -388,6 +464,7 @@ def _run_review_delegation(
         explicit_timeout=explicit_timeout,
         operation=_OPERATION_LABELS.get(command),
         relaunch_command=relaunch_command,
+        knowledge_plan_filename=knowledge_plan_filename,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
@@ -463,14 +540,32 @@ def review_plan(
     permission_mode_explicit: bool = False,
     sandbox: bool | None = None,
     skills: list[str] | None = None,
+    project_root: Path | None = None,
+    ack_self_review: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
-    config, cmd_config = _load_review_config("review_plan")
+    config, cmd_config = _load_review_config("review_plan", project_root)
     skip = _check_review_enabled("review_plan", cmd_config)
     if skip is not None:
         return skip
 
     plan_path = Path(plan_file)
+    from wade.services import interactive_plan_service as interactive_plan
+
+    if ack_self_review:
+        try:
+            interactive_plan.acknowledge_self_review(plan_path)
+        except (ValueError, OSError) as exc:
+            console.error(str(exc))
+            return DelegationResult(
+                success=False, feedback=str(exc), mode=DelegationMode.PROMPT, exit_code=1
+            )
+        return DelegationResult(
+            success=True,
+            feedback="Plan self-review recorded",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
     if not plan_path.is_file():
         console.error(f"Plan file not found: {plan_file}")
         return DelegationResult(
@@ -480,7 +575,19 @@ def review_plan(
             exit_code=1,
         )
 
-    plan_content = plan_path.read_text(encoding="utf-8")
+    try:
+        # Managed plans must be safe before their contents reach a reviewer.
+        interactive_plan.invalidate_review(plan_path)
+        plan_content = (
+            interactive_plan.read_artifact(plan_path)
+            if interactive_plan.review_root(plan_path) is not None
+            else plan_path.read_text(encoding="utf-8")
+        )
+    except (ValueError, OSError) as exc:
+        console.error(str(exc), markup=False)
+        return DelegationResult(
+            success=False, feedback=str(exc), mode=DelegationMode.PROMPT, exit_code=1
+        )
     # A PLAN_DIR_ONLY session is not a git worktree, but it still owns a frozen
     # session manifest beside the plan. Walk upward from the reviewed file so a
     # mapped plan-review uses that exact REVIEW binding instead of silently
@@ -495,7 +602,7 @@ def review_plan(
     try:
         review_cwd = git_repo.get_repo_root(binding_root)
     except GitError:
-        review_cwd = caller_cwd
+        review_cwd = project_root or caller_cwd
     template = load_prompt_template("review-plan.md")
     try:
         prepared = prepare_delegation_method(
@@ -523,6 +630,7 @@ def review_plan(
             sandbox=sandbox,
             delegation_kind=DelegationKind.PLAN_REVIEW,
             method_section=prepared.method_section,
+            host_session=prepared.host_session,
             input_label="Plan input",
             cwd=review_cwd,
             trusted_dirs=(
@@ -532,8 +640,9 @@ def review_plan(
             # the relaunch hint has to carry the file this run was reviewing.
             relaunch_operand=plan_file,
             relaunch_skills=skills,
+            knowledge_plan_filename=plan_path.name,
         )
-    except SkillInvocationError as exc:
+    except (SkillInvocationError, ValueError, OSError) as exc:
         console.error(str(exc))
         return DelegationResult(
             success=False,
@@ -542,6 +651,14 @@ def review_plan(
             exit_code=1,
         )
     cleanup_delegation_bundle(prepared, preserve=not result.success)
+    if result.success and not result.skipped:
+        try:
+            interactive_plan.record_review(
+                plan_path, plan_content, self_review=result.mode is DelegationMode.PROMPT
+            )
+        except (ValueError, OSError) as exc:
+            console.error(str(exc))
+            return result.model_copy(update={"success": False, "exit_code": 1})
     return result
 
 
@@ -590,6 +707,7 @@ class _ReviewDiffs:
     committed: str
     staged: str
     unstaged: str
+    committed_label: str = "Committed branch changes"
 
     @property
     def empty(self) -> bool:
@@ -600,7 +718,7 @@ class _ReviewDiffs:
             return self.staged
         sections: list[str] = []
         for label, content in (
-            ("Committed branch changes", self.committed),
+            (self.committed_label, self.committed),
             ("Staged changes", self.staged),
             ("Unstaged changes", self.unstaged),
         ):
@@ -609,21 +727,184 @@ class _ReviewDiffs:
         return "\n\n".join(sections)
 
 
-def _collect_review_diffs(repo_root: Path, config: ProjectConfig) -> _ReviewDiffs:
+def _collect_review_diffs(
+    repo_root: Path,
+    config: ProjectConfig,
+    *,
+    committed_baseline: str | None = None,
+) -> _ReviewDiffs:
     """Inspect all change sets before classifying an empty review."""
 
     current_branch = git_repo.get_current_branch(repo_root)
     base_branch = _selected_review_base(repo_root, config)
-    committed = (
-        ""
-        if current_branch == base_branch
-        else git_repo.diff_between_checked(repo_root, base_branch, "HEAD").strip()
-    )
+    if committed_baseline is not None:
+        committed = git_repo.diff_between_checked(repo_root, committed_baseline, "HEAD").strip()
+        committed_label = "Committed changes since the prior successful review"
+    else:
+        committed = (
+            ""
+            if current_branch == base_branch
+            else git_repo.diff_between_checked(repo_root, base_branch, "HEAD").strip()
+        )
+        committed_label = "Committed branch changes"
     return _ReviewDiffs(
         committed=committed,
         staged=git_repo.diff_worktree(repo_root, staged=True).strip(),
         unstaged=git_repo.diff_worktree(repo_root, staged=False).strip(),
+        committed_label=committed_label,
     )
+
+
+def _read_optional_plan(repo_root: Path) -> str | None:
+    """Read a bounded regular PLAN.md without treating it as trusted instructions."""
+
+    path = repo_root / "PLAN.md"
+    fd: int | None = None
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        console.info("Optional PLAN.md was not found; continuing without plan context.")
+        return None
+    except OSError as exc:
+        console.warn(f"Could not inspect optional PLAN.md; continuing without it ({exc}).")
+        return None
+    try:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("PLAN.md is not a regular file")
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, os.O_RDONLY | nofollow)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_OPTIONAL_PLAN_BYTES:
+            raise OSError("PLAN.md is not a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = _MAX_OPTIONAL_PLAN_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        if len(content) > _MAX_OPTIONAL_PLAN_BYTES:
+            raise OSError("PLAN.md exceeds the review input limit")
+        return content.decode("utf-8").strip() or None
+    except (OSError, UnicodeError) as exc:
+        console.warn(f"Could not safely read optional PLAN.md; continuing without it ({exc}).")
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+@dataclass(frozen=True)
+class _ReviewInputContext:
+    committed_baseline: str | None = None
+    feedback: str | None = None
+    feedback_fix_scope: bool = False
+
+
+def _pr_comment_review_context(repo_root: Path, head: str) -> _ReviewInputContext:
+    """Resolve one safe PR-comment cycle baseline and its feedback snapshot."""
+
+    manifest = load_session_manifest(repo_root)
+    if manifest is None or manifest.task_id is None:
+        console.warn(
+            "PR-comment review-cycle context is unavailable; reviewing the complete branch diff."
+        )
+        return _ReviewInputContext()
+    try:
+        branch = git_repo.get_current_branch(repo_root)
+        lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    except GitError as exc:
+        console.warn(
+            "Could not identify the PR-comment review cycle; reviewing the complete branch diff "
+            f"({exc})."
+        )
+        return _ReviewInputContext()
+    if lookup.lookup_failed or not lookup.is_open or lookup.pr is None:
+        console.warn(
+            "No open PR identity for the review cycle; reviewing the complete branch diff."
+        )
+        return _ReviewInputContext()
+
+    cycle = read_review_cycle(
+        repo_root,
+        issue_number=manifest.task_id,
+        pr_number=lookup.pr.number,
+    )
+    if cycle.diagnostic is not None:
+        console.warn(f"{cycle.diagnostic}; reviewing the complete branch diff.")
+        return _ReviewInputContext()
+    if cycle.context is None:
+        console.warn("No active PR-comment review cycle; reviewing the complete branch diff.")
+        return _ReviewInputContext()
+
+    try:
+        ancestor = git_branch.is_merged_into(repo_root, cycle.context.baseline_commit, head)
+        if ancestor is not True:
+            console.warn(
+                "PR-comment review-cycle baseline is not a trustworthy ancestor; "
+                "reviewing the complete branch diff."
+            )
+            return _ReviewInputContext(feedback=cycle.context.feedback)
+        if git_repo.has_merge_commit_between(repo_root, cycle.context.baseline_commit, head):
+            console.warn(
+                "A merge occurred after the PR-comment review-cycle baseline; "
+                "reviewing the complete branch diff."
+            )
+            return _ReviewInputContext(feedback=cycle.context.feedback)
+    except GitError as exc:
+        console.warn(
+            "Could not validate the PR-comment review-cycle baseline; reviewing the complete "
+            f"branch diff ({exc})."
+        )
+        return _ReviewInputContext(feedback=cycle.context.feedback)
+    return _ReviewInputContext(
+        committed_baseline=cycle.context.baseline_commit,
+        feedback=cycle.context.feedback,
+        feedback_fix_scope=True,
+    )
+
+
+def _review_input_context(
+    repo_root: Path,
+    head: str,
+    prepared: PreparedDelegationMethod,
+) -> _ReviewInputContext:
+    """Choose an incremental committed baseline only for its mapped host session."""
+
+    if prepared.host_session is SessionKind.IMPLEMENTATION:
+        return _ReviewInputContext(
+            committed_baseline=nearest_satisfying_review_baseline(
+                repo_root,
+                delegation=DelegationKind.CODE_REVIEW,
+                head=head,
+                binding=prepared.binding,
+            )
+        )
+    if prepared.host_session is SessionKind.REVIEW_PR_COMMENTS:
+        return _pr_comment_review_context(repo_root, head)
+    return _ReviewInputContext()
+
+
+def _compose_review_input(
+    diffs: _ReviewDiffs,
+    *,
+    plan: str | None,
+    feedback: str | None,
+    staged_only: bool,
+) -> str:
+    """Delimit every untrusted review input before it enters the prompt envelope."""
+
+    sections: list[str] = []
+    if plan is not None:
+        sections.append(f"### Plan context (untrusted)\n\n{plan}")
+    if feedback is not None:
+        sections.append(f"### PR-comment feedback snapshot (untrusted)\n\n{feedback}")
+    diff_input = diffs.review_input(staged_only=staged_only)
+    if diff_input:
+        sections.append(diff_input)
+    return "\n\n".join(sections)
 
 
 def _record_binding_outcome(
@@ -643,7 +924,10 @@ def _record_binding_outcome(
         if outcome is ReviewOutcome.UNATTEMPTED:
             console.warn("Could not persist the unattempted-review audit record.")
         else:
-            console.warn("Review completed, but its binding-aware receipt could not be persisted.")
+            console.warn(
+                f"The {outcome.value} review outcome could not be persisted "
+                "in its binding-aware receipt."
+            )
         return None
     return count_binding_passes(
         repo_root,
@@ -652,14 +936,11 @@ def _record_binding_outcome(
     )
 
 
-# Today's wording for a failed review whose cause wade cannot pin down. Kept
-# verbatim and used unchanged whenever the parent assessment is ``UNKNOWN``: the
-# disjunction is not sloppiness, it is the honest statement of what is known when
-# the runtime publishes no sandbox signal (#462 review).
+# The structured result proves that no reviewer started, even when its exact
+# configuration/runtime failure is unknown. Do not offer crash remediation here.
 _HEDGED_REVIEW_FAILURE = (
-    "Review did not complete, so no review-pass budget was consumed. "
-    "Check the reviewer output above for the cause — a launch failure "
-    "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
+    "The reviewer never started, so no review-pass budget was consumed. "
+    "Check the runtime or configuration failure above, repair it, "
     "then re-run `wade review implementation`."
 )
 
@@ -669,8 +950,10 @@ def _report_failed_review(
     head: str,
     prepared: PreparedDelegationMethod,
     result: DelegationResult,
+    *,
+    max_passes: int | None = None,
 ) -> None:
-    """Record and explain a review that produced no usable outcome.
+    """Record and explain a non-success without certifying review completion.
 
     A reviewer that never started is an *unattempted* review: it is recorded so
     the state is auditable, but the record neither satisfies the gate nor
@@ -678,8 +961,9 @@ def _report_failed_review(
     `done` skip a required review (#462), and satisfying the gate with it would
     be worse still.
 
-    The remediation is graded by how much wade actually knows, because the value
-    of the diagnosis is that it can be trusted:
+    Explicit cancellation, skipped dispatch, and prompt/preflight failure are
+    exempt. A launched failure spends budget through a non-satisfying receipt.
+    The never-launched remediation is graded by how much wade actually knows:
 
     1. a known-sandboxed parent **and** an attempted unrestricted-profile mismatch
        **and** a denial-shaped failure — state the cause and the exact relaunch
@@ -697,6 +981,47 @@ def _report_failed_review(
     generic remediation — a confident wrong cause, which is worse than the hedged
     one it replaced (#481 review).
     """
+    if result.cancelled:
+        console.warn("Review cancelled by user; no review-pass budget was consumed.")
+        return
+    if result.skipped:
+        console.info("Review skipped; no review-pass budget was consumed.")
+        return
+    if result.mode is DelegationMode.PROMPT:
+        console.warn(
+            "Review preparation did not complete; no review-pass budget was consumed. "
+            "Fix the reported configuration error before retrying."
+        )
+        return
+    if not result.never_launched:
+        passes = _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.FAILED)
+        console.warn(
+            "The reviewer ran and failed; this attempt does not certify review completion. "
+            "Inspect the reviewer output above before retrying."
+        )
+        if isinstance(passes, int) and max_passes is not None:
+            _announce_review_pass_budget(passes, max_passes)
+        current = read_review_record(
+            repo_root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=head,
+            binding=prepared.binding,
+        )
+        if current is not None and current.outcome is ReviewOutcome.FAILED:
+            console.detail(
+                "The current failed receipt consumes a pass but does not satisfy review."
+            )
+        elif current is not None:
+            console.detail(
+                f"The existing {current.outcome.value} review record was retained; "
+                "its gate state is unchanged."
+            )
+        else:
+            console.warn(
+                "Could not confirm a failed-review receipt; inspect the persistence error."
+            )
+        return
+
     current_record = None
     if result.never_launched:
         _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
@@ -816,14 +1141,7 @@ def review_implementation(
 
     try:
         repo_root = git_repo.get_repo_root(Path.cwd())
-        head = git_repo.rev_parse(repo_root, "HEAD")
-        diffs = _collect_review_diffs(repo_root, config)
     except GitError as exc:
-        # ``GitError`` already names the exact command that failed (e.g.
-        # "git diff ... failed (exit N): ..." or "git rev-parse ... failed"),
-        # so surface it directly rather than hard-coding "git diff failed",
-        # which would mis-attribute a repo-root failure and double-prefix a
-        # diff failure.
         message = f"Could not read changes to review: {exc}"
         console.error(message)
         return DelegationResult(
@@ -845,6 +1163,33 @@ def review_implementation(
         return DelegationResult(
             success=False,
             feedback=str(exc),
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+
+    # Resolve the frozen session binding before collecting any diff: the binding
+    # selects whether an implementation re-review can safely narrow its committed
+    # input. A standalone bundle created above must not survive a later GitError.
+    try:
+        head = git_repo.rev_parse(repo_root, "HEAD")
+        input_context = _review_input_context(repo_root, head, prepared)
+        diffs = _collect_review_diffs(
+            repo_root,
+            config,
+            committed_baseline=input_context.committed_baseline,
+        )
+    except GitError as exc:
+        # ``GitError`` already names the exact command that failed (e.g.
+        # "git diff ... failed (exit N): ..." or "git rev-parse ... failed"),
+        # so surface it directly rather than hard-coding "git diff failed",
+        # which would mis-attribute a repo-root failure and double-prefix a
+        # diff failure.
+        cleanup_delegation_bundle(prepared, preserve=False)
+        message = f"Could not read changes to review: {exc}"
+        console.error(message)
+        return DelegationResult(
+            success=False,
+            feedback=message,
             mode=DelegationMode.PROMPT,
             exit_code=1,
         )
@@ -882,84 +1227,136 @@ def review_implementation(
             exit_code=1 if ack_self_review else 0,
         )
 
-    if ack_self_review:
-        passes = _record_binding_outcome(
-            repo_root,
-            head,
-            prepared,
-            ReviewOutcome.REVIEWED,
+    def _execute_review() -> DelegationResult:
+        if ack_self_review:
+            passes = _record_binding_outcome(
+                repo_root,
+                head,
+                prepared,
+                ReviewOutcome.REVIEWED,
+            )
+            cleanup_delegation_bundle(prepared, preserve=passes is None)
+            if passes is None:
+                return DelegationResult(
+                    success=False,
+                    feedback="Self-review acknowledgement could not be persisted.",
+                    mode=DelegationMode.PROMPT,
+                    exit_code=1,
+                )
+            _announce_review_pass_budget(passes, config.done.max_review_passes)
+            return DelegationResult(
+                success=True,
+                feedback=(
+                    "Self-review acknowledged for the current commit and frozen review binding."
+                ),
+                mode=DelegationMode.PROMPT,
+            )
+
+        diff_content = _compose_review_input(
+            diffs,
+            plan=_read_optional_plan(repo_root),
+            feedback=input_context.feedback,
+            staged_only=staged,
         )
-        cleanup_delegation_bundle(prepared, preserve=passes is None)
-        if passes is None:
+        template = load_prompt_template("review-code.md")
+        try:
+            result = _run_review_delegation(
+                template,
+                "review_implementation",
+                content=diff_content,
+                config=config,
+                cmd_config=cmd_config,
+                ai_tool=ai_tool,
+                model=model,
+                mode=mode,
+                effort=effort,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                effort_explicit=effort_explicit,
+                permission_mode=permission_mode,
+                yolo=yolo,
+                permission_mode_explicit=permission_mode_explicit,
+                sandbox=sandbox,
+                delegation_kind=DelegationKind.CODE_REVIEW,
+                method_section=prepared.method_section,
+                host_session=prepared.host_session,
+                feedback_fix_scope=input_context.feedback_fix_scope,
+                input_label="Scoped review input",
+                cwd=repo_root,
+                relaunch_skills=skills,
+                relaunch_staged=staged,
+            )
+        except SkillInvocationError as exc:
+            console.error(str(exc))
+            cleanup_delegation_bundle(prepared, preserve=True)
             return DelegationResult(
                 success=False,
-                feedback="Self-review acknowledgement could not be persisted.",
+                feedback=str(exc),
                 mode=DelegationMode.PROMPT,
                 exit_code=1,
             )
-        _announce_review_pass_budget(passes, config.done.max_review_passes)
-        return DelegationResult(
-            success=True,
-            feedback=("Self-review acknowledged for the current commit and frozen review binding."),
-            mode=DelegationMode.PROMPT,
-        )
+        cleanup_delegation_bundle(prepared, preserve=not result.success)
+        # Count completed reviews, launched failures and real timeouts. A
+        # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
+        # has not consumed a review→fix cycle; counting it would make `done` skip a
+        # required review for an infrastructure failure (#462).
+        if result.skipped or result.cancelled:
+            _report_failed_review(
+                repo_root, head, prepared, result, max_passes=config.done.max_review_passes
+            )
+        elif (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
+            outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
+            passes = _record_binding_outcome(repo_root, head, prepared, outcome)
+            # Surface the running budget from the command itself so the caller sees
+            # how many passes remain before `done` stops requiring re-review — no
+            # need to rely on the "run at most N times" rule buried in the
+            # skill/prompt. Guarded by an int check so a mocked
+            # a failed receipt write never triggers it.
+            if isinstance(passes, int):
+                _announce_review_pass_budget(passes, config.done.max_review_passes)
+        elif result.success:
+            console.info(
+                "Prompt emitted; no satisfying review receipt was written. Perform the "
+                "self-review, then acknowledge it explicitly."
+            )
+        else:
+            _report_failed_review(
+                repo_root, head, prepared, result, max_passes=config.done.max_review_passes
+            )
+        return result
 
-    diff_content = diffs.review_input(staged_only=staged)
-    template = load_prompt_template("review-code.md")
+    # An acknowledgement records a review the user has already performed; it
+    # cannot dispatch or emit another review. Its receipt write is separately
+    # atomic and idempotent, so do not make it contend for the dispatch cap.
+    if ack_self_review or prepared.host_session is not SessionKind.IMPLEMENTATION:
+        return _execute_review()
+
+    # No-diff and empty-index outcomes above are non-delegating state checks
+    # with their own receipt semantics. For implementation sessions, reserve a
+    # binding-scoped in-flight pass before checking the cap, then keep it until
+    # the result receipt (if any) is written. This makes admission, dispatch,
+    # and pass consumption one cross-process transaction.
+    reservation_acquired = False
     try:
-        result = _run_review_delegation(
-            template,
-            "review_implementation",
-            content=diff_content,
-            config=config,
-            cmd_config=cmd_config,
-            ai_tool=ai_tool,
-            model=model,
-            mode=mode,
-            effort=effort,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort_explicit=effort_explicit,
-            permission_mode=permission_mode,
-            yolo=yolo,
-            permission_mode_explicit=permission_mode_explicit,
-            sandbox=sandbox,
-            delegation_kind=DelegationKind.CODE_REVIEW,
-            method_section=prepared.method_section,
-            input_label="Diff input",
-            cwd=repo_root,
-            relaunch_skills=skills,
-            relaunch_staged=staged,
-        )
-    except SkillInvocationError as exc:
-        console.error(str(exc))
+        with binding_pass_reservation(
+            repo_root,
+            delegation=DelegationKind.CODE_REVIEW,
+            binding=prepared.binding,
+        ):
+            reservation_acquired = True
+            cap_skip = _skip_exhausted_implementation_review(repo_root, head, prepared, config)
+            if cap_skip is not None:
+                return cap_skip
+            return _execute_review()
+    except OSError as exc:
+        if reservation_acquired:
+            raise
         cleanup_delegation_bundle(prepared, preserve=True)
+        message = f"Could not reserve an implementation review pass: {exc}"
+        console.error(message)
         return DelegationResult(
             success=False,
-            feedback=str(exc),
+            feedback=message,
             mode=DelegationMode.PROMPT,
             exit_code=1,
         )
-    cleanup_delegation_bundle(prepared, preserve=not result.success)
-    # Count completed reviews and real headless timeouts toward the cap. A
-    # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
-    # has not consumed a review→fix cycle; counting it would make `done` skip a
-    # required review for an infrastructure failure (#462).
-    if (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
-        outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
-        passes = _record_binding_outcome(repo_root, head, prepared, outcome)
-        # Surface the running budget from the command itself so the caller sees
-        # how many passes remain before `done` stops requiring re-review — no
-        # need to rely on the "run at most N times" rule buried in the
-        # skill/prompt. Guarded by an int check so a mocked
-        # a failed receipt write never triggers it.
-        if isinstance(passes, int):
-            _announce_review_pass_budget(passes, config.done.max_review_passes)
-    elif result.success:
-        console.info(
-            "Prompt emitted; no satisfying review receipt was written. Perform the "
-            "self-review, then acknowledge it explicitly."
-        )
-    else:
-        _report_failed_review(repo_root, head, prepared, result)
-    return result

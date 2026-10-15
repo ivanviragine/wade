@@ -5,9 +5,13 @@ kill, background, or early-exit a bounded review before that budget elapses.
 
 A headless timeout is a budget overrun, not a successful review. Use any
 salvaged findings, retry once, and do not loop on the same commit. A non-timeout
-exit 1 is an execution error to diagnose. Implementation review pass caps are
-enforced by `done.max_review_passes`; plan review has no code-tracked cap and
-PR-comment review is uncapped.
+exit 1 is an execution error: diagnose it before retrying, and never treat it
+as a successful review. In an implementation session,
+`wade review implementation` stops before dispatching another reviewer once
+`done.max_review_passes` is reached; proceed to `wade implementation-session done`,
+which remains authoritative for completion and PR review status. A valid
+`--ack-self-review` still writes its receipt because it does not dispatch a
+reviewer. Plan review has no code-tracked cap and PR-comment review is uncapped.
 
 Implementation and PR-comment review may be skipped only for objectively
 trivial docs/comments, formatting, metadata, generated-file, or tiny no-logic

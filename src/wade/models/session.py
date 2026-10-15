@@ -79,6 +79,14 @@ class SyncEvent(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
+class ClosingCandidate(BaseModel):
+    """In-memory commit binding carried through one completion attempt."""
+
+    reviewed_commit: str
+    approved_commit: str
+    effective_base_commit: str | None = None
+
+
 class SyncResult(BaseModel):
     """Result of an implementation sync operation."""
 

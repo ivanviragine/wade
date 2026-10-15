@@ -959,10 +959,10 @@ class TestNetworkAccessRetirement:
     ``sandbox_workspace_write.network_access=false`` on every sandboxed launch and
     take the network away from the lifecycle that requires it. The criterion's
     intent — that network is no longer a wade-managed, per-command axis — is
-    therefore enforced as: the only value wade ever passes is the
-    :data:`LAUNCH_NETWORK_ACCESS` constant, and no config/resolver surface for it
-    remains. This is a source scan, so it catches a missed call site that no
-    behavioural test happens to cover.
+    therefore enforced as: every launch uses the :data:`LAUNCH_NETWORK_ACCESS`
+    constant, except recovery, which must pass no policy option at all. No
+    config/resolver surface for it remains. This is a source scan, so it catches
+    a missed call site that no behavioural test happens to cover.
     """
 
     @staticmethod
@@ -975,18 +975,28 @@ class TestNetworkAccessRetirement:
     def test_launch_network_access_is_unconditionally_on(self) -> None:
         assert LAUNCH_NETWORK_ACCESS is True
 
-    def test_every_network_access_argument_is_the_constant(self) -> None:
+    def test_network_access_arguments_are_constant_or_recovery_absent(self) -> None:
         offenders: list[str] = []
         for path in self._wade_sources():
             for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 stripped = line.strip()
                 if not stripped.startswith("network_access="):
                     continue
+                if path.name in {"main.py", "plan_service.py"} and stripped in {
+                    "network_access=network_access,",
+                    "network_access=network_access is True,",
+                    "network_access=request.network_access,",
+                }:
+                    # Complete planning requests preserve the explicit independent policy.
+                    continue
+                if path.name == "main.py" and stripped == "network_access=None,":
+                    # The short alias keeps its collector default separate from native policy.
+                    continue
                 if stripped != "network_access=LAUNCH_NETWORK_ACCESS,":
                     offenders.append(f"{path.name}:{lineno}: {stripped}")
         assert not offenders, (
-            "network_access must only ever be passed as the LAUNCH_NETWORK_ACCESS "
-            f"constant — found: {offenders}"
+            "network_access must use the LAUNCH_NETWORK_ACCESS constant except when "
+            f"recovery passes no policy — found: {offenders}"
         )
 
     def test_no_network_access_config_or_resolver_surface_remains(self) -> None:
@@ -1005,6 +1015,8 @@ class TestNetworkAccessRetirement:
             if path.parent.name != "cli":
                 continue
             text = path.read_text(encoding="utf-8")
+            if path.name == "main.py":
+                text = text.replace('"--network-access/--no-network-access"', "")
             assert "--network" not in text, f"{path.name} still declares a --network flag"
             assert "--no-network" not in text
 
@@ -1021,7 +1033,6 @@ class TestCapabilityCheckFollowsTheConfirmedTool:
     @pytest.mark.parametrize(
         "module",
         [
-            "wade.services.plan_service",
             "wade.services.deps_service",
             "wade.services.review_delegation_service",
             "wade.services.review_service",

@@ -29,7 +29,12 @@ from wade.skills.materializer import (
 )
 from wade.skills.resolver import SkillResolutionError
 from wade.skills.validation import SkillValidationError
-from wade.utils.safe_state import read_state_file, state_directory_present
+from wade.utils.safe_state import (
+    StateFileUnsafeError,
+    read_state_file,
+    read_state_file_strict,
+    state_directory_present,
+)
 
 
 class SessionCompositionError(RuntimeError):
@@ -196,6 +201,16 @@ def load_session_manifest(worktree_root: Path) -> SessionManifest | None:
         return None
 
 
+def load_session_manifest_strict(worktree_root: Path) -> SessionManifest:
+    """Load a manifest without collapsing OS access denial into missing state."""
+
+    raw = read_state_file_strict(worktree_root, ("session",), "manifest.json")
+    try:
+        return SessionManifest.model_validate_json(raw)
+    except (ValueError, ValidationError) as exc:
+        raise StateFileUnsafeError("Active session manifest is malformed") from exc
+
+
 def session_state_present(worktree_root: Path) -> bool:
     """Whether canonical session state exists, even if it is unsafe or invalid."""
 
@@ -249,6 +264,26 @@ def compose_session(
     work_override = parse_skill_overrides(work_skills)
     review_override = parse_skill_overrides(review_skills)
     existing = load_session_manifest(worktree_root)
+    if kind in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}:
+        from wade.services.knowledge_ownership import author_association
+
+        owner_task = task_id or (existing.task_id if existing is not None else None)
+        if owner_task is not None:
+            try:
+                author_association(
+                    worktree_root,
+                    owner_task,
+                    config,
+                    enforce=True,
+                    require_existing=(
+                        existing is not None
+                        and existing.session
+                        in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}
+                        and not refresh
+                    ),
+                )
+            except ValueError as exc:
+                raise SessionCompositionError(str(exc)) from exc
     if existing is None and session_state_present(worktree_root) and not refresh:
         raise SessionCompositionError(
             "Active session manifest is unreadable or invalid; run an explicit skill refresh"
@@ -292,6 +327,13 @@ def compose_session(
         )
     except (SkillMaterializationError, SkillResolutionError, SkillValidationError) as exc:
         raise SessionCompositionError(f"Session skill resolution failed: {exc}") from exc
+    if kind in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS} and manifest.task_id:
+        from wade.services.knowledge_ownership import author_association
+
+        try:
+            author_association(worktree_root, manifest.task_id, config, create=True, enforce=True)
+        except ValueError as exc:
+            raise SessionCompositionError(str(exc)) from exc
     return SessionCompositionResult(manifest=manifest, reused=False, resolution=resolution)
 
 

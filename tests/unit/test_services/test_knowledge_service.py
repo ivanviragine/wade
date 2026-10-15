@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,7 +16,6 @@ from wade.services.knowledge_service import (
     EntryRating,
     KnowledgeEntry,
     ParsedEntry,
-    StagedRatingsFlushResult,
     _canonical_project_root,
     add_tag_to_entry,
     append_knowledge,
@@ -35,7 +33,6 @@ from wade.services.knowledge_service import (
     read_knowledge,
     read_ratings,
     record_rating,
-    record_rating_for_session,
     record_supersede,
     refusal_for_throwaway_write,
     remove_tag_from_entry,
@@ -47,6 +44,18 @@ from wade.services.knowledge_service import (
     validate_tag,
 )
 from wade.utils.knowledge_file import validate_knowledge_file
+
+
+@pytest.fixture(autouse=True)
+def isolate_owned_file_operations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These file-format units isolate authority; real-Git ownership is integration-tested."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("wade.services.knowledge_ownership.assert_author", MagicMock())
+    monkeypatch.setattr("wade.services.knowledge_ownership.assert_author_path", MagicMock())
+    monkeypatch.setattr(
+        "wade.services.knowledge_ownership.actor", MagicMock(return_value=MagicMock(author=True))
+    )
 
 
 @pytest.fixture
@@ -179,7 +188,7 @@ class TestAppendKnowledge:
         )
         text = result.path.read_text(encoding="utf-8")
         assert f"## {result.entry_id} | " in text
-        assert "| implementation | Issue #42" in text
+        assert "| implementation | kind: note | Issue #42" in text
 
     def test_appends_entry_with_issue(self, project_root: Path, config: KnowledgeConfig) -> None:
         result = append_knowledge(
@@ -191,7 +200,7 @@ class TestAppendKnowledge:
         )
         text = result.path.read_text(encoding="utf-8")
         assert "## " in text
-        assert "| implementation | Issue #42" in text
+        assert "| implementation | kind: note | Issue #42" in text
         assert "Discovered that tests need DB setup." in text
         assert text.endswith("---\n")
 
@@ -289,7 +298,7 @@ class TestParseEntries:
         text = (
             "# Header\n\n---\n\n"
             "## a1b2c3d4 | 2026-03-24 | plan\n\nFirst.\n\n---\n\n"
-            "## b2c3d4e5 | 2026-03-25 | implementation | Issue #42\n\nSecond.\n\n---\n"
+            "## b2c3d4e5 | 2026-03-25 | implementation | kind: note | Issue #42\n\nSecond.\n\n---\n"
         )
         entries = parse_entries(text)
         assert len(entries) == 2
@@ -514,7 +523,7 @@ class TestGetAnnotatedKnowledge:
         self._make_knowledge_file(project_root)
         result = get_annotated_knowledge(project_root, config)
         assert result.content is not None
-        assert result.content.count("[+0/-0]") == 2
+        assert result.content.count("[utility:+0/-0; unverified; unavailable]") == 2
         assert "Useful content." in result.content
         assert "Outdated content." in result.content
 
@@ -530,8 +539,8 @@ class TestGetAnnotatedKnowledge:
 
         result = get_annotated_knowledge(project_root, config)
         assert result.content is not None
-        assert "[+3/-0]" in result.content
-        assert "[+0/-1]" in result.content
+        assert "[utility:+3/-0; unverified; unavailable]" in result.content
+        assert "[utility:+0/-1; unverified; unavailable]" in result.content
 
     def test_min_score_filters_entries(self, project_root: Path, config: KnowledgeConfig) -> None:
         self._make_knowledge_file(project_root)
@@ -589,7 +598,7 @@ class TestGetAnnotatedKnowledge:
 
         result = get_annotated_knowledge(project_root, config, no_filter=True)
         assert result.content is not None
-        assert "[+0/-0/stale:1]" in result.content
+        assert "[utility:+0/-0/stale:1; unverified; unavailable]" in result.content
 
     def test_stale_annotation_not_shown_when_zero(
         self, project_root: Path, config: KnowledgeConfig
@@ -598,9 +607,9 @@ class TestGetAnnotatedKnowledge:
         result = get_annotated_knowledge(project_root, config, no_filter=True)
         assert result.content is not None
         assert "stale:" not in result.content
-        assert "[+0/-0]" in result.content
+        assert "[utility:+0/-0; unverified; unavailable]" in result.content
 
-    def test_stale_filter_hides_entries_at_threshold(
+    def test_stale_feedback_never_hides_entries_at_threshold(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
         self._make_knowledge_file(project_root)
@@ -610,7 +619,7 @@ class TestGetAnnotatedKnowledge:
 
         result = get_annotated_knowledge(project_root, config)
         assert result.content is not None
-        assert "Useful content." not in result.content
+        assert "Useful content." in result.content
         assert "Outdated content." in result.content  # unaffected entry still shown
 
     def test_stale_filter_shows_entries_below_threshold(
@@ -647,7 +656,7 @@ class TestGetAnnotatedKnowledge:
 
         result = get_annotated_knowledge(project_root, config, min_score=0)
         assert result.content is not None
-        assert "Useful content." not in result.content
+        assert "Useful content." in result.content
 
 
 class TestBackwardCompatibility:
@@ -1199,7 +1208,7 @@ class TestGetAnnotatedKnowledgeSearch:
 
 
 class TestGetAnnotatedKnowledgeAutoFilter:
-    def test_auto_filter_prunes_low_rated(
+    def test_default_visibility_retains_low_usefulness(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
         # Need >= 11 qualifying entries so p10_idx > 0 (p10 is 2nd smallest, not min)
@@ -1226,7 +1235,7 @@ class TestGetAnnotatedKnowledgeAutoFilter:
         result = get_annotated_knowledge(project_root, config)
         assert result.content is not None
         assert "Good entry 0" in result.content
-        assert "Bad entry" not in result.content
+        assert "Bad entry" in result.content
 
     def test_auto_filter_passes_low_vote_entries(
         self, project_root: Path, config: KnowledgeConfig
@@ -1346,7 +1355,7 @@ class TestCanonicalProjectRoot:
 
 
 class TestResolveCanonicalKnowledgePath:
-    def test_resolves_from_main_worktree_when_in_linked_worktree(self, tmp_path: Path) -> None:
+    def test_resolves_only_from_local_worktree(self, tmp_path: Path) -> None:
         main_path = tmp_path / "main"
         main_path.mkdir()
         worktree_path = tmp_path / "worktree"
@@ -1357,7 +1366,7 @@ class TestResolveCanonicalKnowledgePath:
             return_value=main_path,
         ):
             result = resolve_canonical_knowledge_path(worktree_path, config)
-            assert result == (main_path / "KNOWLEDGE.md").resolve()
+            assert result == (worktree_path / "KNOWLEDGE.md").resolve()
 
     def test_resolves_from_project_root_when_not_in_worktree(self, tmp_path: Path) -> None:
         config = KnowledgeConfig(enabled=True, path="KNOWLEDGE.md")
@@ -1370,7 +1379,7 @@ class TestResolveCanonicalKnowledgePath:
 
 
 class TestAppendKnowledgeWorktreeRedirect:
-    def test_writes_to_main_worktree_when_called_from_linked_worktree(self, tmp_path: Path) -> None:
+    def test_writes_only_to_own_worktree(self, tmp_path: Path) -> None:
         main_root = tmp_path / "main"
         main_root.mkdir()
         worktree_root = tmp_path / "worktree"
@@ -1389,9 +1398,9 @@ class TestAppendKnowledgeWorktreeRedirect:
             )
 
         # Entry must be in the main repo, not the worktree
-        assert result.path == (main_root / "KNOWLEDGE.md").resolve()
-        assert not (worktree_root / "KNOWLEDGE.md").exists()
-        text = (main_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
+        assert result.path == (worktree_root / "KNOWLEDGE.md").resolve()
+        assert not (main_root / "KNOWLEDGE.md").exists()
+        text = (worktree_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
         assert "Learned from worktree." in text
 
 
@@ -1573,188 +1582,41 @@ class TestWritePathMigration:
         assert folded["e"].down == 1
 
 
-class TestStagedRatingEvents:
-    """Detached vote transport keeps main clean and retries idempotently."""
+class TestLegacyPendingFeedback:
+    """Old transport is retained, never implicitly delivered to main."""
 
-    def test_empty_staging_is_removed_without_materializing_main_ratings(
-        self, tmp_path: Path, config: KnowledgeConfig
+    @pytest.mark.parametrize(
+        "contents", ["", "not JSON\n", '{"id":"entry","dir":"up","event_id":"old"}\n']
+    )
+    def test_flush_preserves_exact_original_bytes(
+        self, tmp_path: Path, config: KnowledgeConfig, contents: str
     ) -> None:
         main = tmp_path / "main"
-        worktree = tmp_path / "plan-worktree"
+        worktree = tmp_path / "retained"
         main.mkdir()
         worktree.mkdir()
         staged = staged_ratings_path(worktree)
         staged.parent.mkdir()
-        staged.write_text("", encoding="utf-8")
-
+        staged.write_text(contents)
         result = flush_staged_ratings(worktree, main, config)
-
-        assert result.success
-        assert not staged.exists()
+        assert result.success == (not contents.strip())
+        assert staged.read_text() == contents
         assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
 
-    def test_new_event_id_deduplicates_delivery_but_legacy_duplicate_does_not(
+    def test_identical_ids_deduplicate_but_legacy_votes_remain_historical(
         self, tmp_path: Path
     ) -> None:
         ratings = tmp_path / "KNOWLEDGE.ratings.jsonl"
-        event = create_rating_event("entry", "up")
-        record = event.to_record()
+        event = create_rating_event("entry", "up").to_record()
         ratings.write_text(
-            "\n".join(
-                [
-                    json.dumps(record),
-                    json.dumps(record),
-                    # Legacy records have no event_id, so two historical votes
-                    # remain two votes rather than being accidentally collapsed.
-                    '{"dir": "up", "id": "legacy", "ts": "same"}',
-                    '{"dir": "up", "id": "legacy", "ts": "same"}',
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+            json.dumps(event)
+            + "\n"
+            + json.dumps(event)
+            + '\n{"id":"legacy","dir":"up"}\n{"id":"legacy","dir":"up"}\n'
         )
-
         folded = read_ratings(ratings)
-
         assert folded["entry"].up == 1
         assert folded["legacy"].up == 2
-
-    def test_detached_rate_stages_without_writing_canonical_sidecar(
-        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "wade.services.knowledge_service.is_throwaway_knowledge_session", lambda _: True
-        )
-
-        event = record_rating_for_session(tmp_path, config, "entry", "up")
-
-        staged = staged_ratings_path(tmp_path)
-        assert staged.is_file()
-        assert event.event_id in staged.read_text(encoding="utf-8")
-        assert not (tmp_path / "KNOWLEDGE.ratings.jsonl").exists()
-
-    def test_flush_hands_off_once_and_retry_only_cleans_staging(
-        self, tmp_path: Path, config: KnowledgeConfig
-    ) -> None:
-        main = tmp_path / "main"
-        worktree = tmp_path / "plan-worktree"
-        main.mkdir()
-        worktree.mkdir()
-        event = create_rating_event("entry", "up")
-        stage_rating_event(worktree, event)
-
-        first = flush_staged_ratings(worktree, main, config)
-
-        assert first.success
-        assert first.appended_count == 1
-        assert not staged_ratings_path(worktree).exists()
-        canonical = main / "KNOWLEDGE.ratings.jsonl"
-        assert read_ratings(canonical)["entry"].up == 1
-
-        # Simulate interruption after a durable append but before staging cleanup.
-        stage_rating_event(worktree, event)
-        retry = flush_staged_ratings(worktree, main, config)
-
-        assert retry.success
-        assert retry.appended_count == 0
-        assert not staged_ratings_path(worktree).exists()
-        assert read_ratings(canonical)["entry"].up == 1
-
-    def test_flush_blocks_a_live_append_until_after_staging_cleanup(
-        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A sibling append cannot be lost between the drain snapshot and unlink."""
-        from wade.services import knowledge_service
-
-        main = tmp_path / "main"
-        worktree = tmp_path / "plan-worktree"
-        main.mkdir()
-        worktree.mkdir()
-        first = create_rating_event("first", "up")
-        second = create_rating_event("second", "up")
-        stage_rating_event(worktree, first)
-
-        snapshot_loaded = threading.Event()
-        continue_flush = threading.Event()
-        append_finished = threading.Event()
-        original_load = knowledge_service._load_staged_rating_records
-
-        def pause_after_snapshot(path: Path) -> list[dict[str, object]]:
-            records = original_load(path)
-            snapshot_loaded.set()
-            assert continue_flush.wait(timeout=1)
-            return records
-
-        monkeypatch.setattr(
-            "wade.services.knowledge_service._load_staged_rating_records", pause_after_snapshot
-        )
-        outcomes: list[StagedRatingsFlushResult] = []
-        drain = threading.Thread(
-            target=lambda: outcomes.append(flush_staged_ratings(worktree, main, config))
-        )
-        append = threading.Thread(
-            target=lambda: (stage_rating_event(worktree, second), append_finished.set())
-        )
-        drain.start()
-        assert snapshot_loaded.wait(timeout=1)
-        append.start()
-
-        # The writer uses the same staging-path lock, so it must remain blocked
-        # until the handoff has unlinked the snapshot it just delivered.
-        assert not append_finished.wait(timeout=0.05)
-        continue_flush.set()
-        drain.join(timeout=1)
-        append.join(timeout=1)
-
-        assert not drain.is_alive()
-        assert not append.is_alive()
-        assert len(outcomes) == 1
-        assert outcomes[0].success
-        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["first"].up == 1
-        staged = staged_ratings_path(worktree)
-        assert staged.is_file()
-        assert second.event_id in staged.read_text(encoding="utf-8")
-        assert first.event_id not in staged.read_text(encoding="utf-8")
-
-    def test_flush_failure_retains_staging_for_recovery(
-        self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        main = tmp_path / "main"
-        worktree = tmp_path / "plan-worktree"
-        main.mkdir()
-        worktree.mkdir()
-        stage_rating_event(worktree, create_rating_event("entry", "up"))
-
-        def fail_migration(_: Path) -> None:
-            raise OSError("main checkout is not writable")
-
-        monkeypatch.setattr(
-            "wade.services.knowledge_service._materialize_migration_locked", fail_migration
-        )
-        result = flush_staged_ratings(worktree, main, config)
-
-        assert not result.success
-        assert "not writable" in (result.message or "")
-        assert staged_ratings_path(worktree).is_file()
-
-    def test_malformed_staging_log_retains_artefact_and_writes_nothing(
-        self, tmp_path: Path, config: KnowledgeConfig
-    ) -> None:
-        """A corrupt transport log is a retryable handoff failure, not garbage to drop."""
-        main = tmp_path / "main"
-        worktree = tmp_path / "plan-worktree"
-        main.mkdir()
-        worktree.mkdir()
-        stage_rating_event(worktree, create_rating_event("entry", "up"))
-        staging = staged_ratings_path(worktree)
-        with staging.open("a", encoding="utf-8") as fd:
-            fd.write("not json at all\n")
-
-        result = flush_staged_ratings(worktree, main, config)
-
-        assert not result.success
-        assert staging.is_file()
-        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
 
 
 class TestStagingContainment:
@@ -1836,10 +1698,9 @@ class TestStagingContainment:
 
         result = flush_staged_ratings(worktree, main, config)
 
-        # Skipped, not failed: nothing could legitimately be staged there, and a
-        # failure would strand the worktree on a condition no retry can clear.
-        assert result.success
-        assert "outside the session worktree" in (result.message or "")
+        # Fail closed without following or deleting the unsafe transport.
+        assert not result.success
+        assert "Unsafe legacy" in (result.message or "")
         assert planted.exists()
         assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
 
@@ -1867,7 +1728,7 @@ class TestRetainedStagedRatingsSweep:
         monkeypatch.setattr("wade.git.repo.is_worktree", lambda _: True)
         monkeypatch.setattr("wade.git.repo.is_head_attached", lambda _: False)
 
-    def test_recovers_votes_left_behind_by_a_failed_handoff(
+    def test_reports_legacy_votes_pending_without_delivery(
         self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from wade.services.knowledge_service import flush_retained_staged_ratings
@@ -1881,10 +1742,10 @@ class TestRetainedStagedRatingsSweep:
         outcomes = flush_retained_staged_ratings(main, config)
 
         assert [(o.success, o.appended_count, o.worktree) for o in outcomes] == [
-            (True, 1, retained)
+            (False, 0, retained)
         ]
-        assert not staged_ratings_path(retained).exists()
-        assert read_ratings(main / "KNOWLEDGE.ratings.jsonl")["entry"].up == 1
+        assert staged_ratings_path(retained).exists()
+        assert not (main / "KNOWLEDGE.ratings.jsonl").exists()
 
     def test_reports_nothing_when_no_worktree_has_staged_votes(
         self, tmp_path: Path, config: KnowledgeConfig, monkeypatch: pytest.MonkeyPatch

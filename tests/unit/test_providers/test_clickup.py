@@ -262,6 +262,26 @@ class TestListTasks:
         tasks = provider.list_tasks()
         assert tasks == []
 
+    def test_finds_marker_beyond_the_first_page(self, provider: ClickUpProvider) -> None:
+        marker = "<!-- wade:plan-handoff:recovery -->"
+        provider._client = MagicMock()
+        provider._client.get.side_effect = [
+            {"tasks": [_make_raw_task(task_id=f"first-{index}") for index in range(100)]},
+            {
+                "tasks": [
+                    _make_raw_task(
+                        task_id="recovered",
+                        description=f"recovered task\n\n{marker}",
+                    )
+                ]
+            },
+        ]
+
+        matches = provider.find_tasks_by_body_marker(marker)
+
+        assert [task.id for task in matches] == ["recovered"]
+        assert provider._client.get.call_count == 2
+
 
 class TestCreateTask:
     def test_create_task(self, provider: ClickUpProvider) -> None:

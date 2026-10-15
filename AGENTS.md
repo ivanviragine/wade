@@ -16,7 +16,7 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 | **the WADE repo** / **this project** | This source repository — `src/wade/`, `templates/`, `tests/`, `scripts/` |
 | **inited project** / **target project** | Any third-party repo that has run `wade init` to adopt the workflow |
 | **workflow templates** | Fixed WADE lifecycle files in `templates/workflows/`; rendered to `.wade/session/WORKFLOW.md` and never replaceable by skill configuration |
-| **methodology skill templates** | WADE-agnostic replaceable methods in `templates/skills/` (planning, implementation, review, and dependency analysis) |
+| **methodology skill templates** | WADE-agnostic replaceable methods in `templates/skills/` (planning, implementation, feedback handling, lifecycle-specific closing review, and dependency analysis) |
 | **session skill snapshots** | Immutable copies of active and available skills under `.wade/session/skills/`, including project skills discovered from the worktree and main checkout |
 | **support skills** | Fixed WADE command-support skills projected into `.claude/skills/` per worktree bootstrap; they are not replaceable methodology |
 | **AGENTS.md pointer** | A short `## Git Workflow` block that **worktree bootstrap** injects into an inited project's `AGENTS.md` per session, not by `wade init` |
@@ -72,6 +72,39 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 > GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
 > code still exists but is inert; removal is tracked as #357 C5.
 
+**Knowledge authority** lives in typed append-only receipts and committed Git
+snapshots. Main/detached/bounded workers observe via ignored Git-common-dir
+owner-bound proposals; never drain generic main feedback into a worktree.
+Acceptance requires original parent/task/content proof and grants no correctness.
+Keep assessment, publication, usefulness and historical relationships separate.
+Pure knowledge parsers/folds in `utils/knowledge_file.py` and
+`utils/knowledge_events.py` may import leaf models, never services; Git proof
+queries stay in `git/knowledge.py`. See `docs/dev/knowledge.md`.
+
+**Summary, dependency, and explicit plan-body replacement** share the
+offset-preserving scanner in `utils/markdown.py`. It protects standalone managed
+ranges and fenced code,
+limits legacy migration to unique column-zero H2 sections, and rejects malformed
+input or rendered output before writing. CommonMark container facts come from
+`markdown-it-py`; WADE keeps original byte slices and rejects incomplete parses.
+Plan refresh selects a stable task PR identity once for retarget, replacement,
+and pin reconciliation; the plan extractor uses the same verified owned span.
+Generic resume retains its existing plan.
+Other Markdown consumers retain their existing contracts; do not assume the
+older extraction/removal helpers are
+structural scanners. See `docs/dev/architecture.md` for ownership and boundaries.
+
+> **Closing-review state** lives in worktree files, not the immutable session
+> bundle: binding-aware receipts are under `.wade/reviews/`, and an active
+> PR-comment feedback cycle is under `.wade/review-cycles/`. The cycle preserves
+> its pre-edit baseline and feedback history across refreshes and is cleared
+> only after a successful PR-comment completion; unsafe state must fall back to
+> a full review. Launched reviewer failures consume one commit-and-binding pass
+> without certifying completion; never-launched, prompt/preflight, skipped, and
+> explicitly cancelled results are exempt. Failed receipts cannot become review
+> baselines; only the existing implementation cap policy permits completion without
+> a satisfying receipt.
+
 > **Deterministic git-hook install/reconcile/build logic lives in `git/hooks.py`**
 > (git layer), not `skills/installer.py`. Packaged template-asset loaders
 > (prompt/skill/hook templates) live in `utils/templates.py`, a leaf module.
@@ -85,9 +118,30 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 
 AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
 
+Native planning prefers Crossby's ordinary interactive launch with native Plan
+mode and supported approval flags. For deferred startup (currently Codex), WADE
+handles Crossby's typed ready/submitted events and sends the task exactly once;
+Crossby owns `/plan` and terminal mechanics. The public collected-session API
+remains the fallback for adapters without terminal Plan support. WADE owns explicit file/stdin
+handoff, review receipts bound to current content and frozen skills, validation,
+knowledge handoff, and task persistence; native flags/protocols stay upstream.
+Update the tracked `uv.lock` and Crossby contract tripwire with dependency
+adoptions. Native plans are not transcripts; never scrape tool storage to find them.
+
 CLI modules are thin dispatch — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
 > Full package structure, command dispatch, config system, and subsystem details: see `docs/dev/architecture.md`
+
+### GitHub Projects v2
+
+`project_service.py` directly composes the separate `GitHubProjectsProvider`;
+Projects operations are not AbstractTaskProvider methods. Pure `models/project.py`
+models define the optional top-level `github_projects` settings and typed results.
+Keep project identity, project-item ID, content ID and qualified repository/task
+identity distinct. Read/default sync never writes; only explicit `sync --apply`
+can update configured existing numeric fields, with full baseline refresh and
+sequential drift/readback checks. Preserve the independent best-effort startup
+Status move. See README and developer architecture/testing docs for contracts.
 
 ### Key Design Patterns
 
@@ -96,6 +150,44 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
+
+Uncollectable planning metadata uses `planning_handoff_errors.UncollectableHandoffError`.
+Parent collection retains the intact original registered owner before editable-plan
+salvage, including read-only launch/progress checks before editable content;
+diagnostics expose bounded public fields/codes and declared versions,
+never payload-bearing exceptions. Retention grants no recovery or review authority.
+A fresh compatible process must still pass original-owner, launch/progress,
+frozen-contract, content and review gates; absent progress may initialize only
+from valid original launch metadata. Finish or safely stop active planning parents
+before changing their shared editable source/environment: refreshing a workflow
+cannot replace already-imported models.
+
+Worktree cleanup and staleness share operation-scoped typed Git merge evidence
+in `git/merge_evidence.py`. Non-ancestral cleanup requires origin-bound exact
+recorded merged-PR head and fresh base ancestry, never patch-ID/tree equivalence
+or remote disappearance. Revalidate worktree HEAD/branch, base, origin and dirty
+state before non-forced removal; retain safe `git branch -d` refusals. See
+`docs/dev/architecture.md`.
+
+Scaffold retargets use a guarded git-layer hard reset: tracked edits and
+untracked/ignored paths obstructing the pinned destination tree must refuse
+before mutation. Noncolliding session output remains allowed. The guard also
+applies to rollback; an obstructed rollback preserves data and reports manual
+recovery, rather than claiming branch/PR consistency was restored.
+
+Review worktree recovery stores destination-bound incomplete records under the
+shared Git directory's `.wade/review-recovery/`, outside frozen session files.
+Startup must refuse a retained or unsafe marker before PR lookup, quiet success
+or agent bootstrap. Guarded recovery reserves Git branch ownership before its
+atomic old-tip backup and expected-old alignment; partial worktrees and recovery
+refs are never automatically removed. See `docs/dev/architecture.md`.
+
+Both session done commands require successful draft-to-ready promotion by
+default. Failed readiness revokes only the active root's done markers and retains
+pushed work, PR-body updates and feedback/review evidence for retry. Fallback PR
+creation must verify the returned PR's actual identity, open state and Boolean
+draft status. `--draft` preserves drafts without demoting ready PRs; completion-time
+bot offers/posts are deferred for actual drafts, including with `--trigger-bots`.
 
 ## Design Principles
 
@@ -152,7 +244,7 @@ Before considering any work complete:
 - [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed
-- [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, review-pr-comments-session for reviews)
+- [ ] **`templates/skills/`** — updated if agent-facing methodology changed (planning, implementation, feedback handling, or lifecycle-specific closing review)
 - [ ] **Commit** — uses conventional-commit prefix
 
 Note: for inited projects, the doc update pass is an explicit mandatory step in

@@ -91,6 +91,25 @@ def test_ai_command_keys_remain_distinct_from_workflow_identity() -> None:
     assert DelegationKind.CODE_REVIEW.value == "code-review"
 
 
+def test_closing_review_defaults_are_specialized_by_session_stage() -> None:
+    assert (
+        SESSION_DEFINITIONS[SessionKind.PLAN].default_skills[SkillSlot.REVIEW][0].canonical
+        == "builtin:plan-review"
+    )
+    assert (
+        SESSION_DEFINITIONS[SessionKind.IMPLEMENTATION]
+        .default_skills[SkillSlot.REVIEW][0]
+        .canonical
+        == "builtin:code-review"
+    )
+    assert (
+        SESSION_DEFINITIONS[SessionKind.REVIEW_PR_COMMENTS]
+        .default_skills[SkillSlot.REVIEW][0]
+        .canonical
+        == "builtin:feedback-fix-review"
+    )
+
+
 @pytest.mark.parametrize(
     ("raw", "canonical"),
     [

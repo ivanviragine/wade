@@ -9,9 +9,11 @@ Three modes share the same caller contract (call → block → get feedback):
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -148,6 +150,42 @@ def _has_inherited_sandbox_profile_mismatch(request: DelegationRequest) -> bool:
 
 
 def delegate(request: DelegationRequest) -> DelegationResult:
+    """Bounded workers observe knowledge; never inherit an author's authority."""
+    operation_id = request.invocation_id or uuid.uuid4().hex
+    if request.cwd is not None and request.mode is not DelegationMode.PROMPT:
+        from wade.services.knowledge_proposals import register_observer_operation
+
+        try:
+            register_observer_operation(
+                request.cwd,
+                operation_id,
+                plan_filename=request.knowledge_plan_filename,
+                task_ids=request.knowledge_task_ids,
+                delegation_digest=request.knowledge_delegation_digest,
+            )
+        except (ValueError, OSError) as exc:
+            return DelegationResult(
+                success=False,
+                feedback=f"Knowledge observer ownership failed before launch: {exc}",
+                mode=request.mode,
+                exit_code=1,
+                never_launched=True,
+            )
+    keys = ("WADE_KNOWLEDGE_OBSERVER", "WADE_KNOWLEDGE_OPERATION_ID")
+    saved = {key: os.environ.get(key) for key in keys}
+    os.environ[keys[0]] = "1"
+    os.environ[keys[1]] = operation_id
+    try:
+        return _dispatch(request)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _dispatch(request: DelegationRequest) -> DelegationResult:
     """Dispatch a delegation request to the appropriate mode runner."""
     if request.mode == DelegationMode.PROMPT:
         return _delegate_prompt(request)
@@ -566,6 +604,7 @@ def _delegate_interactive(
                     feedback="Interactive session cancelled by user",
                     mode=DelegationMode.INTERACTIVE,
                     exit_code=1,
+                    cancelled=True,
                 )
 
         # Read output file after AI exits (must happen before temp dir cleanup)

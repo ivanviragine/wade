@@ -244,8 +244,16 @@ def _review_step(kind: SessionKind, enabled: bool) -> str:
     if not enabled:
         return "Skipped explicitly by project review configuration; record this step as skipped."
     if kind is SessionKind.PLAN:
-        command = "`wade review plan <plan_file>` for each generated plan"
-        prompt_completion = "Exit 2 requires performing the emitted self-review."
+        return (
+            "In an interactive terminal handoff, run `wade review plan <plan_file>` for "
+            "every imported plan. The command loads this frozen REVIEW binding. Exit 2 "
+            "means perform the emitted self-review, address findings, then run the command "
+            "with `--ack-self-review`. External review findings also require action; changed "
+            "plans must be reviewed again. `plan-session done` checks reviews against the "
+            "final content. In a collected session, the trusted parent runs this review "
+            "after collection; prompt-mode review requires actual self-review and explicit "
+            "parent acknowledgement. Failure retains output without creating tasks."
+        )
     else:
         command = "`wade review implementation` for the current commit"
         prompt_completion = (
@@ -253,13 +261,27 @@ def _review_step(kind: SessionKind, enabled: bool) -> str:
             "`wade review implementation --ack-self-review`; prompt emission alone "
             "never writes a satisfying receipt."
         )
+    convergence = (
+        "If review findings create another tracked commit, repeat affected verification and "
+        "the documentation decision, then review that new final commit. "
+        if kind in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}
+        else "If documentation, knowledge, or another later step creates a commit, repeat this "
+        "review before done. "
+    )
+    receipt_requirement = (
+        "The successful receipt must match the final pre-sync commit. "
+        if kind in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}
+        else ""
+    )
+    receipt_outcome = (
+        "A successful external review writes the deterministic binding-aware receipt."
+        if kind in {SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS}
+        else ""
+    )
     return (
         f"Run {command}. The command loads only the frozen REVIEW methodology. "
         "Address actionable findings, commit changes, and re-review once after major fixes. "
-        "The successful receipt must match the final pre-sync commit; if documentation, "
-        "knowledge, or another later step creates a commit, repeat this review before done. "
-        f"{prompt_completion} A successful external review writes the deterministic "
-        "binding-aware receipt."
+        f"{receipt_requirement}{convergence}{prompt_completion} {receipt_outcome}"
     )
 
 

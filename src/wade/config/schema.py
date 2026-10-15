@@ -18,11 +18,13 @@ from wade.models.config import (
     ProviderConfig,
     ProviderID,
 )
+from wade.models.project import GitHubProjectsConfig
 
 __all__ = [
     "AICommandConfig",
     "AIConfig",
     "ComplexityModelMapping",
+    "GitHubProjectsConfig",
     "HooksConfig",
     "ProjectConfig",
     "ProjectSettings",

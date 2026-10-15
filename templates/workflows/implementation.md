@@ -32,9 +32,9 @@ Review methodology (loaded only by the bounded review step):
 5. **Verify.** Run the repository-prescribed focused and full checks appropriate
    to the risk. Fix failures caused by the change and distinguish unrelated
    baseline failures with evidence.
-6. **Method review.** {review_step_state}
-7. **Documentation [mandatory decision].** {documentation_step}
-8. **Knowledge.** {knowledge_step}
+6. **Documentation [mandatory decision].** {documentation_step}
+7. **Knowledge.** {knowledge_step}
+8. **Method review.** {review_step_state}
 9. **PR summary.** Write or update `PR-SUMMARY.md` using
    `reference/pr-summary-format.md`; never commit this session artifact.
 10. **Sync.** Re-run the readiness check after any resume or permission change,
@@ -42,7 +42,12 @@ Review methodology (loaded only by the bounded review step):
     conflicts through the documented recovery path and repeat until exit 0.
 11. **Done.** Run `wade implementation-session done`. This deterministic gate
     verifies required artifacts and the binding-aware review result, syncs when
-    needed, pushes, and updates the PR. Fix gate failures; do not bypass them
+    needed, pushes, and updates the PR. Default completion must promote a draft
+    to ready for review; a failed promotion blocks completion and revokes active
+    done markers. Restore access and retry this same command; pushed work and
+    review evidence remain available. `--draft` creates or preserves a draft,
+    never demotes a ready PR, and defers automatic bot reviews (even with
+    `--trigger-bots`) while the resulting PR is draft. Fix gate failures; do not bypass them
     except through an explicit configured policy or an auditable sanctioned
     review skip.
 12. **Present results.** {completion}

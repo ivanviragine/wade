@@ -27,6 +27,7 @@ from wade.services.implementation_service import (
     _strip_review_usage_block,
     build_review_usage_block,
 )
+from wade.services.review_recovery import RecoveryFailure, RecoveryOutcome
 from wade.services.review_service import (
     _capture_review_session_usage,
     _find_existing_branch_for_issue,
@@ -403,6 +404,10 @@ class TestReviewServiceStart:
         worktree_path.mkdir()
 
         patches = {
+            "get_git_common_dir": patch(
+                "wade.services.review_service.git_repo.get_git_common_dir",
+                return_value=repo_root / ".git",
+            ),
             "load_config": patch(
                 "wade.services.review_service.load_config",
                 return_value=MagicMock(
@@ -497,7 +502,7 @@ class TestReviewServiceStart:
             ),
             patch(
                 "wade.services.review_service._recover_worktree",
-                return_value=None,
+                return_value=RecoveryOutcome(failure=RecoveryFailure.NO_BRANCH),
             ),
         ):
             result = start(target="42")
@@ -642,7 +647,7 @@ class TestReviewServiceStart:
         assert mock_post.call_args.kwargs["effort"] is None
         assert mock_post.call_args.kwargs["effort_explicit"] is False
 
-    def test_explicit_default_effort_survives_waiting_for_reviews(
+    def test_ui_default_effort_survives_waiting_for_reviews(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
         """Choosing the UI's tool default must override a configured effort later."""
@@ -672,7 +677,95 @@ class TestReviewServiceStart:
             assert start(target="42") is True
 
         assert mock_post.call_args.kwargs["effort"] == "none"
-        assert mock_post.call_args.kwargs["effort_explicit"] is True
+        assert mock_post.call_args.kwargs["effort_explicit"] is False
+
+    def test_retained_effort_is_preselected_editable_and_re_retained(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """A retained UI level stays editable and survives another unchanged retry."""
+        from crossby.models.ai import AIToolID, EffortLevel
+
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        # Use the real confirmation UI behind the fixture's call spy so this
+        # exercises the selector that the next start() invocation presents.
+        mock_setup["confirm_ai_selection"].side_effect = confirm_ai_selection
+        adapter = MagicMock()
+        caps = adapter.capabilities.return_value
+        caps.supports_effort = True
+        caps.supports_accept_edits = False
+        caps.supports_auto = False
+        caps.supports_yolo = False
+        caps.blocks_until_exit = False
+        adapter.launch.return_value = 0
+        menu_items_seen: list[list[str]] = []
+
+        def select_proceed(_title: str, items: list[str], **_kwargs: object) -> int:
+            menu_items_seen.append(items)
+            return items.index("Proceed")
+
+        with (
+            patch("wade.services.review_service.resolve_effort", return_value=EffortLevel.XHIGH),
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch(
+                "crossby.ai_tools.AbstractAITool.detect_installed",
+                return_value=[AIToolID.CODEX],
+            ),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", side_effect=select_proceed),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.services.review_service._post_review_lifecycle") as mock_post,
+        ):
+            assert start(target="42", effort="xhigh", effort_explicit=False) is True
+
+        confirm_kwargs = mock_setup["confirm_ai_selection"].call_args.kwargs
+        assert confirm_kwargs["resolved_effort"] is EffortLevel.XHIGH
+        assert confirm_kwargs["effort_explicit"] is False
+        assert "Change effort" in menu_items_seen[0]
+        # Proceeding with the retained selection must not drop it on the next wait.
+        assert mock_post.call_args.kwargs["effort"] == "xhigh"
+        assert mock_post.call_args.kwargs["effort_explicit"] is False
+
+    def test_retained_tool_default_bypasses_config_and_stays_editable(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """A retained ``none`` is distinct from no retry payload and never locks the picker."""
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["resolve_ai_tool"].return_value = "codex"
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            None,
+            PermissionMode.DEFAULT,
+        )
+        adapter = MagicMock()
+        adapter.launch.return_value = 0
+        adapter.capabilities.return_value.blocks_until_exit = False
+
+        with (
+            patch("wade.services.review_service.resolve_effort") as mock_resolve_effort,
+            patch("wade.services.review_service.resolve_sandbox", return_value=False),
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=adapter),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.services.review_service._post_review_lifecycle") as mock_post,
+        ):
+            assert start(target="42", effort="none", effort_explicit=False) is True
+
+        mock_resolve_effort.assert_not_called()
+        confirm_kwargs = mock_setup["confirm_ai_selection"].call_args.kwargs
+        assert confirm_kwargs["resolved_effort"] is None
+        assert confirm_kwargs["effort_explicit"] is False
+        assert mock_post.call_args.kwargs["effort"] == "none"
+        assert mock_post.call_args.kwargs["effort_explicit"] is False
 
     def test_detached_launch_receives_worktree_context(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
@@ -781,7 +874,7 @@ class TestReviewServiceStart:
         assert mock_start.call_args.kwargs["sandbox"] is False
 
     def test_post_lifecycle_relaunch_forwards_confirmed_effort(self, tmp_path: Path) -> None:
-        """A review re-launch keeps the effort selected in the first session."""
+        """A UI-confirmed effort survives a re-launch without locking its picker."""
         from wade.services.review_service import PollOutcome
 
         with (
@@ -801,15 +894,13 @@ class TestReviewServiceStart:
                 99,
                 MagicMock(),
                 effort="high",
-                effort_explicit=True,
+                effort_explicit=False,
             )
 
         assert mock_start.call_args.kwargs["effort"] == "high"
-        assert mock_start.call_args.kwargs["effort_explicit"] is True
+        assert mock_start.call_args.kwargs["effort_explicit"] is False
 
-    def test_post_lifecycle_relaunch_forwards_explicit_tool_default_effort(
-        self, tmp_path: Path
-    ) -> None:
+    def test_post_lifecycle_relaunch_forwards_ui_tool_default_effort(self, tmp_path: Path) -> None:
         """The explicit default is distinct from an unset effort override."""
         from wade.services.review_service import PollOutcome
 
@@ -830,11 +921,11 @@ class TestReviewServiceStart:
                 99,
                 MagicMock(),
                 effort="none",
-                effort_explicit=True,
+                effort_explicit=False,
             )
 
         assert mock_start.call_args.kwargs["effort"] == "none"
-        assert mock_start.call_args.kwargs["effort_explicit"] is True
+        assert mock_start.call_args.kwargs["effort_explicit"] is False
 
     def test_resolves_worktree_by_issue_when_title_drifted(
         self, mock_setup: dict[str, MagicMock]
@@ -881,7 +972,9 @@ class TestReviewServiceStart:
             ),
             patch(
                 "wade.services.review_service._recover_worktree",
-                return_value=Path("/tmp/recovered"),
+                return_value=RecoveryOutcome(
+                    succeeded=True, path=Path("/tmp/recovered"), source="remote"
+                ),
             ) as mock_recover,
         ):
             result = start(target="42")
@@ -2344,64 +2437,30 @@ class TestGetComprehensiveReviewStatus:
 
 
 class TestRecoverWorktree:
-    """Tests for the _recover_worktree() helper."""
+    """The UI wrapper delegates the configured target and preserves failure detail."""
 
-    def _make_config(self) -> MagicMock:
+    @pytest.mark.parametrize("failure", [None, RecoveryFailure.NO_BRANCH, RecoveryFailure.FETCH])
+    def test_structured_outcome_is_not_collapsed(
+        self, tmp_path: Path, failure: RecoveryFailure | None
+    ) -> None:
         from wade.models.config import ProjectConfig
 
-        config = MagicMock(spec=ProjectConfig)
-        config.project = MagicMock()
-        config.project.worktrees_dir = ""
-        config.project.branch_prefix = "feat"
-        config.project.main_branch = "main"
-        return config
-
-    @patch("wade.services.review_service.git_worktree.checkout_existing_branch_worktree")
-    @patch("wade.services.review_service._resolve_worktrees_dir")
-    @patch("wade.services.review_service.git_repo.rev_parse")
-    @patch("wade.services.review_service.git_repo.fetch_ref")
-    def test_success_returns_worktree_path(
-        self,
-        mock_fetch: MagicMock,
-        mock_rev_parse: MagicMock,
-        mock_resolve_wt: MagicMock,
-        mock_checkout: MagicMock,
-        tmp_path: Path,
-    ) -> None:
         repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-        worktrees_dir = tmp_path / "worktrees"
-        worktrees_dir.mkdir()
-        mock_resolve_wt.return_value = worktrees_dir
-        expected_path = worktrees_dir / "repo" / "feat-42-fix"
-        mock_checkout.return_value = expected_path
-
-        result = _recover_worktree(repo_root, "feat/42-fix", self._make_config())
-
-        assert result == expected_path
-        mock_fetch.assert_called_once()
-        mock_rev_parse.assert_called_once()
-        mock_checkout.assert_called_once()
-
-    @patch("wade.services.review_service.git_repo.fetch_ref", side_effect=GitError("no remote"))
-    def test_no_remote_branch_returns_none(
-        self,
-        mock_fetch: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        result = _recover_worktree(tmp_path, "feat/42-fix", self._make_config())
-        assert result is None
-
-    @patch("wade.services.review_service.git_repo.rev_parse", side_effect=GitError("not found"))
-    @patch("wade.services.review_service.git_repo.fetch_ref")
-    def test_branch_not_local_returns_none(
-        self,
-        mock_fetch: MagicMock,
-        mock_rev_parse: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        result = _recover_worktree(tmp_path, "feat/42-fix", self._make_config())
-        assert result is None
+        target = tmp_path / "worktrees" / "repo" / "feat-42-fix"
+        outcome = (
+            RecoveryOutcome(succeeded=True, path=target, source="remote")
+            if failure is None
+            else RecoveryOutcome(failure=failure, detail="specific recovery evidence")
+        )
+        with (
+            patch(
+                "wade.services.review_service._resolve_worktrees_dir",
+                return_value=tmp_path / "worktrees",
+            ),
+            patch("wade.services.review_service.recover_worktree", return_value=outcome) as recover,
+        ):
+            assert _recover_worktree(repo_root, "feat/42-fix", ProjectConfig()) is outcome
+        recover.assert_called_once_with(repo_root, "feat/42-fix", target)
 
 
 # ---------------------------------------------------------------------------
@@ -3112,6 +3171,10 @@ class TestReviewSessionAutonomyE2E:
             patch("wade.services.review_service.load_config", return_value=config),
             patch("wade.services.review_service.get_provider", return_value=provider),
             patch("wade.services.review_service.git_repo.get_repo_root", return_value=repo_root),
+            patch(
+                "wade.services.review_service.git_repo.get_git_common_dir",
+                return_value=repo_root / ".git",
+            ),
             patch(
                 "wade.services.review_service.git_repo.get_current_branch",
                 side_effect=GitError("detached"),

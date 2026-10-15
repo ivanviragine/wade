@@ -73,6 +73,7 @@ src/wade/
 │   ├── permission.py    # PermissionMode (autonomy axis), launch-kwargs helpers
 │   ├── readiness.py     # phase capability requirements + stable failure IDs
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
+│   ├── review_recovery.py # Typed guarded-recovery phases and incomplete record
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
@@ -80,13 +81,17 @@ src/wade/
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
 │   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
+│   ├── native_plan_service.py # Public collected-session boundary and safe artifact import
+│   ├── interactive_plan_service.py # Explicit native-terminal import/review/completion state
 │   ├── review_service.py           # PR review session lifecycle
+│   ├── review_recovery.py          # Remote snapshot recovery and incomplete-state gating
 │   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
 │   ├── session_composition_service.py # Resolve/freeze/refresh interactive bindings
 │   ├── skill_invocation_service.py # Bind methods to bounded operation contracts
 │   ├── skill_diagnostics_service.py # Discovery and precedence diagnostics
 │   ├── review_record_service.py # Binding-aware durable review outcomes
+│   ├── review_cycle_service.py # Safe PR-comment feedback-cycle context
 │   ├── documentation_receipt_service.py # Current-commit documentation decision
 │   ├── batch_review_service.py      # Batch issue review
 │   ├── deps_service.py  # Dependency analysis
@@ -99,6 +104,7 @@ src/wade/
 ├── providers/           # Task backend providers (ABC + registry)
 │   ├── base.py          # AbstractTaskProvider
 │   ├── github.py        # GitHubProvider (gh CLI subprocess)
+│   ├── github_projects.py # Strict Projects v2 GraphQL snapshots/numeric mutations
 │   ├── clickup.py       # ClickUpProvider (REST API)
 │   ├── markdown.py      # MarkdownIssueProvider (single central task file)
 │   ├── _pr_delegate.py  # GitHubPRDelegateMixin (routes PR/review APIs through gh)
@@ -139,6 +145,7 @@ src/wade/
     ├── conventional.py  # Canonical conventional-commit TITLE validator (types + is_conventional_title) — stdlib-only, single Python source of truth
     ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe; sources its title regex from conventional.py
     ├── process.py       # Subprocess helpers
+    ├── git_close_commit.py # Leaf Markdown close-commit eligibility and invocation-local hook/tree guard
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
@@ -152,6 +159,13 @@ workflow-owned references. Replaceable methodology remains under
 for the ownership boundary, typed registries, precedence, manifests, and review
 record model; see [Skills, Snapshots, and Pointer System](skills-system.md) for
 discovery, support projection, and filesystem rules.
+
+Closing-review methods are lifecycle-specific: `plan-review` validates an
+implementation plan, `code-review` validates an implementation change, and
+`feedback-fix-review` validates feedback-driven corrections. `review-comments`
+remains the separate WORK method for verifying incoming review feedback before
+editing. The service-owned bounded result contract, not a replaceable method,
+admits only concrete material findings and fixes the review scope.
 
 > `templates/hooks/pre-push` is the completion-gate backstop script installed
 > per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
@@ -182,6 +196,182 @@ Wade still owns a thin `services/ai_resolution.py` rather than delegating outrig
 
 Adding support for a new AI tool means contributing an adapter to crossby, not to this repo — see `docs/dev/extending.md`.
 
+### Native planning and handoff
+
+`plan_service.plan()` resolves the final confirmed selection before worktree or
+provider mutations. An adapter advertising `supports_plan_mode` uses ordinary
+`launch(plan_mode=True)` after `validate_plan_mode_request()`. Crossby owns
+native flags, version gates, and approval compatibility. For adapters declaring
+`supports_ready_event`, WADE uses the public `on_event` callback: `PLAN_READY`
+submits the task through `session.send_message()` exactly once and
+`MESSAGE_SUBMITTED` confirms delivery before handoff collection. Crossby owns
+Codex's `/plan` activation and PTY; WADE never reads screen text. WADE forwards the
+requested autonomy tier without downgrading unsupported Plan combinations.
+Claude, Cursor, Copilot, OpenCode, Antigravity CLI, and Codex use this path.
+Questions and the full terminal UI remain native. Explicit unsupported sandbox,
+network, trusted-directory, timeout, or transport settings fail before launch.
+The default sandbox is off, as for ordinary interactive launches.
+
+`interactive_plan_service` owns a WADE handoff ID, frozen-session digest, optional
+bundle, completion state, and review receipts under `.wade/plans/`. The native
+planner supplies an explicit file or stdin artifact through `plan-session done`;
+WADE never scans tool storage or parses terminal output for a plan. Native source
+files remain untouched. For public `REQUESTED_PATH` support, native launch uses
+`.wade/plans/native/` so artifact writes remain inside the planning guards. Other
+tools retain their own native storage and can submit explicit stdin content.
+Imports use bounded, no-follow writes and can replace
+only files owned by this handoff. Revisions invalidate completion; review receipts
+match exact plan content, the frozen bundle, and this run. `review plan` records
+successful delegated review, or a pending self-review requiring the explicit
+`--ack-self-review` command after the method has been performed. A new failed
+review cannot reuse a previous success. `done` requires strict validation, current
+reviews (unless explicitly disabled), and the knowledge handoff when enabled.
+After native exit the parent verifies the completed state and files again.
+Nonzero exits and absent/stale handoffs retain output without creating tasks.
+Native terminal output can supply adapter-parsed usage; the WADE handoff ID is
+never presented as a native CLI session ID.
+
+Tools without terminal Plan support retain the public
+`PlanSessionRequest` → `preflight_plan_session()` → `run_plan_session()` flow.
+`native_plan_service` consumes Crossby's complete-session metadata, required
+`PlanCommandPolicy` (`wade *` plus configured patterns), and supported path policy.
+No per-tool flag/version table or wire parser lives in WADE. Callback collection
+preserves native question IDs, multi-select, free text, denial, and cancellation;
+non-TTY supplies no handler. Parent YOLO never answers a native question or grants
+permission. This path defaults to sandbox on, preserves explicit confinement,
+and uses independent approval/network/trusted-directory/timeout requirements.
+Its raw result and provenance are retained in `native-session.json`; only the
+returned artifact becomes tasks. Transcript and usage remain unavailable when
+the public collector does not return them. Required review still runs in the
+parent for this path, with explicit acknowledgement for prompt-mode self-review.
+
+Both paths share `models/plan_bundle.py` and the workflow output contract.
+Duplicate/case-colliding names, traversal, malformed members, unknown edges, and
+cycles fail before provider writes. Multiple tasks require an explicit envelope;
+Markdown headings never infer boundaries. A mixed-validity subset needs human
+consent even under YOLO and must retain prerequisites. Dependencies map to task
+IDs deterministically. The parent owns strict revalidation, knowledge vote
+staging/flushing, persistence, supersession, cleanup, and the separate explicit
+implementation offer. Failures preserve recovery files.
+
+Planning inherits the process environment and scoped fallback `WADE_PLAN_DIR`.
+It does not expose scenes. Frozen workflow loading is in the managed prompt.
+The legacy file-presence Stop nudge is not installed; correctness depends on the
+completion and parent gates, not ambient hooks. Collected transports may exclude
+ambient settings; native terminals use their ordinary launch behavior.
+
+Parent collection uses the additive strict `safe_state` read/list API. The
+legacy API continues to collapse unsafe or unreadable state to `None` for review
+receipts, review cycles, documentation receipts, and other established callers;
+the strict path preserves `EACCES`/`EPERM` as `StateFileAccessError` while keeping
+the same descriptor-relative `O_NOFOLLOW`, regular-file, and byte-limit checks.
+An access denial after native exit causes no provider mutation and never enters
+normal worktree cleanup. Enumeration denial reports an unknown plan count and
+retains the original detached worktree. `wade plan --recover <worktree>` accepts
+only a detached worktree still registered with the current repo, skips launch,
+reloads its frozen plan manifest and explicit completed handoff, and reruns
+binding, content, review, dependency, and strict plan-validation gates before
+persistence. Successful recovery resumes the ordinary finalization and cleanup
+path; WADE does not invoke platform privacy tools or weaken sandbox policy.
+
+`planning_handoff_errors.UncollectableHandoffError` distinguishes persisted
+metadata/frozen-binding failures from ordinary editable Markdown validation.
+Interactive collection (including the second parent collection), collector
+metadata loading, and launch/progress validation classify these failures before
+`plan_service` can enter copy-and-cleanup salvage. Required review metadata is
+validated against the stored completed bundle before editable files: invalid
+Markdown must not mask an unsupported receipt and destroy its owner. A read-only
+parent callback also validates original launch and any present progress metadata
+against that stored session before editable content is read, at both native
+collection passes. Missing progress is initialized only after valid collection.
+Valid metadata retains the separate editable-content validation/salvage contract.
+The failure handler does not
+parse state, enumerate plans, stage knowledge or mutate providers; it keeps the
+registered detached owner, frozen session, raw output, launch binding and existing
+progress byte-for-byte. Registration is checked only to decide whether an
+original-owner recovery command can be advertised. An unregistered fallback or
+copy remains content salvage, without recovery authority.
+
+Diagnostics use bounded public field locations/error codes, no validator
+messages, values, arbitrary map/extra keys, exception context or raw JSON. They
+report the already-imported reader version, safely available declared versions
+and an unavailable unrecorded writer version. Possible schema/runtime skew is
+qualified, not attributed to an adapter. Filesystem denial/I/O retain their
+existing failure contracts. Strict schema rejection is not softened. Missing
+progress after early collection failure may initialize from a validated original
+launch binding; malformed/mismatched present progress fails closed.
+
+Active planning parents must finish or safely stop before shared editable
+source/environment changes. Workflow refresh does not replace imported Python
+models. A fresh compatible process may recover only through the current original
+ownership, binding, content and review gates. Explicit supported handoff refresh
+invalidates completion/reviews and requires new genuine review/done; unreadable
+future state must stay retained. No copied/deleted owner or archive reconstructs
+authority, and retention never adopts historical knowledge observations.
+
+Recovery is idempotent because its launch binding and persistence are recorded as
+they happen. Before a managed planner launches, its worktree gets
+`.wade/plans/handoff-binding.json` (`PlanHandoffBinding`) with the resolved
+model, complete provider configuration, project task-persistence settings, and
+complete knowledge configuration. Recovery rejects a retained handoff without
+that binding rather than synthesizing one from settings that may have changed
+after collection. After collection and before any provider mutation, the worktree
+gets `.wade/plans/handoff-progress.json` (`PlanHandoffProgress`), keyed to the
+completed handoff's session id; it binds the vote set, a pending per-plan marker,
+and a per-plan-file to task-id mapping written after each issue and draft PR
+become durable. Each persisted mapping also records a digest of the exact plan
+content in its draft PR, so a later review edit rejects reuse instead of letting
+task metadata and the retained PR diverge. Recovery validates the provider
+configuration before it instantiates or uses a provider, and reuses the original
+project and knowledge settings rather than silently applying changed values. The
+vote set is bound before staging, so a revised retained artifact cannot reuse a
+previously delivered event ID with a different direction. The pending marker is
+placed in the task's initial hidden body before creation, so a post-creation
+progress-write failure can recover the exact task instead of guessing from its
+title or creating a duplicate. Before recovery renames a task to its reviewed
+plan title, it also records the original branch-forming title, so a rename whose
+response or later progress write fails still refreshes the existing draft PR
+instead of creating one from the new title. A later finalization or cleanup
+failure therefore
+leaves a retry reusing those tasks — and the original model for `planned-by`
+provenance — instead of creating duplicates; a partial finalization with a
+pending marker retains the original worktree for the same reconciliation path.
+Ordinary single-plan replanning and retained-handoff recovery explicitly refresh
+the existing PR before accepting attachment. Generic bootstrap/resume still
+defaults to reuse without replacing its plan. Required content/title persistence
+precedes a base retarget, so refresh failures cannot bypass worktree-pin
+reconciliation after a successful base edit. `DraftPRTarget` fixes the stable
+task-number branch and verified open PR once, using the existing branch policy
+and complete open-PR fallback. Lookup/listing errors, incomplete fallback results,
+or an unverifiable selected PR fail closed. Retarget safety, bootstrap and pin
+reconciliation consume that same identity rather than re-slugifying a changed
+title; fresh creation follows only trustworthy absence.
+
+Explicit refresh uses `replace_owned_section(name="plan", heading=None)` over a
+fresh body through the shared read/transform/budget/write helper. The stored
+content is exactly `PlanFile.body` (the artifact H1 is omitted). The plan extractor
+uses the same scanner-owned span so next startup materializes that body even with
+fenced marker examples before or inside it. Its public result remains `str | None`,
+including empty string for a valid empty pair and None for absent/unsafe ownership;
+interior bytes and the established outer-strip behavior are retained. Unrelated
+source slices/owners remain intact, including unknown and legacyPlan blocks; no legacy
+plan migration occurs. Empty-body reads are valid; unreadable bodies, malformed
+ownership/fences and oversized composition refuse before a body write. The size
+check runs before budget trimming so replacement cannot discard unrelated usage.
+Fresh creation validates the complete owned-plan composition and body limit
+before creating or pushing a branch, so next startup can consume every accepted
+PR-backed plan.
+The task is reread after required PR work; an exact plain Full plan link is
+appended only if absent, preserving current edits and distinguishing PR #7 from
+PR #70, including CRLF issue lines. Required issue read/link-write failures propagate even after partial PR
+success. All explicit-refresh attachment failures retain the original registered
+worktree, frozen bundle, native state, binding/progress, and plan files; filesystem
+fallback output stays at its original path. Supported recovery reruns the gates
+and current reads, then finalizes/cleans only after persistence succeeds. A copied
+cleaned-up archive cannot replace the original registered recovery authority.
+A binding or progress file that is unsafe, invalid, missing required data, or
+bound to another session aborts recovery rather than being silently replaced.
+
 ## Hook Guard Layer
 
 wade installs AI-tool hooks that enforce session rules in *code* rather than
@@ -201,7 +391,7 @@ trusting the agent to follow the skill. The split across the two repos:
 | `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree (except the active tool's memory subtree and always-allowed scratch — see [Memory allowlist](#memory-allowlist) and below) |
 | `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts (the memory subtree and always-allowed scratch are also exempt) |
 | `session-complete` | Stop | **open** (allow) | Ending an impl/review turn with commits ahead of base and no current `done` marker (once) |
-| `plan-complete` | Stop | **open** (allow) | Ending a plan turn with no valid `PLAN*.md` in `.wade/plans` (once) |
+| `plan-complete` (legacy, not installed by native planning) | Stop | **open** (allow) | Ending a legacy plan turn with no valid `PLAN*.md` (once) |
 
 The asymmetry is deliberate and must not regress: a write guard that allows on
 error is worse than useless, while a Stop guard that blocks on error traps the
@@ -216,7 +406,8 @@ failure — unresolvable dir, missing `--root`, exception — fails open. The tw
 Stop guards share the single-shot `.wade/stop-nudged` marker because a worktree
 is either a plan worktree or an impl worktree, never both. Installation:
 `bootstrap_worktree` installs `session-complete` for impl/review sessions (plus
-the pre-push `done` backstop) and `plan-complete` for plan sessions.
+the pre-push `done` backstop). Native plan sessions use parent completion gates,
+not the legacy `plan-complete` Stop hook.
 
 ### Two write channels
 
@@ -465,6 +656,10 @@ installed instead — see the sandbox-profile section below.
 
 ### AI runtime sandbox profile & sandboxed-worktree git writes (#423, #478)
 
+This section describes **ordinary non-plan launch** policy. Native collection
+uses the independent public request contract described above; it does not inherit
+blanket network/temp-directory/git-metadata grants from launch builders.
+
 A linked worktree's git metadata lives **outside** the worktree tree
 (`<main>/.git/worktrees/<wt>` private dir, `<main>/.git` common dir), so under
 `--sandbox workspace-write` every git write to it (`index`/`index.lock`, refs,
@@ -476,9 +671,9 @@ the out-of-root metadata dirs from it and grants them with additive `--add-dir`
 on and shell containment is **not** widened — only these two metadata roots are
 added. The six threaded sites are the impl detached/inline × initial/resume and
 review detached/inline launches (`implementation_service/core.py`,
-`review_service.py`); `delegation_service`/`plan_service` thread the same
+`review_service.py`); `delegation_service` threads the same
 `working_dir` for their worktree-capable paths, under the same network constant
-as everything else — there is no network-off launch path left.
+as other ordinary launches. Native planning has an explicit independent network choice.
 
 **One axis, not two.** `ai.sandbox` is the single cross-tool boolean deciding
 whether the AI runtime launches inside its own filesystem sandbox;
@@ -490,7 +685,7 @@ per-command asymmetry: that asymmetry is exactly what the retired
 strips a separately authenticated reviewer of its host login).
 
 Network access is now a **constant**, not a setting: `LAUNCH_NETWORK_ACCESS` is
-passed `True` at all nine adapter call sites. It must be *passed*, not omitted —
+passed `True` at ordinary launch call sites. It must be *passed*, not omitted —
 crossby's `network_access` parameter defaults to `False`, so a sandboxed launch
 that dropped it would pin `sandbox_workspace_write.network_access=false` and take
 the network away from the very lifecycle (`git fetch`/`push`, `gh`) that requires
@@ -637,7 +832,7 @@ next launch.
 | implementation | `implementation_service/core.py` | `wade implement <id> --no-sandbox` |
 | batch implementation | `implementation_service/batch.py` | `wade implement-batch <ids> --no-sandbox` — assessed once before terminal-broker dispatch, because broker shells may not retain the parent's markers |
 | PR-comment review | `review_service.py` | `wade review pr-comments <id> --no-sandbox` |
-| plan | `plan_service.py` | `wade plan --issue <id> --no-sandbox` (or `wade plan --no-sandbox`) — built here because it calls `build_launch_command` + `run_with_transcript` directly, bypassing `delegate()`, and has no nested-AI guard |
+| plan | `plan_service.py` | `wade plan --issue <id> --no-sandbox` (or `wade plan --no-sandbox`) — native collection bypasses `delegate()` and has no nested-AI guard; explicit native policies still require preflight support |
 | deps, standalone plan/code review, batch review | `delegation_service.delegate()` | per-operation, from `DelegationRequest.operation` / `.relaunch_command` |
 
 Deps (`deps_service.py`), standalone review (`review_delegation_service.py`) and
@@ -676,7 +871,10 @@ counts as launched even though the call never returned. Everything after the
 adapter returns — the confirm prompt, the output-file read — is post-launch by
 position, whatever it raises. The headless path matters most — this repo configures
 `mode: headless` for `deps`, `review_plan` and `review_implementation`, and the
-receipt gate excludes `PROMPT` outright.
+receipt gate excludes `PROMPT` outright. A human decline on the non-blocking
+interactive confirmation is explicitly `cancelled=True`, even though the process
+launched; this exempts it from review-pass accounting. Output-read failures after
+launch remain ordinary launched failures.
 
 `launch_attempted` is a separate structured boundary: it becomes true only after
 dispatch has passed validation and is about to call the process launcher. A
@@ -704,7 +902,23 @@ less information than any outcome from one that did, so recording it can never
 downgrade or overwrite a real receipt for the same commit+binding. Budget
 protection (#462) and receipt *classification* remain separate problems: the gate
 at `review_delegation_service.py` already withheld budget, and `never_launched`
-is what now lets the remediation be trusted instead of hedged.
+is what lets the remediation distinguish a failed launch from a launched crash.
+`ReviewOutcome.FAILED` consumes a pass but never satisfies review or becomes an
+incremental baseline. Success and timeout retain their existing semantics;
+prompt/preflight failure, skipped dispatch and explicit cancellation are exempt.
+Implementation failure handling writes the receipt inside the existing binding
+reservation before releasing concurrent admission. The budget announcement uses
+the persisted count and does not claim consumption when the write failed.
+
+Receipt precedence is `UNATTEMPTED < NOTHING_STAGED < FAILED < TIMED_OUT < NO_DIFF
+< REVIEWED`. Accounting remains idempotent per commit+binding, not per dispatch:
+repeated crashes on one commit spend one tuple, and success promotes failure
+without adding a tuple. Existing implementation cap policy alone permits an
+unreviewed cap-reached completion; failed receipts never certify implementation
+or PR-comment completion. Plan-review failures still leave plan validation
+closed, with no plan-review cap. Receipt schema version stays unchanged; older
+runtimes reject the new enum value and cannot be relied on to count it. No
+historical receipt is rewritten.
 `_report_failed_review()` grades it by what wade actually knows — (1) known
 sandboxed parent **and** an explicit policy denial → state the cause and exact
 relaunch command; (2) a generic denial-shaped failure → explain it might also be
@@ -762,10 +976,11 @@ default when no hostname is given.
 
 **Plan-directory fallback.** `plan()` keeps a supported worktree-less mode: if
 the detached planning worktree cannot be created (bootstrap failure, or no git
-repo at all), it writes plan files to a throwaway directory and launches the
-agent from the caller's checkout. A bare worktree check would report
-`IN_MAIN_CHECKOUT` / `NOT_IN_GIT_REPO` there and the mandatory first action
-would tell the agent to stop, making the fallback unusable. `plan()` therefore
+repo at all), it collects and imports in an isolated throwaway root's
+`.wade/plans/`, with the frozen bundle alongside it. The planner runs there,
+and the prompt names the source checkout only as a read reference, not an added
+write grant. A bare worktree check would report `NOT_IN_GIT_REPO` there.
+`plan()` therefore
 exports `WADE_PLAN_DIR` (`PLAN_DIR_ENV_VAR`) for the duration of that launch
 only; PLAN readiness consults it exclusively when the base check did **not**
 return `IN_WORKTREE`, write-probes the directory, and returns `PLAN_DIR_ONLY`
@@ -800,7 +1015,32 @@ The implementation-review pass cap distinguishes an attempted, bounded review
 from a reviewer that never launched: success and a true headless timeout count
 toward `done.max_review_passes`, but missing credentials/PATH or a sandbox exec
 denial do not. Otherwise an unavailable reviewer could exhaust the cap and let
-`done` bypass its review gate without any review attempt.
+`done` bypass its review gate without any review attempt. For an implementation
+session, `wade review implementation` consults that same active frozen-binding
+count before dispatch and skips an excess launch; `implementation-session done`
+remains the authoritative classifier for accepting an unreviewed later commit
+and projecting its cap-reached PR review status. A valid `--ack-self-review`
+still records the current binding receipt because it acknowledges work already
+performed rather than dispatching a reviewer. Plan and PR-comment reviews are
+uncapped.
+
+Review input converges without weakening completion evidence. The first mapped
+implementation review uses the full branch diff; later reviews may select the
+nearest satisfying record for the same frozen REVIEW binding that is an ancestor
+of `HEAD`, then inspect only the delta from that commit. A Git error, malformed
+or foreign record, non-ancestor, or merge on that ancestry path forces the full
+branch diff. Staged and unstaged changes remain separate inputs in either case,
+and every review writes its ordinary exact-HEAD receipt.
+
+`review_cycle_service.py` stores the PR-comment session's issue/PR identity,
+pre-edit baseline, and normalized feedback in `.wade/review-cycles/`, outside
+the immutable session bundle. Re-fetching retains prior feedback and adds new
+feedback while preserving the baseline; a successful PR-comment `done` removes
+it. The closing review receives the accumulated feedback and cycle delta only
+after safe state, identity, ancestry, and merge-path checks. Any failed check
+emits a diagnostic and reviews the complete branch diff instead. That fallback
+also selects the full-branch result contract, which overrides the frozen
+feedback-fix methodology's narrow scope.
 
 The capability remediation is intentionally tool-neutral: retain the sandbox
 and grant only the worktree Git metadata paths, GitHub credential/API route, or
@@ -873,6 +1113,17 @@ is upgraded — **no re-init, resync, or migration is needed.**
 
 ## Completion Gates & the `done`-marker
 
+The shared finalizer requires default draft-to-ready promotion before label
+removal, bot reviews, or completion-success output. Promotion failure revokes
+only the active worktree/repository root's done markers and remains retryable;
+pushed work, body updates, other receipts and feedback-cycle history survive.
+Fallback creation may recover an existing PR, so completion verifies its matching
+number, OPEN state and explicit Boolean draft status through the git lookup.
+`--draft` preserves observed state without demoting ready PRs. Automatic bot
+posting and offers, including `--trigger-bots`, run only for a ready result;
+drafts consume no bot-trigger markers. Planning/bootstrap drafts and manual
+review-trigger commands keep their existing behavior.
+
 `done` (`implementation_service/done.py`) is the authoritative completion gate.
 Both `implementation-session done` and `review-pr-comments-session done` call the
 same `done()` service, parameterized by `session_type`; the gate set branches on
@@ -897,12 +1148,90 @@ HEAD, so any sha-keyed check must precede it):
    review evidence.
 5. **documentation decision** (both) — require an `updated` or reasoned
    `not-needed` receipt for the pre-sync HEAD and session kind.
-6. **sync** (both) — auto-sync through the existing service and refuse only on
-   conflict.
+6. **sync** (both) — auto-sync through the existing service and refuse conflicts.
 7. **knowledge validity** (both, when enabled) — runs after sync so a union-merge
-   corruption cannot ship.
-8. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing
+   corruption cannot ship. Pin the reviewed tip and accepted actual base merge;
+   late authored knowledge, ambiguous merged claims/history or further HEAD
+   changes require fresh closing checks. The knowledge-only comparison does not
+   certify arbitrary non-knowledge tree equivalence.
+8. `_done_via_pr` writes `.wade/done@<approved HEAD>` immediately before pushing
+   that immutable SHA when knowledge gates are enabled,
    and projects the review outcome into the PR body.
+   The existing-PR body callback preserves `None` for a failed read; the shared
+   body helper refuses to transform or write it, while an empty string remains
+   a valid read. A failed body read or write clears the active marker root's
+   `done` marker family and returns before ready promotion, label removal, or
+   bot-review actions. Retry reads the current remote body again. Other review,
+   documentation, bot, and feedback-cycle state stays intact; the successful
+   push and any earlier title synchronization are not rolled back.
+
+**Structural body replacement (#495).** The leaf `utils/markdown.py` owns an
+offset-preserving scanner for standalone `wade:<name>:start/end` pairs, code
+fences, and column-zero ATX headings. The direct `markdown-it-py` dependency
+supplies CommonMark token nesting and source line maps; WADE retains original
+CR/LF offsets and never renders parsed content. Standalone marker lines within
+multiline top-level raw HTML spans remain visible; list/quote/code containers
+still exclude literal marker examples. Only Summary finalization and
+dependency updates adopt it; existing extraction, session-list, usage, and budget helpers
+retain their own contracts. Pydantic range models carry offsets into the
+original string so unrelated content, including CRLF slices, remains unchanged.
+Backtick/tilde fences accept zero-to-three-space indentation and matching longer
+closing runs, including fences in nested list/quote containers. List/quote/code
+contents cannot supply owned pairs or legacy headings. The parser decides
+paragraph, setext, lazy-continuation, blank-line and indentation boundaries;
+WADE does not maintain a second container state machine. The locked parser's
+fence rule includes a real closing line in its source map and excludes it from
+content. WADE checks that contract explicitly to reject auto-closed fences;
+regressions cover empty/content/marker payloads, containers, CR/LF/CRLF and EOF.
+If token nesting reaches the configured parser limit (100), refuse instead of
+trusting an incomplete parse. This evidence-driven parser adoption replaces
+manual container tracking after reproduced preservation failures; it does not
+change the scanner/edit API or adopt it in other Markdown consumers.
+
+Each owned pair is authoritative and replaced in place. Without a pair, a unique
+column-zero ATX legacy H2 may migrate only up to the first actual top-level
+H1/H2, managed range, fence, or EOF. All top-level headings are recorded as
+boundaries, including indented ATX and setext; `legacy_candidate` separately
+marks eligible migration starts. Unmarked lookalikes elsewhere remain untouched when a pair exists. If an
+empty update removes a pair or legacy section while a same-named human H2
+remains, retain an empty owned pair. Determine this using a provisional cleared
+projection, because removing old HTML can expose previously hidden headings.
+An existing owned pair retains its original offset. This is necessary ownership evidence:
+without it, an identical retry misclassifies that human section as legacy. Empty
+pairs remain idempotent and accept later nonempty replacement; when no such
+human heading remains, removal still deletes the owned pair. This evidence-driven
+exception to the original plan's literal pair-removal wording satisfies its
+stronger human-content preservation and repeated-update acceptance criteria.
+Select ownership and at most one legacy range from the original body before
+rendering. The finalizer selects Summary and review-status together and assembles
+their complete replacements atomically; no temporary cleared projection can
+authorize another deletion or reject an otherwise valid final context. Validate
+that unrelated managed block names and exact source slices still have the same
+multiplicity in the rendered scan. If an edit reclassifies one as literal text
+(or exposes a previously literal block as an owner), refuse rather than change
+ownership across parser contexts.
+Missing Summary/review projections use real managed anchors: Summary precedes existing
+review status or the first implementation usage; missing review status follows
+Summary, otherwise precedes usage. An outgoing projection whose final content
+and retained ownership evidence are both absent cannot serve as an insertion
+anchor. Retained empty ownership pairs remain valid anchors. Repeated unrelated
+blocks remain opaque.
+Internal source slots retain original positional anchors while excluding selected
+outgoing Summary/review text from the existing reference helper. New projection
+examples are inserted afterward. No slot-bearing body is parsed for ownership or
+written remotely. Empty-pair retention considers both final projections together;
+missing pairs use the same required anchors even when retained only as ownership
+evidence. Final managed ownership and exact unrelated source slices are checked
+after the complete composition.
+
+Validate the original, rendered candidate, and post-budget write payload.
+Unmatched, reversed, nested/crossed markers, duplicate owned pairs, ambiguous
+legacy headings, and unclosed fences raise `MarkdownStructureError`. The shared
+finalizer catches this before the remote body write and follows the failed-body
+completion path above, including revoking only done markers; diagnostics name
+the current body or new summary input. Dependency updates report a skipped issue,
+do not count it as updated, and continue the batch. This is conservative
+migration, not a general Markdown parser or a concurrent-write compare-and-swap.
 
 **Review status is legible in the PR body (#367).** `_classify_review()` is the
 single source for the gate and the `wade:review-status` PR-body block. It records
@@ -911,7 +1240,7 @@ includes the active binding's pass count. The structured worktree records under
 `.wade/reviews/` provide deterministic gate evidence; the PR-body projection is
 the durable human-readable outcome.
 
-Binding-aware review records and documentation receipts use the descriptor-safe
+Binding-aware review records, review-cycle contexts, and documentation receipts use the descriptor-safe
 state primitives in `utils/safe_state.py`: `.wade` and intermediate directories
 must be real directories, final files are opened relative to trusted directory
 handles, and malformed/symlinked/unreadable state is treated as absent. Record
@@ -949,6 +1278,45 @@ and `commit-msg` in one call so their chaining stays correct. **Honesty:**
 `git push --no-verify` bypasses it in one flag — a quality/backstop layer, not a
 boundary.
 
+## Removed review-worktree recovery
+
+`services/review_recovery.py` delegates to a Git-layer fetch into a unique
+`refs/wade/review-fetch/` pin, using `--refmap= --no-tags --no-prune` to disable
+configured opportunistic tracking updates, tag following and pruning. It captures the fetched commit and installs the tracking ref
+with expected-old/no-deref semantics; fetch never follows a symbolic tracking
+ref into a checked-out local branch. Preexisting symbolic destinations refuse
+before fetch, and tracking races cannot move their symbolic targets. Successful
+installation deletes only the owned temporary pin at its captured OID; failure
+reports its inspection ref. The captured commit stays fixed for the entire
+recovery operation. Cached tracking refs establish
+neither a fresh PR head after a failed fetch nor live remote absence:
+`git/branch.py:live_remote_head_exists` accepts absence only from an exact
+`ls-remote --exit-code --refs` no-match response. Only that result permits a
+warned local-only fallback; query and fetch failures remain distinct.
+
+`git/worktree.py:recover_branch_worktree` reserves an unused destination with
+ordinary `worktree add --no-checkout`, rechecks ownership and reads the actual
+local tip. A single expected-old `update-ref --stdin` transaction preserves a
+differing tip under `refs/wade/recovery/<branch>/<old-OID>` and aligns the task
+head. Existing backups are verified, never overwritten; lock or CAS failures
+stop without retrying an unconditional update. Index-only `read-tree` and
+non-forcing `checkout-index` populate the pinned tree without discarding ignored
+or untracked collisions. Local fallback reserves detached first, then attaches
+with `checkout --no-guess --no-overwrite-ignore <branch> --`; the trailing `--`
+prevents a deleted branch from becoming a tracked-path restoration. Final
+verification checks the fully qualified symbolic branch, HEAD, index and working
+files against the pin, so a same-named tag cannot cause a false refusal.
+
+A destination-keyed Pydantic record in `<git-common-dir>/.wade/review-recovery/`
+is atomically persisted before reservation and updated through the recovery
+phases under a shared lock. Only verified success clears it. Failure or
+interruption retains all partial files and refs. `review_service.start` checks
+this record before accepting an existing worktree, looking up its PR or taking
+the quiet-success path; corrupt, unreadable and unsafe markers fail closed.
+This mutable state is separate from frozen session bundles and scaffold
+retarget recovery. Existing ordinary worktrees and shared checkout helpers keep
+their previous behavior.
+
 ## Command Dispatch
 
 `src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `deps-session`, `implementation-session`, `review-pr-comments-session`, `review`, `knowledge`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias (for `task`) and `address-reviews-session` (for `review-pr-comments-session`) are hidden Typer groups pointing at the same apps, and `hook` is a hidden write-guard entry point invoked by AI tools. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
@@ -985,7 +1353,7 @@ models:                      # values below are crossby's claude defaults, not w
     easy: claude-haiku-4.5
     medium: claude-sonnet-5
     complex: claude-sonnet-5
-    very_complex: claude-opus-5
+    very_complex: claude-opus-5.5
 provider:
   name: github
 hooks:
@@ -1172,73 +1540,31 @@ exactly as before #448. See knowledge `cc91cd11` for the generalized principle.
 
 The tier values `wade init` writes are **not wade constants** — `init_service/config_io.py::_resolve_models()` seeds them from `crossby.config.defaults.get_defaults(tool)`, so **bumping the crossby pin changes what newly initialized projects get**. The example above shows crossby's `claude` defaults at the currently pinned version; run `get_defaults()` for the authoritative set rather than trusting a doc snapshot, and re-check this block on every crossby bump. A bump does **not** rewrite tiers an existing `.wade.yml` already sets: `wade update` re-resolves the defaults and calls `_patch_config` without `force`, which backfills only *absent* tiers. So a fresh `wade init` picks up the new defaults wholesale, while an existing project changes only where it left a tier unset.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for every command, with no per-command asymmetry. Network access is unconditionally on and no longer configurable — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, `sandbox`, and `timeout` keys as applicable. `sandbox` (global `ai.sandbox` or per-command) is the cross-tool AI-runtime sandbox profile resolved by `resolve_sandbox()`: CLI `--sandbox`/`--no-sandbox` > per-command > global > **`False` (unrestricted)** for ordinary launches. Native terminal planning uses that same default; the collector fallback keeps its safe posture. Both preserve explicit sandbox requirements. Network access is unconditionally on for ordinary non-plan launches; planning exposes an independent default-off request — see the "AI runtime sandbox profile" section above. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
 
-**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True` for native plan tools, and `plan_mode=False` for Antigravity CLI whose native plan mode sandboxes writes to an external brain store while WADE's plan-artifact guard enforces containment); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`. Every launch command (`plan`, `implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
+**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a tool without native auto support can downgrade to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. Native terminal planning forwards the requested tier through Crossby's Plan-mode validator and ordinary launch; unsupported combinations fail instead of downgrading. Codex uses native terminal startup events and supports all four approval tiers. The retained collector fallback uses parent-only `default`/`yolo` and a separate native approval policy. Ordinary invalid autonomy configuration warns and falls back to `default`. Every ordinary launch command (`implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule. In addition, a completed non-zero headless exit preserves trimmed stdout and appends a clearly labeled stderr tail (the final 20 non-empty lines, capped at 4,000 characters, with truncation labeled); only failures with neither stream retain the generic no-output fallback.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
 **Repo-quality gates** (`HooksConfig` → `PreCommitConfig` / `CommitMsgConfig` / `PostToolUseConfig`, #352): three opt-in, off-by-default subsections. `pre_commit.{lint,test}` and `commit_msg.conventional` install per-worktree `pre-commit` / `commit-msg` git hooks (baked from config at bootstrap via placeholder substitution — no per-commit config load). They are reconciled together with the `done.pre_push_backstop` `pre-push` hook by `reconcile_worktree_git_hooks`, which installs the desired set in one batch (so every prior user hook is captured **before** wade sets `core.hooksPath` — per-hook `.chain-<hook_name>` files; a #349 unsuffixed `.chain` is migrated to `.chain-pre-push` on upgrade) **and** is idempotent across re-bootstraps of a reused worktree: a gate turned off since a prior session is neutralized (a chain-only passthrough that still runs any captured prior, or a full uninstall + `core.hooksPath` unset when nothing is managed), so disabling a gate actually disables it. `post_tool_use` installs a PostToolUse hook into context-capable tools only (dialect ≠ `DECISION`, so Antigravity CLI is skipped and its prior entry removed); the command is **stable** (`wade-hook post_tool_use --tool <id> --root <root>`) and resolves `lint_cmd`/timeout/scope from `.wade.yml` at runtime, so re-bootstrap dedups, a disabled gate's entry is removed (and a leftover hook self-noops), and it fails open — lints the just-edited file (`lint_cmd` file-scoped; falls back to `pre_commit.lint` whole-repo) and injects findings back as `additionalContext`, never blocking. All three, like `done`, derive their `check_service` validator allowlists from `*.model_fields` so config-key validity can't drift (knowledge `ca245d6a`). **Honesty:** `git commit --no-verify` bypasses the git hooks — these are quality gates, not enforcement boundaries.
 
-**Project knowledge** (worktree-local lifecycle, #358/#462): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — an attached session edits the copy in its worktree and the change rides to `main` with its PR. They are never copied into worktrees (a copy would manufacture a stale snapshot). Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`.
-
-**Detached-vote staging (#462):** `record_rating_for_session()` first validates
-the entry against the detached worktree's committed knowledge snapshot, then
-serializes a durable `RatingEvent` only to `.wade/knowledge-ratings-staged.jsonl`.
-What *authorizes* staging is `is_throwaway_knowledge_session()`: a
-`.wade/throwaway-session` marker **plus** a linked worktree on a detached HEAD.
-The marker is written by the two parents that create such a worktree
-(`plan()` and standalone `task deps`, via `mark_throwaway_knowledge_session`) —
-i.e. exactly the two lifecycles that later call `flush_staged_ratings()`. A bare
-detached HEAD is deliberately not enough: a primary checkout parked on one (CI,
-`git checkout <sha>`, bisect) or a hand-made `git worktree add --detach` has no
-parent that would ever flush the artefact, so a vote staged there would be
-stranded — those write the ordinary ratings sidecar instead.
-Read-only `knowledge get`, `status`, and `tag list` use that same local snapshot;
-they never cross into the main checkout. The parent plan/deps lifecycle calls
-`flush_staged_ratings()` before cleanup, holds the staging-log lock through its
-snapshot, the locked main-spool transfer, and staging cleanup, then appends only
-event IDs not already present and fsyncs. A live sibling's append therefore
-waits until cleanup and creates a fresh log rather than being lost between the
-snapshot and unlink. Every filesystem operation on a session-relative
-`.wade/` path — the readiness probe, the marker writer
-(`mark_throwaway_knowledge_session`, which **raises** on an escape), the staging
-writer, and the flush's read + unlink — first rejects a parent that is a symlink
-or resolves outside the session root (`path_escapes_session`): `.wade/` is an
-ordinary checked-out path, so a symlink there would silently redirect a vote into
-the main checkout (or make the post-transfer `unlink` delete an outside file),
-and a preflight alone cannot stop one planted afterwards. The flush *skips* such
-a path (success, nothing to hand off) rather than failing, since the writer's
-identical check means nothing could legitimately be staged there and a failure
-would strand the worktree on an unclearable condition. A failed or partially
-completed handoff leaves the
-throwaway worktree and its generated output in place for retry — and that retry
-is real, not advisory: `wade plan` and standalone `wade task deps` both call
-`report_retained_vote_recovery` (`services/knowledge_recovery.py`) **before**
-creating their next worktree, which sweeps every linked worktree of the repo
-still carrying the throwaway marker plus a staging log
-(`flush_retained_staged_ratings`) and reports what it recovered. Discovery is
-deterministic, so no resume command or user bookkeeping is needed. The sweep
-never *removes* a worktree — a retained one may be a live sibling session — and
-is safe to run against one anyway, because the flush skips event IDs already in
-the main spool. Standalone deps
-also fsyncs its returned edges to `.wade/deps-analysis-output.txt` before that
-handoff, because stdout alone would be lost with the parent process. Duplicate
-delivery of a new event is folded once, while legacy no-ID JSONL vote records
-retain their historical duplicate-vote semantics. The next attached
-bootstrap's existing ratings-only carry-forward remains the sole path that puts
-tracked ratings into a PR. `knowledge status` reports staged votes from a
-detached session in addition to canonical sidecar dirt, and carries an
-unreadable staging log as its own `staging_error` state — a corrupt transport
-log is a *failing handoff*, so it must never be collapsed into "0 staged votes"
-and reported as a clean session.
-
-`wade task deps` runs the `DEPS` check for **every** non-prompt agent cwd, not
-only a worktree it created itself — a reused planning worktree with blocked
-`.wade/` staging must stop delegation too. Cleanup differs by owner: a
-standalone worktree this call created is removed (nothing was produced yet),
-while a planning worktree is preserved for the parent `wade plan` lifecycle that
-flushes its votes.
+**Project knowledge** (#510): tracked prose and schema1 append-only evidence receipts
+belong to a valid owning implementation/PR-comment worktree. Assessment,
+publication, usefulness and historical relationships remain independent.
+Reconciliation reads consistent committed Git trees without fetching; file proof
+uses blob identity across receipt commits/rebase/squash. Main/detached/bounded
+workers persist ignored Git-common-dir owner-bound proposals, never a generic
+tracked main spool. Only a verified original parent/task/content association can
+be accepted, and fresh committed proof is required for correctness. Bootstrap
+never adopts foreign feedback. A separately frozen original author association
+binds worktree/branch/provider/task and cannot move on branch switch or refresh.
+Shared acceptance records converge under the queue lock. Shared done gates
+reconcile after sync, pin the approved candidate, and push its explicit SHA;
+late authored knowledge or ambiguous knowledge merges require fresh closing
+checks. Recovery merges after the pin cannot inherit an old review. Invalid or
+changed displayed claims withhold committed labels; unsafe done markers clear.
+See [knowledge.md](knowledge.md) for proof types, concurrency, exact-duplicate
+normalization, compatibility, ownership and explicit recovery commands.
 
 **Lifecycle readiness enforcement (#462):** Phase readiness is resolved by
 `check_service.resolve_session_readiness(phase, cwd)` — it loads config, maps the
@@ -1323,72 +1649,31 @@ Each AI tool adapter must implement the abstract method `capabilities()` (binary
 
 **Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
-## Planning Lifecycle (plan-file contract)
+## Planning Lifecycle (validated plan handoff)
 
-`wade plan` (`services/plan_service.py`) is a **two-phase** flow. The AI **never
-creates issues** — it writes one `PLAN*.md` per issue to a plan directory, and
-after it exits **wade** validates those files and persists the issues and draft
-PRs itself. This is a deliberate determinism boundary (see *Determinism via
-Services*): the agent authors plan content; code decides what becomes an issue.
+The planning boundaries above supply validated, reviewed `PlanFile`
+members to the existing task lifecycle. The agent authors content; deterministic
+services decide what becomes a task. Collection/import/review errors and
+noninteractive mixed-validity subsets create no tasks.
 
-**Phase 1 — generate plan files.** In a git repo the service creates a
-detached-HEAD **planning worktree** (`git/worktree.py:create_detached_worktree`),
-bootstraps its fixed plan workflow and frozen WORK/REVIEW bindings, and points the
-AI at `<worktree>/.wade/plans/`. Isolating outputs to that subdirectory keeps
-ordinary repo markdown (e.g. `README.md`) from being misread as a generated plan.
-Outside a git repo it falls back to a `tempfile.mkdtemp(prefix="wade-plan-")`
-temp dir, materializes the same session bundle inside that directory, and skips
-draft-PR creation (except for Antigravity CLI, which requires a
-guarded git planning worktree because its launch uses normal file writing mode with
-WADE's plan-artifact PreToolUse guard rather than agy's brain-sandboxed native plan mode).
-The launch prompt (`plan-session.md`) tells the agent to write a plan file per issue
-and to **not** create the issues.
+For each accepted plan, `_create_issues_from_plans` creates a lightweight task,
+adds complexity labels, bootstraps a draft PR containing the full plan, then
+links that PR in the task. Task providers may be non-GitHub; PR APIs still use
+`GitHubPRDelegateMixin`. A failed draft bootstrap closes the lightweight issue
+best-effort to avoid orphaning it, reports failure, and retains the plan.
 
-**Phase 2 — validate, then persist.** After the AI exits, wade discovers the
-title-parseable files (`validate_plan_files`) and runs the **strict**
-`_select_valid_plans` gate (`utils/plan_validation.py:validate_plan_dir`): every
-plan must carry a `## Complexity` and a conventional-commit title prefix. Invalid
-files are surfaced loudly and skipped — a TTY run confirms before proceeding with
-the valid subset; a non-TTY / `yolo` run proceeds after the warning. For a
-from-scratch plan, `_create_issues_from_plans` then, **per valid plan file**:
+With `--issue <id>`, one accepted plan attaches to the original task, preserving
+its body and guarding in-flight PR base retargets. Multiple plans supersede it
+only when all their task/PR writes succeed; the existing close confirmation
+remains. A partial split leaves the original open and retains failed output;
+it does not authorize an implementation offer or report overall success.
 
-1. Creates a **lightweight task** (title + a brief context excerpt) via the
-   configured provider's `create_task` — this may be a **non-GitHub** provider.
-2. Adds the `complexity:X` label.
-3. Bootstraps a **draft PR** carrying the full plan body (`bootstrap_draft_pr`),
-   then appends the PR link to the task body. Draft-PR / review APIs always flow
-   through GitHub (`gh`) regardless of the task provider: non-GitHub providers
-   compose `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), so task CRUD
-   uses the provider's own backend while PR/review operations delegate to `gh`.
-
-**`--issue <id>` (attach / supersede).** With an issue id, the session is
-pre-loaded with that issue's context (and the issue heading is persisted to
-`.wade/plan-issue.md` so a resumed/compacted plan session can re-inject it). A
-**single** valid plan is attached to the existing issue via a draft PR
-(`_attach_plan_to_existing_issue`, preserving the original body and appending the
-PR link); **multiple** plans **supersede** it — one new issue per plan
-(`_supersede_issue_with_plans`). Only if every plan became an issue does it then
-comment on the original and — unless `yolo` — prompt to close it as *not
-planned*; declining that prompt leaves the original open even though every plan
-succeeded. A partial split (some plans failed to become issues) always leaves
-the original open, no prompt asked.
-
-**Partial-plan preservation.** When the strict gate rejects a batch (all invalid,
-or the user aborted a partial run) or a draft PR can't be persisted (e.g. an
-unresolvable declared base), the generated `PLAN*.md` are salvaged to a stable
-temp dir (`_preserve_generated_plans`) instead of being discarded with the
-worktree — a one-line fix (a missing `## Complexity`) shouldn't force a full
-re-plan. This covers the from-scratch multi-plan path and the single-plan attach
-failure path. The `--issue` **supersede** path is the exception: on a partial
-split, the failed plan files are *not* salvaged — `_supersede_issue_with_plans`
-returns only the successful issue numbers, and the caller finalizes those and
-removes the planning worktree/temp dir, discarding the failed plan(s) along with
-it. On the full-success paths the planning worktree/temp dir is cleaned up.
-
-**Automatic dependency analysis.** When a run produces **2+** issues,
-`_finalize_issues` runs `deps_service.analyze_deps` over them and applies any
-dependency edges it finds (reusing the planning worktree). A single-issue run
-instead offers to start implementing it immediately.
+Native provenance is recorded independently of token usage. Explicit bundle
+dependencies are mapped to task IDs and persisted with a tracking issue when
+edges exist. Failures preserve recoverable output and report incomplete
+persistence, rather than pretending already-created external state was rolled
+back. The single-task implementation offer is a separate human confirmation,
+including under YOLO. Successful vote flushing and cleanup remain required.
 
 ## Merge Strategy
 
@@ -1397,6 +1682,20 @@ instead offers to start implementing it immediately.
 - **`PR`** (default and only) — The agent runs `wade implementation-session done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `done` — it is cleaned up automatically by `implement` after the human merges the PR. When the tool exits, `implement`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
 
 `wade implementation-session done` handles PR creation / update. The post-work lifecycle prompt handles the merge decision.
+
+After a successful remote merge, `lifecycle._pull_main_after_merge()` routes its
+bounded pull-recovery loop to the main checkout. It stashes tracked changes
+once with `git.stash.create_named_stash`, using the main checkout's actual
+branch, and carries the returned SHA/message through success and rollback.
+Restoration applies that exact SHA once; it never pops the shared stack or
+falls back to another entry. Successful apply preserves any remaining owned
+entry for manual cleanup: the shared `drop_stash_by_sha` helper verifies a positional ref
+before a separate drop, leaving a concurrent-push window this caller avoids by
+not deleting. Conflicts, unavailable identities, and stash-creation failures
+report recovery while preserving any remaining entries. Untracked move-aside
+and rollback ordering stay intact; local rollback is best effort rather than
+crash-safe or an exact no-op when restoration fails. Local warnings do not
+change the already-successful remote merge result.
 
 ## Determinism via Services
 
@@ -1423,7 +1722,18 @@ When wade installs skills into a target project (per session, via worktree boots
 **`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
 - `--cd` — Create worktree, print its path to stdout, and exit without launching AI. Deterministic setup still runs first (for example worktree bootstrap and draft-PR bootstrap when needed). Used internally by `wade cd`.
-- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (read from the PR lookup's `baseRefName`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). An explicit `--base` is validated for well-formedness up front (`is_valid_git_ref`, symmetric with the plan-declared path checked at plan-done) so a malformed value fails fast instead of surfacing later as a murkier "does not exist"; a chain-derived base is a generated branch name and always passes. Reading the base off the already-verified lookup (rather than a second `get_pr_base_branch` query, whose `None` conflates "no base" with "gh failed") avoids a silent fallback to `main`. The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it — and cleared when the effective base resolves back to `main` (e.g. `--base main` retargeting a reused worktree's PR), so a stale pin never keeps targeting the old base. `sync`/`done` treat the stored base as **authoritative**: they no longer gate on a local/`origin/<base>` existence check (which a single-branch / narrow-refspec clone can fail even for a valid base), and instead let the fetch/merge path surface an unresolvable base as an error rather than silently falling back to `main`. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. Editing the PR base does **not** rewrite the head branch's ancestry, so a **scaffold-only** branch (only its scaffold commit beyond the old base) is first re-rooted on the new base and force-pushed (`reroot_scaffold_branch_for_retarget`, shared by the plan and implement retarget paths) — otherwise the old base's commits would leak into the new base's diff and merge into it. When the scaffold branch is **not** checked out it is moved with `git branch -f`; when it **is** checked out (the `wade implement --cd` case) it is re-rooted *in place* with a hard reset inside its worktree (`reset_worktree_hard`), since `git branch -f` refuses a checked-out branch. The reroot **aborts** rather than retarget onto a stale branch when it can't be done loss-free: an unresolvable old base (can't prove the branch is scaffold-only — a reset might discard commits), a checked-out worktree with uncommitted **tracked** changes (`has_tracked_changes`) or one whose path can't be resolved, or an unresolvable new base. A branch carrying **real work** (`_branch_has_real_work`: more than the scaffold commit past its base — measured against the local head or `origin/<branch>` when the head lives only on the remote) cannot be rewritten without discarding it, so `start()` guards that case — confirm in a TTY, else abort — instead of silently flipping the base and polluting the PR, mirroring the plan flow's `_base_retarget_is_safe`. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
+- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (read from the PR lookup's `baseRefName`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). An explicit `--base` is validated for well-formedness up front (`is_valid_git_ref`, symmetric with the plan-declared path checked at plan-done) so a malformed value fails fast instead of surfacing later as a murkier "does not exist"; a chain-derived base is a generated branch name and always passes. Reading the base off the already-verified lookup (rather than a second `get_pr_base_branch` query, whose `None` conflates "no base" with "gh failed") avoids a silent fallback to `main`. The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it — and cleared when the effective base resolves back to `main` (e.g. `--base main` retargeting a reused worktree's PR), so a stale pin never keeps targeting the old base. `sync`/`done` treat the stored base as **authoritative**: they no longer gate on a local/`origin/<base>` existence check (which a single-branch / narrow-refspec clone can fail even for a valid base), and instead let the fetch/merge path surface an unresolvable base as an error rather than silently falling back to `main`. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. Editing the PR base does **not** rewrite the head branch's ancestry, so a **scaffold-only** branch (only its scaffold commit beyond the old base) is first re-rooted on the new base and force-pushed (`reroot_scaffold_branch_for_retarget`, shared by the plan and implement retarget paths) — otherwise the old base's commits would leak into the new base's diff and merge into it. When the scaffold branch is **not** checked out it is moved with `git branch -f`; when it **is** checked out (the `wade implement --cd` case) it is re-rooted *in place* with a hard reset inside its worktree (`reset_worktree_hard`), since `git branch -f` refuses a checked-out branch. The reroot **aborts** rather than retarget onto a stale branch when it can't be done loss-free: an unresolvable old base (can't prove the branch is scaffold-only — a reset might discard commits), a checked-out worktree with uncommitted **tracked** changes (`has_tracked_changes`), untracked or ignored filesystem paths obstructing the destination tree, or one whose path can't be resolved, or an unresolvable new base. A branch carrying **real work** (`_branch_has_real_work`: more than the scaffold commit past its base — measured against the local head or `origin/<branch>` when the head lives only on the remote) cannot be rewritten without discarding it, so `start()` guards that case — confirm in a TTY, else abort — instead of silently flipping the base and polluting the PR, mirroring the plan flow's `_base_retarget_is_safe`. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
+
+Scaffold hard resets pin the destination commit and inspect its complete tree against
+the index and filesystem before mutation. The git-layer guard includes ignored
+files, empty/nested directories, symlinks without following them, and filesystem
+case aliases; inspection errors refuse. Tree-entry modes distinguish gitlinks:
+resets explicitly pass `--no-recurse-submodules` to leave submodule directories
+and their contents alone even when `submodule.recurse=true`.
+The same guard applies to scaffold
+rollback after a failed PR-base edit. An obstructed rollback preserves the new
+user data and reports the existing branch/PR divergence for manual recovery.
+This preflight does not provide isolation from concurrent filesystem writers.
 
 **`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.
@@ -1442,6 +1752,34 @@ When wade installs skills into a target project (per session, via worktree boots
 
 **`wade worktree remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).
+- `--force` skips confirmation; `--discard-dirty` explicitly permits data loss.
+
+Cleanup and staleness share typed operation-scoped `MergeAssessment` results
+from `git/merge_evidence.py`. Local branch containment permits offline cleanup.
+Otherwise `git/pr.py` exhausts paginated closed-PR records for the configured
+origin's explicit host/owner/repository, validating source repository/branch,
+base repository/name, recorded final `head.sha` and `merge_commit_sha`. It ignores
+`GH_REPO` and live source refs, so deleted/reused branches cannot substitute a
+new tip. Unknown, malformed, ambiguous and failed queries remain distinct from
+no exact match. Individual patch IDs and equal trees do not authorize removal.
+
+The PR path pins the configured origin URL and reuses recovery's
+`git/branch.py::fetch_review_snapshot` primitive with that explicit URL. Only a
+unique operation-owned pin is a fetch destination; expected-old, `--no-deref`
+installation updates the remote-tracking ref without following a symbolic ref
+into local history. Unsafe tracking refs or raced installation fail closed and
+retain any fetched pin for inspection. Failed refreshes never reuse cached PR
+proof; the recorded merge must be an ancestor of the fresh base. Later edits/reverts are allowed, base rewrites excluding the merge are not.
+Commit/object checks disable Git replacement objects. Cleanup normalizes the
+worktree inventory path, binds its full symbolic branch ref and actual HEAD
+without tag-name abbreviation, and rechecks the head, base, origin and cleanliness after queries/session-data preservation. Git's
+non-forced worktree removal provides the final dirty-file refusal. These checks
+bound revalidation; they do not promise atomicity against arbitrary writers.
+Stale listing is only a snapshot: cleanup revalidates its operation-scoped proof,
+open/unknown tasks remain ACTIVE, and remote disappearance alone proves no merge.
+Safe branch deletion remains `-d`; a squash/rebase branch may remain after its
+worktree is removed. No refusal escalates to `-D` without explicit discard.
+
 
 **`wade update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.
@@ -1478,3 +1816,33 @@ Dev:
 - `ruff>=0.4` — Linting and formatting
 - `pre-commit>=3.7` — Git hook management
 - `types-PyYAML>=6.0` — Type stubs for PyYAML
+
+
+## GitHub Projects v2 commands
+
+`cli/project.py` exposes items/rank/pick/sync as thin parsers/renderers.
+`services/project_service.py` resolves the optional top-level `github_projects`
+configuration and schema, evaluates deterministic fixed-bound scoring/filtering,
+counts the complete WIP pool before candidate filters, and orchestrates explicit
+numeric write-back. `models/project.py` contains pure typed configuration,
+connection results, contributions and operation outcomes. Loader, check-config
+and the schema re-export all accept the same nested model; init patching preserves
+it without introducing network calls.
+
+`providers/github_projects.py` is separate from AbstractTaskProvider and is
+constructed directly by the service. It owns explicit cwd/hostname gh transport,
+JSON stdin variables, bounded independent fields/items/fieldValues/content
+pagination, safe errors and one-number mutations. Field schemas retain the
+required Boolean `isIssueField`; sync rejects issue-backed or unknown output
+ownership before planning any write, even for unset numeric outputs. Label/assignee field values
+are not GraphQL Nodes: complete underlying content connections supply these
+values instead of assuming a value-node cursor. Unfetched connections have
+explicit completeness flags. Unknown selected unions and malformed pagination
+fail, and observed inaccessible content cannot imply available WIP capacity.
+
+Read/default sync never mutates; apply alone performs full baseline refresh,
+affected-item drift checks and sequential readback-verified numeric updates.
+No new task-provider ABC methods, lifecycle hooks, database state or writes to
+issue-owned fields are introduced. Existing best-effort move_to_in_progress
+behavior remains independent. See README for credentials, schema compatibility,
+visibility, scoring and non-atomic partial-failure contracts.
