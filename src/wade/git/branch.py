@@ -376,31 +376,6 @@ def is_merged_into(repo_root: Path, branch: str, base: str) -> bool | None:
     return None
 
 
-def all_patches_present(repo_root: Path, base: str, branch: str) -> bool:
-    """Return True when every commit on *branch* already has a patch on *base*.
-
-    Wraps ``git cherry <base> <branch>``, which compares *patch ids* rather than
-    commit ids — so it recognizes a squash- or rebase-merged branch whose tip is
-    NOT an ancestor of *base*. ``git cherry`` marks an already-applied commit
-    with ``-`` and a genuinely-absent one with ``+``; this returns True only
-    when the command succeeds and no line starts with ``+``.
-
-    Returns False on any git error (fail closed) and when *branch* has no
-    commits to compare (empty output) — an empty result must never read as
-    "safe to delete".
-
-    Caveat: ``git cherry`` compares individual patch ids, so squashing several
-    commits into one may still report ``+`` for each original commit. Treat a
-    True result as authoritative; a False result may still be a squash merge, so
-    callers fall back to it only *after* an exact ancestor check.
-    """
-    result = _run_git("cherry", base, branch, cwd=repo_root, check=False)
-    if result.returncode != 0:
-        return False
-    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    return bool(lines) and not any(ln.startswith("+") for ln in lines)
-
-
 def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
     """Count commits on *branch* that are not on *base*.
 
@@ -539,13 +514,15 @@ class ReviewTrackingError(GitError):
     """Snapshot validation/installation failed; never permit local fallback."""
 
 
-def fetch_review_snapshot(repo_root: Path, branch_name: str) -> str:
+def fetch_review_snapshot(repo_root: Path, branch_name: str, *, remote: str = "origin") -> str:
     """Fetch to an isolated pin, then CAS-install tracking without dereferencing.
 
     Fetch follows symbolic destination refs, so even a pre-fetch symbolic-ref
     check cannot protect a checked-out branch against an intervening ref swap.
     Only the isolated ref is a fetch destination; the tracking update uses
     expected-old/no-deref semantics and the returned pin never changes with it.
+    Verified cleanup may supply its pinned origin URL as ``remote``; review
+    recovery retains the ordinary named-origin default.
     """
     tracking = f"refs/remotes/origin/{branch_name}"
     isolated = "refs/wade/review-fetch/" + uuid.uuid4().hex
@@ -559,7 +536,7 @@ def fetch_review_snapshot(repo_root: Path, branch_name: str) -> str:
     # or discard a stale/divergent local head when the remote was force-pushed.
     # Even explicit refspecs otherwise opportunistically update configured
     # tracking refs; empty refmap plus no tags/pruning confines ref writes to this pin.
-    git_repo.fetch_ref(repo_root, "origin", f"refs/heads/{branch_name}:{isolated}", isolated=True)
+    git_repo.fetch_ref(repo_root, remote, f"refs/heads/{branch_name}:{isolated}", isolated=True)
     try:
         selected = resolve_ref_commit(repo_root, isolated)
         if selected is None:

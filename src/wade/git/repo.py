@@ -293,6 +293,15 @@ def get_current_branch(path: Path) -> str:
     return branch
 
 
+def get_current_branch_ref(path: Path) -> str:
+    """Read HEAD's fully qualified local branch, without tag abbreviation."""
+    result = _run_git("symbolic-ref", "--quiet", "HEAD", cwd=path)
+    ref = result.stdout.strip()
+    if not ref.startswith("refs/heads/"):
+        raise GitError("HEAD does not name a local branch")
+    return ref
+
+
 def is_head_attached(path: Path) -> bool:
     """Check whether HEAD is attached to a branch (i.e. not detached).
 

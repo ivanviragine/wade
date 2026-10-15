@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from crossby.models.ai import AIToolID
 
+from wade.models.merge_evidence import MergeAssessment, MergeEvidenceState
+from wade.models.worktree import Worktree
 from wade.services.implementation_service import _cleanup_worktree, _preserve_session_data
 
 _REPO = Path("/fake/repo")
@@ -90,6 +94,27 @@ class TestPreserveSessionData:
 
 
 class TestCleanupWorktreeCallsPreservation:
+    @pytest.fixture(autouse=True)
+    def _valid_cleanup_target(self) -> Iterator[None]:
+        # These tests isolate preservation ordering/resilience. The cleanup
+        # identity and history contracts have independent real-Git coverage.
+        prefix = "wade.services.implementation_service.cleanup"
+        with (
+            patch(
+                f"{prefix}._worktree_identity",
+                return_value=Worktree(path=str(_WT_PATH), branch="feat/1-thing", head="a" * 40),
+            ),
+            patch(
+                f"{prefix}.git_merge.assess_branch",
+                return_value=MergeAssessment(
+                    state=MergeEvidenceState.VERIFIED, reason="contained", branch="feat/1-thing"
+                ),
+            ),
+            patch(f"{prefix}._worktree_loss_risk", return_value=[]),
+            patch(f"{prefix}.git_branch.delete_branch"),
+        ):
+            yield
+
     def test_preservation_called_before_removal(self) -> None:
         """_preserve_session_data() is called before git_worktree.remove_worktree()."""
         call_order: list[str] = []

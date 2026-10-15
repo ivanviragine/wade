@@ -162,6 +162,13 @@ from valid original launch metadata. Finish or safely stop active planning paren
 before changing their shared editable source/environment: refreshing a workflow
 cannot replace already-imported models.
 
+Worktree cleanup and staleness share operation-scoped typed Git merge evidence
+in `git/merge_evidence.py`. Non-ancestral cleanup requires origin-bound exact
+recorded merged-PR head and fresh base ancestry, never patch-ID/tree equivalence
+or remote disappearance. Revalidate worktree HEAD/branch, base, origin and dirty
+state before non-forced removal; retain safe `git branch -d` refusals. See
+`docs/dev/architecture.md`.
+
 Scaffold retargets use a guarded git-layer hard reset: tracked edits and
 untracked/ignored paths obstructing the pinned destination tree must refuse
 before mutation. Noncolliding session output remains allowed. The guard also
