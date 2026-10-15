@@ -71,9 +71,10 @@ def read_review_record(
 _OUTCOME_PRECEDENCE = {
     ReviewOutcome.UNATTEMPTED: 0,
     ReviewOutcome.NOTHING_STAGED: 1,
-    ReviewOutcome.TIMED_OUT: 2,
-    ReviewOutcome.NO_DIFF: 3,
-    ReviewOutcome.REVIEWED: 4,
+    ReviewOutcome.FAILED: 2,
+    ReviewOutcome.TIMED_OUT: 3,
+    ReviewOutcome.NO_DIFF: 4,
+    ReviewOutcome.REVIEWED: 5,
 }
 
 
