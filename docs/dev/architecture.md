@@ -1246,8 +1246,8 @@ boundary.
 ## Removed review-worktree recovery
 
 `services/review_recovery.py` delegates to a Git-layer fetch into a unique
-`refs/wade/review-fetch/` pin, using `--refmap=` to disable configured opportunistic
-tracking updates. It captures the fetched commit and installs the tracking ref
+`refs/wade/review-fetch/` pin, using `--refmap= --no-tags --no-prune` to disable
+configured opportunistic tracking updates, tag following and pruning. It captures the fetched commit and installs the tracking ref
 with expected-old/no-deref semantics; fetch never follows a symbolic tracking
 ref into a checked-out local branch. Preexisting symbolic destinations refuse
 before fetch, and tracking races cannot move their symbolic targets. Successful

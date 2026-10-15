@@ -130,7 +130,7 @@ def test_force_pushed_recovery_preserves_displaced_unpublished_tip_and_other_wor
     fetch_errors: list[str] = []
     actual_fetch = git_repo.fetch_ref
 
-    def observe_real_fetch(root: Path, remote: str, refspec: str, **kwargs: str) -> None:
+    def observe_real_fetch(root: Path, remote: str, refspec: str, **kwargs: bool) -> None:
         try:
             actual_fetch(root, remote, refspec, **kwargs)
         except GitError as exc:
@@ -270,7 +270,7 @@ def test_successful_fetch_with_disappearing_tracking_ref_refuses_local_fallback(
     repo = recovery_repo
     actual_fetch = git_repo.fetch_ref
 
-    def remove_after_real_fetch(root: Path, remote: str, refspec: str, **kwargs: str) -> None:
+    def remove_after_real_fetch(root: Path, remote: str, refspec: str, **kwargs: bool) -> None:
         actual_fetch(root, remote, refspec, **kwargs)
         _git(repo.local, "update-ref", "-d", "refs/remotes/origin/" + repo.branch)
 
@@ -760,7 +760,7 @@ def test_isolated_fetch_cannot_follow_tracking_ref_races_or_fall_back(
     lock = repo.local / ".git" / (tracking + ".lock")
     isolated_ref = ""
 
-    def race_fetch(root: Path, remote: str, refspec: str, **kwargs: str) -> None:
+    def race_fetch(root: Path, remote: str, refspec: str, **kwargs: bool) -> None:
         nonlocal isolated_ref
         source, isolated_ref = refspec.split(":", 1)
         assert source == "refs/heads/" + repo.branch
@@ -816,4 +816,22 @@ def test_isolated_fetch_ignores_configured_local_head_mapping_and_clears_owned_p
     assert _git(result.path, "rev-parse", "HEAD") == repo.remote_tip
     assert _git(repo.local, "rev-parse", "refs/remotes/origin/" + repo.branch) == repo.remote_tip
     assert _git(repo.local, "for-each-ref", "refs/wade/review-fetch/") == ""
+    assert _protected(repo) == protected
+
+
+def test_isolated_fetch_preserves_local_tags_despite_prune_and_tag_config(
+    recovery_repo: RecoveryRepository,
+) -> None:
+    repo = recovery_repo
+    _git(repo.local, "tag", "precious-local-tag", repo.old_tip)
+    _git(repo.publisher, "tag", "remote-only-tag", repo.remote_tip)
+    _git(repo.publisher, "push", "origin", "refs/tags/remote-only-tag")
+    _git(repo.local, "config", "fetch.prune", "true")
+    _git(repo.local, "config", "fetch.pruneTags", "true")
+    _git(repo.local, "config", "remote.origin.tagOpt", "--tags")
+    protected = _protected(repo)
+    result = _recover_worktree(repo.local, repo.branch, _config(repo))
+    assert result.succeeded, result.detail
+    assert _git(repo.local, "rev-parse", "refs/tags/precious-local-tag") == repo.old_tip
+    assert _ref_absent(repo.local, "refs/tags/remote-only-tag")
     assert _protected(repo) == protected

@@ -649,22 +649,22 @@ def rev_parse(repo_root: Path, ref: str) -> str:
     return result.stdout.strip()
 
 
-def fetch_ref(repo_root: Path, remote: str, refspec: str, *, refmap: str | None = None) -> None:
+def fetch_ref(repo_root: Path, remote: str, refspec: str, *, isolated: bool = False) -> None:
     """Fetch a specific refspec from a remote.
 
     Args:
         repo_root: Repository root directory.
         remote: Remote name (e.g. "origin").
         refspec: Refspec to fetch (e.g. "branch:branch").
-        refmap: Override configured tracking mappings; empty disables opportunistic updates.
+        isolated: Disable configured tracking mappings, tag following and pruning.
 
     Raises:
         GitError: If the fetch fails.
     """
-    if refmap is None:
-        _run_git("fetch", remote, refspec, cwd=repo_root)
+    if isolated:
+        _run_git("fetch", "--refmap=", "--no-tags", "--no-prune", remote, refspec, cwd=repo_root)
     else:
-        _run_git("fetch", "--refmap=" + refmap, remote, refspec, cwd=repo_root)
+        _run_git("fetch", remote, refspec, cwd=repo_root)
 
 
 def has_remote(repo_root: Path) -> bool:

@@ -558,8 +558,8 @@ def fetch_review_snapshot(repo_root: Path, branch_name: str) -> str:
     # A unique, non-forcing destination cannot follow the task's tracking symref
     # or discard a stale/divergent local head when the remote was force-pushed.
     # Even explicit refspecs otherwise opportunistically update configured
-    # tracking refs; an empty refmap confines all head updates to this pin.
-    git_repo.fetch_ref(repo_root, "origin", f"refs/heads/{branch_name}:{isolated}", refmap="")
+    # tracking refs; empty refmap plus no tags/pruning confines ref writes to this pin.
+    git_repo.fetch_ref(repo_root, "origin", f"refs/heads/{branch_name}:{isolated}", isolated=True)
     try:
         selected = resolve_ref_commit(repo_root, isolated)
         if selected is None:
