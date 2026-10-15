@@ -234,7 +234,7 @@ class TestFixedWorkflowRendering:
     ) -> None:
         workflow = self._compose(tmp_git_repo, kind)
 
-        assert SESSION_DEFINITIONS[kind].workflow_revision == 3
+        assert SESSION_DEFINITIONS[kind].workflow_revision == 4
         assert (
             workflow.index("**Documentation [mandatory decision].**")
             < workflow.index("**Knowledge.**")

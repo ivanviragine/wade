@@ -42,7 +42,12 @@ Review methodology (loaded only by the bounded review step):
     conflicts through the documented recovery path and repeat until exit 0.
 11. **Done.** Run `wade implementation-session done`. This deterministic gate
     verifies required artifacts and the binding-aware review result, syncs when
-    needed, pushes, and updates the PR. Fix gate failures; do not bypass them
+    needed, pushes, and updates the PR. Default completion must promote a draft
+    to ready for review; a failed promotion blocks completion and revokes active
+    done markers. Restore access and retry this same command; pushed work and
+    review evidence remain available. `--draft` creates or preserves a draft,
+    never demotes a ready PR, and defers automatic bot reviews (even with
+    `--trigger-bots`) while the resulting PR is draft. Fix gate failures; do not bypass them
     except through an explicit configured policy or an auditable sanctioned
     review skip.
 12. **Present results.** {completion}

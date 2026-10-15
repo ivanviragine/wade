@@ -41,8 +41,13 @@ Closing review methodology (loaded only by the bounded review step):
     gate enforces this unless the project explicitly disables that policy.
 12. **Done.** Run `wade review-pr-comments-session done`. It must align with the
     implementation gate: required summary, current-binding review result, sync,
-    resolved threads, push, and PR update. Fix failures instead of routing around
-    them.
+    resolved threads, push, and PR update. Default completion requires successful
+    draft-to-ready promotion. A promotion failure blocks completion, clears only
+    active done markers, and preserves feedback context and retry evidence:
+    restore access and rerun this command. `--draft` creates or preserves a draft
+    without demoting ready PRs; automatic bot reviews are deferred for an actual
+    draft, even with `--trigger-bots`. Do not claim reviewers were notified for
+    draft completion. Fix failures instead of routing around them.
 13. **Present results.** {completion}
 
 {review_budget}
