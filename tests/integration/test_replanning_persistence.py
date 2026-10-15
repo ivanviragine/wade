@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from wade.models.config import (
     AICommandConfig,
@@ -23,6 +23,9 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
 )
+from wade.models.delegation import DelegationMode, DelegationResult
+from wade.models.interactive_plan import InteractivePlanState
+from wade.models.plan_bundle import PlanBundle
 from wade.models.task import Task
 from wade.services import interactive_plan_service as interactive
 from wade.services import plan_service
@@ -51,6 +54,7 @@ class RemoteState(BaseModel):
     pr_title: str = "fix: existing task"
     plan_markdown: str = _PLAN
     managed: bool = True
+    service_review: bool = False
     original_manifest: bytes = b""
     original_review: bytes = b""
     original_binding: bytes = b""
@@ -191,9 +195,33 @@ def replanning(
             assert str(root) in _git(repo, "worktree", "list", "--porcelain")
         assert (root / ".wade/session/manifest.json").is_file()
         interactive.import_artifact(root, state.plan_markdown)
-        interactive.record_review(
-            root / ".wade/plans/PLAN.md", state.plan_markdown, self_review=False
-        )
+        if state.service_review:
+            from wade.services.review_delegation_service import review_plan
+
+            with patch(
+                "wade.services.review_delegation_service.delegate",
+                return_value=DelegationResult(
+                    success=True,
+                    feedback="No material actionable findings.",
+                    mode=DelegationMode.HEADLESS,
+                    exit_code=0,
+                ),
+            ):
+                reviewed = review_plan(
+                    str(root / ".wade/plans/PLAN.md"),
+                    project_root=root,
+                    ai_tool="codex",
+                    model="gpt-6.1-sol",
+                    effort="high",
+                    mode="headless",
+                    permission_mode="default",
+                    sandbox=True,
+                )
+            assert reviewed.success
+        else:
+            interactive.record_review(
+                root / ".wade/plans/PLAN.md", state.plan_markdown, self_review=False
+            )
         interactive.complete(root)
         state.original_manifest = (root / ".wade/session/manifest.json").read_bytes()
         state.original_review = (root / ".wade/plans/interactive-reviews.json").read_bytes()
@@ -646,3 +674,358 @@ def test_existing_full_plan_link_with_crlf_is_preserved_without_duplicates(
         assert plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
         assert state.issue_body.startswith(original)
         assert state.issue_body.count("**Full plan**: PR #7") == 1
+
+
+# Strict test-local legacy field surface: these reproduce the 1.2.20 rejection
+# without installing another WADE or loading private target-project artifacts.
+_LegacyBundle = create_model(
+    "LegacyPlanBundle",
+    __config__=ConfigDict(extra="forbid"),
+    **{
+        name: (field.annotation, field)
+        for name, field in PlanBundle.model_fields.items()
+        if name != "knowledge_proposals"
+    },
+)
+_LegacyState = create_model(
+    "LegacyInteractivePlanState",
+    __config__=ConfigDict(extra="forbid"),
+    **{
+        name: ((_LegacyBundle | None, None) if name == "bundle" else (field.annotation, field))
+        for name, field in InteractivePlanState.model_fields.items()
+        if name != "refresh_pending"
+    },
+)
+
+
+def _owned_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in (root / ".wade").rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+
+
+def test_schema_rejection_retains_registered_original_before_progress_and_recovers(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState],
+) -> None:
+    repo, _config, provider, state = replanning
+    state.service_review = True
+    original_collect = interactive.collect
+    snapshots: dict[str, bytes] = {}
+
+    def legacy_collect(root: Path) -> object:
+        (root / ".wade/plans/raw-native-output.txt").write_text("Public synthetic native output.\n")
+        snapshots.update(_owned_bytes(root))
+        with patch.object(
+            InteractivePlanState,
+            "model_validate_json",
+            side_effect=_LegacyState.model_validate_json,
+        ):
+            return original_collect(root)
+
+    with patch.object(interactive, "collect", side_effect=legacy_collect):
+        assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+    root = state.planning_root
+    assert root is not None
+    assert root.is_dir(), (
+        "Schema rejection must not replace the registered owner with a salvage copy"
+    )
+    assert str(root) in _git(repo, "worktree", "list", "--porcelain")
+    assert _owned_bytes(root) == snapshots
+    assert not (root / ".wade/plans/handoff-progress.json").exists()
+    provider.update_task.assert_not_called()
+    provider.create_task.assert_not_called()
+    provider.comment_on_task.assert_not_called()
+    assert state.pr_writes == 0 and state.pr_creates == 0
+    # Repeating incompatible recovery neither rewrites state nor cleans it up.
+    for _ in range(2):
+        with patch.object(
+            InteractivePlanState,
+            "model_validate_json",
+            side_effect=_LegacyState.model_validate_json,
+        ):
+            assert not plan_service.plan(project_root=repo, recover=root)
+        assert _owned_bytes(root) == snapshots
+        assert str(root) in _git(repo, "worktree", "list", "--porcelain")
+    # Use the same original launch binding and current service review evidence.
+    # Missing progress is legitimate: compatible recovery initializes it safely.
+    assert plan_service.plan(project_root=repo, recover=root)
+    assert not root.exists()
+    assert str(root) not in _git(repo, "worktree", "list", "--porcelain")
+    assert state.pr_writes == 1
+    provider.create_task.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "corruption", ["future-state", "future-version", "malformed-state", "malformed-reviews"]
+)
+@pytest.mark.parametrize("knowledge_enabled", [False, True])
+def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState],
+    capsys: pytest.CaptureFixture[str],
+    corruption: str,
+    knowledge_enabled: bool,
+) -> None:
+    repo, config, provider, state = replanning
+    state.service_review = True
+    config.knowledge.enabled = knowledge_enabled
+    if knowledge_enabled:
+        state.plan_markdown = (
+            "<!-- wade:plan-bundle:v2 -->\n```json\n"
+            + json.dumps(
+                {
+                    "plans": [{"filename": "PLAN.md", "markdown": _PLAN, "depends_on": []}],
+                    "knowledge_proposals": [],
+                }
+            )
+            + "\n```"
+        )
+    snapshots: dict[str, bytes] = {}
+    original_collect = interactive.collect
+
+    def corrupt_collect(root: Path) -> object:
+        path = (
+            root
+            / ".wade/plans"
+            / (interactive.REVIEWS if corruption == "malformed-reviews" else interactive.STATE)
+        )
+        if corruption.startswith("malformed"):
+            path.write_text('{"SECRET-JSON-KEY": SECRET-JSON-VALUE')
+        else:
+            payload = json.loads(path.read_text())
+            if corruption == "future-version":
+                payload["version"] = 999
+            else:
+                payload["SECRET-EXTRA-KEY"] = "SECRET-EXTRA-VALUE"
+            path.write_text(json.dumps(payload))
+        snapshots.update(_owned_bytes(root))
+        return original_collect(root)
+
+    with (
+        patch.object(interactive, "collect", side_effect=corrupt_collect),
+        patch.object(
+            plan_service, "_prepare_plan_handoff", wraps=plan_service._prepare_plan_handoff
+        ) as prepare,
+        patch("wade.services.knowledge_proposals.stage_proposal") as stage,
+    ):
+        assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+    root = state.planning_root
+    assert root is not None and root.exists()
+    assert _owned_bytes(root) == snapshots
+    assert str(root) in _git(repo, "worktree", "list", "--porcelain")
+    assert not (root / ".wade/plans/handoff-progress.json").exists()
+    prepare.assert_not_called()
+    stage.assert_not_called()
+    provider.update_task.assert_not_called()
+    provider.create_task.assert_not_called()
+    provider.comment_on_task.assert_not_called()
+    assert state.pr_writes == 0 and state.pr_creates == 0
+    output = capsys.readouterr()
+    combined = output.out + output.err
+    assert "SECRET" not in combined
+    assert "Uncollectable" in combined
+    assert "writer version unavailable" in combined
+    assert "wade plan --recover" in combined
+    if corruption.startswith("malformed"):
+        assert "json_invalid" in combined
+    elif corruption == "future-version":
+        assert "literal_error" in combined
+    else:
+        assert "extra_forbidden" in combined
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "second-state",
+        "missing-binding",
+        "future-binding",
+        "malformed-binding",
+        "future-progress",
+        "malformed-progress",
+        "mismatched-progress",
+    ],
+)
+def test_second_parent_collection_and_launch_progress_failures_retain_original(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState], corruption: str
+) -> None:
+    repo, config, provider, state = replanning
+    state.service_review = True
+    original_collect = interactive.collect_with_state
+    collections = 0
+    snapshot: dict[str, bytes] = {}
+
+    def corrupt_second(root: Path) -> object:
+        nonlocal collections
+        collections += 1
+        if collections == 2:
+            plans = root / ".wade/plans"
+            if corruption == "second-state":
+                path = plans / interactive.STATE
+                payload = json.loads(path.read_bytes())
+                payload["PRIVATE-KEY"] = "PRIVATE-VALUE"
+                path.write_text(json.dumps(payload))
+            elif corruption.endswith("binding"):
+                path = plans / plan_service.HANDOFF_BINDING_FILE
+                if corruption == "missing-binding":
+                    path.unlink()
+                elif corruption == "malformed-binding":
+                    path.write_text('{"PRIVATE": PRIVATE')
+                else:
+                    payload = json.loads(path.read_bytes())
+                    payload["PRIVATE-KEY"] = "PRIVATE-VALUE"
+                    path.write_text(json.dumps(payload))
+            else:
+                # Only valid original launch metadata may initialize progress.
+                current, _ = original_collect(root)
+                progress = plan_service._ensure_handoff_progress(
+                    root, current.session_id, None, config
+                )
+                path = plans / plan_service.HANDOFF_PROGRESS_FILE
+                if corruption == "malformed-progress":
+                    path.write_text('{"PRIVATE": PRIVATE')
+                else:
+                    payload = json.loads(progress.model_dump_json())
+                    if corruption == "mismatched-progress":
+                        payload["session_id"] = "different-session"
+                    else:
+                        payload["PRIVATE-KEY"] = "PRIVATE-VALUE"
+                    path.write_text(json.dumps(payload))
+            snapshot.update(_owned_bytes(root))
+        return original_collect(root)
+
+    with (
+        patch.object(interactive, "collect_with_state", side_effect=corrupt_second),
+        patch.object(plan_service, "_preserve_generated_plans") as salvage,
+        patch.object(plan_service, "_remove_planning_worktree") as cleanup,
+        patch.object(
+            plan_service, "list_state_files_strict", side_effect=ValueError("PRIVATE")
+        ) as enumeration,
+        patch("wade.services.knowledge_proposals.stage_proposal") as stage,
+    ):
+        assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+    root = state.planning_root
+    assert root is not None and root.exists()
+    assert collections == 2
+    assert _owned_bytes(root) == snapshot
+    assert str(root) in _git(repo, "worktree", "list", "--porcelain")
+    salvage.assert_not_called()
+    cleanup.assert_not_called()
+    enumeration.assert_not_called()
+    stage.assert_not_called()
+    assert not plan_service.plan(project_root=repo, recover=root)
+    assert _owned_bytes(root) == snapshot
+    assert root.exists()
+    provider.update_task.assert_not_called()
+    provider.create_task.assert_not_called()
+    provider.comment_on_task.assert_not_called()
+    assert state.pr_writes == 0 and state.pr_creates == 0
+
+
+def test_retained_owner_explicit_refresh_requires_new_service_review_and_done(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState],
+) -> None:
+    from wade.models.interactive_plan import InteractivePlanReviews
+    from wade.services.review_delegation_service import review_plan
+
+    repo, _config, _provider, state = replanning
+    state.service_review = True
+    original_collect = interactive.collect
+
+    def legacy_collect(root: Path) -> object:
+        with patch.object(
+            InteractivePlanState,
+            "model_validate_json",
+            side_effect=_LegacyState.model_validate_json,
+        ):
+            return original_collect(root)
+
+    with patch.object(interactive, "collect", side_effect=legacy_collect):
+        assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+    root = state.planning_root
+    assert root is not None and root.exists()
+    binding = (root / ".wade/plans/handoff-binding.json").read_bytes()
+    plan = (root / ".wade/plans/PLAN.md").read_bytes()
+    assert interactive.refresh_handoff(root) == "native"
+    assert (root / ".wade/plans/handoff-binding.json").read_bytes() == binding
+    assert (root / ".wade/plans/PLAN.md").read_bytes() == plan
+    refreshed = InteractivePlanState.model_validate_json(
+        (root / ".wade/plans" / interactive.STATE).read_bytes()
+    )
+    assert not refreshed.completed and refreshed.review_required
+    assert (
+        InteractivePlanReviews.model_validate_json(
+            (root / ".wade/plans" / interactive.REVIEWS).read_bytes()
+        ).plans
+        == {}
+    )
+    assert not plan_service.plan(project_root=repo, recover=root)
+    with pytest.raises(ValueError, match="Review is required"):
+        interactive.complete(root)
+    with patch(
+        "wade.services.review_delegation_service.delegate",
+        return_value=DelegationResult(
+            success=True,
+            feedback="No material actionable findings.",
+            mode=DelegationMode.HEADLESS,
+            exit_code=0,
+        ),
+    ):
+        reviewed = review_plan(
+            str(root / ".wade/plans/PLAN.md"),
+            project_root=root,
+            ai_tool="codex",
+            model="gpt-6.1-sol",
+            effort="high",
+            mode="headless",
+            permission_mode="default",
+            sandbox=True,
+        )
+    assert reviewed.success
+    assert not plan_service.plan(project_root=repo, recover=root)
+    interactive.complete(root)
+    assert plan_service.plan(project_root=repo, recover=root)
+    assert not root.exists()
+    assert state.pr_writes == 1
+
+
+@pytest.mark.parametrize("owner_kind", ["copied", "attached"])
+def test_retention_never_authorizes_copied_or_attached_owner(
+    replanning: tuple[Path, ProjectConfig, MagicMock, RemoteState], owner_kind: str
+) -> None:
+    import shutil
+
+    repo, _config, provider, state = replanning
+    state.service_review = True
+    original_collect = interactive.collect
+
+    def legacy_collect(root: Path) -> object:
+        with patch.object(
+            InteractivePlanState,
+            "model_validate_json",
+            side_effect=_LegacyState.model_validate_json,
+        ):
+            return original_collect(root)
+
+    with patch.object(interactive, "collect", side_effect=legacy_collect):
+        assert not plan_service.plan(project_root=repo, issue_id="42", ai_tool="claude")
+    root = state.planning_root
+    assert root is not None and root.exists()
+    snapshot = _owned_bytes(root)
+    if owner_kind == "copied":
+        recovery = repo.parent / "copied-owner"
+        shutil.copytree(root / ".wade", recovery / ".wade")
+    else:
+        recovery = root
+        _git(root, "checkout", "-b", "attached-planning-output")
+    with patch.object(plan_service, "_remove_planning_worktree") as cleanup:
+        assert not plan_service.plan(project_root=repo, recover=recovery)
+    cleanup.assert_not_called()
+    assert _owned_bytes(root) == snapshot
+    assert _owned_bytes(recovery) == snapshot
+    assert root.exists() and recovery.exists()
+    provider.update_task.assert_not_called()
+    provider.create_task.assert_not_called()
+    provider.comment_on_task.assert_not_called()
+    assert state.pr_writes == 0 and state.pr_creates == 0

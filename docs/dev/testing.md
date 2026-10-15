@@ -137,6 +137,27 @@ ANTHROPIC_API_KEY=... ./scripts/test-live-ai-taskr.sh
 Live scripts are strict by design: they fail fast when required env vars,
 credentials, or binaries are missing.
 
+## Planning schema-skew retention
+
+Use public synthetic fixtures and test-local strict legacy models to reproduce
+the relevant old field surface (`bundle.knowledge_proposals` and
+`refresh_pending`), without another installed WADE or private archives. Inject
+the rejecting reader at normal parent collection in a real disposable registered
+detached worktree. Snapshot every original `.wade/session` and `.wade/plans` byte,
+including raw output, launch binding and any progress. Assert repeated unresolved
+recovery leaves those bytes and registration unchanged, with no cleanup,
+provider writes or knowledge staging, even when enumeration cannot run.
+
+Then use a compatible reader on that same owner through normal recovery. Create
+current review evidence by the production review service with a deterministic
+mock delegate, never copied historical receipts. Cover legitimate absent-progress
+initialization, malformed/mismatched present metadata, second parent collection,
+future fields/versions and malformed JSON. Explicit refresh must clear old
+completion/reviews and require new review/done. Diagnostic assertions include
+secret-like keys/values/messages, bounded long error lists, declared versions,
+and exact quoted command lines at widths 40/80. Preserve the separate editable
+Markdown validation and subset-consent coverage.
+
 ## Native planning dependency validation
 
 Use real public Crossby request/result models in consumer tests, not mocks that

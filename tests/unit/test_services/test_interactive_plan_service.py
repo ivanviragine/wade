@@ -286,3 +286,62 @@ def test_native_v2_proposals_survive_completion_and_collection(
     )
     interactive.complete(tmp_path)
     assert interactive.collect(tmp_path).knowledge_proposals == bundle.knowledge_proposals
+
+
+@pytest.mark.parametrize("metadata", [interactive.STATE, interactive.REVIEWS])
+def test_collection_metadata_errors_are_typed_but_editable_content_is_not(
+    session: Path, metadata: str
+) -> None:
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    interactive.import_artifact(session, PLAN)
+    copied = session / ".wade/plans/PLAN.md"
+    interactive.record_review(copied, PLAN, self_review=False)
+    interactive.complete(session)
+    copied.write_text(PLAN + "\nChanged content.\n")
+    with pytest.raises(ValueError, match="changed after completion") as content_error:
+        interactive.collect(session)
+    assert not isinstance(content_error.value, UncollectableHandoffError)
+    copied.write_text(PLAN)
+    path = session / ".wade/plans" / metadata
+    path.write_text('{"PRIVATE-KEY": PRIVATE-VALUE')
+    snapshot = path.read_bytes()
+    with pytest.raises(UncollectableHandoffError) as rejected:
+        interactive.collect_with_state(session)
+    assert rejected.value.category == (
+        "interactive-state" if metadata == interactive.STATE else "review-metadata"
+    )
+    assert "json_invalid" in str(rejected.value)
+    assert "PRIVATE" not in str(rejected.value)
+    assert path.read_bytes() == snapshot
+
+
+@pytest.mark.parametrize("corruption", ["malformed", "version", "bundle"])
+def test_collection_reports_frozen_contract_category_without_payload(
+    session: Path, corruption: str
+) -> None:
+    import json
+
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    interactive.import_artifact(session, PLAN)
+    copied = session / ".wade/plans/PLAN.md"
+    interactive.record_review(copied, PLAN, self_review=False)
+    interactive.complete(session)
+    manifest = session / ".wade/session/manifest.json"
+    payload = json.loads(manifest.read_bytes())
+    if corruption == "malformed":
+        manifest.write_text('{"PRIVATE": PRIVATE')
+    elif corruption == "version":
+        payload["schema_version"] = 999
+        manifest.write_text(json.dumps(payload))
+    else:
+        (session / ".wade/session/WORKFLOW.md").write_text("PRIVATE altered workflow")
+    with pytest.raises(UncollectableHandoffError) as rejected:
+        interactive.collect(session)
+    message = str(rejected.value)
+    assert rejected.value.category == "frozen-bindings"
+    assert "PRIVATE" not in message
+    if corruption == "version":
+        assert "declared schema 999" in message
+        assert "schema_version: value_error" in message

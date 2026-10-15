@@ -70,7 +70,9 @@ from wade.services.knowledge_recovery import (
     RETAINED_VOTE_RECOVERY_HINT,
     report_retained_vote_recovery,
 )
+from wade.services.planning_handoff_errors import UncollectableHandoffError
 from wade.services.session_composition_service import (
+    SessionCompositionError,
     load_session_manifest_strict,
     validate_frozen_session_bundle,
 )
@@ -149,15 +151,16 @@ def _load_handoff_binding(root: Path) -> PlanHandoffBinding:
     """Load the launch settings that identify a recoverable handoff's backend."""
 
     if not state_file_present(root, ("plans",), HANDOFF_BINDING_FILE):
-        raise ValueError("Planning handoff binding was never recorded; cannot safely recover")
+        cause = ValueError("Planning handoff binding was never recorded; cannot safely recover")
+        raise UncollectableHandoffError(root, "launch-binding", cause) from cause
     try:
         raw = read_state_file_strict(root, ("plans",), HANDOFF_BINDING_FILE)
     except StateFileUnsafeError as exc:
-        raise ValueError("Planning handoff binding is absent or unsafe") from exc
+        raise UncollectableHandoffError(root, "launch-binding", exc) from exc
     try:
         return PlanHandoffBinding.model_validate_json(raw)
     except ValueError as exc:
-        raise ValueError("Planning handoff binding is invalid") from exc
+        raise UncollectableHandoffError(root, "launch-binding", exc, raw=raw) from exc
 
 
 def _validate_handoff_binding(binding: PlanHandoffBinding, config: ProjectConfig) -> None:
@@ -186,13 +189,14 @@ def _load_handoff_progress(root: Path, session_id: str) -> PlanHandoffProgress |
     try:
         raw = read_state_file_strict(root, ("plans",), HANDOFF_PROGRESS_FILE)
     except StateFileUnsafeError as exc:
-        raise ValueError("Planning handoff progress is absent or unsafe") from exc
+        raise UncollectableHandoffError(root, "progress", exc) from exc
     try:
         progress = PlanHandoffProgress.model_validate_json(raw)
     except ValueError as exc:
-        raise ValueError("Planning handoff progress is invalid") from exc
+        raise UncollectableHandoffError(root, "progress", exc, raw=raw) from exc
     if progress.session_id != session_id:
-        raise ValueError("Planning handoff progress belongs to a different completed session")
+        cause = ValueError("Planning handoff progress belongs to a different completed session")
+        raise UncollectableHandoffError(root, "progress", cause, raw=raw) from cause
     return progress
 
 
@@ -272,7 +276,7 @@ def _config_for_handoff_recovery(
     )
 
 
-def _ensure_handoff_progress(
+def _ensure_handoff_progress_validated(
     root: Path,
     session_id: str,
     model: str | None,
@@ -318,6 +322,30 @@ def _ensure_handoff_progress(
     if not _save_handoff_progress(root, progress):
         raise HandoffProgressSaveError("Cannot safely save planning handoff progress")
     return progress
+
+
+def _ensure_handoff_progress(
+    root: Path,
+    session_id: str,
+    model: str | None,
+    config: ProjectConfig,
+    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
+    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None,
+) -> PlanHandoffProgress:
+    """Keep uncollectable parent metadata out of editable-Markdown salvage."""
+    try:
+        return _ensure_handoff_progress_validated(
+            root, session_id, model, config, knowledge_votes, knowledge_proposals
+        )
+    except (
+        UncollectableHandoffError,
+        HandoffProgressSaveError,
+        StateFileAccessError,
+        StateFileIOError,
+    ):
+        raise
+    except ValueError as exc:
+        raise UncollectableHandoffError(root, "progress", exc) from exc
 
 
 def _handoff_progress_saver(
@@ -1146,8 +1174,17 @@ def _recover_completed_handoff(
     console.rule("wade plan recovery")
     console.kv("Planning worktree", str(root))
     try:
-        manifest = load_session_manifest_strict(root)
-        validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
+        try:
+            manifest = load_session_manifest_strict(root)
+            validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
+        except (StateFileAccessError, StateFileIOError):
+            raise
+        except (ValueError, SessionCompositionError) as exc:
+            if isinstance(exc, SessionCompositionError) and (
+                state_error := interactive_plan._frozen_bundle_state_error(root, exc)
+            ):
+                raise state_error from exc
+            raise UncollectableHandoffError(root, "frozen-bindings", exc) from exc
         collected: PlanSessionResult | None = None
         if interactive_plan.active(root):
             state, bundle = interactive_plan.collect_with_state(root)
@@ -1243,6 +1280,10 @@ def _recover_completed_handoff(
         if not accepted_plans:
             _retain_inaccessible_handoff(plan_dir, root, access_denied=False)
             return False
+    except UncollectableHandoffError as exc:
+        console.error(native_plan.failure_message(exc), markup=False)
+        _retain_uncollectable_handoff(plan_dir, repo_root, root)
+        return False
     except (Exception, KeyboardInterrupt) as exc:
         category = type(exc).__name__
         message = (
@@ -1737,6 +1778,11 @@ def plan(
             _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
+    except UncollectableHandoffError as exc:
+        console.error(native_plan.failure_message(exc), markup=False)
+        _retain_uncollectable_handoff(plan_dir, repo_root, planning_worktree)
+        stop_title_keeper()
+        return False
     except (Exception, KeyboardInterrupt) as exc:
         category = type(exc).__name__
         message = (
@@ -2915,3 +2961,59 @@ def _retain_inaccessible_handoff(
             else "Recover the retained handoff with"
         )
         console.hint(f"{prefix}: {command}")
+
+
+def _retain_uncollectable_handoff(
+    plan_dir: str, repo_root: Path | None, planning_worktree: Path | None
+) -> None:
+    """Never enumerate/copy/clean uncollected metadata or grant archive authority."""
+    from wade.git import worktree as git_worktree
+    from wade.git.repo import GitError
+
+    console.warn(
+        "The intact original planning output was retained; no cleanup or task mutation ran."
+    )
+    console.detail(f"Original output: {plan_dir}", markup=False)
+    registered = False
+    if repo_root is not None and planning_worktree is not None:
+        try:
+            registered = any(
+                Path(os.path.abspath(entry.path)) == Path(os.path.abspath(planning_worktree))
+                and entry.branch == "(detached)"
+                for entry in git_worktree.list_worktrees(repo_root)
+            )
+        except (GitError, OSError, ValueError):
+            registered = False
+    if not registered:
+        console.info(
+            "Detached original-owner recovery is unavailable or unverified. Keep this output; "
+            "a copied archive or unregistered directory requires a fresh planning owner, "
+            "content-only import, and new review/completion gates."
+        )
+        return
+    assert planning_worktree is not None
+    console.info(
+        "After stabilizing the editable installation, use a fresh compatible WADE process. "
+        "Recovery still requires the original registered detached owner, launch/config/provider "
+        "binding, frozen contracts, unchanged content and current review. "
+        "Retention grants no authority."
+    )
+    console.info(
+        "If supported tooling can read this schema but frozen contracts require refresh, "
+        "explicitly "
+        "refresh the original handoff, genuinely review every plan, and run plan-session done "
+        "before recovery. Unknown future/unreadable state must remain retained until supported."
+    )
+    # One physical line, without Rich wrapping or markup interpretation.
+    console.out.print(
+        shlex.join(["wade", "plan", "--recover", str(planning_worktree)]),
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )
+    console.out.print(
+        shlex.join(["wade", "plan-session", "refresh", str(planning_worktree / ".wade/plans")]),
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )

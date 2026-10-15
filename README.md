@@ -497,6 +497,28 @@ durably recorded rather than applying settings changed after collection. If even
 the retained plan count is unknown rather than reporting zero. WADE never changes
 OS privacy or sandbox settings for you.
 
+Malformed or unsupported persisted handoff/review metadata and incompatible
+frozen contracts also retain the intact original planning owner, including raw
+output, launch binding and existing progress. WADE reports bounded public field
+locations/error codes, the current reader version and available declared schema
+and workflow versions; an unrecorded writer version remains unavailable. Strict
+unknown-field/version rejection stays in force. This differs from editable plan
+validation: a copied plan archive cannot replace the registered owner or its
+review authority, and unresolved metadata failure stages no knowledge or tasks.
+
+Finish or safely stop active planning parents before changing their shared
+editable source or environment. A workflow refresh cannot replace Python models
+already imported by a running parent. After stabilizing the installation, start a
+fresh compatible WADE process and use the printed original-root recovery command.
+Recovery may initialize missing progress from valid original launch metadata;
+malformed or mismatched present progress is never silently replaced. If supported
+tooling can read the schema but frozen contracts need refresh, explicitly run
+`wade plan-session refresh <original-worktree>/.wade/plans`, genuinely review each
+plan, and run `wade plan-session done` before recovery. An unknown future or
+unreadable schema remains retained until supported tooling can interpret it.
+Deleted/unregistered owners and copied archives require a fresh planning owner,
+content-only import and new review/completion gates.
+
 `wade plan --issue <N>` re-plans an existing task. If the session produces a
 single plan file, its reviewed body replaces the plan in the task's existing
 open PR, and the task stays open. A task title change keeps the same PR and head
