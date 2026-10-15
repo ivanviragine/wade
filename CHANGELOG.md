@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.2] — 2026-10-15
+
+### Bug Fixes
+
+- distinguish a reviewer that never launched from one that crashed (#485) (576cc61)
+
 ## [v1.4.1] — 2026-10-15
 
 ### Bug Fixes

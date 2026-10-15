@@ -166,12 +166,13 @@ class TestReviewImplementationReceipts:
         record.assert_called_once()
         assert record.call_args.args[3] is ReviewOutcome.NOTHING_STAGED
 
-    def test_launch_failure_does_not_record_or_spend_pass(
+    def test_launch_failure_records_unattempted_without_spending_pass(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
     ) -> None:
         failure = DelegationResult(
             success=False,
             feedback="Not logged in",
+            never_launched=True,
             mode=DelegationMode.HEADLESS,
             exit_code=1,
         )
@@ -184,7 +185,7 @@ class TestReviewImplementationReceipts:
         ):
             rds.review_implementation()
 
-        record.assert_not_called()
+        assert record.call_args.args[3] is ReviewOutcome.UNATTEMPTED
         assert "no review-pass budget" in warn.call_args.args[0]
 
 
@@ -613,12 +614,18 @@ class TestImplementationReviewPreflightCap:
         record.assert_called_once()
         assert record.call_args.args[3] is ReviewOutcome.NOTHING_STAGED
 
+    @pytest.mark.parametrize("succeeds", (True, False))
     def test_concurrent_reviews_cannot_dispatch_beyond_the_binding_cap(
-        self, tmp_path: Path, review_preflight: PreparedDelegationMethod
+        self, tmp_path: Path, review_preflight: PreparedDelegationMethod, succeeds: bool
     ) -> None:
         config = self._config(limit=1)
         prepared = self._prepared_for(review_preflight, SessionKind.IMPLEMENTATION, tmp_path)
-        completed = DelegationResult(success=True, feedback="ok", mode=DelegationMode.HEADLESS)
+        completed = DelegationResult(
+            success=succeeds,
+            feedback="result",
+            mode=DelegationMode.HEADLESS,
+            exit_code=0 if succeeds else 1,
+        )
         first_started = threading.Event()
         release_first = threading.Event()
         second_finished = threading.Event()
@@ -789,10 +796,10 @@ class TestUnattemptedReviewGate:
         assert ReviewOutcome.UNATTEMPTED.satisfies_review is False
         assert ReviewOutcome.UNATTEMPTED.consumes_pass is False
 
-    def test_a_nonzero_exit_is_still_not_recorded(
+    def test_a_launched_nonzero_exit_records_failed_without_approval(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
     ) -> None:
-        """Only "never started" is unattempted; a reviewer that ran is not."""
+        """A running reviewer spends budget without certifying completion."""
         ran_and_failed = DelegationResult(
             success=False,
             feedback="exited 3",
@@ -801,7 +808,96 @@ class TestUnattemptedReviewGate:
         )
         record, _ = self._run(tmp_path, ran_and_failed)
 
+        record.assert_called_once()
+        assert record.call_args.args[3].value == "failed"
+
+    @pytest.mark.parametrize(
+        "result",
+        (
+            DelegationResult(success=False, feedback="failure", mode=DelegationMode.PROMPT),
+            DelegationResult(
+                success=False, feedback="failure", mode=DelegationMode.INTERACTIVE, cancelled=True
+            ),
+            DelegationResult(
+                success=True, feedback="skip", mode=DelegationMode.HEADLESS, skipped=True
+            ),
+        ),
+    )
+    def test_exempt_results_do_not_write_or_announce_a_pass(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        result: DelegationResult,
+    ) -> None:
+        record, announce = self._run(tmp_path, result)
         record.assert_not_called()
+        announce.assert_not_called()
+
+    @pytest.mark.parametrize("mode", (DelegationMode.HEADLESS, DelegationMode.INTERACTIVE))
+    def test_launched_failure_persists_once_without_certifying_review(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        mode: DelegationMode,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Message shape cannot override the structured launch boundary.
+        failed = DelegationResult(
+            success=False, feedback="permission denied", mode=mode, exit_code=3
+        )
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation", return_value=failed),
+        ):
+            for _ in range(2):
+                assert rds.review_implementation() is failed
+        receipt = read_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit="a" * 40,
+            binding=review_preflight.binding,
+        )
+        assert receipt is not None and receipt.outcome is ReviewOutcome.FAILED
+        assert receipt.consumes_pass and not receipt.satisfies_review
+        assert (
+            count_binding_passes(
+                tmp_path,
+                delegation=DelegationKind.CODE_REVIEW,
+                binding=review_preflight.binding,
+            )
+            == 1
+        )
+        text = _cap(capsys)
+        assert "reviewer ran and failed" in text
+        assert "Review pass 1 of 2 recorded" in text
+        assert "reviewer never started" not in text
+
+    def test_failed_receipt_write_does_not_claim_budget_or_persistence(
+        self,
+        tmp_path: Path,
+        review_preflight: PreparedDelegationMethod,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        failed = DelegationResult(
+            success=False, feedback="failure", mode=DelegationMode.HEADLESS, exit_code=1
+        )
+        with (
+            patch.object(rds, "write_review_record", return_value=None),
+            patch.object(rds, "_announce_review_pass_budget") as announce,
+        ):
+            rds._report_failed_review(
+                tmp_path,
+                "a" * 40,
+                review_preflight,
+                failed,
+                max_passes=2,
+            )
+        announce.assert_not_called()
+        text = _cap(capsys)
+        assert "could not be persisted" in text
+        assert "Could not confirm a failed-review receipt" in text
+        assert "current failed receipt consumes" not in text
 
     def test_a_known_sandboxed_parent_keeps_a_generic_denial_hedged(
         self,

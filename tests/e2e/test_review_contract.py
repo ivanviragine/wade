@@ -43,6 +43,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 
@@ -53,6 +54,12 @@ if log_path:
         f.write("\\n")
 
 argv = sys.argv[1:]
+if os.environ.get("WADE_FAKE_CLAUDE_TIMEOUT"):
+    print("PARTIAL REVIEW", flush=True)
+    time.sleep(5)
+if os.environ.get("WADE_FAKE_CLAUDE_FAIL"):
+    print("FAKE REVIEW CRASH", file=sys.stderr)
+    sys.exit(3)
 if "--print" in argv:
     print("FAKE REVIEW FEEDBACK")
     sys.exit(0)
@@ -597,7 +604,7 @@ class TestInheritedSandboxReviewContract:
         output = " ".join(self._review(e2e_repo, self._SANDBOXED_PARENT).split())
 
         assert "Codex CLI is sandboxed and the implementation review never started" not in output
-        assert "Review did not complete, so no review-pass budget was consumed." in output
+        assert "The reviewer never started, so no review-pass budget was consumed." in output
 
     def test_missing_tool_is_not_blamed_on_the_sandbox(
         self,
@@ -612,7 +619,7 @@ class TestInheritedSandboxReviewContract:
         )
 
         assert "Codex CLI is sandboxed and the implementation review never started" not in output
-        assert "Review did not complete, so no review-pass budget was consumed." in output
+        assert "The reviewer never started, so no review-pass budget was consumed." in output
 
     def test_compatible_sandbox_request_is_not_told_to_relaunch(
         self,
@@ -626,7 +633,7 @@ class TestInheritedSandboxReviewContract:
         output = " ".join(self._review(e2e_repo, env, ai="codex", sandbox=True).split())
 
         assert "Codex CLI is sandboxed and the implementation review never started" not in output
-        assert "Review did not complete, so no review-pass budget was consumed." in output
+        assert "The reviewer never started, so no review-pass budget was consumed." in output
 
     def test_the_gate_stays_closed_with_an_unattempted_record(
         self,
@@ -704,7 +711,96 @@ class TestInheritedSandboxReviewContract:
         output = " ".join(self._review(e2e_repo, {"CODEX_CLI": "1"}).split())
 
         assert "is sandboxed" not in output
-        assert "Review did not complete, so no review-pass budget was consumed." in output
+        assert "The reviewer never started, so no review-pass budget was consumed." in output
+
+
+class TestLaunchedFailureReviewContract:
+    def test_explicit_timeout_keeps_its_outcome_and_does_not_retry(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        (e2e_repo / "src/app.py").write_text('print("timeout fixture")\n')
+        config_path = e2e_repo / ".wade.yml"
+        config = yaml.safe_load(config_path.read_text())
+        config["ai"]["review_implementation"] = {"timeout": 1}
+        config_path.write_text(yaml.safe_dump(config))
+        log_file = e2e_repo / "timeout-review-log.jsonl"
+        result = _run(
+            ["review", "implementation", "--mode", "headless", "--ai", "claude"],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file), "WADE_FAKE_CLAUDE_TIMEOUT": "1"},
+        )
+        assert result.returncode != 0
+        assert len(_read_fake_claude_log(log_file)) == 1
+        records = list((e2e_repo / ".wade/reviews").glob("review@code-review@*.json"))
+        assert len(records) == 1
+        payload = json.loads(records[0].read_text())
+        assert payload["outcome"] == "timed-out" and payload["consumes_pass"] is True
+
+    def test_failed_commits_consume_budget_without_certifying_review(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / "failed-review-log.jsonl"
+        worktree, pr_number = _bootstrap_review_target(
+            e2e_repo,
+            mock_gh_cli,
+            466,
+            "fix: account for launched review failures",
+            "feat/466-fix-account-for-launched-review-failures",
+        )
+        (worktree / "PR-SUMMARY.md").write_text(
+            "Record failed reviewers without approving their work.\n"
+        )
+        env = {"WADE_FAKE_CLAUDE_LOG": str(log_file), "WADE_FAKE_CLAUDE_FAIL": "1"}
+        review_args = ["review", "implementation", "--mode", "headless", "--ai", "claude"]
+        for index in (1, 2):
+            (worktree / "implementation.txt").write_text(f"change {index}\n")
+            _git(["add", "implementation.txt"], cwd=worktree)
+            _git(["commit", "-m", f"fix: fixture change {index}"], cwd=worktree)
+            docs = _run(
+                ["implementation-session", "docs", "--not-needed", "Fixture only"], cwd=worktree
+            )
+            assert docs.returncode == 0, docs.stdout + docs.stderr
+            failed = _run(review_args, cwd=worktree, env=env)
+            assert failed.returncode != 0
+            output = " ".join((failed.stdout + failed.stderr).split())
+            assert "reviewer ran and failed" in output
+            records = list((worktree / ".wade/reviews").glob("review@code-review@*.json"))
+            assert len(records) == index
+            assert all(json.loads(path.read_text())["outcome"] == "failed" for path in records)
+            assert all(json.loads(path.read_text())["consumes_pass"] for path in records)
+            if index == 1:
+                repeated = _run(review_args, cwd=worktree, env=env)
+                assert repeated.returncode != 0
+                assert (
+                    len(list((worktree / ".wade/reviews").glob("review@code-review@*.json"))) == 1
+                )
+                done = _run(["implementation-session", "done", "--no-trigger-bots"], cwd=worktree)
+                assert done.returncode != 0
+                assert "Review has not run for the current commit" in done.stdout + done.stderr
+        assert len(_read_fake_claude_log(log_file)) == 3
+        capped = _run(review_args, cwd=worktree, env=env)
+        assert capped.returncode == 0
+        assert "No additional implementation review was launched" in " ".join(
+            (capped.stdout + capped.stderr).split()
+        )
+        assert len(_read_fake_claude_log(log_file)) == 3
+        done = _run(["implementation-session", "done", "--no-trigger-bots"], cwd=worktree)
+        assert done.returncode == 0, done.stdout + done.stderr
+        output = " ".join((done.stdout + done.stderr).lower().split())
+        assert "not re-reviewed" in output
+        assert "2 commit(s) have consumed a review pass" in output
+        assert "have been reviewed" not in output
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        body = state["prs"][str(pr_number)]["body"]
+        assert "cap reached" in body
+        assert "final commit was not freshly reviewed" in body
+        assert "✅ Reviewed at" not in body
 
 
 class TestReviewPrCommentsCommand:

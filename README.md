@@ -1261,8 +1261,9 @@ cannot make `gh`, Git metadata, or a network route available.
 If `wade review implementation` cannot launch its reviewer because of missing
 credentials, PATH, or sandbox execution access, it does not consume a
 `done.max_review_passes` slot: repair the runtime and retry. A real headless
-timeout still counts as a bounded review attempt, so the review/fix loop cannot
-run forever.
+timeout and a reviewer that launched but failed both consume a review pass
+without certifying completion. Prompt/preflight failures, skipped dispatches,
+and explicit human cancellation do not consume a pass.
 
 A reviewer that **never started** — including a sandbox-capability refusal before
 the launch — is recorded as an *unattempted* review so the state is auditable,
@@ -1271,8 +1272,18 @@ requirement, spends no review pass, cannot overwrite a real receipt already
 written for the same commit, and leaves `wade implementation-session done` and
 `wade review-pr-comments-session done` closed. An infrastructure failure must
 never be able to certify a commit. A reviewer that started and exited non-zero
-stays distinguishable from one that never ran, because the two need opposite
-remediation.
+writes a consuming, non-satisfying `failed` receipt: inspect its output before
+retrying. Failed receipts cannot serve as incremental review baselines. Below
+the configured cap, implementation completion still requires a satisfying
+review; PR-comment completion always requires one. At the existing implementation
+cap, completion reports unreviewed/cap-reached status rather than approval.
+
+Passes count distinct commit-and-frozen-binding tuples, not process launches.
+Repeated crashes on the same commit consume one tuple; a later successful review
+promotes that receipt without adding a pass. A timeout, no-diff, or successful
+receipt takes precedence over a later failure for the same tuple. Older WADE
+versions do not understand the new `failed` outcome; use the current runtime to
+read its receipts rather than expecting an older runtime to count them.
 
 For Codex, WADE launches unsandboxed by default so delegated tools keep their
 own host credentials; set `ai.sandbox: true` (or pass `--sandbox`) to keep

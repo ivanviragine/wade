@@ -136,6 +136,49 @@ def test_record_is_idempotent_promotable_and_never_downgraded(tmp_path: Path) ->
     assert len(list_review_records(tmp_path)) == 1
 
 
+@pytest.mark.parametrize(
+    "stronger", (ReviewOutcome.TIMED_OUT, ReviewOutcome.NO_DIFF, ReviewOutcome.REVIEWED)
+)
+def test_failed_receipt_is_consuming_isolated_promotable_and_never_downgrades(
+    tmp_path: Path,
+    stronger: ReviewOutcome,
+) -> None:
+    binding = _binding("review-a")
+    other = _binding("review-b")
+    for outcome in (
+        ReviewOutcome.FAILED,
+        ReviewOutcome.FAILED,
+        ReviewOutcome.UNATTEMPTED,
+        ReviewOutcome.NOTHING_STAGED,
+    ):
+        receipt = write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=HEAD,
+            binding=binding,
+            outcome=outcome,
+        )
+        assert receipt is not None and receipt.outcome is ReviewOutcome.FAILED
+        assert receipt.consumes_pass and not receipt.satisfies_review
+    assert (
+        count_binding_passes(tmp_path, delegation=DelegationKind.CODE_REVIEW, binding=binding) == 1
+    )
+    assert count_binding_passes(tmp_path, delegation=DelegationKind.CODE_REVIEW, binding=other) == 0
+    for outcome in (stronger, ReviewOutcome.FAILED):
+        receipt = write_review_record(
+            tmp_path,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=HEAD,
+            binding=binding,
+            outcome=outcome,
+        )
+        assert receipt is not None and receipt.outcome is stronger
+    assert len(list_review_records(tmp_path)) == 1
+    assert count_binding_passes(
+        tmp_path, delegation=DelegationKind.CODE_REVIEW, binding=binding
+    ) == int(stronger.consumes_pass)
+
+
 def test_record_precedence_holds_the_tuple_lock_for_the_complete_transaction(
     tmp_path: Path,
 ) -> None:
@@ -333,6 +376,7 @@ def test_nearest_satisfying_same_binding_ancestor_is_selected_by_git_distance(
         (older, ReviewOutcome.REVIEWED, binding),
         (nearer, ReviewOutcome.NO_DIFF, binding),
         ("e" * 40, ReviewOutcome.TIMED_OUT, binding),
+        ("1" * 40, ReviewOutcome.FAILED, binding),
         ("f" * 40, ReviewOutcome.REVIEWED, other),
     ):
         assert (

@@ -99,7 +99,11 @@ structural scanners. See `docs/dev/architecture.md` for ownership and boundaries
 > PR-comment feedback cycle is under `.wade/review-cycles/`. The cycle preserves
 > its pre-edit baseline and feedback history across refreshes and is cleared
 > only after a successful PR-comment completion; unsafe state must fall back to
-> a full review.
+> a full review. Launched reviewer failures consume one commit-and-binding pass
+> without certifying completion; never-launched, prompt/preflight, skipped, and
+> explicitly cancelled results are exempt. Failed receipts cannot become review
+> baselines; only the existing implementation cap policy permits completion without
+> a satisfying receipt.
 
 > **Deterministic git-hook install/reconcile/build logic lives in `git/hooks.py`**
 > (git layer), not `skills/installer.py`. Packaged template-asset loaders
