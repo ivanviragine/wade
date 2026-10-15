@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.1] — 2026-10-15
+
+### Bug Fixes
+
+- enforce ready-for-review PR completion (#484) (626db05)
+
 ## [v1.4.0] — 2026-10-15
 
 ### Features

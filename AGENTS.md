@@ -160,6 +160,13 @@ or agent bootstrap. Guarded recovery reserves Git branch ownership before its
 atomic old-tip backup and expected-old alignment; partial worktrees and recovery
 refs are never automatically removed. See `docs/dev/architecture.md`.
 
+Both session done commands require successful draft-to-ready promotion by
+default. Failed readiness revokes only the active root's done markers and retains
+pushed work, PR-body updates and feedback/review evidence for retry. Fallback PR
+creation must verify the returned PR's actual identity, open state and Boolean
+draft status. `--draft` preserves drafts without demoting ready PRs; completion-time
+bot offers/posts are deferred for actual drafts, including with `--trigger-bots`.
+
 ## Design Principles
 
 ### Determinism via Services

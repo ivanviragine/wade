@@ -1059,6 +1059,17 @@ is upgraded — **no re-init, resync, or migration is needed.**
 
 ## Completion Gates & the `done`-marker
 
+The shared finalizer requires default draft-to-ready promotion before label
+removal, bot reviews, or completion-success output. Promotion failure revokes
+only the active worktree/repository root's done markers and remains retryable;
+pushed work, body updates, other receipts and feedback-cycle history survive.
+Fallback creation may recover an existing PR, so completion verifies its matching
+number, OPEN state and explicit Boolean draft status through the git lookup.
+`--draft` preserves observed state without demoting ready PRs. Automatic bot
+posting and offers, including `--trigger-bots`, run only for a ready result;
+drafts consume no bot-trigger markers. Planning/bootstrap drafts and manual
+review-trigger commands keep their existing behavior.
+
 `done` (`implementation_service/done.py`) is the authoritative completion gate.
 Both `implementation-session done` and `review-pr-comments-session done` call the
 same `done()` service, parameterized by `session_type`; the gate set branches on
