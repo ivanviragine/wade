@@ -146,12 +146,12 @@ def _recover_worktree(repo_root: Path, branch: str, target: Path) -> RecoveryOut
             return RecoveryOutcome(failure=RecoveryFailure.OWNERSHIP, path=target, detail=str(exc))
         source: Literal["remote", "local"] = "remote"
         fetch_error = ""
+        selected: str | None = None
         try:
-            # A force-pushed PR must refresh tracking while leaving local heads
-            # untouched. Capture the resulting OID; later ref refreshes cannot
-            # choose a different recovery snapshot.
-            git_repo.fetch_ref(
-                repo_root, "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+            selected = git_branch.fetch_review_snapshot(repo_root, branch)
+        except git_branch.ReviewTrackingError as exc:
+            return RecoveryOutcome(
+                failure=RecoveryFailure.FETCHED_REF, path=target, detail=str(exc)
             )
         except (GitError, OSError) as exc:
             fetch_error = str(exc)
@@ -170,13 +170,13 @@ def _recover_worktree(repo_root: Path, branch: str, target: Path) -> RecoveryOut
                     detail=f"Live remote head exists, but fetch failed: {fetch_error}",
                 )
             source = "local"
-        ref = f"refs/remotes/origin/{branch}" if source == "remote" else f"refs/heads/{branch}"
-        try:
-            selected = git_branch.resolve_ref_commit(repo_root, ref)
-        except (GitError, OSError) as exc:
-            return RecoveryOutcome(
-                failure=RecoveryFailure.FETCHED_REF, path=target, detail=str(exc)
-            )
+        if source == "local":
+            try:
+                selected = git_branch.resolve_ref_commit(repo_root, f"refs/heads/{branch}")
+            except (GitError, OSError) as exc:
+                return RecoveryOutcome(
+                    failure=RecoveryFailure.FETCHED_REF, path=target, detail=str(exc)
+                )
         if selected is None:
             return RecoveryOutcome(
                 failure=RecoveryFailure.NO_BRANCH
@@ -186,7 +186,7 @@ def _recover_worktree(repo_root: Path, branch: str, target: Path) -> RecoveryOut
                 detail=(
                     f"Live remote head and local branch are absent. Fetch context: {fetch_error}"
                     if source == "local"
-                    else f"Successful fetch did not provide {ref}"
+                    else "Successful fetch did not provide a pinned commit"
                 ),
             )
         record = RecoveryRecord(branch=branch, target=target, selected_oid=selected)

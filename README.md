@@ -559,7 +559,8 @@ fetch selects the current remote branch commit, including a force-pushed head.
 If the local branch points elsewhere, WADE first preserves that exact commit
 under `refs/wade/recovery/<branch>/<old-commit>` and prints a `git branch` command
 to recover it. These refs are retained automatically; existing worktrees are
-never realigned by this recovery path.
+never realigned by this recovery path. Fetch never follows a symbolic tracking
+ref into a local branch.
 
 A failed fetch uses a local branch only after a live remote query confirms that
 the remote head is absent, and warns that the local code may be stale. Fetch or

@@ -6,10 +6,12 @@ import os
 import shlex
 import stat
 import subprocess
+import uuid
 from pathlib import Path
 
 import structlog
 
+from wade.git import repo as git_repo
 from wade.git.repo import GitError, _run_git, _run_git_with_retry
 from wade.utils.slug import slugify
 
@@ -531,3 +533,50 @@ def recovery_branch_command(repo_root: Path, backup_ref: str) -> str:
     """Quote a non-forcing command that makes a preserved tip an ordinary branch."""
     name = "recovered-" + backup_ref.rsplit("/", 1)[-1][:12]
     return shlex.join(["git", "-C", str(repo_root), "branch", name, backup_ref])
+
+
+class ReviewTrackingError(GitError):
+    """Snapshot validation/installation failed; never permit local fallback."""
+
+
+def fetch_review_snapshot(repo_root: Path, branch_name: str) -> str:
+    """Fetch to an isolated pin, then CAS-install tracking without dereferencing.
+
+    Fetch follows symbolic destination refs, so even a pre-fetch symbolic-ref
+    check cannot protect a checked-out branch against an intervening ref swap.
+    Only the isolated ref is a fetch destination; the tracking update uses
+    expected-old/no-deref semantics and the returned pin never changes with it.
+    """
+    tracking = f"refs/remotes/origin/{branch_name}"
+    isolated = "refs/wade/review-fetch/" + uuid.uuid4().hex
+    try:
+        previous = resolve_ref_commit(repo_root, tracking)
+        if resolve_ref_commit(repo_root, isolated) is not None:
+            raise GitError(f"Isolated review fetch ref already exists: {isolated}")
+    except (GitError, OSError) as exc:
+        raise ReviewTrackingError(f"Unsafe review tracking destination: {exc}") from exc
+    # A unique, non-forcing destination cannot follow the task's tracking symref
+    # or discard a stale/divergent local head when the remote was force-pushed.
+    # Even explicit refspecs otherwise opportunistically update configured
+    # tracking refs; an empty refmap confines all head updates to this pin.
+    git_repo.fetch_ref(repo_root, "origin", f"refs/heads/{branch_name}:{isolated}", refmap="")
+    try:
+        selected = resolve_ref_commit(repo_root, isolated)
+        if selected is None:
+            raise GitError("Successful fetch did not provide its isolated commit pin")
+        _run_git(
+            "update-ref",
+            "--no-deref",
+            tracking,
+            selected,
+            previous if previous is not None else "0" * len(selected),
+            cwd=repo_root,
+        )
+        # Delete only this operation's temporary ref at its captured identity.
+        # Any changed ref or installation failure is retained and reported.
+        _run_git("update-ref", "--no-deref", "-d", isolated, selected, cwd=repo_root)
+    except (GitError, OSError) as exc:
+        raise ReviewTrackingError(
+            f"Cannot install fetched review snapshot; inspect pin {isolated}: {exc}"
+        ) from exc
+    return selected

@@ -390,10 +390,10 @@ def recover_branch_worktree(
         if _run_git("write-tree", cwd=path).stdout.strip() != selected_tree:
             raise GitError("Recovered index differs from the selected commit")
         _run_git("diff-files", "--quiet", "--", cwd=path)
-        attached = _run_git("symbolic-ref", "--short", "HEAD", cwd=path).stdout.strip()
+        attached = _run_git("symbolic-ref", "HEAD", cwd=path).stdout.strip()
         head = _run_git("rev-parse", "--verify", "HEAD^{commit}", cwd=path).stdout.strip()
         tip = git_branch.resolve_ref_commit(repo_root, f"refs/heads/{branch_name}")
-        if attached != branch_name or head != selected_oid or tip != selected_oid:
+        if attached != f"refs/heads/{branch_name}" or head != selected_oid or tip != selected_oid:
             raise GitError("Recovered branch/HEAD changed from the selected commit")
         return RecoveredWorktree(path=path, selected_oid=selected_oid, backup_ref=backup)
     except RecoveryStepError:

@@ -1245,8 +1245,15 @@ boundary.
 
 ## Removed review-worktree recovery
 
-`services/review_recovery.py` fetches only into the remote-tracking ref and pins
-its commit for the entire recovery operation. Cached tracking refs establish
+`services/review_recovery.py` delegates to a Git-layer fetch into a unique
+`refs/wade/review-fetch/` pin, using `--refmap=` to disable configured opportunistic
+tracking updates. It captures the fetched commit and installs the tracking ref
+with expected-old/no-deref semantics; fetch never follows a symbolic tracking
+ref into a checked-out local branch. Preexisting symbolic destinations refuse
+before fetch, and tracking races cannot move their symbolic targets. Successful
+installation deletes only the owned temporary pin at its captured OID; failure
+reports its inspection ref. The captured commit stays fixed for the entire
+recovery operation. Cached tracking refs establish
 neither a fresh PR head after a failed fetch nor live remote absence:
 `git/branch.py:live_remote_head_exists` accepts absence only from an exact
 `ls-remote --exit-code --refs` no-match response. Only that result permits a
@@ -1262,7 +1269,8 @@ non-forcing `checkout-index` populate the pinned tree without discarding ignored
 or untracked collisions. Local fallback reserves detached first, then attaches
 with `checkout --no-guess --no-overwrite-ignore <branch> --`; the trailing `--`
 prevents a deleted branch from becoming a tracked-path restoration. Final
-verification checks the branch, HEAD, index and working files against the pin.
+verification checks the fully qualified symbolic branch, HEAD, index and working
+files against the pin, so a same-named tag cannot cause a false refusal.
 
 A destination-keyed Pydantic record in `<git-common-dir>/.wade/review-recovery/`
 is atomically persisted before reservation and updated through the recovery

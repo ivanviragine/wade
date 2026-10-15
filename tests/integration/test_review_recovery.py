@@ -130,9 +130,9 @@ def test_force_pushed_recovery_preserves_displaced_unpublished_tip_and_other_wor
     fetch_errors: list[str] = []
     actual_fetch = git_repo.fetch_ref
 
-    def observe_real_fetch(root: Path, remote: str, refspec: str) -> None:
+    def observe_real_fetch(root: Path, remote: str, refspec: str, **kwargs: str) -> None:
         try:
-            actual_fetch(root, remote, refspec)
+            actual_fetch(root, remote, refspec, **kwargs)
         except GitError as exc:
             fetch_errors.append(str(exc))
             raise
@@ -270,8 +270,8 @@ def test_successful_fetch_with_disappearing_tracking_ref_refuses_local_fallback(
     repo = recovery_repo
     actual_fetch = git_repo.fetch_ref
 
-    def remove_after_real_fetch(root: Path, remote: str, refspec: str) -> None:
-        actual_fetch(root, remote, refspec)
+    def remove_after_real_fetch(root: Path, remote: str, refspec: str, **kwargs: str) -> None:
+        actual_fetch(root, remote, refspec, **kwargs)
         _git(repo.local, "update-ref", "-d", "refs/remotes/origin/" + repo.branch)
 
     with patch("wade.git.repo.fetch_ref", side_effect=remove_after_real_fetch):
@@ -706,3 +706,114 @@ def test_tracking_ref_refresh_after_capture_does_not_change_selected_snapshot(
     assert outcome.selected_oid == repo.remote_tip
     assert _git(outcome.path, "rev-parse", "HEAD") == repo.remote_tip
     assert _git(repo.local, "rev-parse", "refs/remotes/origin/" + repo.branch) == repo.old_tip
+
+
+def test_symbolic_tracking_destination_cannot_move_checked_out_main(
+    recovery_repo: RecoveryRepository,
+) -> None:
+    repo = recovery_repo
+    tracking = "refs/remotes/origin/" + repo.branch
+    _git(repo.local, "update-ref", "-d", tracking)
+    _git(repo.local, "symbolic-ref", tracking, "refs/heads/main")
+    protected = _protected(repo)
+    result = _recover_worktree(repo.local, repo.branch, _config(repo))
+    assert not result.succeeded
+    assert _protected(repo) == protected
+    assert _git(repo.local, "symbolic-ref", tracking) == "refs/heads/main"
+    assert not _target(repo).exists()
+
+
+@pytest.mark.parametrize("local_fallback", [False, True])
+def test_same_named_tag_does_not_reject_attached_recovery(
+    recovery_repo: RecoveryRepository, local_fallback: bool
+) -> None:
+    repo = recovery_repo
+    _git(repo.local, "tag", repo.branch, repo.old_tip)
+    if local_fallback:
+        _git(repo.publisher, "push", "origin", "--delete", repo.branch)
+    protected = _protected(repo)
+    result = _recover_worktree(repo.local, repo.branch, _config(repo))
+    assert result.succeeded, result.detail
+    assert result.path is not None
+    assert _git(result.path, "symbolic-ref", "HEAD") == "refs/heads/" + repo.branch
+    assert _git(result.path, "rev-parse", "HEAD") == (
+        repo.old_tip if local_fallback else repo.remote_tip
+    )
+    assert _git(repo.local, "rev-parse", "refs/tags/" + repo.branch) == repo.old_tip
+    assert _protected(repo) == protected
+
+
+@pytest.mark.parametrize(
+    "race", ["symbolic", "symbolic-equal-oid", "changed", "locked", "missing-pin"]
+)
+def test_isolated_fetch_cannot_follow_tracking_ref_races_or_fall_back(
+    recovery_repo: RecoveryRepository, race: str
+) -> None:
+    from wade.services.review_recovery import RecoveryFailure
+
+    repo = recovery_repo
+    tracking = "refs/remotes/origin/" + repo.branch
+    if race == "symbolic-equal-oid":
+        _git(repo.local, "update-ref", tracking, "refs/heads/main")
+    protected = _protected(repo)
+    actual_fetch = git_repo.fetch_ref
+    lock = repo.local / ".git" / (tracking + ".lock")
+    isolated_ref = ""
+
+    def race_fetch(root: Path, remote: str, refspec: str, **kwargs: str) -> None:
+        nonlocal isolated_ref
+        source, isolated_ref = refspec.split(":", 1)
+        assert source == "refs/heads/" + repo.branch
+        assert isolated_ref.startswith("refs/wade/review-fetch/")
+        assert isolated_ref != tracking
+        if race.startswith("symbolic"):
+            _git(repo.local, "symbolic-ref", tracking, "refs/heads/main")
+        actual_fetch(root, remote, refspec, **kwargs)
+        if race == "changed":
+            _git(repo.local, "update-ref", tracking, repo.old_tip)
+        elif race == "locked":
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text("owned test lock")
+        elif race == "missing-pin":
+            _git(repo.local, "update-ref", "-d", isolated_ref)
+            _git(repo.publisher, "push", "origin", "--delete", repo.branch)
+
+    try:
+        with patch("wade.git.repo.fetch_ref", side_effect=race_fetch):
+            result = _recover_worktree(repo.local, repo.branch, _config(repo))
+    finally:
+        if race == "locked":
+            lock.unlink()
+    assert _protected(repo) == protected
+    if result.succeeded:
+        # Some Git versions may safely replace the symbolic tracking ref itself;
+        # --no-deref must never move its checked-out main target.
+        assert race == "symbolic-equal-oid"
+        assert result.path is not None
+        assert _git(result.path, "rev-parse", "HEAD") == repo.remote_tip
+    else:
+        assert result.failure == RecoveryFailure.FETCHED_REF
+        assert not _target(repo).exists()
+        assert _git(repo.local, "rev-parse", "refs/heads/" + repo.branch) == repo.old_tip
+    if race.startswith("symbolic") and not result.succeeded:
+        assert _git(repo.local, "symbolic-ref", tracking) == "refs/heads/main"
+    elif race == "changed":
+        assert _git(repo.local, "rev-parse", tracking) == repo.old_tip
+    if not result.succeeded and race != "missing-pin":
+        assert _git(repo.local, "rev-parse", isolated_ref) == repo.remote_tip
+
+
+def test_isolated_fetch_ignores_configured_local_head_mapping_and_clears_owned_pin(
+    recovery_repo: RecoveryRepository,
+) -> None:
+    repo = recovery_repo
+    _git(repo.local, "config", "--unset-all", "remote.origin.fetch")
+    _git(repo.local, "config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
+    protected = _protected(repo)
+    result = _recover_worktree(repo.local, repo.branch, _config(repo))
+    assert result.succeeded, result.detail
+    assert result.path is not None
+    assert _git(result.path, "rev-parse", "HEAD") == repo.remote_tip
+    assert _git(repo.local, "rev-parse", "refs/remotes/origin/" + repo.branch) == repo.remote_tip
+    assert _git(repo.local, "for-each-ref", "refs/wade/review-fetch/") == ""
+    assert _protected(repo) == protected
