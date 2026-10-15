@@ -3723,3 +3723,69 @@ class TestStrictValidationGateWiring:
         with patch("wade.services.plan_service._preserve_generated_plans"):
             assert not plan(project_root=tmp_path, yolo=True)
         provider.create_task.assert_not_called()
+
+
+@pytest.mark.parametrize("width", [40, 80])
+@pytest.mark.parametrize("registered", [False, True])
+def test_uncollectable_owner_commands_are_exact_and_never_grant_archive_authority(
+    tmp_path: Path, width: int, registered: bool
+) -> None:
+    import io
+    import shlex
+
+    from rich.console import Console
+
+    from wade.services import plan_service
+
+    owner = tmp_path / "original long owner with 'quotes' [red] $(not-executed)"
+    output = io.StringIO()
+    entry = Worktree(path=str(owner), branch="(detached)", head="abc123")
+    with (
+        patch.object(plan_service.console, "out", Console(file=output, width=width)),
+        patch("wade.git.worktree.list_worktrees", return_value=[entry] if registered else []),
+        patch.object(
+            plan_service, "list_state_files_strict", side_effect=ValueError("PRIVATE")
+        ) as enumerate_plans,
+    ):
+        plan_service._retain_uncollectable_handoff(str(owner / ".wade/plans"), tmp_path, owner)
+    lines = output.getvalue().splitlines()
+    commands = [line for line in lines if line.startswith("wade ")]
+    if registered:
+        expected = [
+            ["wade", "plan", "--recover", str(owner)],
+            ["wade", "plan-session", "refresh", str(owner / ".wade/plans")],
+        ]
+        assert commands == [shlex.join(argv) for argv in expected]
+        assert [shlex.split(line) for line in commands] == expected
+    else:
+        assert not commands
+        assert "content-only import" in output.getvalue()
+    enumerate_plans.assert_not_called()
+
+
+@pytest.mark.parametrize("metadata", ["handoff-binding.json", "handoff-progress.json"])
+def test_parent_metadata_unknown_fields_are_typed_and_preserved(
+    tmp_path: Path, metadata: str
+) -> None:
+    from wade.services import plan_service
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    root = tmp_path
+    plans = root / ".wade/plans"
+    plans.mkdir(parents=True)
+    config = ProjectConfig()
+    plan_service._save_handoff_binding(root, None, config)
+    progress = plan_service._ensure_handoff_progress(root, "original", None, config)
+    path = plans / metadata
+    payload = json.loads(path.read_bytes())
+    payload["PRIVATE-KEY"] = "PRIVATE-VALUE"
+    path.write_text(json.dumps(payload))
+    snapshot = path.read_bytes()
+    with pytest.raises(UncollectableHandoffError) as rejected:
+        plan_service._ensure_handoff_progress(root, progress.session_id, None, config)
+    assert rejected.value.category == (
+        "launch-binding" if metadata == "handoff-binding.json" else "progress"
+    )
+    assert "PRIVATE" not in str(rejected.value)
+    assert "extra_forbidden" in str(rejected.value)
+    assert path.read_bytes() == snapshot
