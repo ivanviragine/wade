@@ -1763,13 +1763,16 @@ base repository/name, recorded final `head.sha` and `merge_commit_sha`. It ignor
 new tip. Unknown, malformed, ambiguous and failed queries remain distinct from
 no exact match. Individual patch IDs and equal trees do not authorize removal.
 
-The PR path pins the configured origin URL and fetches only the selected base
-into its remote-tracking ref with an isolated explicit refspec. Failed refreshes
-never reuse cached PR proof; the recorded merge must be an ancestor of the fresh
-base. Later edits/reverts are allowed, base rewrites excluding the merge are not.
+The PR path pins the configured origin URL and reuses recovery's
+`git/branch.py::fetch_review_snapshot` primitive with that explicit URL. Only a
+unique operation-owned pin is a fetch destination; expected-old, `--no-deref`
+installation updates the remote-tracking ref without following a symbolic ref
+into local history. Unsafe tracking refs or raced installation fail closed and
+retain any fetched pin for inspection. Failed refreshes never reuse cached PR
+proof; the recorded merge must be an ancestor of the fresh base. Later edits/reverts are allowed, base rewrites excluding the merge are not.
 Commit/object checks disable Git replacement objects. Cleanup normalizes the
-worktree inventory path, binds its branch and actual HEAD, and rechecks the head,
-base, origin and cleanliness after queries/session-data preservation. Git's
+worktree inventory path, binds its full symbolic branch ref and actual HEAD
+without tag-name abbreviation, and rechecks the head, base, origin and cleanliness after queries/session-data preservation. Git's
 non-forced worktree removal provides the final dirty-file refusal. These checks
 bound revalidation; they do not promise atomicity against arbitrary writers.
 Stale listing is only a snapshot: cleanup revalidates its operation-scoped proof,

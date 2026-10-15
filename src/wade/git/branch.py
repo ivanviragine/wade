@@ -514,13 +514,15 @@ class ReviewTrackingError(GitError):
     """Snapshot validation/installation failed; never permit local fallback."""
 
 
-def fetch_review_snapshot(repo_root: Path, branch_name: str) -> str:
+def fetch_review_snapshot(repo_root: Path, branch_name: str, *, remote: str = "origin") -> str:
     """Fetch to an isolated pin, then CAS-install tracking without dereferencing.
 
     Fetch follows symbolic destination refs, so even a pre-fetch symbolic-ref
     check cannot protect a checked-out branch against an intervening ref swap.
     Only the isolated ref is a fetch destination; the tracking update uses
     expected-old/no-deref semantics and the returned pin never changes with it.
+    Verified cleanup may supply its pinned origin URL as ``remote``; review
+    recovery retains the ordinary named-origin default.
     """
     tracking = f"refs/remotes/origin/{branch_name}"
     isolated = "refs/wade/review-fetch/" + uuid.uuid4().hex
@@ -534,7 +536,7 @@ def fetch_review_snapshot(repo_root: Path, branch_name: str) -> str:
     # or discard a stale/divergent local head when the remote was force-pushed.
     # Even explicit refspecs otherwise opportunistically update configured
     # tracking refs; empty refmap plus no tags/pruning confines ref writes to this pin.
-    git_repo.fetch_ref(repo_root, "origin", f"refs/heads/{branch_name}:{isolated}", isolated=True)
+    git_repo.fetch_ref(repo_root, remote, f"refs/heads/{branch_name}:{isolated}", isolated=True)
     try:
         selected = resolve_ref_commit(repo_root, isolated)
         if selected is None:

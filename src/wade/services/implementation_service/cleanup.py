@@ -410,7 +410,7 @@ def _worktree_identity(main_root: Path, wt_path: Path, main_branch: str) -> Work
     head = git_merge.commit_oid(wt_path, "HEAD")
     if head != wt.head or head != git_merge.commit_oid(main_root, f"refs/heads/{wt.branch}"):
         raise GitError("worktree HEAD and inventoried local branch head do not match")
-    if git_repo.get_current_branch(wt_path) != wt.branch:
+    if git_repo.get_current_branch_ref(wt_path) != f"refs/heads/{wt.branch}":
         raise GitError("worktree checked-out branch does not match inventory")
     return wt
 

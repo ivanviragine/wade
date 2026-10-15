@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from wade.git import branch as git_branch
 from wade.git import pr as git_pr
-from wade.git.repo import GitError, _run_git, fetch_ref
+from wade.git.repo import GitError, _run_git
 from wade.models.merge_evidence import MergeAssessment, MergeAssessmentCache, MergeEvidenceState
 
 
@@ -30,8 +31,8 @@ def assess_branch(
 ) -> MergeAssessment:
     """Accept local ancestry offline, otherwise require exact merged-PR proof.
 
-    Network proof always refreshes the explicitly selected base, into only its
-    remote-tracking ref, ignoring narrow/misconfigured default fetch mappings.
+    Network proof fetches the selected base into an operation-owned pin, then
+    CAS-installs tracking without dereferencing it or following default mappings.
     Cache lifetime is the owning service operation; callers still revalidate
     mutable branch/HEAD/cleanliness before removal.
     """
@@ -50,6 +51,11 @@ def assess_branch(
         # is sufficient for ancestry but never substitutes for a PR-path fetch.
         for ref in (f"refs/heads/{base}", f"refs/remotes/origin/{base}"):
             try:
+                if (
+                    ref.startswith("refs/remotes/")
+                    and git_branch.resolve_ref_commit(root, ref) is None
+                ):
+                    continue
                 oid = commit_oid(root, ref)
             except GitError:
                 continue
@@ -66,9 +72,13 @@ def assess_branch(
             if lookup.state == MergeEvidenceState.VERIFIED and lookup.pr is not None:
                 result.pr = lookup.pr
                 ref = f"refs/remotes/origin/{base}"
-                # Fetch the pinned configured URL, never a mutable local head.
-                fetch_ref(root, repository.origin_url, f"+refs/heads/{base}:{ref}", isolated=True)
-                result.base_ref, result.base_commit = ref, commit_oid(root, ref)
+                # Reuse recovery's isolated pin + expected-old/no-deref tracking
+                # installation: fetching directly to a tracking symref can move
+                # an unrelated checked-out local branch.
+                selected = git_branch.fetch_review_snapshot(
+                    root, base, remote=repository.origin_url
+                )
+                result.base_ref, result.base_commit = ref, commit_oid(root, selected)
                 merge = commit_oid(root, lookup.pr.merge_commit)
                 if not _contained(root, merge, result.base_commit):
                     result.state = MergeEvidenceState.NOT_MATCHED
@@ -90,8 +100,11 @@ def revalidate_assessment(root: Path, assessment: MergeAssessment) -> None:
     """Reject changed branch/base/origin bindings instead of reusing stale proof."""
     if commit_oid(root, f"refs/heads/{assessment.branch}") != assessment.head:
         raise GitError("local branch head changed during cleanup")
-    if assessment.base_ref and commit_oid(root, assessment.base_ref) != assessment.base_commit:
-        raise GitError("target base changed during cleanup; retry with fresh evidence")
+    if assessment.base_ref:
+        if assessment.base_ref.startswith("refs/remotes/"):
+            git_branch.resolve_ref_commit(root, assessment.base_ref)
+        if commit_oid(root, assessment.base_ref) != assessment.base_commit:
+            raise GitError("target base changed during cleanup; retry with fresh evidence")
     if (
         assessment.origin_url
         and git_pr.origin_github_repository(root).origin_url != assessment.origin_url

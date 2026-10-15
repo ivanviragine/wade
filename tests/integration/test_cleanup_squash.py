@@ -406,3 +406,83 @@ def test_git_refuses_changes_after_last_cleanliness_check(
     monkeypatch.setattr(cleanup.git_worktree, "remove_worktree", remove_late)
     assert not cleanup.remove(target="42", force=True, project_root=root)
     assert (wt / "last-instant.txt").read_text() == "user file\n"
+
+
+@pytest.mark.parametrize("entry", ["assessment", "list", "remove"])
+def test_symbolic_tracking_ref_never_rewrites_unpublished_local_main(
+    squash_repo: tuple[Path, Path, dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    from wade.git.merge_evidence import assess_branch
+    from wade.models.merge_evidence import MergeEvidenceState
+
+    root, wt, _ = squash_repo
+    (root / "unpublished.txt").write_text("must preserve local history\n")
+    git(root, "add", "unpublished.txt")
+    git(root, "commit", "-m", "feat: unpublished local main work")
+    before = git(root, "rev-parse", "refs/heads/main")
+    git(root, "symbolic-ref", "refs/remotes/origin/main", "refs/heads/main")
+    if entry == "assessment":
+        assessment = assess_branch(root, "feat/42-squash", "main")
+        verified = assessment.state == MergeEvidenceState.VERIFIED
+    elif entry == "list":
+        provider = MagicMock()
+        provider.read_task_or_none.return_value = None
+        monkeypatch.setattr(cleanup, "get_provider", lambda _: provider)
+        sessions = cleanup.list_sessions(project_root=root, silent=True)
+        verified = sessions[0]["staleness"] == "stale_merged"
+    else:
+        verified = cleanup.remove(target="42", force=True, project_root=root)
+    assert git(root, "rev-parse", "refs/heads/main") == before
+    assert (root / "unpublished.txt").read_text() == "must preserve local history\n"
+    assert git(root, "symbolic-ref", "refs/remotes/origin/main") == "refs/heads/main"
+    assert not verified
+    assert wt.is_dir()
+
+
+def test_same_named_tag_does_not_change_checked_out_branch_identity(
+    squash_repo: tuple[Path, Path, dict[str, object]],
+) -> None:
+    root, wt, _ = squash_repo
+    git(root, "tag", "feat/42-squash", "main")
+    assert git(wt, "symbolic-ref", "HEAD") == "refs/heads/feat/42-squash"
+    assert cleanup.remove(target="42", force=True, project_root=root)
+    assert not wt.exists()
+
+
+def test_tracking_swap_during_base_fetch_preserves_local_head_and_pin(
+    squash_repo: tuple[Path, Path, dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wade.git import repo as git_repo
+    from wade.git.merge_evidence import assess_branch
+    from wade.models.merge_evidence import MergeEvidenceState
+
+    root, wt, _ = squash_repo
+    (root / "unpublished.txt").write_text("keep unpublished main\n")
+    git(root, "add", "unpublished.txt")
+    git(root, "commit", "-m", "feat: unpublished main")
+    before = git(root, "rev-parse", "refs/heads/main")
+    fetch = git_repo.fetch_ref
+    pins: list[str] = []
+
+    def swap_tracking(
+        repo_root: Path, remote: str, refspec: str, *, isolated: bool = False
+    ) -> None:
+        assert isolated
+        assert not refspec.startswith("+")
+        pins.append(refspec.split(":", 1)[1])
+        assert pins[-1].startswith("refs/wade/review-fetch/")
+        fetch(repo_root, remote, refspec, isolated=isolated)
+        git(root, "symbolic-ref", "refs/remotes/origin/main", "refs/heads/main")
+
+    monkeypatch.setattr(git_repo, "fetch_ref", swap_tracking)
+    assessment = assess_branch(root, "feat/42-squash", "main")
+    assert assessment.state == MergeEvidenceState.UNKNOWN
+    assert "inspect pin" in assessment.reason
+    assert git(root, "rev-parse", "refs/heads/main") == before
+    assert (root / "unpublished.txt").read_text() == "keep unpublished main\n"
+    assert git(root, "symbolic-ref", "refs/remotes/origin/main") == "refs/heads/main"
+    assert len(pins) == 1 and git(root, "rev-parse", pins[0])
+    assert wt.is_dir()
