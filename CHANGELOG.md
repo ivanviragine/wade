@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.0] — 2026-10-15
+
+### Features
+
+- add GitHub Projects (v2) support: field-aware prioritization, sorting, and sync (#543) (1122e74)
+
 ## [v1.3.1] — 2026-10-14
 
 ### Bug Fixes
