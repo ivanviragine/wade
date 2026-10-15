@@ -139,6 +139,8 @@ class ReviewOutcome(StrEnum):
     REVIEWED = "reviewed"
     NO_DIFF = "no-diff"
     TIMED_OUT = "timed-out"
+    #: The reviewer ran but failed: it spends budget without certifying review.
+    FAILED = "failed"
     NOTHING_STAGED = "nothing-staged"
     #: The reviewer never started — an unknown/unsupported tool, or a launch that
     #: failed outright (an inherited parent sandbox being the motivating case).
@@ -149,7 +151,7 @@ class ReviewOutcome(StrEnum):
 
     @property
     def consumes_pass(self) -> bool:
-        return self in {ReviewOutcome.REVIEWED, ReviewOutcome.TIMED_OUT}
+        return self in {ReviewOutcome.REVIEWED, ReviewOutcome.TIMED_OUT, ReviewOutcome.FAILED}
 
     @property
     def satisfies_review(self) -> bool:

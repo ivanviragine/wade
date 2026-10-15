@@ -873,7 +873,8 @@ def _gate_review_ran(
             "commit was not re-reviewed."
         )
         console.detail(
-            f"{status.passes} commit(s) have been reviewed on this worktree; the cap bounds "
+            f"{status.passes} commit(s) have consumed a review pass on this worktree; "
+            "the cap bounds "
             "the review→fix→re-review loop so `done` can't be blocked indefinitely. "
             "Completing without requiring another review."
         )

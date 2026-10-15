@@ -604,6 +604,7 @@ def _delegate_interactive(
                     feedback="Interactive session cancelled by user",
                     mode=DelegationMode.INTERACTIVE,
                     exit_code=1,
+                    cancelled=True,
                 )
 
         # Read output file after AI exits (must happen before temp dir cleanup)
