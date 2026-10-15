@@ -27,6 +27,7 @@ from wade.services.implementation_service import (
     _strip_review_usage_block,
     build_review_usage_block,
 )
+from wade.services.review_recovery import RecoveryFailure, RecoveryOutcome
 from wade.services.review_service import (
     _capture_review_session_usage,
     _find_existing_branch_for_issue,
@@ -403,6 +404,10 @@ class TestReviewServiceStart:
         worktree_path.mkdir()
 
         patches = {
+            "get_git_common_dir": patch(
+                "wade.services.review_service.git_repo.get_git_common_dir",
+                return_value=repo_root / ".git",
+            ),
             "load_config": patch(
                 "wade.services.review_service.load_config",
                 return_value=MagicMock(
@@ -497,7 +502,7 @@ class TestReviewServiceStart:
             ),
             patch(
                 "wade.services.review_service._recover_worktree",
-                return_value=None,
+                return_value=RecoveryOutcome(failure=RecoveryFailure.NO_BRANCH),
             ),
         ):
             result = start(target="42")
@@ -967,7 +972,9 @@ class TestReviewServiceStart:
             ),
             patch(
                 "wade.services.review_service._recover_worktree",
-                return_value=Path("/tmp/recovered"),
+                return_value=RecoveryOutcome(
+                    succeeded=True, path=Path("/tmp/recovered"), source="remote"
+                ),
             ) as mock_recover,
         ):
             result = start(target="42")
@@ -2430,64 +2437,30 @@ class TestGetComprehensiveReviewStatus:
 
 
 class TestRecoverWorktree:
-    """Tests for the _recover_worktree() helper."""
+    """The UI wrapper delegates the configured target and preserves failure detail."""
 
-    def _make_config(self) -> MagicMock:
+    @pytest.mark.parametrize("failure", [None, RecoveryFailure.NO_BRANCH, RecoveryFailure.FETCH])
+    def test_structured_outcome_is_not_collapsed(
+        self, tmp_path: Path, failure: RecoveryFailure | None
+    ) -> None:
         from wade.models.config import ProjectConfig
 
-        config = MagicMock(spec=ProjectConfig)
-        config.project = MagicMock()
-        config.project.worktrees_dir = ""
-        config.project.branch_prefix = "feat"
-        config.project.main_branch = "main"
-        return config
-
-    @patch("wade.services.review_service.git_worktree.checkout_existing_branch_worktree")
-    @patch("wade.services.review_service._resolve_worktrees_dir")
-    @patch("wade.services.review_service.git_repo.rev_parse")
-    @patch("wade.services.review_service.git_repo.fetch_ref")
-    def test_success_returns_worktree_path(
-        self,
-        mock_fetch: MagicMock,
-        mock_rev_parse: MagicMock,
-        mock_resolve_wt: MagicMock,
-        mock_checkout: MagicMock,
-        tmp_path: Path,
-    ) -> None:
         repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-        worktrees_dir = tmp_path / "worktrees"
-        worktrees_dir.mkdir()
-        mock_resolve_wt.return_value = worktrees_dir
-        expected_path = worktrees_dir / "repo" / "feat-42-fix"
-        mock_checkout.return_value = expected_path
-
-        result = _recover_worktree(repo_root, "feat/42-fix", self._make_config())
-
-        assert result == expected_path
-        mock_fetch.assert_called_once()
-        mock_rev_parse.assert_called_once()
-        mock_checkout.assert_called_once()
-
-    @patch("wade.services.review_service.git_repo.fetch_ref", side_effect=GitError("no remote"))
-    def test_no_remote_branch_returns_none(
-        self,
-        mock_fetch: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        result = _recover_worktree(tmp_path, "feat/42-fix", self._make_config())
-        assert result is None
-
-    @patch("wade.services.review_service.git_repo.rev_parse", side_effect=GitError("not found"))
-    @patch("wade.services.review_service.git_repo.fetch_ref")
-    def test_branch_not_local_returns_none(
-        self,
-        mock_fetch: MagicMock,
-        mock_rev_parse: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        result = _recover_worktree(tmp_path, "feat/42-fix", self._make_config())
-        assert result is None
+        target = tmp_path / "worktrees" / "repo" / "feat-42-fix"
+        outcome = (
+            RecoveryOutcome(succeeded=True, path=target, source="remote")
+            if failure is None
+            else RecoveryOutcome(failure=failure, detail="specific recovery evidence")
+        )
+        with (
+            patch(
+                "wade.services.review_service._resolve_worktrees_dir",
+                return_value=tmp_path / "worktrees",
+            ),
+            patch("wade.services.review_service.recover_worktree", return_value=outcome) as recover,
+        ):
+            assert _recover_worktree(repo_root, "feat/42-fix", ProjectConfig()) is outcome
+        recover.assert_called_once_with(repo_root, "feat/42-fix", target)
 
 
 # ---------------------------------------------------------------------------
@@ -3198,6 +3171,10 @@ class TestReviewSessionAutonomyE2E:
             patch("wade.services.review_service.load_config", return_value=config),
             patch("wade.services.review_service.get_provider", return_value=provider),
             patch("wade.services.review_service.git_repo.get_repo_root", return_value=repo_root),
+            patch(
+                "wade.services.review_service.git_repo.get_git_common_dir",
+                return_value=repo_root / ".git",
+            ),
             patch(
                 "wade.services.review_service.git_repo.get_current_branch",
                 side_effect=GitError("detached"),

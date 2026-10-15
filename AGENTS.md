@@ -167,6 +167,13 @@ before mutation. Noncolliding session output remains allowed. The guard also
 applies to rollback; an obstructed rollback preserves data and reports manual
 recovery, rather than claiming branch/PR consistency was restored.
 
+Review worktree recovery stores destination-bound incomplete records under the
+shared Git directory's `.wade/review-recovery/`, outside frozen session files.
+Startup must refuse a retained or unsafe marker before PR lookup, quiet success
+or agent bootstrap. Guarded recovery reserves Git branch ownership before its
+atomic old-tip backup and expected-old alignment; partial worktrees and recovery
+refs are never automatically removed. See `docs/dev/architecture.md`.
+
 Both session done commands require successful draft-to-ready promotion by
 default. Failed readiness revokes only the active root's done markers and retains
 pushed work, PR-body updates and feedback/review evidence for retry. Fallback PR

@@ -576,6 +576,24 @@ WADE splits review into an **AI review pass** you or the agent can invoke, and
 | `wade review pr-comments <N>` | Starts a session to address human/bot PR comments |
 | `wade review trigger <N>` | Posts configured bot-review trigger comments on the task's PR |
 
+When `wade review pr-comments <N>` recreates a removed worktree, a successful
+fetch selects the current remote branch commit, including a force-pushed head.
+If the local branch points elsewhere, WADE first preserves that exact commit
+under `refs/wade/recovery/<branch>/<old-commit>` and prints a `git branch` command
+to recover it. These refs are retained automatically; existing worktrees are
+never realigned by this recovery path. Fetch never follows a symbolic tracking
+ref into a local branch.
+
+A failed fetch uses a local branch only after a live remote query confirms that
+the remote head is absent, and warns that the local code may be stale. Fetch or
+query errors, occupied destinations, and branches held by another worktree stop
+recovery without discarding local work. Partial recovery retains its worktree,
+backup refs and an incomplete-state record under the shared Git directory's
+`.wade/review-recovery/`. Later review startup refuses that destination before
+checking the PR or launching an agent. Inspect the reported files, branch tips,
+backup refs and marker to resolve it manually; running implementation or deleting
+the marker alone does not repair an incomplete checkout.
+
 Prompt-mode implementation review prints the bounded review prompt and exits 2;
 printing it does not certify that a review happened. After performing that
 self-review and addressing its findings, run
