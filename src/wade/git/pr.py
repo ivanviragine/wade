@@ -587,12 +587,16 @@ def update_pr_title(repo_root: Path, pr_number: int, title: str) -> bool:
 _NO_PR_SIGNALS = ("no pull requests found", "no open pull requests")
 
 
-def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
+def get_pr_for_branch(
+    repo_root: Path, branch: str, *, require_draft_state: bool = False
+) -> PRLookup:
     """Look up the PR associated with *branch*.
 
     Args:
         repo_root: Repository root directory.
         branch: Branch name to search for.
+        require_draft_state: Refuse absent or non-Boolean draft status rather
+            than using the legacy default. Required for completion recovery.
 
     Returns:
         A :class:`PRLookup` distinguishing three realities: no PR exists, the
@@ -619,6 +623,10 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
         return PRLookup(found=False, lookup_failed=True)
     try:
         data = json.loads(result.stdout)
+        if require_draft_state and (
+            not isinstance(data, dict) or type(data.get("isDraft")) is not bool
+        ):
+            return PRLookup(lookup_failed=True)
         pr = PRRef(
             number=data["number"],
             url=data.get("url", ""),
@@ -627,7 +635,7 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
             isDraft=data.get("isDraft", False),
             baseRefName=data.get("baseRefName", ""),
         )
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         return PRLookup(found=False, lookup_failed=True)
     return PRLookup(found=True, pr=pr)
 

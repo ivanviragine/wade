@@ -115,3 +115,9 @@ class TestDoneDefersStrip:
             result = done("42", project_root=repo_root)
 
         assert result is True
+
+
+def test_failed_feedback_finalization_preserves_cycle_and_retry_setup(tmp_path: Path) -> None:
+    strip, clear_cycle = _run_done(tmp_path, pr_result=False, session_type="review-pr-comments")
+    strip.assert_not_called()
+    clear_cycle.assert_not_called()
