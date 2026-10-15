@@ -920,6 +920,21 @@ via the `gh` CLI, so `wade review pr-comments`, the auto-poll loop, and
 `wade review-pr-comments-session fetch` / `resolve` behave identically across
 providers. Only where a task itself lives differs.
 
+### ClickUp provider
+
+Task state follows ClickUp's canonical `status.type`, regardless of the display
+name: `closed` maps to WADE Closed; `done` and every other nonempty type remain
+Open. A renamed Closed status still closes the task, and a custom status named
+“Complete” does not. Legacy payloads with missing, null or blank type fall back
+to the names `closed`, `complete` and `done`; typeless “Done” is therefore
+ambiguous and retains the older Closed interpretation.
+
+Closing a task reads its home List's effective statuses, including inherited
+statuses, and sends the unique canonical Closed status's exact display name.
+Missing or ambiguous metadata fails before the update; the returned task must
+have canonical Closed type before WADE reports success. WADE does not assume
+that “closed” or “Done” is the configured closing name.
+
 ### Markdown provider
 
 Useful when you want tasks versioned alongside the code, with no external
