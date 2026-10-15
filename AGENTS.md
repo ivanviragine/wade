@@ -151,6 +151,17 @@ Status move. See README and developer architecture/testing docs for contracts.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
 
+Uncollectable planning metadata uses `planning_handoff_errors.UncollectableHandoffError`.
+Parent collection retains the intact original registered owner before editable-plan
+salvage, including read-only launch/progress checks before editable content;
+diagnostics expose bounded public fields/codes and declared versions,
+never payload-bearing exceptions. Retention grants no recovery or review authority.
+A fresh compatible process must still pass original-owner, launch/progress,
+frozen-contract, content and review gates; absent progress may initialize only
+from valid original launch metadata. Finish or safely stop active planning parents
+before changing their shared editable source/environment: refreshing a workflow
+cannot replace already-imported models.
+
 Scaffold retargets use a guarded git-layer hard reset: tracked edits and
 untracked/ignored paths obstructing the pinned destination tree must refuse
 before mutation. Noncolliding session output remains allowed. The guard also

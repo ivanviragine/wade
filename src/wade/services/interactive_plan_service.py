@@ -8,6 +8,7 @@ import os
 import shlex
 import stat
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +21,7 @@ from wade.models.plan_bundle import PlanBundle, PlanMember
 from wade.models.skill import SkillSlot
 from wade.models.workflow import SessionKind
 from wade.services import native_plan_service as native
+from wade.services.planning_handoff_errors import UncollectableHandoffError
 from wade.services.session_composition_service import (
     SessionCompositionError,
     load_session_manifest_strict,
@@ -106,13 +108,13 @@ def _binding_digest(root: Path) -> str:
     except StateFileAccessError:
         raise
     except StateFileUnsafeError as exc:
-        raise ValueError("Interactive planning requires its frozen session bundle") from exc
+        raise UncollectableHandoffError(root, "frozen-bindings", exc) from exc
     try:
         validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
     except SessionCompositionError as exc:
         if state_error := _frozen_bundle_state_error(root, exc):
             raise state_error from exc
-        raise ValueError(str(exc)) from exc
+        raise UncollectableHandoffError(root, "frozen-bindings", exc) from exc
     return manifest.bundle_digest
 
 
@@ -151,11 +153,13 @@ def _load(root: Path) -> InteractivePlanState:
         raise ValueError("Interactive planning handoff is absent or unsafe")
     state = InteractivePlanState.model_validate_json(raw)
     if state.refresh_pending:
-        raise ValueError(
-            "Planning refresh interrupted; rerun plan-session refresh on the original directory"
-        )
+        cause = ValueError("Planning refresh interrupted")
+        raise UncollectableHandoffError(
+            root, "interactive-state", cause, raw=raw, reason_code="interrupted-refresh"
+        ) from cause
     if state.bundle_digest != _binding_digest(root):
-        raise ValueError("Interactive planning bindings changed; restart the planning session")
+        cause = ValueError("Interactive planning bindings changed; restart the planning session")
+        raise UncollectableHandoffError(root, "frozen-bindings", cause) from cause
     return state
 
 
@@ -345,22 +349,52 @@ def complete(root: Path) -> None:
     _save(root, state)
 
 
-def collect(root: Path) -> PlanBundle:
+def collect(
+    root: Path,
+    *,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
+) -> PlanBundle:
     """Accept only a completed submission whose files and reviews are still current."""
-    return collect_with_state(root)[1]
+    return collect_with_state(root, before_content=before_content)[1]
 
 
-def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
+def collect_with_state(
+    root: Path,
+    *,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
+) -> tuple[InteractivePlanState, PlanBundle]:
     """Collect a completed handoff and return its validated launch metadata."""
 
     try:
-        state = _load(root)
+        try:
+            state = _load(root)
+        except (UncollectableHandoffError, StateFileAccessError, StateFileIOError):
+            raise
+        except ValueError as exc:
+            raise UncollectableHandoffError(
+                root,
+                "interactive-state",
+                exc,
+                raw=read_state_file(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES),
+            ) from exc
         if not state.completed or state.bundle is None:
             raise ValueError("No completed plan handoff; run wade plan-session done before exiting")
+        # Required metadata must parse before editable files can enter salvage.
+        # Valid receipts bind the stored completed bundle; equality with the
+        # current files is checked below before returning that same bundle.
+        try:
+            _validate_reviews(root, state, state.bundle)
+        except (StateFileAccessError, StateFileIOError):
+            raise
+        except ValueError as exc:
+            raise UncollectableHandoffError(
+                root, "review-metadata", exc, raw=read_state_file(root, ("plans",), REVIEWS)
+            ) from exc
+        if before_content is not None:
+            before_content(state)
         bundle = _current_bundle(root, state)
         if bundle != state.bundle:
             raise ValueError("Plans changed after completion; run wade plan-session done again")
-        _validate_reviews(root, state, bundle)
         return state, bundle
     except StateFileAccessError as exc:
         raise InteractivePlanAccessError(root, exc) from exc

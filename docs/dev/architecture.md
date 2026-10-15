@@ -274,6 +274,41 @@ binding, content, review, dependency, and strict plan-validation gates before
 persistence. Successful recovery resumes the ordinary finalization and cleanup
 path; WADE does not invoke platform privacy tools or weaken sandbox policy.
 
+`planning_handoff_errors.UncollectableHandoffError` distinguishes persisted
+metadata/frozen-binding failures from ordinary editable Markdown validation.
+Interactive collection (including the second parent collection), collector
+metadata loading, and launch/progress validation classify these failures before
+`plan_service` can enter copy-and-cleanup salvage. Required review metadata is
+validated against the stored completed bundle before editable files: invalid
+Markdown must not mask an unsupported receipt and destroy its owner. A read-only
+parent callback also validates original launch and any present progress metadata
+against that stored session before editable content is read, at both native
+collection passes. Missing progress is initialized only after valid collection.
+Valid metadata retains the separate editable-content validation/salvage contract.
+The failure handler does not
+parse state, enumerate plans, stage knowledge or mutate providers; it keeps the
+registered detached owner, frozen session, raw output, launch binding and existing
+progress byte-for-byte. Registration is checked only to decide whether an
+original-owner recovery command can be advertised. An unregistered fallback or
+copy remains content salvage, without recovery authority.
+
+Diagnostics use bounded public field locations/error codes, no validator
+messages, values, arbitrary map/extra keys, exception context or raw JSON. They
+report the already-imported reader version, safely available declared versions
+and an unavailable unrecorded writer version. Possible schema/runtime skew is
+qualified, not attributed to an adapter. Filesystem denial/I/O retain their
+existing failure contracts. Strict schema rejection is not softened. Missing
+progress after early collection failure may initialize from a validated original
+launch binding; malformed/mismatched present progress fails closed.
+
+Active planning parents must finish or safely stop before shared editable
+source/environment changes. Workflow refresh does not replace imported Python
+models. A fresh compatible process may recover only through the current original
+ownership, binding, content and review gates. Explicit supported handoff refresh
+invalidates completion/reviews and requires new genuine review/done; unreadable
+future state must stay retained. No copied/deleted owner or archive reconstructs
+authority, and retention never adopts historical knowledge observations.
+
 Recovery is idempotent because its launch binding and persistence are recorded as
 they happen. Before a managed planner launches, its worktree gets
 `.wade/plans/handoff-binding.json` (`PlanHandoffBinding`) with the resolved
