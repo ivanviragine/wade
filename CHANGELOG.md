@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.3] — 2026-10-15
+
+### Bug Fixes
+
+- _recover_worktree fetch fails on a diverged/force-pushed open-PR branch (#486) (49b3639)
+
 ## [v1.4.2] — 2026-10-15
 
 ### Bug Fixes
