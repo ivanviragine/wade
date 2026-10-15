@@ -152,7 +152,9 @@ Then use a compatible reader on that same owner through normal recovery. Create
 current review evidence by the production review service with a deterministic
 mock delegate, never copied historical receipts. Cover legitimate absent-progress
 initialization, malformed/mismatched present metadata, second parent collection,
-future fields/versions and malformed JSON. Explicit refresh must clear old
+future fields/versions and malformed JSON. Combine unsupported/malformed review
+metadata with invalid Markdown or changed member sets: metadata retention must
+win before editable-content salvage. Explicit refresh must clear old
 completion/reviews and require new review/done. Diagnostic assertions include
 secret-like keys/values/messages, bounded long error lists, declared versions,
 and exact quoted command lines at widths 40/80. Preserve the separate editable

@@ -758,7 +758,16 @@ def test_schema_rejection_retains_registered_original_before_progress_and_recove
 
 
 @pytest.mark.parametrize(
-    "corruption", ["future-state", "future-version", "malformed-state", "malformed-reviews"]
+    "corruption",
+    [
+        "future-state",
+        "future-version",
+        "malformed-state",
+        "malformed-reviews",
+        "future-reviews-invalid-plan",
+        "malformed-reviews-invalid-plan",
+        "future-reviews-invalid-member-set",
+    ],
 )
 @pytest.mark.parametrize("knowledge_enabled", [False, True])
 def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
@@ -788,7 +797,7 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
         path = (
             root
             / ".wade/plans"
-            / (interactive.REVIEWS if corruption == "malformed-reviews" else interactive.STATE)
+            / (interactive.REVIEWS if "reviews" in corruption else interactive.STATE)
         )
         if corruption.startswith("malformed"):
             path.write_text('{"SECRET-JSON-KEY": SECRET-JSON-VALUE')
@@ -799,6 +808,10 @@ def test_normal_collection_retains_bad_metadata_without_leaking_or_staging(
             else:
                 payload["SECRET-EXTRA-KEY"] = "SECRET-EXTRA-VALUE"
             path.write_text(json.dumps(payload))
+        if corruption.endswith("invalid-plan"):
+            (root / ".wade/plans/PLAN.md").write_text("Public plan without its required H1.\n")
+        elif corruption.endswith("invalid-member-set"):
+            (root / ".wade/plans/PLAN-extra.md").write_text(_PLAN)
         snapshots.update(_owned_bytes(root))
         return original_collect(root)
 

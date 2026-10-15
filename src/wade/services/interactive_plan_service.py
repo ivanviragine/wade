@@ -370,17 +370,20 @@ def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
             ) from exc
         if not state.completed or state.bundle is None:
             raise ValueError("No completed plan handoff; run wade plan-session done before exiting")
-        bundle = _current_bundle(root, state)
-        if bundle != state.bundle:
-            raise ValueError("Plans changed after completion; run wade plan-session done again")
+        # Required metadata must parse before editable files can enter salvage.
+        # Valid receipts bind the stored completed bundle; equality with the
+        # current files is checked below before returning that same bundle.
         try:
-            _validate_reviews(root, state, bundle)
+            _validate_reviews(root, state, state.bundle)
         except (StateFileAccessError, StateFileIOError):
             raise
         except ValueError as exc:
             raise UncollectableHandoffError(
                 root, "review-metadata", exc, raw=read_state_file(root, ("plans",), REVIEWS)
             ) from exc
+        bundle = _current_bundle(root, state)
+        if bundle != state.bundle:
+            raise ValueError("Plans changed after completion; run wade plan-session done again")
         return state, bundle
     except StateFileAccessError as exc:
         raise InteractivePlanAccessError(root, exc) from exc
