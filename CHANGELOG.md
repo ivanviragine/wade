@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.5] — 2026-10-15
+
+### Bug Fixes
+
+- allow safe cleanup after multi-commit squash merges (#535) (d9e9665)
+
 ## [v1.4.4] — 2026-10-15
 
 ### Bug Fixes
