@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# ClickUp statuses that map to "closed"
-_CLOSED_STATUSES = frozenset({"closed", "complete", "done"})
+# Compatibility names only for task payloads without a canonical status type.
+_LEGACY_CLOSED_STATUSES = frozenset({"closed", "complete", "done"})
 
 
 def _epoch_ms_to_datetime(ms: str | None) -> datetime | None:
@@ -44,11 +44,23 @@ def _epoch_ms_to_datetime(ms: str | None) -> datetime | None:
         return None
 
 
+def _is_canonical_closed(status: dict[str, Any]) -> bool:
+    status_type = status.get("type")
+    return isinstance(status_type, str) and status_type.strip().lower() == "closed"
+
+
 def _parse_clickup_task(raw: dict[str, Any]) -> Task:
     """Convert a ClickUp task JSON object to a WADE Task model."""
     status_obj = raw.get("status") or {}
-    status_str = (status_obj.get("status") or "").lower()
-    state = TaskState.CLOSED if status_str in _CLOSED_STATUSES else TaskState.OPEN
+    status_type = status_obj.get("type")
+    if isinstance(status_type, str):
+        status_type = status_type.strip().lower()
+    if status_type is None or status_type == "":
+        # Older payloads omit type. Canonical Done deliberately remains OPEN.
+        status_name = (status_obj.get("status") or "").strip().lower()
+        state = TaskState.CLOSED if status_name in _LEGACY_CLOSED_STATUSES else TaskState.OPEN
+    else:
+        state = TaskState.CLOSED if status_type == "closed" else TaskState.OPEN
 
     tags: list[Label] = []
     for tag in raw.get("tags") or []:
@@ -232,11 +244,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
     def read_task(self, task_id: str) -> Task:
         """Read a single task by its ID."""
-        data = self._client.get(
-            f"/api/v2/task/{task_id}",
-            params={"include_markdown_description": "true"},
-        )
-        return _parse_clickup_task(data)
+        return _parse_clickup_task(self._read_task_data(task_id))
 
     def update_task(
         self,
@@ -257,17 +265,47 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         return self.read_task(task_id)
 
     def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
-        """Close a task by setting its status to 'closed'.
+        """Resolve the task's home List Closed status, write it, and verify closure.
 
-        ClickUp has no close-reason concept — ``reason`` is accepted for
-        interface parity with other providers and ignored.
+        Canonical Done stays open. Unusable destination metadata fails before
+        mutation; name-only read compatibility is never a close destination.
+        ClickUp has no close-reason concept, so ``reason`` is accepted and ignored.
         """
-        self._client.put(
-            f"/api/v2/task/{task_id}",
-            json={"status": "closed"},
-        )
+        raw = self._read_task_data(task_id)
+        if _is_canonical_closed(raw.get("status") or {}):
+            return _parse_clickup_task(raw)
+
+        home_list = raw.get("list") or {}
+        list_id = home_list.get("id") if isinstance(home_list, dict) else None
+        if not isinstance(list_id, str) or not list_id.strip():
+            raise ValueError(f"Cannot close ClickUp task {task_id}: missing home List ID")
+
+        metadata = self._client.get(f"/api/v2/list/{list_id}")
+        statuses = metadata.get("statuses")
+        if not isinstance(statuses, list):
+            raise ValueError(f"Cannot resolve Closed status for ClickUp List {list_id}")
+        closed_statuses = [
+            status
+            for status in statuses
+            if isinstance(status, dict) and _is_canonical_closed(status)
+        ]
+        if len(closed_statuses) != 1:
+            raise ValueError(
+                f"Expected exactly one canonical Closed status for ClickUp List {list_id}"
+            )
+        target = closed_statuses[0].get("status")
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(f"Closed status for ClickUp List {list_id} has no usable name")
+
+        self._client.put(f"/api/v2/task/{task_id}", json={"status": target})
+        updated = self._read_task_data(task_id)
+        if not _is_canonical_closed(updated.get("status") or {}):
+            raise ValueError(
+                f"ClickUp task {task_id} is not canonically closed after status update"
+            )
+        task = _parse_clickup_task(updated)
         logger.info("clickup.task_closed", task_id=task_id)
-        return self.read_task(task_id)
+        return task
 
     def comment_on_task(self, task_id: str, body: str) -> None:
         """Add a comment to a task."""
@@ -342,6 +380,13 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
             return False
 
     # --- Internal helpers ---
+
+    def _read_task_data(self, task_id: str) -> dict[str, Any]:
+        """Retain raw canonical status and home List metadata for close verification."""
+        return self._client.get(
+            f"/api/v2/task/{task_id}",
+            params={"include_markdown_description": "true"},
+        )
 
     def _resolve_space_id(self) -> str:
         """Lazily resolve the space ID from the configured list."""
