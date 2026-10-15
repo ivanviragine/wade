@@ -19,6 +19,7 @@ def _run_git(
     *args: str,
     cwd: Path,
     check: bool = True,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a git command and return the CompletedProcess result.
 
@@ -36,13 +37,12 @@ def _run_git(
     cmd = ["git", *args]
     log.debug("git.run", cmd=cmd, cwd=str(cwd))
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+        if input_text is None:
+            result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
+        else:
+            result = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, check=check, input=input_text
+            )
     except subprocess.CalledProcessError as exc:
         raise GitError(
             f"git {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
@@ -293,6 +293,15 @@ def get_current_branch(path: Path) -> str:
     return branch
 
 
+def get_current_branch_ref(path: Path) -> str:
+    """Read HEAD's fully qualified local branch, without tag abbreviation."""
+    result = _run_git("symbolic-ref", "--quiet", "HEAD", cwd=path)
+    ref = result.stdout.strip()
+    if not ref.startswith("refs/heads/"):
+        raise GitError("HEAD does not name a local branch")
+    return ref
+
+
 def is_head_attached(path: Path) -> bool:
     """Check whether HEAD is attached to a branch (i.e. not detached).
 
@@ -355,8 +364,9 @@ def has_tracked_changes(path: Path) -> bool:
 
     Ignores untracked files (``--untracked-files=no``): a freshly bootstrapped scaffold
     worktree is full of untracked output (``.wade/``, ``PLAN.md``, installed skills) that
-    must not count as "dirty". Used to decide whether a checked-out scaffold branch can be
-    safely hard-reset for a base retarget without discarding real edits (#376 review).
+    must not count as "dirty". Used to decide whether a checked-out scaffold branch can
+    pass the tracked-edit prerequisite for a base retarget (#376 review).
+    The guarded hard reset separately checks untracked/ignored collisions.
 
     Args:
         path: Any directory inside the repo/worktree.
@@ -568,7 +578,11 @@ def status_porcelain_paths(cwd: Path, *paths: str) -> list[str]:
 
 
 def push_branch(
-    repo_root: Path, branch: str, set_upstream: bool = False, force: bool = False
+    repo_root: Path,
+    branch: str,
+    set_upstream: bool = False,
+    force: bool = False,
+    source_commit: str | None = None,
 ) -> None:
     """Push a branch to origin.
 
@@ -577,6 +591,8 @@ def push_branch(
         branch: Branch name to push.
         set_upstream: If True, add ``-u`` to track the remote branch.
         force: If True, use ``--force-with-lease`` to allow non-fast-forward pushes.
+        source_commit: Optional full immutable commit to deliver instead of re-reading
+            a concurrently moving local branch. Upstream still tracks ``branch``.
 
     Raises:
         GitError: If the push fails.
@@ -584,11 +600,20 @@ def push_branch(
     args = ["push"]
     if force:
         args.append("--force-with-lease")
-    if set_upstream:
+    if source_commit is not None:
+        if len(source_commit) not in {40, 64} or any(
+            c not in "0123456789abcdef" for c in source_commit
+        ):
+            raise GitError("Pinned push source must be a full commit object ID")
+        args.extend(["origin", f"{source_commit}:refs/heads/{branch}"])
+    elif set_upstream:
         args.extend(["-u", "origin", branch])
     else:
         args.extend(["origin", branch])
     _run_git_with_retry(*args, cwd=repo_root)
+    if source_commit is not None and set_upstream:
+        _run_git("config", f"branch.{branch}.remote", "origin", cwd=repo_root)
+        _run_git("config", f"branch.{branch}.merge", f"refs/heads/{branch}", cwd=repo_root)
 
 
 def checkout(repo_root: Path, branch: str) -> None:
@@ -633,18 +658,22 @@ def rev_parse(repo_root: Path, ref: str) -> str:
     return result.stdout.strip()
 
 
-def fetch_ref(repo_root: Path, remote: str, refspec: str) -> None:
+def fetch_ref(repo_root: Path, remote: str, refspec: str, *, isolated: bool = False) -> None:
     """Fetch a specific refspec from a remote.
 
     Args:
         repo_root: Repository root directory.
         remote: Remote name (e.g. "origin").
         refspec: Refspec to fetch (e.g. "branch:branch").
+        isolated: Disable configured tracking mappings, tag following and pruning.
 
     Raises:
         GitError: If the fetch fails.
     """
-    _run_git("fetch", remote, refspec, cwd=repo_root)
+    if isolated:
+        _run_git("fetch", "--refmap=", "--no-tags", "--no-prune", remote, refspec, cwd=repo_root)
+    else:
+        _run_git("fetch", remote, refspec, cwd=repo_root)
 
 
 def has_remote(repo_root: Path) -> bool:

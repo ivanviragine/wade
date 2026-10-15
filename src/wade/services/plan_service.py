@@ -46,9 +46,13 @@ from crossby.models.ai import (
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig, with_wade_base_pattern
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
-from wade.models.interactive_plan import PlanHandoffBinding, PlanHandoffProgress
+from wade.models.interactive_plan import (
+    InteractivePlanState,
+    PlanHandoffBinding,
+    PlanHandoffProgress,
+)
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
-from wade.models.plan_bundle import PlanBundle, PlanKnowledgeVote
+from wade.models.plan_bundle import PlanBundle, PlanKnowledgeProposal, PlanKnowledgeVote
 from wade.models.task import CloseReason, PlanFile, Task, TaskState
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
@@ -65,11 +69,14 @@ from wade.services.ai_resolution import (
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
+from wade.services.implementation_service._shared import DraftPRTarget, resolve_draft_pr_target
 from wade.services.knowledge_recovery import (
     RETAINED_VOTE_RECOVERY_HINT,
     report_retained_vote_recovery,
 )
+from wade.services.planning_handoff_errors import UncollectableHandoffError
 from wade.services.session_composition_service import (
+    SessionCompositionError,
     load_session_manifest_strict,
     validate_frozen_session_bundle,
 )
@@ -148,15 +155,16 @@ def _load_handoff_binding(root: Path) -> PlanHandoffBinding:
     """Load the launch settings that identify a recoverable handoff's backend."""
 
     if not state_file_present(root, ("plans",), HANDOFF_BINDING_FILE):
-        raise ValueError("Planning handoff binding was never recorded; cannot safely recover")
+        cause = ValueError("Planning handoff binding was never recorded; cannot safely recover")
+        raise UncollectableHandoffError(root, "launch-binding", cause) from cause
     try:
         raw = read_state_file_strict(root, ("plans",), HANDOFF_BINDING_FILE)
     except StateFileUnsafeError as exc:
-        raise ValueError("Planning handoff binding is absent or unsafe") from exc
+        raise UncollectableHandoffError(root, "launch-binding", exc) from exc
     try:
         return PlanHandoffBinding.model_validate_json(raw)
     except ValueError as exc:
-        raise ValueError("Planning handoff binding is invalid") from exc
+        raise UncollectableHandoffError(root, "launch-binding", exc, raw=raw) from exc
 
 
 def _validate_handoff_binding(binding: PlanHandoffBinding, config: ProjectConfig) -> None:
@@ -185,13 +193,14 @@ def _load_handoff_progress(root: Path, session_id: str) -> PlanHandoffProgress |
     try:
         raw = read_state_file_strict(root, ("plans",), HANDOFF_PROGRESS_FILE)
     except StateFileUnsafeError as exc:
-        raise ValueError("Planning handoff progress is absent or unsafe") from exc
+        raise UncollectableHandoffError(root, "progress", exc) from exc
     try:
         progress = PlanHandoffProgress.model_validate_json(raw)
     except ValueError as exc:
-        raise ValueError("Planning handoff progress is invalid") from exc
+        raise UncollectableHandoffError(root, "progress", exc, raw=raw) from exc
     if progress.session_id != session_id:
-        raise ValueError("Planning handoff progress belongs to a different completed session")
+        cause = ValueError("Planning handoff progress belongs to a different completed session")
+        raise UncollectableHandoffError(root, "progress", cause, raw=raw) from cause
     return progress
 
 
@@ -236,7 +245,11 @@ def _validate_handoff_progress_binding(
         )
     if progress.knowledge.enabled != progress.knowledge_required:
         raise ValueError("Planning handoff progress has inconsistent knowledge settings")
-    if progress.knowledge_required and progress.knowledge_votes is None:
+    if (
+        progress.knowledge_required
+        and progress.knowledge_votes is None
+        and progress.knowledge_proposals is None
+    ):
         raise ValueError(
             "Planning handoff progress lacks its original knowledge vote binding; "
             "cannot safely recover"
@@ -267,15 +280,21 @@ def _config_for_handoff_recovery(
     )
 
 
-def _ensure_handoff_progress(
-    root: Path,
-    session_id: str,
-    model: str | None,
-    config: ProjectConfig,
-    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
-) -> PlanHandoffProgress:
-    """Return one handoff's durable metadata, creating it before mutations."""
+def _validated_handoff_metadata(
+    root: Path, session_id: str, model: str | None, config: ProjectConfig
+) -> tuple[PlanHandoffBinding, PlanHandoffProgress | None]:
+    """Validate original parent metadata without initializing missing progress."""
+    try:
+        return _load_validated_handoff_metadata(root, session_id, model, config)
+    except (UncollectableHandoffError, StateFileAccessError, StateFileIOError):
+        raise
+    except ValueError as exc:
+        raise UncollectableHandoffError(root, "progress", exc) from exc
 
+
+def _load_validated_handoff_metadata(
+    root: Path, session_id: str, model: str | None, config: ProjectConfig
+) -> tuple[PlanHandoffBinding, PlanHandoffProgress | None]:
     binding = _load_handoff_binding(root)
     _validate_handoff_binding(binding, config)
     if binding.model != model:
@@ -297,6 +316,28 @@ def _ensure_handoff_progress(
                 "Planning handoff progress does not match its original launch binding; "
                 "cannot safely recover"
             )
+    return binding, progress
+
+
+def _preflight_handoff_metadata(
+    root: Path, state: InteractivePlanState, model: str | None, config: ProjectConfig
+) -> None:
+    """Reject uncollectable parent metadata before editable content can be salvaged."""
+    _validated_handoff_metadata(root, state.session_id, model, config)
+
+
+def _ensure_handoff_progress_validated(
+    root: Path,
+    session_id: str,
+    model: str | None,
+    config: ProjectConfig,
+    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
+    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None,
+) -> PlanHandoffProgress:
+    """Return one handoff's durable metadata, creating it before mutations."""
+
+    binding, progress = _validated_handoff_metadata(root, session_id, model, config)
+    if progress is not None:
         return progress
 
     progress = PlanHandoffProgress(
@@ -307,10 +348,35 @@ def _ensure_handoff_progress(
         knowledge=binding.knowledge.model_copy(deep=True),
         knowledge_required=binding.knowledge_required,
         knowledge_votes=knowledge_votes if binding.knowledge_required else None,
+        knowledge_proposals=knowledge_proposals if binding.knowledge_required else None,
     )
     if not _save_handoff_progress(root, progress):
         raise HandoffProgressSaveError("Cannot safely save planning handoff progress")
     return progress
+
+
+def _ensure_handoff_progress(
+    root: Path,
+    session_id: str,
+    model: str | None,
+    config: ProjectConfig,
+    knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None,
+    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None,
+) -> PlanHandoffProgress:
+    """Keep uncollectable parent metadata out of editable-Markdown salvage."""
+    try:
+        return _ensure_handoff_progress_validated(
+            root, session_id, model, config, knowledge_votes, knowledge_proposals
+        )
+    except (
+        UncollectableHandoffError,
+        HandoffProgressSaveError,
+        StateFileAccessError,
+        StateFileIOError,
+    ):
+        raise
+    except ValueError as exc:
+        raise UncollectableHandoffError(root, "progress", exc) from exc
 
 
 def _handoff_progress_saver(
@@ -331,7 +397,7 @@ def _bind_handoff_knowledge_votes(
 
     if progress is None:
         return
-    if progress.knowledge_votes is None:
+    if progress.knowledge_votes is None and progress.knowledge_proposals is None:
         raise ValueError(
             "Planning handoff progress lacks its original knowledge vote binding; "
             "cannot safely recover"
@@ -685,6 +751,7 @@ def run_interactive_planning_session(
     issue_context: str | None,
     session_bundle: str,
     source_root: str,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
 ) -> tuple[PlanBundle, TokenUsage | None]:
     """Leave questions and review inside the native terminal; collect an explicit handoff."""
     prompt = render_plan_prompt(plan_dir, issue_context, session_bundle, source_root)
@@ -751,7 +818,7 @@ def run_interactive_planning_session(
         raise ValueError(f"Native planning CLI exited with code {exit_code}; output was retained")
     if deferred_input and not submitted:
         raise ValueError("Native Plan task submission was not confirmed; output was retained")
-    bundle = interactive_plan.collect(request.working_dir)
+    bundle = interactive_plan.collect(request.working_dir, before_content=before_content)
     usage = adapter.parse_transcript(transcript) if transcript.is_file() else None
     return bundle, usage
 
@@ -778,11 +845,19 @@ def _prepare_plan_handoff(
 ) -> list[PlanFile] | None:
     """Revalidate one collected handoff before any provider mutation."""
 
-    if bundle.knowledge_votes and (not knowledge_required or planning_worktree is None):
+    if (bundle.knowledge_votes or bundle.knowledge_proposals) and (
+        not knowledge_required or planning_worktree is None
+    ):
         raise ValueError("Knowledge votes require an enabled, managed planning worktree")
-    if knowledge_required and planning_worktree is not None and bundle.knowledge_votes is None:
+    if (
+        knowledge_required
+        and planning_worktree is not None
+        and bundle.knowledge_votes is None
+        and bundle.knowledge_proposals is None
+    ):
         raise ValueError(
-            "Knowledge-enabled planning requires the bundle's explicit knowledge_votes handoff"
+            "Knowledge-enabled planning requires knowledge_proposals "
+            "(legacy knowledge_votes remain historical)"
         )
     accepted_plans = _select_valid_plans(
         Path(plan_dir), validate_plan_files(Path(plan_dir)), yolo=resolved_yolo
@@ -819,7 +894,34 @@ def _prepare_plan_handoff(
             if any(vote.entry_id not in known_ids for vote in bundle.knowledge_votes):
                 raise ValueError("Native plan returned a rating for an unknown knowledge entry")
 
+        if (
+            handoff_progress is not None
+            and handoff_progress.knowledge_proposals != bundle.knowledge_proposals
+        ):
+            raise ValueError("Planning handoff knowledge proposals changed; cannot safely recover")
         _bind_handoff_knowledge_votes(handoff_progress, bundle.knowledge_votes)
+        if bundle.knowledge_proposals:
+            from wade.services.knowledge_proposals import stage_proposal
+            from wade.utils.knowledge_events import body_digest
+
+            entries_by_id = {
+                e.entry_id: e
+                for e in parse_entries(
+                    resolve_knowledge_path(planning_worktree, config.knowledge).read_text()
+                )
+            }
+            for proposal in bundle.knowledge_proposals:
+                entry = entries_by_id.get(proposal.entry_id)
+                if entry is None or body_digest(entry) != proposal.body_digest:
+                    raise ValueError("Knowledge proposal names changed/missing claim content")
+                stage_proposal(
+                    planning_worktree,
+                    config.knowledge,
+                    proposal.entry_id,
+                    proposal.model_dump(mode="json"),
+                    operation_id=handoff_id,
+                    plan_filename=proposal.plan_filename,
+                )
         for vote in bundle.knowledge_votes or ():
             record_handoff_rating_for_session(
                 planning_worktree,
@@ -877,6 +979,7 @@ def _persist_accepted_plans(
                 resolved_model,
                 config,
                 bundle.knowledge_votes,
+                bundle.knowledge_proposals,
             )
         except (StateFileError, ValueError) as exc:
             console.error(f"Could not record planning recovery progress: {exc}", markup=False)
@@ -894,12 +997,12 @@ def _persist_accepted_plans(
                 yolo=resolved_yolo,
                 refresh_existing_plan=refresh_existing_plan,
             ):
-                # A recovered handoff needs its original detached worktree: the
+                # An accepted replan needs its original workspace: the
                 # frozen session, handoff binding, and persistence progress there
-                # are what make a later ``wade plan --recover`` retry safe. A
+                # make a later ``wade plan --recover`` retry safe. A
                 # copied plan alone cannot restore that state after a transient
                 # draft-PR refresh failure.
-                if refresh_existing_plan and planning_worktree is not None:
+                if refresh_existing_plan:
                     _retain_inaccessible_handoff(plan_dir, planning_worktree, access_denied=False)
                 else:
                     _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
@@ -1103,8 +1206,17 @@ def _recover_completed_handoff(
     console.rule("wade plan recovery")
     console.kv("Planning worktree", str(root))
     try:
-        manifest = load_session_manifest_strict(root)
-        validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
+        try:
+            manifest = load_session_manifest_strict(root)
+            validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
+        except (StateFileAccessError, StateFileIOError):
+            raise
+        except (ValueError, SessionCompositionError) as exc:
+            if isinstance(exc, SessionCompositionError) and (
+                state_error := interactive_plan._frozen_bundle_state_error(root, exc)
+            ):
+                raise state_error from exc
+            raise UncollectableHandoffError(root, "frozen-bindings", exc) from exc
         collected: PlanSessionResult | None = None
         if interactive_plan.active(root):
             state, bundle = interactive_plan.collect_with_state(root)
@@ -1173,7 +1285,12 @@ def _recover_completed_handoff(
             # failed initial progress write cannot substitute current project
             # settings before re-staging votes or touching the provider.
             progress = _ensure_handoff_progress(
-                root, handoff_id, resolved_model, config, bundle.knowledge_votes
+                root,
+                handoff_id,
+                resolved_model,
+                config,
+                bundle.knowledge_votes,
+                bundle.knowledge_proposals,
             )
         resolved_effort = EffortLevel(raw_effort) if raw_effort is not None else None
         provider = get_provider(config)
@@ -1195,6 +1312,10 @@ def _recover_completed_handoff(
         if not accepted_plans:
             _retain_inaccessible_handoff(plan_dir, root, access_denied=False)
             return False
+    except UncollectableHandoffError as exc:
+        console.error(native_plan.failure_message(exc), markup=False)
+        _retain_uncollectable_handoff(plan_dir, repo_root, root)
+        return False
     except (Exception, KeyboardInterrupt) as exc:
         category = type(exc).__name__
         message = (
@@ -1625,6 +1746,13 @@ def plan(
                     issue_context=issue_context,
                     session_bundle=session_bundle,
                     source_root=str(planning_worktree or repo_root or cwd),
+                    before_content=(
+                        lambda state: _preflight_handoff_metadata(
+                            session_cwd, state, resolved_model, config
+                        )
+                    )
+                    if planning_worktree is not None
+                    else None,
                 )
             else:
                 request = request.model_copy(
@@ -1655,9 +1783,19 @@ def plan(
                         resolved_model,
                         config,
                         bundle.knowledge_votes,
+                        bundle.knowledge_proposals,
                     )
         if interactive:
-            handoff_id = interactive_plan.collect_with_state(session_cwd)[0].session_id
+            handoff_id = interactive_plan.collect_with_state(
+                session_cwd,
+                before_content=(
+                    lambda state: _preflight_handoff_metadata(
+                        session_cwd, state, resolved_model, config
+                    )
+                )
+                if planning_worktree is not None
+                else None,
+            )[0].session_id
             if planning_worktree is not None:
                 handoff_progress = _ensure_handoff_progress(
                     planning_worktree,
@@ -1665,6 +1803,7 @@ def plan(
                     resolved_model,
                     config,
                     bundle.knowledge_votes,
+                    bundle.knowledge_proposals,
                 )
         else:
             assert collected is not None
@@ -1687,6 +1826,11 @@ def plan(
             _preserve_generated_plans(plan_dir, repo_root, planning_worktree, config)
             stop_title_keeper()
             return False
+    except UncollectableHandoffError as exc:
+        console.error(native_plan.failure_message(exc), markup=False)
+        _retain_uncollectable_handoff(plan_dir, repo_root, planning_worktree)
+        stop_title_keeper()
+        return False
     except (Exception, KeyboardInterrupt) as exc:
         category = type(exc).__name__
         message = (
@@ -1731,6 +1875,7 @@ def plan(
         usage=usage,
         collected=collected,
         handoff_id=handoff_id,
+        refresh_existing_plan=True,
     )
 
 
@@ -2005,6 +2150,7 @@ def _base_retarget_is_safe(
     repo_root: Path,
     *,
     yolo: bool,
+    resolved_target: DraftPRTarget | None = None,
 ) -> bool:
     """Guard re-planning from silently changing an in-flight PR's base.
 
@@ -2022,10 +2168,16 @@ def _base_retarget_is_safe(
     from wade.git import pr as git_pr
     from wade.git import repo as git_repo
 
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix, int(issue.id), issue.title
+    branch_name = (
+        resolved_target.branch_name
+        if resolved_target is not None
+        else git_branch.make_branch_name(config.project.branch_prefix, int(issue.id), issue.title)
     )
-    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    lookup = (
+        resolved_target.lookup
+        if resolved_target is not None
+        else git_pr.get_pr_for_branch(repo_root, branch_name)
+    )
     if lookup.lookup_failed:
         # A transient gh error is NOT "no PR" (git/pr.py contract). We cannot tell
         # whether a retarget would be safe, so abort rather than risk one — the
@@ -2086,7 +2238,12 @@ def _base_retarget_is_safe(
 
 
 def _reconcile_inflight_worktree_base(
-    config: ProjectConfig, issue: Task, repo_root: Path, declared_base: str | None
+    config: ProjectConfig,
+    issue: Task,
+    repo_root: Path,
+    declared_base: str | None,
+    *,
+    branch_name: str | None = None,
 ) -> bool:
     """Bring an in-flight worktree's ``.wade/base_branch`` in line with a just-applied
     PR retarget, so a resumed session's ``sync``/``done`` merge into the new base — not
@@ -2112,9 +2269,10 @@ def _reconcile_inflight_worktree_base(
     if declared_base is None:
         return True
 
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix, int(issue.id), issue.title
-    )
+    if branch_name is None:
+        branch_name = git_branch.make_branch_name(
+            config.project.branch_prefix, int(issue.id), issue.title
+        )
     try:
         wt_path = next(
             (
@@ -2188,7 +2346,7 @@ def _attach_plan_to_existing_issue(
 
     Reuses the same label / PR / body-update logic as _create_issues_from_plans
     but skips issue creation since the issue already exists.  The original issue
-    body is preserved — the PR link is appended rather than replacing it.
+    body is reread after PR persistence — the link never overwrites newer edits.
 
     When the plan declares a base branch that differs from an already-in-flight
     PR's base, the retarget is guarded (:func:`_base_retarget_is_safe`) so it is
@@ -2197,7 +2355,8 @@ def _attach_plan_to_existing_issue(
     Returns ``False`` when attaching did not fully succeed and the caller must
     preserve the freshly generated plan and abort finalization — instead of
     finalizing the issue and force-removing the planning worktree, which would
-    discard the replacement plan (#376). That covers three cases: the retarget
+    discard the replacement plan (#376). That includes stable identity lookup,
+    required issue read/link writes, structural refresh rejection, the retarget
     guard refused an in-flight base change, ``bootstrap_draft_pr`` failed to
     create/retarget the draft PR, or the in-flight worktree's merge-target pin
     could not be reconciled after a retarget. Returns ``True`` on success and on
@@ -2212,7 +2371,20 @@ def _attach_plan_to_existing_issue(
 
     # Bootstrap draft PR with full plan content
     if repo_root is not None:
-        if not _base_retarget_is_safe(config, issue, plan_file, repo_root, yolo=yolo):
+        resolved_target: DraftPRTarget | None = None
+        if refresh_existing_plan:
+            from wade.git.pr import GhCliError
+
+            try:
+                resolved_target = resolve_draft_pr_target(
+                    repo_root, issue.id, issue.title, config.project.branch_prefix
+                )
+            except (GhCliError, OSError) as exc:
+                console.error(f"Could not resolve the task's draft PR: {exc}", markup=False)
+                return False
+        if not _base_retarget_is_safe(
+            config, issue, plan_file, repo_root, yolo=yolo, resolved_target=resolved_target
+        ):
             return False
         pr_info = bootstrap_draft_pr(
             issue_number=issue.id,
@@ -2222,6 +2394,8 @@ def _attach_plan_to_existing_issue(
             repo_root=repo_root,
             base_branch=plan_file.base_branch,
             refresh_existing_plan=refresh_existing_plan,
+            resolved_target=resolved_target,
+            refresh_title=issue.title if refresh_existing_plan else None,
         )
         if pr_info:
             pr_number = pr_info.get("number", "?")
@@ -2234,7 +2408,11 @@ def _attach_plan_to_existing_issue(
             # A failed write is not swallowed — abort so the caller preserves the
             # plan instead of finalizing on a divergent merge target.
             if not _reconcile_inflight_worktree_base(
-                config, issue, repo_root, plan_file.base_branch
+                config,
+                issue,
+                repo_root,
+                plan_file.base_branch,
+                branch_name=resolved_target.branch_name if resolved_target is not None else None,
             ):
                 return False
 
@@ -2242,14 +2420,18 @@ def _attach_plan_to_existing_issue(
             # handoff replays this path after a failed finalization or cleanup, and
             # bootstrap_draft_pr reuses the same open PR — so only append a link the
             # body does not already carry instead of stacking duplicates (#516).
-            original_body = (issue.body or "").rstrip("\n")
-            plan_link = f"**Full plan**: PR #{pr_number}"
-            if plan_link not in original_body:
-                updated_body = original_body + f"\n\n{plan_link}"
-                try:
-                    provider.update_task(issue.id, body=updated_body)
-                except Exception as e:
-                    logger.warning("plan.pr_link_update_failed", error=str(e))
+            try:
+                current_issue = provider.read_task(issue.id)
+                original_body = current_issue.body or ""
+                plan_link = f"**Full plan**: PR #{pr_number}"
+                if re.search(rf"(?m)^{re.escape(plan_link)}[ \t]*\r?$", original_body) is None:
+                    provider.update_task(issue.id, body=original_body + f"\n\n{plan_link}")
+            except Exception as exc:
+                console.error(
+                    f"Could not persist the plan link on task #{issue.id}: {exc}", markup=False
+                )
+                return False
+
         else:
             # Draft-PR bootstrap failed (missing declared base, a failed retarget,
             # or a transient gh error). The plan lives only in the worktree/plan
@@ -2396,6 +2578,27 @@ def _finalize_issues(
     :data:`PLAN_FINALIZATION_FAILED` when generated plans must be preserved, or
     None if no interactive offer was made.
     """
+    if planning_worktree is not None and config.knowledge.enabled:
+        from wade.services.knowledge_proposals import bind_completed_parent
+        from wade.utils.safe_state import read_state_file
+
+        try:
+            raw_state = read_state_file(planning_worktree, ("plans",), "interactive-session.json")
+            if raw_state is not None:
+                from wade.models.interactive_plan import InteractivePlanState
+
+                bind_completed_parent(
+                    planning_worktree,
+                    InteractivePlanState.model_validate_json(raw_state).session_id,
+                )
+            elif native_result is not None:
+                bind_completed_parent(planning_worktree, native_result.session_id)
+        except (ValueError, OSError) as exc:
+            console.error(
+                f"Knowledge parent/task ownership could not be persisted: {exc}", markup=False
+            )
+            return PLAN_FINALIZATION_FAILED
+
     # Apply token usage to issue bodies
     if usage is not None and usage.total_tokens:
         apply_plan_token_usage(
@@ -2538,10 +2741,9 @@ def _finalize_issues(
     console.empty()
     if len(issue_numbers) == 1:
         if planning_worktree is not None and repo_root is not None and config.knowledge.enabled:
-            # The next attached implementation bootstrap carries main's pending
-            # ratings into its PR. Delay the handoff until every plan-finalizing
-            # side effect above succeeded, but run it immediately before that
-            # bootstrap so this detached vote is not left behind.
+            # Proposals are already durable and task-bound. Legacy unarchived
+            # transports must retain their original parent; never let a child
+            # bootstrap adopt or erase another operation's feedback.
             result = _offer_to_implement(
                 issue_numbers[0],
                 before_start=lambda: _flush_planning_votes_before_implementation(
@@ -2807,3 +3009,59 @@ def _retain_inaccessible_handoff(
             else "Recover the retained handoff with"
         )
         console.hint(f"{prefix}: {command}")
+
+
+def _retain_uncollectable_handoff(
+    plan_dir: str, repo_root: Path | None, planning_worktree: Path | None
+) -> None:
+    """Never enumerate/copy/clean uncollected metadata or grant archive authority."""
+    from wade.git import worktree as git_worktree
+    from wade.git.repo import GitError
+
+    console.warn(
+        "The intact original planning output was retained; no cleanup or task mutation ran."
+    )
+    console.detail(f"Original output: {plan_dir}", markup=False)
+    registered = False
+    if repo_root is not None and planning_worktree is not None:
+        try:
+            registered = any(
+                Path(os.path.abspath(entry.path)) == Path(os.path.abspath(planning_worktree))
+                and entry.branch == "(detached)"
+                for entry in git_worktree.list_worktrees(repo_root)
+            )
+        except (GitError, OSError, ValueError):
+            registered = False
+    if not registered:
+        console.info(
+            "Detached original-owner recovery is unavailable or unverified. Keep this output; "
+            "a copied archive or unregistered directory requires a fresh planning owner, "
+            "content-only import, and new review/completion gates."
+        )
+        return
+    assert planning_worktree is not None
+    console.info(
+        "After stabilizing the editable installation, use a fresh compatible WADE process. "
+        "Recovery still requires the original registered detached owner, launch/config/provider "
+        "binding, frozen contracts, unchanged content and current review. "
+        "Retention grants no authority."
+    )
+    console.info(
+        "If supported tooling can read this schema but frozen contracts require refresh, "
+        "explicitly "
+        "refresh the original handoff, genuinely review every plan, and run plan-session done "
+        "before recovery. Unknown future/unreadable state must remain retained until supported."
+    )
+    # One physical line, without Rich wrapping or markup interpretation.
+    console.out.print(
+        shlex.join(["wade", "plan", "--recover", str(planning_worktree)]),
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )
+    console.out.print(
+        shlex.join(["wade", "plan-session", "refresh", str(planning_worktree / ".wade/plans")]),
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )

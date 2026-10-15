@@ -202,7 +202,7 @@ manifest/workflow. Durable review records survive outside the session bundle,
 but apply only if the new session's review binding is identical.
 
 The implementation and PR-comment definitions currently use workflow revision
-2. Their authoritative order is verification, documentation decision, knowledge,
+3 (planning uses4 for typed owner-bound knowledge proposals). Their authoritative order is verification, documentation decision, knowledge,
 then closing method review; an old frozen revision is rejected until an explicit
 refresh replaces it. Expected tracked documentation and knowledge changes are
 therefore normally present in the final review. If a review finding creates a
@@ -366,3 +366,19 @@ This is a qualitative, repository-evidence review rather than a claim that a
 particular model will always produce identical output. The defaults provide the
 missing generic method; fixed workflows, deterministic gates, and tests remain
 the authority when output quality varies.
+
+## Evidence-bound knowledge compatibility
+
+Plan workflow4 and implementation/PR-comment workflow3 use the knowledge
+contracts in [knowledge.md](knowledge.md). Typed v2 plan observations and schema1
+owner-bound proposals replace generic next-worktree delivery; v1 votes remain
+historical input. Explicit refresh/recovery must validate frozen current workflow
+and handoff/review bindings. `plan-session refresh <original .wade/plans>`
+durably archives an intact original parent's old bundle. Native refresh closes
+old review/completion; fresh independent review/done precedes `plan --recover`.
+Collected artifacts/progress remain unchanged, and recovery performs its normal
+parent review before persistence without creating native completion state.
+Interrupted refresh is explicitly retryable and never invents a receipt.
+Bootstrap/review/done never auto-accept proposals.
+Commit owned knowledge before review; post-sync and recovery-push reconciliation
+are deterministic fixed gates, not methodology or agent discretion.

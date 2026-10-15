@@ -42,13 +42,14 @@ A session without that file uses native collection and parent review.
 6. **User review.** Summarize every plan (title, complexity, key tasks), invite
    revisions, and apply them before continuing.
 7. **Method review.** {review_step_state}
-8. **Knowledge handoff.** If knowledge is enabled, search relevant entries and
-   evaluate only those you read. Include each rating in the artifact's
-   `knowledge_votes`; use an explicit empty list if none warrant a vote. Do not
-   execute rating writes in the native planner. The parent stages these votes
-   after review and carries them into the existing managed handoff. Put durable
-   learnings in the plans for implementation to capture. In `PLAN_DIR_ONLY`,
-   return no votes.
+8. **Knowledge handoff.** If knowledge is enabled, evaluate relevant entries
+   without granting correctness from votes. Include explicit `knowledge_proposals`
+   in the artifact (empty when none). Each observation binds the entry body digest
+   and, for a split plan, its specific member filename; unresolved observations
+   remain pending. Do not execute tracked writes in native Plan mode. The parent
+   persists ignored owner-bound proposals and binds actual tasks after persistence;
+   bootstrap never auto-accepts them. Put durable learnings in the plans for fresh
+   implementation assessment. In `PLAN_DIR_ONLY`, return no proposals.
 9. **Validate.** In an interactive terminal handoff, run
    `wade plan-session done <plan_dir>` after review and every revision. It validates
    content and current review receipts. In a collected session the parent runs

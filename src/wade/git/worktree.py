@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Callable
 from pathlib import Path
 
 import structlog
 
-from wade.git.repo import _run_git, _run_git_with_retry
+from wade.git.repo import GitError, _run_git, _run_git_with_retry
 from wade.models import Worktree
+from wade.models.review_recovery import (
+    RecoveredWorktree,
+    RecoveryBlock,
+    RecoveryPhase,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -198,3 +205,198 @@ def prune_worktrees(repo_root: Path) -> None:
     """
     log.info("worktree.prune")
     _run_git_with_retry("worktree", "prune", cwd=repo_root)
+
+
+class RecoveryStepError(GitError):
+    """A failed guarded recovery retains its newly reserved files and refs."""
+
+    def __init__(
+        self,
+        detail: str,
+        block: RecoveryBlock,
+        phase: RecoveryPhase,
+        path: Path,
+        backup_ref: str | None = None,
+    ) -> None:
+        self.block = block
+        self.phase = phase
+        self.path = path
+        self.backup_ref = backup_ref
+        super().__init__(detail)
+
+
+def normalized_recovery_path(path: Path) -> Path:
+    """Normalize ancestors without following an occupied/dangling target symlink."""
+    absolute = Path(os.path.abspath(path))
+    return absolute.parent.resolve() / absolute.name
+
+
+def recover_branch_worktree(
+    repo_root: Path,
+    branch_name: str,
+    worktree_path: Path,
+    selected_oid: str,
+    *,
+    local_only: bool = False,
+    progress: Callable[[RecoveryPhase, str | None], None] | None = None,
+) -> RecoveredWorktree:
+    """Reserve Git ownership, align with a durable CAS backup, then populate safely.
+
+    Existing helpers intentionally keep their original checkout contract. This
+    operation never retries a forced checkout, rolls back, or removes partial work.
+    """
+    from wade.git import branch as git_branch
+
+    path = normalized_recovery_path(worktree_path)
+    phase = RecoveryPhase.PREPARING
+    block = RecoveryBlock.CREATION
+    backup: str | None = None
+
+    def emit(next_phase: RecoveryPhase, recorded_backup: str | None = None) -> None:
+        nonlocal phase
+        phase = next_phase
+        if progress is not None:
+            try:
+                progress(phase, recorded_backup)
+            except (OSError, ValueError) as exc:
+                raise RecoveryStepError(
+                    f"Cannot persist recovery phase {phase}: {exc}",
+                    RecoveryBlock.STATE,
+                    phase,
+                    path,
+                    backup,
+                ) from exc
+
+    try:
+        _run_git("check-ref-format", "--branch", branch_name, cwd=repo_root)
+        if path.exists() or path.is_symlink():
+            raise RecoveryStepError(
+                f"Recovery destination already exists: {path}",
+                RecoveryBlock.DESTINATION,
+                phase,
+                path,
+            )
+        owners = [wt.path for wt in list_worktrees(repo_root) if wt.branch == branch_name]
+        if owners:
+            raise RecoveryStepError(
+                f"Branch {branch_name} is already checked out at {', '.join(owners)}",
+                RecoveryBlock.OWNERSHIP,
+                phase,
+                path,
+            )
+        local_tip = git_branch.resolve_ref_commit(repo_root, f"refs/heads/{branch_name}")
+        if local_only and local_tip != selected_oid:
+            raise RecoveryStepError(
+                "Selected local fallback branch disappeared or changed before reservation",
+                RecoveryBlock.VERIFICATION,
+                phase,
+                path,
+            )
+        emit(RecoveryPhase.RESERVING)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive mkdir refuses even an empty destination created since preflight.
+        try:
+            path.mkdir()
+        except FileExistsError as exc:
+            raise RecoveryStepError(
+                f"Recovery destination appeared during reservation: {path}",
+                RecoveryBlock.DESTINATION,
+                phase,
+                path,
+            ) from exc
+        if local_only:
+            _run_git(
+                "worktree",
+                "add",
+                "--detach",
+                "--no-checkout",
+                "--",
+                str(path),
+                selected_oid,
+                cwd=repo_root,
+            )
+        elif local_tip is None:
+            _run_git(
+                "worktree",
+                "add",
+                "--no-checkout",
+                "-b",
+                branch_name,
+                "--",
+                str(path),
+                selected_oid,
+                cwd=repo_root,
+            )
+        else:
+            _run_git(
+                "worktree", "add", "--no-checkout", "--", str(path), branch_name, cwd=repo_root
+            )
+        emit(RecoveryPhase.RESERVED)
+        reserved_owners = [
+            normalized_recovery_path(Path(wt.path))
+            for wt in list_worktrees(repo_root)
+            if wt.branch == branch_name
+        ]
+        expected_owners = [] if local_only else [path]
+        if reserved_owners != expected_owners:
+            raise RecoveryStepError(
+                f"Branch ownership changed after reservation: {reserved_owners}",
+                RecoveryBlock.OWNERSHIP,
+                phase,
+                path,
+            )
+        observed_tip = git_branch.resolve_ref_commit(repo_root, f"refs/heads/{branch_name}")
+        if observed_tip is None or (local_only and observed_tip != selected_oid):
+            raise RecoveryStepError(
+                "Selected local branch disappeared or changed after reservation",
+                RecoveryBlock.VERIFICATION,
+                phase,
+                path,
+            )
+        block = RecoveryBlock.PRESERVATION
+        proposed_backup = (
+            f"refs/wade/recovery/{branch_name}/{observed_tip}"
+            if not local_only and observed_tip != selected_oid
+            else None
+        )
+        emit(RecoveryPhase.ALIGNING, proposed_backup)
+        if not local_only:
+            backup = git_branch.preserve_and_align_branch(
+                repo_root, branch_name, observed_tip, selected_oid
+            )
+        emit(RecoveryPhase.ALIGNED, backup)
+        block = RecoveryBlock.POPULATION
+        emit(RecoveryPhase.POPULATING, backup)
+        _run_git("read-tree", selected_oid, cwd=path)
+        # No force/update flags: tracked-path collisions, including ignored
+        # files introduced after reservation, must survive and refuse checkout.
+        _run_git("checkout-index", "--all", "--index", cwd=path)
+        if local_only:
+            block = RecoveryBlock.OWNERSHIP
+            emit(RecoveryPhase.ATTACHING)
+            if (
+                git_branch.resolve_ref_commit(repo_root, f"refs/heads/{branch_name}")
+                != selected_oid
+            ):
+                raise GitError(
+                    "Selected local fallback branch disappeared or changed before attachment"
+                )
+            # The trailing -- prevents a deleted branch being parsed as a path
+            # checkout, which could otherwise overwrite matching-path user edits.
+            _run_git("checkout", "--no-guess", "--no-overwrite-ignore", branch_name, "--", cwd=path)
+        block = RecoveryBlock.VERIFICATION
+        emit(RecoveryPhase.VERIFYING, backup)
+        selected_tree = _run_git("rev-parse", selected_oid + "^{tree}", cwd=path).stdout.strip()
+        if _run_git("write-tree", cwd=path).stdout.strip() != selected_tree:
+            raise GitError("Recovered index differs from the selected commit")
+        _run_git("diff-files", "--quiet", "--", cwd=path)
+        attached = _run_git("symbolic-ref", "HEAD", cwd=path).stdout.strip()
+        head = _run_git("rev-parse", "--verify", "HEAD^{commit}", cwd=path).stdout.strip()
+        tip = git_branch.resolve_ref_commit(repo_root, f"refs/heads/{branch_name}")
+        if attached != f"refs/heads/{branch_name}" or head != selected_oid or tip != selected_oid:
+            raise GitError("Recovered branch/HEAD changed from the selected commit")
+        return RecoveredWorktree(path=path, selected_oid=selected_oid, backup_ref=backup)
+    except RecoveryStepError:
+        raise
+    except (GitError, OSError) as exc:
+        raise RecoveryStepError(str(exc), block, phase, path, backup) from exc

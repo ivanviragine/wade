@@ -20,8 +20,9 @@ from crossby.models.ai import (
 from pydantic import ValidationError
 
 from wade.models.config import with_wade_base_pattern
-from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
+from wade.models.plan_bundle import BUNDLE_MARKER, LEGACY_BUNDLE_MARKER, PlanBundle, PlanMember
 from wade.models.task import PlanFile
+from wade.services.planning_handoff_errors import UncollectableHandoffError
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.safe_state import (
@@ -40,6 +41,8 @@ def failure_message(exc: BaseException) -> str:
     """Never echo Pydantic's input payload, which can contain plans or secrets."""
     from crossby.ai_tools.plan_mode import safe_error_excerpt
 
+    if isinstance(exc, UncollectableHandoffError):
+        return str(exc)
     if isinstance(exc, ValidationError):
         return str(exc.errors(include_input=False, include_context=False)[0]["msg"])
     return safe_error_excerpt(str(exc)) or type(exc).__name__
@@ -109,11 +112,21 @@ def parse_artifact(markdown: str) -> PlanBundle:
     if not markdown.strip().startswith("<!-- wade:plan-bundle:"):
         return PlanBundle(plans=(PlanMember(filename="PLAN.md", markdown=markdown),))
     match = re.fullmatch(
-        re.escape(BUNDLE_MARKER) + r"\s*```json\s*\n(.*)\n```\s*", markdown.strip(), re.DOTALL
+        "(?:"
+        + re.escape(BUNDLE_MARKER)
+        + "|"
+        + re.escape(LEGACY_BUNDLE_MARKER)
+        + ")"
+        + r"\s*```json\s*\n(.*)\n```\s*",
+        markdown.strip(),
+        re.DOTALL,
     )
     if match is None:
         raise ValueError("malformed or unsupported WADE plan bundle envelope")
-    return PlanBundle.model_validate(json.loads(match[1], object_pairs_hook=_unique_keys))
+    bundle = PlanBundle.model_validate(json.loads(match[1], object_pairs_hook=_unique_keys))
+    if markdown.strip().startswith(LEGACY_BUNDLE_MARKER) and bundle.knowledge_proposals is not None:
+        raise ValueError("Typed knowledge proposals require the v2 plan envelope")
+    return bundle
 
 
 def save_artifact(root: Path, result: PlanSessionResult) -> None:
@@ -136,7 +149,10 @@ def load_artifact(root: Path) -> tuple[PlanSessionResult, PlanBundle]:
         raise
     except StateFileUnsafeError as exc:
         raise ValueError("Native planning handoff is absent or unsafe") from exc
-    result = PlanSessionResult.model_validate_json(raw)
+    try:
+        result = PlanSessionResult.model_validate_json(raw)
+    except ValidationError as exc:
+        raise UncollectableHandoffError(root, "native-state", exc, raw=raw) from exc
     bundle = parse_artifact(result.plan)
     validate_imported_set(root, bundle)
     return result, bundle

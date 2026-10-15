@@ -65,6 +65,7 @@ def _run_done_via_pr(
     with ExitStack() as stack:
         mock_get_provider = stack.enter_context(patch(f"{_DONE}.get_provider"))
         stack.enter_context(patch(f"{_DONE}.git_repo._run_git"))
+        stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
         stack.enter_context(patch(f"{_DONE}.git_pr.get_pr_for_branch", return_value=lookup))
         stack.enter_context(patch(f"{_DONE}.git_pr.get_pr_body", return_value="Implements #42\n"))
         stack.enter_context(patch(f"{_DONE}.git_pr.update_pr_body", return_value=True))
@@ -180,6 +181,7 @@ class TestPrTitleSyncFailure:
         with ExitStack() as stack:
             mock_get_provider = stack.enter_context(patch(f"{_DONE}.get_provider"))
             stack.enter_context(patch(f"{_DONE}.git_repo._run_git"))
+            stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
             stack.enter_context(
                 patch(f"{_DONE}.git_pr.get_pr_for_branch", return_value=PRLookup(found=False))
             )

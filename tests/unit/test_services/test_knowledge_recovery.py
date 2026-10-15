@@ -58,7 +58,7 @@ class TestReportRetainedVoteRecovery:
         report_retained_vote_recovery(tmp_path, ProjectConfig(knowledge=_enabled()))
 
         message = console.info.call_args.args[0]
-        assert "Recovered 2 staged knowledge vote(s)" in message
+        assert "Preserved 2 knowledge proposal(s)" in message
         assert "plan-abc" in message
 
     def test_reports_a_still_failing_handoff_instead_of_going_quiet(

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+import pytest
+
 from wade.utils.markdown import (
+    MarkdownStructureError,
     append_session_to_body,
     build_sessions_block,
     extract_all_sections,
@@ -14,6 +17,9 @@ from wade.utils.markdown import (
     has_marker_block,
     parse_sessions_from_body,
     remove_marker_block,
+    replace_owned_section,
+    scan_markdown_structure,
+    strip_legacy_section,
 )
 
 
@@ -204,3 +210,453 @@ class TestSessionsBlock:
         assert "Original description." in result
         assert "More text." in result
         assert "Session ID: 123" in result
+
+
+@pytest.mark.parametrize(
+    "name", ["plan", "sessions", "deps", "impl-usage", "review-usage", "future-block"]
+)
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_structural_migration_preserves_managed_slices(name: str, newline: str) -> None:
+    body = newline.join(
+        [
+            f"<!-- wade:{name}:start -->",
+            "## Summary",
+            "Keep requirements.",
+            f"<!-- wade:{name}:end -->",
+            "Tail without final newline",
+        ]
+    )
+    assert strip_legacy_section(body, "Summary") == body
+
+
+@pytest.mark.parametrize(
+    "barrier",
+    [
+        "# Tasks\nKeep.",
+        "#\nKeep.",
+        "##\nKeep.",
+        "## Tasks\nKeep.",
+        "<!-- wade:future:start -->\nKeep.\n<!-- wade:future:end -->",
+        "```text\nKeep.\n```",
+        "~~~text\nKeep.\n~~~~",
+    ],
+)
+def test_legacy_migration_stops_at_first_barrier(barrier: str) -> None:
+    body = "Intro.\n\n## Summary\nOld.\n### Old detail\nRemove.\n" + barrier + "\nTail."
+    assert strip_legacy_section(body, "Summary") == "Intro.\n\n" + barrier + "\nTail."
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "> ## Summary\nQuoted.",
+        "- ## Summary\nList.",
+        "  ## Summary\nList continuation.",
+        "    ## Summary\nIndented code.",
+        "## Summary Notes\nKeep.",
+        "```markdown\n## Summary\n<!-- wade:plan:end -->\n```",
+        "   ~~~~markdown\n## Summary\n~~~\n   ~~~~~",
+    ],
+)
+def test_lookalikes_do_not_migrate(example: str) -> None:
+    assert strip_legacy_section(example, "Summary") == example
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!-- wade:plan:end -->",
+        "<!-- wade:plan:start -->",
+        "<!-- wade:a:start -->\n<!-- wade:b:end -->",
+        "<!-- wade:a:start -->\n<!-- wade:b:start -->\n<!-- wade:b:end -->\n<!-- wade:a:end -->",
+        "```\n~~~",
+        "~~~~\n~~~",
+        "## Summary\nA.\n## Summary\nB.",
+    ],
+)
+def test_unsafe_structure_refuses_legacy_migration(body: str) -> None:
+    with pytest.raises(MarkdownStructureError):
+        strip_legacy_section(body, "Summary")
+
+
+def test_owned_pair_is_authoritative_and_stays_in_place() -> None:
+    body = (
+        "## Summary\n"
+        "User section.\n"
+        "<!-- wade:summary:start -->\n"
+        "Old.\n"
+        "<!-- wade:summary:end -->\n"
+        "## Tasks\n"
+        "Keep."
+    )
+    expected = (
+        "## Summary\n"
+        "User section.\n"
+        "<!-- wade:summary:start -->\n"
+        "New.\n"
+        "<!-- wade:summary:end -->\n"
+        "## Tasks\n"
+        "Keep."
+    )
+    assert (
+        replace_owned_section(body, name="summary", heading="Summary", content="New.") == expected
+    )
+    assert (
+        replace_owned_section(body, name="summary", heading="Summary", content="")
+        == "## Summary\nUser section.\n<!-- wade:summary:start -->\n\n"
+        "<!-- wade:summary:end -->\n## Tasks\nKeep."
+    )
+
+
+def test_duplicate_owned_pairs_refused_but_unrelated_repeats_opaque() -> None:
+    block = "<!-- wade:future:start -->\n## Summary\nKeep.\n<!-- wade:future:end -->\n"
+    assert strip_legacy_section(block + block, "Summary") == block + block
+    owned = block.replace("future", "summary")
+    with pytest.raises(MarkdownStructureError, match="duplicate"):
+        replace_owned_section(owned + owned, name="summary", heading="Summary", content="New.")
+
+
+def test_owned_insertion_ignores_fenced_anchor_and_preserves_crlf() -> None:
+    prefix = (
+        "```\r\n"
+        "<!-- wade:impl-usage:start -->\r\n"
+        "example\r\n"
+        "<!-- wade:impl-usage:end -->\r\n"
+        "```\r\n"
+        "Tail.\r\n"
+    )
+    real = "<!-- wade:impl-usage:start -->\r\nReal usage.\r\n<!-- wade:impl-usage:end -->"
+    result = replace_owned_section(
+        prefix + real, name="summary", heading="Summary", content="New.", before=("impl-usage",)
+    )
+    assert (
+        result
+        == prefix
+        + "\r\n<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->\r\n\r\n"
+        + real
+    )
+    assert (
+        replace_owned_section(
+            result, name="summary", heading="Summary", content="New.", before=("impl-usage",)
+        )
+        == result
+    )
+
+
+def test_scanner_supports_matching_longer_fences_and_opaque_marker_examples() -> None:
+    body = "```text\n<!-- wade:plan:start -->\n````\n  ~~~text\n<!-- wade:plan:end -->\n  ~~~~"
+    structure = scan_markdown_structure(body)
+    assert len(structure.fences) == 2
+    assert structure.blocks == []
+
+
+def test_legacy_crlf_removal_preserves_unrelated_tail_without_final_newline() -> None:
+    body = "Prefix.\r\n\r\n## Summary\r\nOld.\r\n## Tasks\r\nKeep."
+    assert strip_legacy_section(body, "Summary") == "Prefix.\r\n\r\n## Tasks\r\nKeep."
+
+
+@pytest.mark.parametrize("separator", ["\v", "\f", "\x85", "\u2028", "\u2029"])
+def test_non_markdown_line_separators_do_not_create_legacy_headings(separator: str) -> None:
+    body = "User text." + separator + "## Summary\nKeep this paragraph."
+    assert strip_legacy_section(body, "Summary") == body
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+@pytest.mark.parametrize(
+    "example",
+    [
+        "- Example:\n  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n",
+        "-\n  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n",
+        "-\t```markdown\n\t<!-- wade:{name}:end -->\n\t```\n",
+        "1. Example:\n   <!-- wade:{name}:start -->\n   Keep.\n   <!-- wade:{name}:end -->\n",
+        "- ```markdown\n  <!-- wade:{name}:end -->\n  ```\n",
+        "1. ~~~markdown\n   <!-- wade:{name}:end -->\n   ~~~~\n",
+        "- Outer\n  - ```markdown\n    <!-- wade:{name}:end -->\n    ```\n"
+        "  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n",
+        "- Paragraph\nlazy continuation\n  <!-- wade:{name}:start -->\n"
+        "  Keep.\n  <!-- wade:{name}:end -->\n",
+    ],
+)
+def test_list_examples_are_not_owned_blocks(name: str, example: str) -> None:
+    prefix = example.format(name=name) + "\n"
+    old = f"<!-- wade:{name}:start -->\nOld.\n<!-- wade:{name}:end -->"
+    expected = prefix + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    assert replace_owned_section(prefix + old, name=name, heading=None, content="New.") == expected
+
+
+def test_unclosed_list_fence_refuses_mutation() -> None:
+    with pytest.raises(MarkdownStructureError, match="unclosed code fence"):
+        replace_owned_section(
+            "- ```markdown\n  Keep.", name="summary", heading=None, content="New."
+        )
+
+
+@pytest.mark.parametrize("separator", ["- - -", "* * *", "_ _ _"])
+def test_thematic_break_is_not_a_list_container(separator: str) -> None:
+    body = separator + "\n  <!-- wade:summary:start -->\nOld.\n  <!-- wade:summary:end -->"
+    assert replace_owned_section(body, name="summary", heading=None, content="New.") == (
+        separator + "\n<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    )
+
+
+def test_dedented_fence_cannot_close_a_list_fence() -> None:
+    with pytest.raises(MarkdownStructureError, match="unclosed code fence"):
+        replace_owned_section("- ```\n```", name="summary", heading=None, content="New.")
+
+
+@pytest.mark.parametrize(
+    "prefix", ["-\n", "- ```\n  Code.\n  ```\n", "- Paragraph.\n\n      Code.\n"]
+)
+def test_dedented_paragraph_after_nonparagraph_list_content_ends_container(prefix: str) -> None:
+    prefix += "Human text.\n"
+    old = "  <!-- wade:summary:start -->\nOld.\n  <!-- wade:summary:end -->"
+    expected = prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    assert (
+        replace_owned_section(prefix + old, name="summary", heading=None, content="New.")
+        == expected
+    )
+
+
+@pytest.mark.parametrize("lookalike", ["2. Not a list", "-"])
+def test_noninterrupting_list_lookalikes_do_not_hide_owned_blocks(lookalike: str) -> None:
+    prefix = "Paragraph.\n" + lookalike + "\n"
+    old = "   <!-- wade:summary:start -->\nOld.\n   <!-- wade:summary:end -->"
+    expected = prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    assert (
+        replace_owned_section(prefix + old, name="summary", heading=None, content="New.")
+        == expected
+    )
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+@pytest.mark.parametrize("underline", ["=======", "---", "-"])
+@pytest.mark.parametrize("payload_indent", ["", "  "])
+def test_setext_heading_ends_lazy_list_paragraph(
+    name: str, underline: str, payload_indent: str
+) -> None:
+    prefix = "- Example\n  " + underline + "\nHuman text.\n"
+    old = f"  <!-- wade:{name}:start -->\n{payload_indent}Old.\n  <!-- wade:{name}:end -->"
+    expected = prefix + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    assert replace_owned_section(prefix + old, name=name, heading=None, content="New.") == expected
+
+
+@pytest.mark.parametrize("name,heading", [("summary", "Summary"), ("deps", "Dependencies")])
+@pytest.mark.parametrize("human_count", [1, 2])
+def test_empty_removal_retains_ownership_across_retries(
+    name: str, heading: str, human_count: int
+) -> None:
+    human = (f"## {heading}\nHuman requirement.\n") * human_count
+    old = f"<!-- wade:{name}:start -->\nOld projection.\n<!-- wade:{name}:end -->"
+    expected = human + f"<!-- wade:{name}:start -->\n\n<!-- wade:{name}:end -->"
+    once = replace_owned_section(human + old, name=name, heading=heading, content="")
+    assert once == expected
+    assert replace_owned_section(once, name=name, heading=heading, content="") == expected
+    assert replace_owned_section(once, name=name, heading=heading, content="New.") == (
+        human + f"<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    )
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+@pytest.mark.parametrize("quote", ["> Example", "> > Nested example", "> Example\n  > continued"])
+def test_lazy_blockquote_list_continuations_preserve_marker_examples(name: str, quote: str) -> None:
+    example = (
+        f"- {quote}\nlazy continuation\n"
+        f"  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n"
+    )
+    assert scan_markdown_structure(example).blocks == []
+    result = replace_owned_section(example, name=name, heading=None, content="New.")
+    assert result == example + f"\n<!-- wade:{name}:start -->\nNew.\n<!-- wade:{name}:end -->"
+    assert replace_owned_section(result, name=name, heading=None, content="New.") == result
+
+
+@pytest.mark.parametrize("quote", ["> # Heading", ">", ">     Code.", "> Text.\n  > ==="])
+def test_nonparagraph_blockquotes_end_lazy_list_context(quote: str) -> None:
+    prefix = f"- {quote}\nHuman text.\n"
+    old = "  <!-- wade:summary:start -->\nOld.\n  <!-- wade:summary:end -->"
+    assert replace_owned_section(prefix + old, name="summary", heading=None, content="New.") == (
+        prefix + "<!-- wade:summary:start -->\nNew.\n<!-- wade:summary:end -->"
+    )
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+@pytest.mark.parametrize(
+    "context",
+    [
+        "- Text.\n  >     Code.\nHuman text.\n",
+        "- Text.\n  > >     Code.\nHuman text.\n",
+        "- Outer.\n  - Text.\n    >     Code.\nHuman text.\n",
+        "- Text.\n  > # Heading\nHuman text.\n",
+        "- Text.\n  >\nHuman text.\n",
+        "- Text.\n  > ```\n  > Code.\n  > ```\nHuman text.\n",
+        "- Text.\n  > Quote.\n\nHuman text.\n",
+    ],
+)
+def test_container_boundaries_cannot_hide_following_plan(heading: str, context: str) -> None:
+    plan = "  <!-- wade:plan:start -->\n  Requirements.\n  <!-- wade:plan:end -->"
+    body = f"## {heading}\nLegacy.\n" + context + plan
+    expected = "  > ```\n  > Code.\n  > ```\nHuman text.\n" + plan if "```" in context else plan
+    assert strip_legacy_section(body, heading) == expected
+    assert scan_markdown_structure(body).owned("plan") is not None
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+@pytest.mark.parametrize("container", ["", "- ", "> ", "- > "])
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+@pytest.mark.parametrize("content", ["", "Keep.\n", "<!-- wade:plan:end -->\n\n"])
+def test_container_fence_closure_contract(
+    newline: str, container: str, fence: str, content: str
+) -> None:
+    continuation = container.replace("- ", "  ")
+    middle = "".join(continuation + line + "\n" for line in content.split("\n")[:-1])
+    unclosed = (container + fence + "\n" + middle).replace("\n", newline)
+    closed = unclosed + continuation + fence + fence[0]
+    structure = scan_markdown_structure(closed)
+    assert len(structure.fences) == 1
+    assert structure.fences[0].start == 0
+    assert structure.fences[0].end == len(closed)
+    assert structure.blocks == []
+    with pytest.raises(MarkdownStructureError, match="unclosed code fence"):
+        scan_markdown_structure(unclosed)
+
+
+def test_parser_nesting_limit_refuses_instead_of_hiding_owned_blocks() -> None:
+    body = "> " * 110 + "Nested quote.\n\n<!-- wade:plan:start -->\nKeep.\n<!-- wade:plan:end -->"
+    with pytest.raises(MarkdownStructureError, match="nesting exceeds"):
+        scan_markdown_structure(body)
+
+
+@pytest.mark.parametrize("name", ["summary", "deps"])
+def test_quoted_paragraph_continuation_with_code_indentation_remains_literal(name: str) -> None:
+    body = (
+        "- > Quote paragraph.\n  >     Still paragraph.\nlazy continuation\n"
+        f"  <!-- wade:{name}:start -->\n  Keep.\n  <!-- wade:{name}:end -->\n"
+    )
+    assert scan_markdown_structure(body).blocks == []
+    assert replace_owned_section(body, name=name, heading=None, content="") == body
+
+
+@pytest.mark.parametrize("name", ["summary", "deps", "plan", "future"])
+@pytest.mark.parametrize("wrapper", ["details", "div"])
+def test_standalone_markers_inside_raw_html_remain_owned(name: str, wrapper: str) -> None:
+    before, after = f"<{wrapper}>\n", f"\n</{wrapper}>"
+    block = f"<!-- wade:{name}:start -->\nOld.\n<!-- wade:{name}:end -->"
+    body = before + block + after
+    expected = before + block.replace("Old.", "New.") + after
+    assert scan_markdown_structure(body).owned(name) is not None
+    result = replace_owned_section(body, name=name, heading=None, content="New.")
+    assert result == expected
+    assert replace_owned_section(result, name=name, heading=None, content="New.") == expected
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+def test_multiline_html_cannot_hide_protected_plan(heading: str) -> None:
+    plan = (
+        "<!-- wade:plan:start -->\n\n## " + heading + "\nKeep requirements.\n\n"
+        "</details>\n<!-- wade:plan:end -->"
+    )
+    body = "## " + heading + "\nLegacy.\n<details>\n" + plan
+    assert strip_legacy_section(body, heading) == plan
+
+
+def test_nested_owned_marker_in_raw_html_refuses_replacement() -> None:
+    body = (
+        "<!-- wade:summary:start -->\n<details>\n<!-- wade:plan:start -->\n"
+        "Keep.\n<!-- wade:plan:end -->\n</details>\n<!-- wade:summary:end -->"
+    )
+    with pytest.raises(MarkdownStructureError, match="nested"):
+        replace_owned_section(body, name="summary", heading="Summary", content="New.")
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "  ## Requirements\nKeep.",
+        "   # Requirements\nKeep.",
+        "Requirements\n============\nKeep.",
+        "Requirements\n---\nKeep.",
+    ],
+)
+def test_all_actual_top_level_headings_bound_legacy_migration(heading: str, boundary: str) -> None:
+    body = "Intro.\n\n## " + heading + "\nOld.\n\n" + boundary
+    assert strip_legacy_section(body, heading) == "Intro.\n\n" + boundary
+
+
+@pytest.mark.parametrize("heading", ["Summary", "Dependencies"])
+@pytest.mark.parametrize("form", ["  ## {heading}\nHuman.", "{heading}\n---\nHuman."])
+def test_boundary_only_heading_does_not_become_legacy_candidate(heading: str, form: str) -> None:
+    body = form.format(heading=heading)
+    assert strip_legacy_section(body, heading) == body
+
+
+@pytest.mark.parametrize("name,heading", [("summary", "Summary"), ("deps", "Dependencies")])
+@pytest.mark.parametrize("marked", [False, True])
+def test_empty_removal_retains_newly_exposed_human_heading(
+    name: str, heading: str, marked: bool
+) -> None:
+    old = f"## {heading}\n<details>\nOld.\n</details>\n"
+    if marked:
+        old = f"<!-- wade:{name}:start -->\n" + old + f"<!-- wade:{name}:end -->\n"
+    plan = "<!-- wade:plan:start -->\nKeep plan.\n<!-- wade:plan:end -->\n"
+    human = f"## {heading}\nKeep human requirements."
+    body = old + plan + human
+    once = replace_owned_section(body, name=name, heading=heading, content="")
+    assert plan in once
+    assert human in once
+    assert "Old." not in once
+    assert scan_markdown_structure(once).owned(name) is not None
+    assert replace_owned_section(once, name=name, heading=heading, content="") == once
+    restored = replace_owned_section(once, name=name, heading=heading, content="New.")
+    assert plan in restored
+    assert human in restored
+    assert replace_owned_section(restored, name=name, heading=heading, content="New.") == restored
+
+
+@pytest.mark.parametrize("name,heading", [("summary", "Summary"), ("deps", "Dependencies")])
+def test_context_shift_cannot_hide_unrelated_managed_ownership(name: str, heading: str) -> None:
+    plan = "  <!-- wade:plan:start -->\n  Keep.\n  <!-- wade:plan:end -->"
+    body = f"- Example\n## {heading}\nOld.\n" + plan
+    assert scan_markdown_structure(body).owned("plan") is not None
+    with pytest.raises(MarkdownStructureError, match="ownership changed"):
+        replace_owned_section(body, name=name, heading=heading, content="")
+
+
+@pytest.mark.parametrize("first", ["summary", "review-status"])
+@pytest.mark.parametrize("wrapper", ["details", "div"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_atomic_projections_validate_only_complete_html_composition(
+    first: str, wrapper: str, newline: str
+) -> None:
+    from wade.utils.markdown import OwnedSectionReplacement, replace_owned_sections
+
+    second = "review-status" if first == "summary" else "summary"
+    plan = "  <!-- wade:plan:start -->\n  Keep plan.\n  <!-- wade:plan:end -->"
+    payload = f"<{wrapper}>\nRequirements.\n</{wrapper}>"
+    block = f"<!-- wade:{first}:start -->\n{payload}\n<!-- wade:{first}:end -->"
+    body = (block + "\n- Example\n" + plan).replace("\n", newline)
+    # The same final source is safe even though clearing first's HTML payload
+    # alone would hide the indented plan. The second projection remains empty.
+    changes = [
+        OwnedSectionReplacement(name=first, content=payload.replace("\n", newline)),
+        OwnedSectionReplacement(name=second),
+    ]
+    expected = body.replace(
+        block.replace("\n", newline), block.replace(payload, payload.replace("\n", newline))
+    )
+    result = replace_owned_sections(body, changes)
+    assert plan.replace("\n", newline) in result
+    assert result == expected
+    assert replace_owned_sections(result, changes) == result
+
+
+def test_atomic_projection_slot_namespace_cannot_rewrite_new_payload() -> None:
+    from wade.utils.markdown import OwnedSectionReplacement, replace_owned_sections
+
+    payload = "Keep literal \x00wade-projection-new-1\x00 inside input."
+    changes = [
+        OwnedSectionReplacement(name="summary", content=payload),
+        OwnedSectionReplacement(name="review-status", content="Reviewed."),
+    ]
+    result = replace_owned_sections("Human.\n", changes)
+    assert payload in result
+    assert replace_owned_sections(result, changes) == result

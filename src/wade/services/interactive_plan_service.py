@@ -8,7 +8,9 @@ import os
 import shlex
 import stat
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from wade.models.interactive_plan import (
     InteractivePlanReview,
@@ -16,8 +18,10 @@ from wade.models.interactive_plan import (
     InteractivePlanState,
 )
 from wade.models.plan_bundle import PlanBundle, PlanMember
+from wade.models.skill import SkillSlot
 from wade.models.workflow import SessionKind
 from wade.services import native_plan_service as native
+from wade.services.planning_handoff_errors import UncollectableHandoffError
 from wade.services.session_composition_service import (
     SessionCompositionError,
     load_session_manifest_strict,
@@ -104,13 +108,13 @@ def _binding_digest(root: Path) -> str:
     except StateFileAccessError:
         raise
     except StateFileUnsafeError as exc:
-        raise ValueError("Interactive planning requires its frozen session bundle") from exc
+        raise UncollectableHandoffError(root, "frozen-bindings", exc) from exc
     try:
         validate_frozen_session_bundle(root, manifest, expected_kind=SessionKind.PLAN)
     except SessionCompositionError as exc:
         if state_error := _frozen_bundle_state_error(root, exc):
             raise state_error from exc
-        raise ValueError(str(exc)) from exc
+        raise UncollectableHandoffError(root, "frozen-bindings", exc) from exc
     return manifest.bundle_digest
 
 
@@ -148,8 +152,14 @@ def _load(root: Path) -> InteractivePlanState:
     if raw is None:  # pragma: no cover - strict reads return bytes or raise
         raise ValueError("Interactive planning handoff is absent or unsafe")
     state = InteractivePlanState.model_validate_json(raw)
+    if state.refresh_pending:
+        cause = ValueError("Planning refresh interrupted")
+        raise UncollectableHandoffError(
+            root, "interactive-state", cause, raw=raw, reason_code="interrupted-refresh"
+        ) from cause
     if state.bundle_digest != _binding_digest(root):
-        raise ValueError("Interactive planning bindings changed; restart the planning session")
+        cause = ValueError("Interactive planning bindings changed; restart the planning session")
+        raise UncollectableHandoffError(root, "frozen-bindings", cause) from cause
     return state
 
 
@@ -214,6 +224,7 @@ def _current_bundle(root: Path, state: InteractivePlanState) -> PlanBundle:
             for member in state.bundle.plans
         ),
         knowledge_votes=state.bundle.knowledge_votes,
+        knowledge_proposals=state.bundle.knowledge_proposals,
     )
 
 
@@ -322,9 +333,14 @@ def complete(root: Path) -> None:
     bundle = _current_bundle(root, state)
     if plan_done(root / ".wade/plans").has_errors:
         raise ValueError("Fix plan validation errors before completing the session")
-    if state.knowledge_required and bundle.knowledge_votes is None:
+    if (
+        state.knowledge_required
+        and bundle.knowledge_votes is None
+        and bundle.knowledge_proposals is None
+    ):
         raise ValueError(
-            "Knowledge-enabled planning requires a bundle with knowledge_votes; "
+            "Knowledge-enabled planning requires knowledge_proposals "
+            "(legacy knowledge_votes remain historical); "
             "use an explicit empty list when no entries were evaluated"
         )
     _validate_reviews(root, state, bundle)
@@ -333,22 +349,142 @@ def complete(root: Path) -> None:
     _save(root, state)
 
 
-def collect(root: Path) -> PlanBundle:
+def collect(
+    root: Path,
+    *,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
+) -> PlanBundle:
     """Accept only a completed submission whose files and reviews are still current."""
-    return collect_with_state(root)[1]
+    return collect_with_state(root, before_content=before_content)[1]
 
 
-def collect_with_state(root: Path) -> tuple[InteractivePlanState, PlanBundle]:
+def collect_with_state(
+    root: Path,
+    *,
+    before_content: Callable[[InteractivePlanState], None] | None = None,
+) -> tuple[InteractivePlanState, PlanBundle]:
     """Collect a completed handoff and return its validated launch metadata."""
 
     try:
-        state = _load(root)
+        try:
+            state = _load(root)
+        except (UncollectableHandoffError, StateFileAccessError, StateFileIOError):
+            raise
+        except ValueError as exc:
+            raise UncollectableHandoffError(
+                root,
+                "interactive-state",
+                exc,
+                raw=read_state_file(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES),
+            ) from exc
         if not state.completed or state.bundle is None:
             raise ValueError("No completed plan handoff; run wade plan-session done before exiting")
+        # Required metadata must parse before editable files can enter salvage.
+        # Valid receipts bind the stored completed bundle; equality with the
+        # current files is checked below before returning that same bundle.
+        try:
+            _validate_reviews(root, state, state.bundle)
+        except (StateFileAccessError, StateFileIOError):
+            raise
+        except ValueError as exc:
+            raise UncollectableHandoffError(
+                root, "review-metadata", exc, raw=read_state_file(root, ("plans",), REVIEWS)
+            ) from exc
+        if before_content is not None:
+            before_content(state)
         bundle = _current_bundle(root, state)
         if bundle != state.bundle:
             raise ValueError("Plans changed after completion; run wade plan-session done again")
-        _validate_reviews(root, state, bundle)
         return state, bundle
     except StateFileAccessError as exc:
         raise InteractivePlanAccessError(root, exc) from exc
+
+
+def refresh_handoff(root: Path) -> Literal["native", "collected"]:
+    """Refresh an intact original handoff without promoting an old review.
+
+    The original plans, session identity, launch binding and persistence progress
+    remain unchanged. Native refresh closes completion/review with a durable
+    pending flag. Collected recovery already reviews every materialized plan
+    before persistence; no synthetic native state is created for that path.
+    No provider operation or new review is dispatched here.
+    """
+    from wade.config.loader import load_config
+    from wade.git import repo as git_repo
+    from wade.services.session_composition_service import compose_session
+    from wade.skills.materializer import compute_session_bundle_digest, validate_session_bundle
+    from wade.utils.filelock import file_lock
+
+    root = root.resolve()
+    if not git_repo.is_worktree(root) or git_repo.is_head_attached(root):
+        raise ValueError("Refresh requires the original registered detached planning worktree")
+    with file_lock(root / ".wade/plans/refresh.lock", create_parent=False):
+        raw = (
+            read_state_file_strict(root, ("plans",), STATE, max_bytes=MAX_HANDOFF_BYTES)
+            if state_file_present(root, ("plans",), STATE)
+            else None
+        )
+        state = InteractivePlanState.model_validate_json(raw) if raw is not None else None
+        if state is None:
+            # The public collected artifact must validate before its contracts
+            # change. Its normal recovery path still performs the parent review.
+            native.load_artifact(root)
+        manifest = load_session_manifest_strict(root)
+        if manifest.session is not SessionKind.PLAN:
+            raise ValueError("Original planning session composition is required")
+        validate_session_bundle(root, manifest)
+        if (
+            state is not None
+            and not state.refresh_pending
+            and state.bundle_digest != manifest.bundle_digest
+        ):
+            raise ValueError("Native handoff does not match its original frozen bundle")
+        # Archive the validated old bundle before any replacement. It remains a
+        # recovery artifact; never claim its prior reviews cover the new bundle.
+        archive_name = "session-refresh-" + manifest.bundle_digest.split(":", 1)[1]
+        archive = root / ".wade/plans" / archive_name
+        if archive.is_symlink():
+            raise ValueError("Unsafe session refresh archive")
+        for source in sorted((root / ".wade/session").rglob("*")):
+            if source.is_symlink():
+                raise ValueError("Unsafe frozen session archive source")
+            if not source.is_file():
+                continue
+            relative = source.relative_to(root / ".wade/session")
+            parts = ("plans", archive_name, *relative.parent.parts)
+            original = source.read_bytes()
+            previous = read_state_file(root, parts, relative.name)
+            if previous is not None and previous != original:
+                raise ValueError("Original session refresh archive conflicts; preserve it")
+            if previous is None and not atomic_write_state_file(
+                root, parts, relative.name, original
+            ):
+                raise ValueError("Could not durably archive frozen session before refresh")
+        if compute_session_bundle_digest(archive) != manifest.bundle_digest:
+            raise ValueError("Original frozen session archive is incomplete or changed")
+        if state is not None:
+            state.completed = False
+            state.refresh_pending = True
+            state.review_required = True
+            _save(root, state)
+            _save_reviews(root, InteractivePlanReviews())
+        config = load_config(root)
+        main = git_repo.main_checkout_root(root)
+        refreshed = compose_session(
+            root,
+            main,
+            config,
+            kind=SessionKind.PLAN,
+            task_id=manifest.task_id,
+            refresh=True,
+            work_skills=[skill.canonical_ref for skill in manifest.bindings[SkillSlot.WORK].skills],
+            review_skills=[
+                skill.canonical_ref for skill in manifest.bindings[SkillSlot.REVIEW].skills
+            ],
+        )
+        if state is not None:
+            state.bundle_digest = refreshed.manifest.bundle_digest
+            state.refresh_pending = False
+            _save(root, state)
+            return "native"
+        return "collected"

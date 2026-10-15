@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.git import branch as git_branch
 from wade.models.config import (
     AICommandConfig,
@@ -286,6 +288,26 @@ class TestReviewRanGate:
     def test_receipt_for_other_sha_refuses(self, tmp_path: Path) -> None:
         _record_review(tmp_path, "a" * 40)
         assert _gate_review_ran(ProjectConfig(), tmp_path, "b" * 40, skip_review=False) is False
+
+    @pytest.mark.parametrize(
+        "session_kind", (SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS)
+    )
+    @pytest.mark.parametrize("limit", (1, 2))
+    def test_launched_failure_only_allows_the_existing_implementation_cap(
+        self,
+        tmp_path: Path,
+        session_kind: SessionKind,
+        limit: int,
+    ) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head, outcome=ReviewOutcome.FAILED, session_kind=session_kind)
+        assert _gate_review_ran(
+            ProjectConfig(done=DoneConfig(max_review_passes=limit)),
+            tmp_path,
+            head,
+            skip_review=False,
+            session_type=session_kind.value,
+        ) is (session_kind is SessionKind.IMPLEMENTATION and limit == 1)
 
     def test_unattempted_review_leaves_the_gate_closed(self, tmp_path: Path) -> None:
         """A reviewer that never launched opens nothing (#480).
@@ -737,6 +759,12 @@ class TestKnowledgeValidGate:
     def _config(self, tmp_path: Path, *, enabled: bool) -> ProjectConfig:
         from wade.models.config import KnowledgeConfig
 
+        if not (tmp_path / ".git").exists():
+            _git(tmp_path, "init", "-b", "main")
+            _git(tmp_path, "config", "user.name", "Knowledge gate fixture")
+            _git(tmp_path, "config", "user.email", "gate@example.invalid")
+            _git(tmp_path, "add", ".")
+            _git(tmp_path, "commit", "--allow-empty", "-m", "test: committed gate fixture")
         return ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=enabled, path="KNOWLEDGE.md"),

@@ -64,10 +64,10 @@ Then the exit decision as a native dialog: `Exit now — wade takes over
 PR #123 — https://github.com/…/pull/123 · 4/5 threads resolved
 ⚠️ 1 item needs your attention:
    • Thread on auth.py left unresolved — reviewer asked for a design decision only you can make.
-Next: exit — reviewers are notified of your changes.
+Next: exit — PR handoff is complete.
 ```
 
-Exit dialog: `Exit now — reviewers are notified (recommended)` / `Keep editing —
+Exit dialog: `Exit now — wade takes over (recommended)` / `Keep editing —
 I have more changes`.
 
 ### Plan session (clean run)
@@ -93,7 +93,7 @@ When `.wade.yml` disables a step — reviews off
 ✅ Docs · ⏭️ Review (reviews disabled in `.wade.yml`) · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
 PR #123 — https://github.com/…/pull/123 · 5/5 threads resolved
 ✅ Nothing needs your attention.
-Next: exit — reviewers are notified of your changes.
+Next: exit — PR handoff is complete.
 ```
 
 ## Cross-tool note (known limitation)
@@ -103,3 +103,8 @@ crossby-adapted tools (Cursor, Copilot, Codex, OpenCode, Antigravity, VS Code)
 may degrade the emoji glyphs or the dialog to plain text. That is a known
 limitation, not a regression: the inline spec reads fine as plain text, so the
 summary stays usable everywhere.
+
+For explicit draft completion, state that the PR remains draft and automatic bot
+reviews are deferred. Do not claim reviewers were notified. A failed required
+promotion is incomplete: report the failure and retry the same session done
+command after restoring access.

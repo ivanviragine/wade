@@ -4,6 +4,90 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.5] — 2026-10-15
+
+### Bug Fixes
+
+- allow safe cleanup after multi-commit squash merges (#535) (d9e9665)
+
+## [v1.4.4] — 2026-10-15
+
+### Bug Fixes
+
+- preserve planning ownership across active runtime schema upgrades (#546) (dc55a53)
+
+## [v1.4.3] — 2026-10-15
+
+### Bug Fixes
+
+- _recover_worktree fetch fails on a diverged/force-pushed open-PR branch (#486) (49b3639)
+
+## [v1.4.2] — 2026-10-15
+
+### Bug Fixes
+
+- distinguish a reviewer that never launched from one that crashed (#485) (576cc61)
+
+## [v1.4.1] — 2026-10-15
+
+### Bug Fixes
+
+- enforce ready-for-review PR completion (#484) (626db05)
+
+## [v1.4.0] — 2026-10-15
+
+### Features
+
+- add GitHub Projects (v2) support: field-aware prioritization, sorting, and sync (#543) (1122e74)
+
+## [v1.3.1] — 2026-10-14
+
+### Bug Fixes
+
+- persist replacement plans when replanning an existing task (#536) (31c3e89)
+
+## [v1.3.0] — 2026-10-14
+
+### Features
+
+- make project knowledge evidence-bound and reconcile it at PR integration (#537) (5e0888c)
+
+## [v1.2.20] — 2026-10-14
+
+### Bug Fixes
+
+- preserve embedded plan sections during PR summary replacement (#533) (0756c6a)
+
+## [v1.2.19] — 2026-10-14
+
+### Bug Fixes
+
+- ignore fenced code examples when parsing Markdown tasks (#531) (ff9afcd)
+
+## [v1.2.18] — 2026-10-14
+
+### Bug Fixes
+
+- isolate Markdown task auto-commits from unrelated staged work (#529) (b9f6658)
+
+## [v1.2.17] — 2026-10-14
+
+### Bug Fixes
+
+- preserve copyable stash recovery commands at narrow terminal widths (#541) (f39e0a1)
+
+## [v1.2.16] — 2026-10-14
+
+### Bug Fixes
+
+- restore post-merge stashes by identity across worktrees (#528) (d141f0b)
+
+## [v1.2.15] — 2026-10-14
+
+### Bug Fixes
+
+- preserve untracked files when retargeting scaffold branches (#526) (8c51aee)
+
 ## [v1.2.14] — 2026-10-14
 
 ### Bug Fixes

@@ -7,7 +7,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-BUNDLE_MARKER = "<!-- wade:plan-bundle:v1 -->"
+BUNDLE_MARKER = "<!-- wade:plan-bundle:v2 -->"
+LEGACY_BUNDLE_MARKER = "<!-- wade:plan-bundle:v1 -->"
 
 
 class PlanMember(BaseModel):
@@ -32,12 +33,24 @@ class PlanKnowledgeVote(BaseModel):
     direction: Literal["up", "down", "stale"]
 
 
+class PlanKnowledgeProposal(BaseModel):
+    """Observation only; a consumer must verify ownership and assess fresh proof."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    entry_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,100}$")
+    body_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    feedback: Literal["useful", "not-useful", "needs-recheck"]
+    note: str = Field(min_length=1)
+    plan_filename: str | None = None
+
+
 class PlanBundle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     plans: tuple[PlanMember, ...] = Field(min_length=1, max_length=50)
     # None means no knowledge handoff was supplied, not "nothing was evaluated".
     knowledge_votes: tuple[PlanKnowledgeVote, ...] | None = None
+    knowledge_proposals: tuple[PlanKnowledgeProposal, ...] | None = None
 
     @model_validator(mode="after")
     def _unambiguous_members(self) -> Self:
@@ -58,6 +71,11 @@ class PlanBundle(BaseModel):
             completed.update(ready)
             for name in ready:
                 del pending[name]
+        if self.knowledge_votes is not None and self.knowledge_proposals is not None:
+            raise ValueError("Choose typed proposals or legacy historical votes, not both")
+        for proposal in self.knowledge_proposals or ():
+            if proposal.plan_filename is not None and proposal.plan_filename not in names:
+                raise ValueError("Knowledge proposal names an unknown plan member")
         votes = self.knowledge_votes or ()
         if len({vote.entry_id for vote in votes}) != len(votes):
             raise ValueError("knowledge entries must have at most one vote")

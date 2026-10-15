@@ -151,3 +151,24 @@ class TestListPrsRaiseOnError:
     def test_empty_success_is_not_an_error(self, mock_gh: MagicMock) -> None:
         mock_gh.return_value = _gh_result(0, stdout="[]")
         assert list_prs(Path("/repo"), raise_on_error=True) == []
+
+
+@pytest.mark.parametrize("draft_json", [None, "null", '"false"', "0", "{}", "[]"])
+def test_completion_lookup_requires_present_boolean_draft_state(draft_json: str | None) -> None:
+    field = "" if draft_json is None else f', "isDraft": {draft_json}'
+    with patch(
+        "wade.git.pr._run_gh",
+        return_value=_gh_result(0, '{"number": 7, "state": "OPEN"' + field + "}"),
+    ):
+        lookup = get_pr_for_branch(Path("/repo"), "feat/7-x", require_draft_state=True)
+    assert lookup.lookup_failed and not lookup.found
+
+
+@pytest.mark.parametrize("draft_json,expected", [("true", True), ("false", False)])
+def test_completion_lookup_accepts_observed_boolean(draft_json: str, expected: bool) -> None:
+    with patch(
+        "wade.git.pr._run_gh",
+        return_value=_gh_result(0, '{"number": 7, "state": "OPEN", "isDraft": ' + draft_json + "}"),
+    ):
+        lookup = get_pr_for_branch(Path("/repo"), "feat/7-x", require_draft_state=True)
+    assert lookup.is_open and lookup.is_draft is expected

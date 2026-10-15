@@ -21,7 +21,7 @@ from crossby.models.ai import (
     PlanSessionResult,
 )
 from crossby.utils.versioning import BinaryVersion
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.plan_bundle import BUNDLE_MARKER, PlanBundle, PlanMember
@@ -348,3 +348,91 @@ def test_validation_diagnostics_do_not_echo_secret_inputs() -> None:
     with pytest.raises(ValidationError) as failure:
         PlanBundle.model_validate({"plans": "SECRET-INPUT-DO-NOT-PRINT"})
     assert "SECRET-INPUT-DO-NOT-PRINT" not in native.failure_message(failure.value)
+
+
+def test_metadata_diagnostic_reports_all_public_legacy_rejections(tmp_path: Path) -> None:
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    class LegacyBundle(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    class LegacyState(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        version: int = 1
+        bundle: LegacyBundle
+
+    payload = {"version": 1, "bundle": {"knowledge_proposals": []}, "refresh_pending": False}
+    with pytest.raises(ValidationError) as failure:
+        LegacyState.model_validate(payload)
+    message = native.failure_message(
+        UncollectableHandoffError(
+            tmp_path, "interactive-state", failure.value, raw=json.dumps(payload).encode()
+        )
+    )
+    assert "bundle.knowledge_proposals: extra_forbidden" in message
+    assert "refresh_pending: extra_forbidden" in message
+    assert "Reader WADE" in message and "declared schema 1" in message
+    assert "writer version unavailable" in message
+    assert "skew is possible" in message
+
+
+def test_metadata_diagnostic_redacts_unknown_keys_messages_and_inputs(tmp_path: Path) -> None:
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    class Metadata(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        tool: str
+
+        @field_validator("tool")
+        @classmethod
+        def reject(cls, value: str) -> str:
+            raise ValueError("SECRET-VALIDATOR-MESSAGE")
+
+    payload = {"tool": "SECRET-INPUT", "SECRET-EXTRA-KEY": "SECRET-EXTRA-VALUE"}
+    with pytest.raises(ValidationError) as failure:
+        Metadata.model_validate(payload)
+    message = native.failure_message(
+        UncollectableHandoffError(
+            tmp_path, "review-metadata", failure.value, raw=b'{"version":"SECRET-SCHEMA"}'
+        )
+    )
+    assert "SECRET" not in message
+    assert "[redacted]: extra_forbidden" in message
+    assert "tool: value_error" in message
+    assert "declared schema unavailable" in message
+
+
+def test_metadata_diagnostic_caps_errors_and_malformed_json_details(tmp_path: Path) -> None:
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    class Metadata(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    with pytest.raises(ValidationError) as failure:
+        Metadata.model_validate({f"SECRET-KEY-{n}": "SECRET-VALUE" for n in range(100)})
+    message = native.failure_message(
+        UncollectableHandoffError(tmp_path, "native-state", failure.value)
+    )
+    assert "SECRET" not in message
+    assert "92 additional errors omitted" in message
+    assert len(message) < 1800
+    with pytest.raises(ValidationError) as malformed:
+        Metadata.model_validate_json('{"SECRET-JSON": invalid')
+    message = native.failure_message(
+        UncollectableHandoffError(tmp_path, "native-state", malformed.value)
+    )
+    assert "malformed JSON" in message and "json_invalid" in message
+    assert "SECRET" not in message and len(message) < 1800
+
+
+def test_metadata_diagnostic_tolerates_deep_malformed_json(tmp_path: Path) -> None:
+    from wade.models.interactive_plan import InteractivePlanState
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    raw = b'{"PRIVATE":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}"
+    with pytest.raises(ValidationError) as rejected:
+        InteractivePlanState.model_validate_json(raw)
+    error = UncollectableHandoffError(tmp_path, "interactive-state", rejected.value, raw=raw)
+    assert "json_invalid" in str(error)
+    assert "PRIVATE" not in str(error)
+    assert "declared schema unavailable" in str(error)
