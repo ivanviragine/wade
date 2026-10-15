@@ -152,9 +152,10 @@ def _load(root: Path) -> InteractivePlanState:
         raise ValueError("Interactive planning handoff is absent or unsafe")
     state = InteractivePlanState.model_validate_json(raw)
     if state.refresh_pending:
-        raise ValueError(
-            "Planning refresh interrupted; rerun plan-session refresh on the original directory"
-        )
+        cause = ValueError("Planning refresh interrupted")
+        raise UncollectableHandoffError(
+            root, "interactive-state", cause, raw=raw, reason_code="interrupted-refresh"
+        ) from cause
     if state.bundle_digest != _binding_digest(root):
         cause = ValueError("Interactive planning bindings changed; restart the planning session")
         raise UncollectableHandoffError(root, "frozen-bindings", cause) from cause

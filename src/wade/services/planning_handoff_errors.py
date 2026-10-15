@@ -164,12 +164,17 @@ class UncollectableHandoffError(ValueError):
         cause: BaseException,
         *,
         raw: bytes | None = None,
+        reason_code: Literal["interrupted-refresh"] | None = None,
     ) -> None:
         self.root = root
         self.category = category
         validation = _validation_cause(cause)
         details: list[str] = []
-        reason = "invalid persisted metadata or frozen binding integrity"
+        reason = (
+            "planning refresh interrupted; rerun plan-session refresh on the original directory"
+            if reason_code == "interrupted-refresh"
+            else "invalid persisted metadata or frozen binding integrity"
+        )
         if validation is not None:
             errors = validation.errors(
                 include_input=False, include_context=False, include_url=False
