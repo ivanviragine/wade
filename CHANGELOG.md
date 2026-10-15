@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.4] — 2026-10-15
+
+### Bug Fixes
+
+- preserve planning ownership across active runtime schema upgrades (#546) (dc55a53)
+
 ## [v1.4.3] — 2026-10-15
 
 ### Bug Fixes
