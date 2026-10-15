@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import subprocess
 from pathlib import Path
@@ -524,3 +525,9 @@ def preserve_and_align_branch(
         commands = f"start\n{preserve}\nupdate {ref} {selected_oid} {old_oid}\nprepare\ncommit\n"
     _run_git("update-ref", "--no-deref", "--stdin", cwd=repo_root, input_text=commands)
     return backup
+
+
+def recovery_branch_command(repo_root: Path, backup_ref: str) -> str:
+    """Quote a non-forcing command that makes a preserved tip an ordinary branch."""
+    name = "recovered-" + backup_ref.rsplit("/", 1)[-1][:12]
+    return shlex.join(["git", "-C", str(repo_root), "branch", name, backup_ref])

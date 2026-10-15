@@ -1,12 +1,13 @@
 """Exact live-head query errors must never become permission for local fallback."""
 
+import shlex
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
 import pytest
 
-from wade.git.branch import live_remote_head_exists
+from wade.git.branch import live_remote_head_exists, recovery_branch_command
 from wade.git.repo import GitError
 
 
@@ -41,3 +42,16 @@ def test_live_head_probe_classifies_only_exact_response(
                 live_remote_head_exists(tmp_path, "topic")
         else:
             assert live_remote_head_exists(tmp_path, "topic") is expected
+
+
+def test_recovery_command_preserves_special_path_bytes_without_forcing() -> None:
+    repo = Path("/tmp/repo with spaces, 'quotes', $(literal), [markup]")
+    backup = "refs/wade/recovery/topic/" + "a" * 40
+    assert shlex.split(recovery_branch_command(repo, backup)) == [
+        "git",
+        "-C",
+        str(repo),
+        "branch",
+        "recovered-" + "a" * 12,
+        backup,
+    ]

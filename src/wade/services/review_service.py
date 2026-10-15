@@ -7,7 +7,6 @@ post-session token tracking, and label management.
 from __future__ import annotations
 
 import contextlib
-import shlex
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -1611,8 +1610,7 @@ def _recover_worktree(
 
 
 def _show_recovery_command(repo_root: Path, backup_ref: str) -> None:
-    name = "recovered-" + backup_ref.rsplit("/", 1)[-1][:12]
-    console.command(shlex.join(["git", "-C", str(repo_root), "branch", name, backup_ref]))
+    console.command(git_branch.recovery_branch_command(repo_root, backup_ref))
 
 
 def _report_recovery_failure(result: RecoveryOutcome, issue_id: str, repo_root: Path) -> None:
