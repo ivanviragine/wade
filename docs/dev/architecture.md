@@ -834,7 +834,10 @@ counts as launched even though the call never returned. Everything after the
 adapter returns — the confirm prompt, the output-file read — is post-launch by
 position, whatever it raises. The headless path matters most — this repo configures
 `mode: headless` for `deps`, `review_plan` and `review_implementation`, and the
-receipt gate excludes `PROMPT` outright.
+receipt gate excludes `PROMPT` outright. A human decline on the non-blocking
+interactive confirmation is explicitly `cancelled=True`, even though the process
+launched; this exempts it from review-pass accounting. Output-read failures after
+launch remain ordinary launched failures.
 
 `launch_attempted` is a separate structured boundary: it becomes true only after
 dispatch has passed validation and is about to call the process launcher. A
@@ -862,7 +865,23 @@ less information than any outcome from one that did, so recording it can never
 downgrade or overwrite a real receipt for the same commit+binding. Budget
 protection (#462) and receipt *classification* remain separate problems: the gate
 at `review_delegation_service.py` already withheld budget, and `never_launched`
-is what now lets the remediation be trusted instead of hedged.
+is what lets the remediation distinguish a failed launch from a launched crash.
+`ReviewOutcome.FAILED` consumes a pass but never satisfies review or becomes an
+incremental baseline. Success and timeout retain their existing semantics;
+prompt/preflight failure, skipped dispatch and explicit cancellation are exempt.
+Implementation failure handling writes the receipt inside the existing binding
+reservation before releasing concurrent admission. The budget announcement uses
+the persisted count and does not claim consumption when the write failed.
+
+Receipt precedence is `UNATTEMPTED < NOTHING_STAGED < FAILED < TIMED_OUT < NO_DIFF
+< REVIEWED`. Accounting remains idempotent per commit+binding, not per dispatch:
+repeated crashes on one commit spend one tuple, and success promotes failure
+without adding a tuple. Existing implementation cap policy alone permits an
+unreviewed cap-reached completion; failed receipts never certify implementation
+or PR-comment completion. Plan-review failures still leave plan validation
+closed, with no plan-review cap. Receipt schema version stays unchanged; older
+runtimes reject the new enum value and cannot be relied on to count it. No
+historical receipt is rewritten.
 `_report_failed_review()` grades it by what wade actually knows — (1) known
 sandboxed parent **and** an explicit policy denial → state the cause and exact
 relaunch command; (2) a generic denial-shaped failure → explain it might also be

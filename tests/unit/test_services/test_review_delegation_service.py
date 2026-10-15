@@ -1993,3 +1993,59 @@ class TestFailedReviewSandboxRemediation:
 
         mock_console.warn.assert_called_once_with(rds._HEDGED_REVIEW_FAILURE)
         mock_console.detail.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ("review_plan", "review_implementation"))
+@pytest.mark.parametrize("signal", ("failed", "never_launched", "timed_out", "cancelled"))
+def test_shared_review_dispatch_preserves_failure_classification(command: str, signal: str) -> None:
+    config = _review_config(review_plan_mode="headless", review_implementation_mode="headless")
+    delegated = DelegationResult(
+        success=False,
+        feedback="review output",
+        mode=DelegationMode.HEADLESS,
+        exit_code=1,
+        never_launched=signal == "never_launched",
+        timed_out=signal == "timed_out",
+        cancelled=signal == "cancelled",
+        launch_attempted=signal != "never_launched",
+    )
+    with (
+        patch.object(rds, "delegate", return_value=delegated),
+        patch.object(
+            rds, "confirm_ai_selection", return_value=("claude", None, None, PermissionMode.DEFAULT)
+        ),
+    ):
+        result = _run_review_delegation(
+            "Review.",
+            command,
+            config=config,
+            cmd_config=getattr(config.ai, command),
+            ai_tool="claude",
+            mode="headless",
+        )
+    assert result is delegated
+
+
+@pytest.mark.parametrize("signal", ("failed", "never_launched", "timed_out", "cancelled"))
+def test_failed_plan_review_never_writes_completion_receipt(tmp_path: Path, signal: str) -> None:
+    plan = tmp_path / "PLAN.md"
+    plan.write_text("# Preserve behavior\n", encoding="utf-8")
+    delegated = DelegationResult(
+        success=False,
+        feedback="review output",
+        mode=DelegationMode.HEADLESS,
+        exit_code=1,
+        never_launched=signal == "never_launched",
+        timed_out=signal == "timed_out",
+        cancelled=signal == "cancelled",
+    )
+    config = _review_config(review_plan_mode="headless")
+    with (
+        patch.object(rds, "load_config", return_value=config),
+        patch.object(rds, "_run_review_delegation", return_value=delegated),
+        patch("wade.services.interactive_plan_service.record_review") as record,
+        patch.object(rds, "_record_binding_outcome") as budget,
+    ):
+        assert review_plan(str(plan)) is delegated
+    record.assert_not_called()
+    budget.assert_not_called()

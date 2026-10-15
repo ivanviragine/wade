@@ -507,6 +507,33 @@ class TestDelegateInteractive:
         assert result.success is False
         assert "No output file" in result.feedback
 
+    @patch("wade.services.delegation_service.prompts.confirm", return_value=False)
+    @patch("wade.services.delegation_service.deliver_prompt_if_needed")
+    @patch("wade.services.delegation_service.AbstractAITool.get")
+    def test_nonblocking_human_decline_is_explicit_cancellation(
+        self,
+        mock_get: MagicMock,
+        mock_deliver: MagicMock,
+        mock_confirm: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        adapter = mock_get.return_value
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=False)
+        result = _delegate_interactive(
+            DelegationRequest(
+                mode=DelegationMode.INTERACTIVE,
+                prompt="Review",
+                ai_tool="claude",
+                output_file=tmp_path / "out.txt",
+            )
+        )
+        adapter.launch.assert_called_once()
+        mock_confirm.assert_called_once()
+        assert result.cancelled is True
+        assert result.never_launched is False
+        assert result.success is False
+        assert result.exit_code == 1
+
     @patch("wade.services.delegation_service.deliver_prompt_if_needed")
     @patch("wade.services.delegation_service.AbstractAITool.get")
     def test_interactive_permission_mode_is_forwarded(
