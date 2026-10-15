@@ -10,7 +10,15 @@ import pytest
 import yaml
 from crossby.models.ai import AIToolID
 
-from wade.models.config import ComplexityModelMapping, ProjectSettings
+from wade.models.config import (
+    AICommandConfig,
+    BotReviewConfig,
+    ComplexityModelMapping,
+    KnowledgeConfig,
+    ProjectSettings,
+    ProviderID,
+)
+from wade.models.init_setup import HooksSetup, ImplementationSetup, ProviderSetup
 from wade.services.init_service import (
     GITIGNORE_ENTRIES,
     GITIGNORE_MARKER_END,
@@ -359,7 +367,7 @@ class TestInit:
 
     @patch(
         "wade.services.init_service.commands._prompt_knowledge_setup",
-        return_value={"enabled": True, "path": "docs/KNOWLEDGE.md"},
+        return_value=KnowledgeConfig(enabled=True, path="docs/KNOWLEDGE.md"),
     )
     def test_init_with_knowledge_enabled_creates_file_and_config(
         self, _mock_knowledge: MagicMock, tmp_git_repo: Path
@@ -382,7 +390,7 @@ class TestInit:
 
     @patch(
         "wade.services.init_service.commands._prompt_knowledge_setup",
-        return_value={"enabled": True, "path": "../KNOWLEDGE.md"},
+        return_value=KnowledgeConfig(enabled=True, path="../KNOWLEDGE.md"),
     )
     def test_init_rejects_invalid_knowledge_path_before_writing_config(
         self, _mock_knowledge: MagicMock, tmp_git_repo: Path
@@ -558,12 +566,12 @@ class TestPromptCommandOverrides:
         # empty default; the wizard doesn't prompt for it (not in cmd_triples), so
         # it is never written unless a user sets ai.review_pr_comments by hand.
         assert result == {
-            "plan": {},
-            "deps": {},
-            "review_plan": {},
-            "review_implementation": {},
-            "review_batch": {},
-            "review_pr_comments": {},
+            "plan": AICommandConfig(),
+            "deps": AICommandConfig(),
+            "review_plan": AICommandConfig(),
+            "review_implementation": AICommandConfig(),
+            "review_batch": AICommandConfig(),
+            "review_pr_comments": AICommandConfig(),
         }
 
     @patch("wade.ui.prompts.select")
@@ -575,11 +583,11 @@ class TestPromptCommandOverrides:
             non_interactive=False,
             default_tool="claude",
         )
-        assert result["plan"] == {}
-        assert result["deps"] == {"mode": "headless"}
-        assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
-        assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
-        assert result["review_batch"] == {"enabled": "true", "mode": "interactive"}
+        assert result["plan"] == AICommandConfig()
+        assert result["deps"] == AICommandConfig(mode="headless")
+        assert result["review_plan"] == AICommandConfig(enabled=True, mode="prompt")
+        assert result["review_implementation"] == AICommandConfig(enabled=True, mode="prompt")
+        assert result["review_batch"] == AICommandConfig(enabled=True, mode="interactive")
 
     @patch("wade.ui.prompts.select")
     def test_interactive_reviews_disabled(self, mock_select: MagicMock) -> None:
@@ -593,11 +601,11 @@ class TestPromptCommandOverrides:
             1,  # review_batch: Enable=No
         ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
-        assert result["plan"] == {}
-        assert result["deps"] == {}
-        assert result["review_plan"] == {"enabled": "false"}
-        assert result["review_implementation"] == {"enabled": "false"}
-        assert result["review_batch"] == {"enabled": "false"}
+        assert result["plan"] == AICommandConfig()
+        assert result["deps"] == AICommandConfig()
+        assert result["review_plan"] == AICommandConfig(enabled=False)
+        assert result["review_implementation"] == AICommandConfig(enabled=False)
+        assert result["review_batch"] == AICommandConfig(enabled=False)
 
     @patch("wade.ui.prompts.select")
     def test_review_batch_mode_prompt_defaults_to_interactive(self, mock_select: MagicMock) -> None:
@@ -636,12 +644,12 @@ class TestPromptCommandOverrides:
         #   Enable=Yes (idx 0), mode=prompt (idx 0) → skip tool/model
         mock_select.side_effect = [1, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0]
         result = _prompt_command_overrides(["claude", "antigravity-cli"], non_interactive=False)
-        assert result["plan"]["tool"] == "antigravity-cli"
-        assert result["plan"]["model"] == "gemini-3-flash"
-        assert result["deps"] == {}
-        assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
-        assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
-        assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
+        assert result["plan"].tool == "antigravity-cli"
+        assert result["plan"].model == "gemini-3-flash"
+        assert result["deps"] == AICommandConfig()
+        assert result["review_plan"] == AICommandConfig(enabled=True, mode="prompt")
+        assert result["review_implementation"] == AICommandConfig(enabled=True, mode="prompt")
+        assert result["review_batch"] == AICommandConfig(enabled=True, mode="prompt")
 
     @patch("wade.services.init_service.prompts_setup.AbstractAITool.get")
     @patch("wade.services.init_service.prompts_setup._collect_model_options")
@@ -681,9 +689,9 @@ class TestPromptCommandOverrides:
             1,  # review_batch: Enable=No
         ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
-        assert result["review_plan"]["mode"] == "headless"
-        assert result["review_plan"]["tool"] == "claude"
-        assert result["review_plan"]["model"] == "claude-sonnet"
+        assert result["review_plan"].mode == "headless"
+        assert result["review_plan"].tool == "claude"
+        assert result["review_plan"].model == "claude-sonnet"
 
     @patch("wade.ui.prompts.select")
     def test_deps_with_default_tool_shows_mode(self, mock_select: MagicMock) -> None:
@@ -693,7 +701,7 @@ class TestPromptCommandOverrides:
         # review_plan/review_implementation/review_batch: Enable=No (1)
         mock_select.side_effect = [1, 0, 0, 1, 0, 0, 1, 1, 1]
         result = _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        assert result["deps"] == {"mode": "headless"}
+        assert result["deps"] == AICommandConfig(mode="headless")
 
     @patch("wade.ui.prompts.select")
     def test_deps_mode_excludes_self_review(self, mock_select: MagicMock) -> None:
@@ -847,8 +855,8 @@ class TestWriteConfig:
     def test_with_command_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         overrides = {
-            "plan": {"tool": "antigravity-cli", "model": "gemini-3-pro"},
-            "deps": {},
+            "plan": AICommandConfig(tool="antigravity-cli", model="gemini-3-pro"),
+            "deps": AICommandConfig(),
         }
         _write_config(
             config_path,
@@ -867,9 +875,9 @@ class TestWriteConfig:
     def test_with_enabled_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         overrides = {
-            "review_plan": {"enabled": "false"},
-            "review_implementation": {"enabled": "true", "tool": "claude", "mode": "prompt"},
-            "review_batch": {"enabled": "true", "tool": "copilot", "mode": "headless"},
+            "review_plan": AICommandConfig(enabled=False),
+            "review_implementation": AICommandConfig(enabled=True, tool="claude", mode="prompt"),
+            "review_batch": AICommandConfig(enabled=True, tool="copilot", mode="headless"),
         }
         _write_config(
             config_path,
@@ -964,7 +972,7 @@ class TestPatchConfig:
             "claude",
             ComplexityModelMapping(),
             force=True,
-            bot_review_setup={"auto_trigger": True},
+            bot_review_setup=BotReviewConfig(auto_trigger=True),
         )
         config = yaml.safe_load(config_path.read_text())
         assert config["bot_review"]["auto_trigger"] is True
@@ -983,7 +991,7 @@ class TestPatchConfig:
             "claude",
             ComplexityModelMapping(),
             force=True,
-            bot_review_setup={"auto_trigger": False, "offer_on_done": False},
+            bot_review_setup=BotReviewConfig(auto_trigger=False, offer_on_done=False),
         )
         config = yaml.safe_load(config_path.read_text())
         assert config["bot_review"]["auto_trigger"] is False
@@ -1004,7 +1012,7 @@ class TestPatchConfig:
             "claude",
             ComplexityModelMapping(),
             force=True,
-            bot_review_setup={"auto_trigger": True},
+            bot_review_setup=BotReviewConfig(auto_trigger=True),
         )
         config = yaml.safe_load(config_path.read_text())
         assert config["bot_review"]["auto_trigger"] is True
@@ -1019,7 +1027,7 @@ class TestPatchConfig:
             "claude",
             ComplexityModelMapping(),
             force=True,
-            bot_review_setup={"auto_trigger": True},
+            bot_review_setup=BotReviewConfig(auto_trigger=True),
         )
         config = yaml.safe_load(config_path.read_text())
         # auto_trigger is patched, but the empty bots list is NOT re-seeded.
@@ -1167,7 +1175,10 @@ class TestPatchConfig:
     def test_force_sets_command_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
-        overrides = {"plan": {"tool": "antigravity-cli", "model": "gemini-3-pro"}, "deps": {}}
+        overrides = {
+            "plan": AICommandConfig(tool="antigravity-cli", model="gemini-3-pro"),
+            "deps": AICommandConfig(),
+        }
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
         )
@@ -1181,7 +1192,7 @@ class TestPatchConfig:
         config_path.write_text(
             "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: antigravity-cli\n"
         )
-        overrides = {"plan": {}, "deps": {}}
+        overrides = {"plan": AICommandConfig(), "deps": AICommandConfig()}
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
         )
@@ -1193,7 +1204,7 @@ class TestPatchConfig:
         config_path.write_text(
             "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: existing-tool\n"
         )
-        overrides = {"plan": {"tool": "new-tool"}, "deps": {}}
+        overrides = {"plan": AICommandConfig(tool="new-tool"), "deps": AICommandConfig()}
         _patch_config(
             config_path,
             "claude",
@@ -1298,8 +1309,8 @@ class TestPatchConfig:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
         overrides = {
-            "deps": {"tool": "claude", "mode": "headless"},
-            "review_plan": {"tool": "claude", "effort": "low", "mode": "prompt"},
+            "deps": AICommandConfig(tool="claude", mode="headless"),
+            "review_plan": AICommandConfig(tool="claude", effort="low", mode="prompt"),
         }
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
@@ -1313,9 +1324,9 @@ class TestPatchConfig:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
         overrides = {
-            "review_plan": {"enabled": "false"},
-            "review_implementation": {"enabled": "true", "tool": "claude", "mode": "prompt"},
-            "review_batch": {"enabled": "true", "tool": "copilot", "mode": "headless"},
+            "review_plan": AICommandConfig(enabled=False),
+            "review_implementation": AICommandConfig(enabled=True, tool="claude", mode="prompt"),
+            "review_batch": AICommandConfig(enabled=True, tool="copilot", mode="headless"),
         }
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
@@ -1331,9 +1342,7 @@ class TestPatchConfig:
     def test_no_force_sets_enabled_when_section_missing(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
-        overrides = {
-            "review_plan": {"enabled": "false"},
-        }
+        overrides = {"review_plan": AICommandConfig(enabled=False)}
         _patch_config(
             config_path,
             "claude",
@@ -1347,9 +1356,7 @@ class TestPatchConfig:
     def test_force_sets_review_implementation_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
-        overrides = {
-            "review_implementation": {"tool": "copilot", "mode": "headless"},
-        }
+        overrides = {"review_implementation": AICommandConfig(tool="copilot", mode="headless")}
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
         )
@@ -1827,22 +1834,22 @@ class TestGitignoreEntries:
 class TestPromptHooksSetup:
     def test_non_interactive_returns_defaults(self) -> None:
         result = _prompt_hooks_setup(non_interactive=True)
-        assert result["post_worktree_create"] is None
-        assert result["copy_to_worktree"] == []
+        assert result.post_worktree_create is None
+        assert result.copy_to_worktree == []
 
     @patch("wade.ui.prompts.input_prompt")
     def test_interactive_with_values(self, mock_input: MagicMock) -> None:
         mock_input.side_effect = ["scripts/setup-worktree.sh", ".env, .secrets"]
         result = _prompt_hooks_setup(non_interactive=False)
-        assert result["post_worktree_create"] == "scripts/setup-worktree.sh"
-        assert result["copy_to_worktree"] == [".env", ".secrets"]
+        assert result.post_worktree_create == "scripts/setup-worktree.sh"
+        assert result.copy_to_worktree == [".env", ".secrets"]
 
     @patch("wade.ui.prompts.input_prompt")
     def test_interactive_empty_skips(self, mock_input: MagicMock) -> None:
         mock_input.side_effect = ["", ""]
         result = _prompt_hooks_setup(non_interactive=False)
-        assert result["post_worktree_create"] is None
-        assert result["copy_to_worktree"] == []
+        assert result.post_worktree_create is None
+        assert result.copy_to_worktree == []
 
 
 # ---------------------------------------------------------------------------
@@ -1859,7 +1866,7 @@ class TestPromptBotReviewSetup:
         result = _prompt_bot_review_setup(
             non_interactive=True, current_auto_trigger=True, current_offer_on_done=False
         )
-        assert result == {"auto_trigger": True, "offer_on_done": False}
+        assert result == BotReviewConfig(auto_trigger=True, offer_on_done=False)
 
     @pytest.mark.parametrize(
         ("choice", "expected"),
@@ -1873,7 +1880,7 @@ class TestPromptBotReviewSetup:
         from wade.services.init_service.prompts_setup import _prompt_bot_review_setup
 
         with patch("wade.ui.prompts.select", return_value=choice):
-            assert _prompt_bot_review_setup(non_interactive=False) == expected
+            assert _prompt_bot_review_setup(non_interactive=False) == BotReviewConfig(**expected)
 
     @pytest.mark.parametrize(
         ("auto", "offer", "expected_default"),
@@ -1908,7 +1915,7 @@ class TestWriteConfigHooks:
 
     def test_write_config_with_setup_script(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        hooks = {"post_worktree_create": "scripts/setup.sh", "copy_to_worktree": [".env"]}
+        hooks = HooksSetup(post_worktree_create="scripts/setup.sh", copy_to_worktree=[".env"])
         _write_config(config_path, "claude", ComplexityModelMapping(), hooks_setup=hooks)
         config = yaml.safe_load(config_path.read_text())
         assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
@@ -1946,7 +1953,7 @@ class TestPatchConfigHooks:
     def test_patch_force_sets_hooks_setup(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        hooks = {"post_worktree_create": "scripts/setup.sh", "copy_to_worktree": [".env"]}
+        hooks = HooksSetup(post_worktree_create="scripts/setup.sh", copy_to_worktree=[".env"])
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), hooks_setup=hooks, force=True
         )
@@ -1974,7 +1981,7 @@ class TestPatchConfigHooks:
         #358: they are tracked, so a worktree checks out the committed version;
         copying manufactures the stale snapshot this issue removes.
         """
-        mock_knowledge_setup.return_value = {"enabled": True, "path": "docs/LEARNINGS.md"}
+        mock_knowledge_setup.return_value = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
         init(project_root=tmp_git_repo, non_interactive=True)
 
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
@@ -2107,7 +2114,7 @@ class TestPromptProviderSetup:
 
     def test_non_interactive_returns_github(self, tmp_path: Path) -> None:
         result = _prompt_provider_setup(tmp_path, non_interactive=True)
-        assert result == {"name": "github"}
+        assert result == ProviderSetup(name=ProviderID.GITHUB)
 
     @patch("wade.services.init_service.prompts_setup._check_gh_auth", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
@@ -2118,7 +2125,7 @@ class TestPromptProviderSetup:
         tmp_path: Path,
     ) -> None:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "github"
+        assert result.name == "github"
 
     @patch("wade.services.init_service.prompts_setup._check_gh_auth", return_value=False)
     @patch("wade.ui.prompts.confirm", return_value=False)  # skip auth
@@ -2131,7 +2138,7 @@ class TestPromptProviderSetup:
         tmp_path: Path,
     ) -> None:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "github"
+        assert result.name == "github"
 
     @patch("wade.services.init_service.prompts_setup._check_gh_auth")
     @patch("subprocess.run")  # gh auth login
@@ -2149,7 +2156,7 @@ class TestPromptProviderSetup:
         mock_auth.side_effect = [False, True]  # first call: not authed, second: authed
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "github"
+        assert result.name == "github"
         assert mock_auth.call_count == 2
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
@@ -2171,11 +2178,11 @@ class TestPromptProviderSetup:
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
 
-        assert result["name"] == "clickup"
-        assert result["api_token_env"] == "CLICKUP_API_TOKEN"
-        assert result["settings"]["team_id"] == "team1"
-        assert result["settings"]["list_id"] == "list1"
-        assert "space_id" not in result["settings"]
+        assert result.name == "clickup"
+        assert result.api_token_env == "CLICKUP_API_TOKEN"
+        assert result.settings["team_id"] == "team1"
+        assert result.settings["list_id"] == "list1"
+        assert "space_id" not in result.settings
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
     @patch("wade.ui.prompts.confirm")
@@ -2193,7 +2200,7 @@ class TestPromptProviderSetup:
         mock_confirm.side_effect = [False, False]
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["settings"]["space_id"] == "space1"
+        assert result.settings["space_id"] == "space1"
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
     @patch("wade.services.init_service.prompts_setup._save_token_to_env", return_value=True)
@@ -2214,7 +2221,7 @@ class TestPromptProviderSetup:
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
 
-        assert result["add_env_to_copy"] is True
+        assert result.add_env_to_copy is True
         mock_save.assert_called_once_with(tmp_path, "MY_TOKEN", "pk_123")
 
     def test_current_provider_preselects(self, tmp_path: Path) -> None:
@@ -2228,7 +2235,9 @@ class TestPromptProviderSetup:
             patch("wade.ui.prompts.input_prompt", side_effect=["pk_1", "TOK", "t", "l", ""]),
             patch("wade.ui.prompts.confirm", side_effect=[False, False]),
         ):
-            _prompt_provider_setup(tmp_path, non_interactive=False, current_provider="clickup")
+            _prompt_provider_setup(
+                tmp_path, non_interactive=False, current_provider=ProviderID.CLICKUP
+            )
             # Verify default=1 was passed (ClickUp pre-selected)
             mock_select.assert_called_once()
             _, kwargs = mock_select.call_args
@@ -2253,7 +2262,7 @@ class TestPromptProviderSetup:
         mock_confirm.side_effect = [False, False]
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "clickup"
+        assert result.name == "clickup"
         assert mock_validate.call_count == 3
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=False)
@@ -2274,7 +2283,7 @@ class TestPromptProviderSetup:
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
         # Should still return clickup config despite failures
-        assert result["name"] == "clickup"
+        assert result.name == "clickup"
 
     @patch("wade.services.init_service.prompts_setup._check_gh_auth", return_value=False)
     @patch("wade.ui.prompts.confirm", return_value=True)  # yes, try auth
@@ -2289,7 +2298,7 @@ class TestPromptProviderSetup:
         """When gh CLI is not installed, gh auth login should not crash."""
         with patch("subprocess.run", side_effect=FileNotFoundError):
             result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "github"
+        assert result.name == "github"
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
     @patch("wade.ui.prompts.confirm")
@@ -2316,7 +2325,7 @@ class TestPromptProviderSetup:
         mock_confirm.side_effect = [False, False]
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["api_token_env"] == "CLICKUP_TOKEN"
+        assert result.api_token_env == "CLICKUP_TOKEN"
 
     @patch("wade.services.init_service.prompts_setup._check_gh_auth")
     @patch("subprocess.run")
@@ -2334,7 +2343,7 @@ class TestPromptProviderSetup:
         mock_auth.side_effect = [False, False]
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "github"
+        assert result.name == "github"
         assert mock_auth.call_count == 2
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
@@ -2356,7 +2365,7 @@ class TestPromptProviderSetup:
         mock_confirm.side_effect = [False, True]  # no browser, yes save
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["add_env_to_copy"] is False
+        assert result.add_env_to_copy is False
 
     @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=False)
     @patch("wade.ui.prompts.input_prompt")
@@ -2372,7 +2381,7 @@ class TestPromptProviderSetup:
         mock_input.side_effect = ["", "", ""]
 
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
-        assert result["name"] == "github"
+        assert result.name == "github"
 
 
 # ---------------------------------------------------------------------------
@@ -2392,7 +2401,10 @@ class TestWriteConfigProvider:
     def test_github_provider_explicit(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         _write_config(
-            config_path, "claude", ComplexityModelMapping(), provider_setup={"name": "github"}
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup=ProviderSetup(name=ProviderID.GITHUB),
         )
         config = yaml.safe_load(config_path.read_text())
         assert config["provider"]["name"] == "github"
@@ -2400,11 +2412,11 @@ class TestWriteConfigProvider:
 
     def test_clickup_provider_with_settings(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        provider_setup = {
-            "name": "clickup",
-            "api_token_env": "CLICKUP_API_TOKEN",
-            "settings": {"list_id": "123", "team_id": "456"},
-        }
+        provider_setup = ProviderSetup(
+            name=ProviderID.CLICKUP,
+            api_token_env="CLICKUP_API_TOKEN",
+            settings={"list_id": "123", "team_id": "456"},
+        )
         _write_config(
             config_path, "claude", ComplexityModelMapping(), provider_setup=provider_setup
         )
@@ -2419,11 +2431,11 @@ class TestPatchConfigProvider:
     def test_patch_adds_provider_when_missing(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\n")
-        provider_setup = {
-            "name": "clickup",
-            "api_token_env": "CLICKUP_API_TOKEN",
-            "settings": {"list_id": "123", "team_id": "456"},
-        }
+        provider_setup = ProviderSetup(
+            name=ProviderID.CLICKUP,
+            api_token_env="CLICKUP_API_TOKEN",
+            settings={"list_id": "123", "team_id": "456"},
+        )
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), provider_setup=provider_setup
         )
@@ -2441,11 +2453,11 @@ class TestPatchConfigProvider:
     def test_force_overwrites_provider(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nprovider:\n  name: github\n")
-        provider_setup = {
-            "name": "clickup",
-            "api_token_env": "CLICKUP_API_TOKEN",
-            "settings": {"list_id": "123", "team_id": "456"},
-        }
+        provider_setup = ProviderSetup(
+            name=ProviderID.CLICKUP,
+            api_token_env="CLICKUP_API_TOKEN",
+            settings={"list_id": "123", "team_id": "456"},
+        )
         _patch_config(
             config_path,
             "claude",
@@ -2459,7 +2471,7 @@ class TestPatchConfigProvider:
     def test_no_force_preserves_existing_provider(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nprovider:\n  name: github\n")
-        provider_setup = {"name": "clickup"}
+        provider_setup = ProviderSetup(name=ProviderID.CLICKUP)
         _patch_config(
             config_path,
             "claude",
@@ -2483,7 +2495,7 @@ class TestPatchConfigProvider:
             config_path,
             "claude",
             ComplexityModelMapping(),
-            provider_setup={"name": "clickup"},
+            provider_setup=ProviderSetup(name=ProviderID.CLICKUP),
             force=True,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -2503,7 +2515,7 @@ class TestPatchConfigProvider:
             config_path,
             "claude",
             ComplexityModelMapping(),
-            provider_setup={"name": "github"},
+            provider_setup=ProviderSetup(name=ProviderID.GITHUB),
             force=True,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -2515,11 +2527,11 @@ class TestPatchConfigProvider:
         """When force=False and existing name is preserved, don't merge mismatched settings."""
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nprovider:\n  name: github\n")
-        provider_setup = {
-            "name": "clickup",
-            "api_token_env": "CLICKUP_API_TOKEN",
-            "settings": {"list_id": "123", "team_id": "456"},
-        }
+        provider_setup = ProviderSetup(
+            name=ProviderID.CLICKUP,
+            api_token_env="CLICKUP_API_TOKEN",
+            settings={"list_id": "123", "team_id": "456"},
+        )
         _patch_config(
             config_path,
             "claude",
@@ -2544,10 +2556,7 @@ class TestPatchConfigProvider:
             config_path,
             "claude",
             ComplexityModelMapping(),
-            provider_setup={
-                "name": "clickup",
-                "settings": {"list_id": "999"},
-            },
+            provider_setup=ProviderSetup(name=ProviderID.CLICKUP, settings={"list_id": "999"}),
             force=True,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -2566,7 +2575,7 @@ class TestPatchConfigProvider:
             config_path,
             "claude",
             ComplexityModelMapping(),
-            provider_setup={"name": "clickup", "api_token_env": "NEW_TOKEN"},
+            provider_setup=ProviderSetup(name=ProviderID.CLICKUP, api_token_env="NEW_TOKEN"),
             force=True,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -2580,7 +2589,9 @@ class TestPatchConfigProvider:
             config_path,
             "claude",
             ComplexityModelMapping(),
-            provider_setup={"name": "clickup", "settings": {"list_id": "1", "team_id": "2"}},
+            provider_setup=ProviderSetup(
+                name=ProviderID.CLICKUP, settings={"list_id": "1", "team_id": "2"}
+            ),
             force=True,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -2800,7 +2811,7 @@ class TestShowInitSummary:
     def test_renders_without_error_minimal(self) -> None:
         with patch("wade.services.init_service.manifest.console") as mock_console:
             _show_init_summary(
-                provider_setup={"name": "github"},
+                provider_setup=ProviderSetup(name=ProviderID.GITHUB),
                 project_settings=ProjectSettings(
                     main_branch="main",
                     branch_prefix="feat",
@@ -2810,10 +2821,10 @@ class TestShowInitSummary:
                 default_model=None,
                 default_effort=None,
                 default_yolo=None,
-                implementation_setup={},
+                implementation_setup=ImplementationSetup(),
                 command_overrides={},
-                hooks_setup={},
-                knowledge_setup={},
+                hooks_setup=HooksSetup(),
+                knowledge_setup=KnowledgeConfig(),
             )
         kv_calls = {call.args[0]: call.args[1] for call in mock_console.kv.call_args_list}
         assert kv_calls.get("Provider") == "github"
@@ -2831,7 +2842,7 @@ class TestShowInitSummary:
         )
         with patch("wade.services.init_service.manifest.console") as mock_console:
             _show_init_summary(
-                provider_setup={"name": "github"},
+                provider_setup=ProviderSetup(name=ProviderID.GITHUB),
                 project_settings=ProjectSettings(
                     main_branch="main",
                     branch_prefix="fix",
@@ -2841,17 +2852,16 @@ class TestShowInitSummary:
                 default_model="claude-sonnet-4-6",
                 default_effort="medium",
                 default_yolo=True,
-                implementation_setup={"tool": "claude", "model_mapping": mapping},
+                implementation_setup=ImplementationSetup(tool="claude", model_mapping=mapping),
                 command_overrides={
-                    "plan": {"tool": "antigravity-cli", "model": "gemini-3-pro"},
-                    "deps": {"mode": "headless"},
-                    "review_plan": {"enabled": "true", "mode": "prompt"},
+                    "plan": AICommandConfig(tool="antigravity-cli", model="gemini-3-pro"),
+                    "deps": AICommandConfig(mode="headless"),
+                    "review_plan": AICommandConfig(enabled=True, mode="prompt"),
                 },
-                hooks_setup={
-                    "post_worktree_create": "scripts/setup.sh",
-                    "copy_to_worktree": [".env"],
-                },
-                knowledge_setup={"enabled": True, "path": "docs/KNOWLEDGE.md"},
+                hooks_setup=HooksSetup(
+                    post_worktree_create="scripts/setup.sh", copy_to_worktree=[".env"]
+                ),
+                knowledge_setup=KnowledgeConfig(enabled=True, path="docs/KNOWLEDGE.md"),
             )
         kv_calls = {call.args[0]: call.args[1] for call in mock_console.kv.call_args_list}
         assert kv_calls.get("AI tool") == "claude"
@@ -2891,7 +2901,7 @@ class TestWriteConfigYolo:
 
     def test_per_command_yolo_in_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        overrides = {"plan": {"tool": "claude", "yolo": "true"}, "deps": {}}
+        overrides = {"plan": AICommandConfig(tool="claude", yolo=True), "deps": AICommandConfig()}
         _write_config(config_path, "claude", ComplexityModelMapping(), command_overrides=overrides)
         config = yaml.safe_load(config_path.read_text())
         assert config["ai"]["plan"]["yolo"] is True
@@ -2908,7 +2918,9 @@ class TestEnsureMarkdownFile:
     def test_creates_default_when_missing(self, tmp_path: Path) -> None:
         from wade.services.init_service import _ensure_markdown_file
 
-        _ensure_markdown_file(tmp_path, {"path": "ISSUES.md"})
+        _ensure_markdown_file(
+            tmp_path, ProviderSetup(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+        )
         assert (tmp_path / "ISSUES.md").is_file()
         assert "# Wade Issues" in (tmp_path / "ISSUES.md").read_text(encoding="utf-8")
 
@@ -2917,7 +2929,9 @@ class TestEnsureMarkdownFile:
 
         existing = tmp_path / "ISSUES.md"
         existing.write_text("existing content\n", encoding="utf-8")
-        _ensure_markdown_file(tmp_path, {"path": "ISSUES.md"})
+        _ensure_markdown_file(
+            tmp_path, ProviderSetup(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+        )
         assert existing.read_text(encoding="utf-8") == "existing content\n"
 
     def test_rejects_directory_at_path(self, tmp_path: Path) -> None:
@@ -2926,7 +2940,9 @@ class TestEnsureMarkdownFile:
         # A directory exists where the file should go.
         (tmp_path / "ISSUES.md").mkdir()
         with pytest.raises(ValueError, match="not a regular file"):
-            _ensure_markdown_file(tmp_path, {"path": "ISSUES.md"})
+            _ensure_markdown_file(
+                tmp_path, ProviderSetup(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+            )
 
 
 class TestPatchConfigYolo:
@@ -2965,3 +2981,233 @@ class TestPatchConfigYolo:
         )
         config = yaml.safe_load(config_path.read_text())
         assert config["ai"]["yolo"] is True
+
+
+class TestTypedInitSetup:
+    @pytest.mark.parametrize(
+        ("setup", "expected"),
+        [
+            (AICommandConfig(), {}),
+            (AICommandConfig(enabled=False, yolo=False), {"enabled": False, "yolo": False}),
+            (
+                AICommandConfig(tool="claude", yolo=True, sandbox=True, timeout=30),
+                {"tool": "claude", "yolo": True},
+            ),
+        ],
+    )
+    def test_command_yaml_uses_only_wizard_fields(
+        self, setup: AICommandConfig, expected: dict[str, object]
+    ) -> None:
+        from wade.services.init_service.config_io import _ai_command_config_dict
+
+        assert _ai_command_config_dict(setup) == expected
+
+    @pytest.mark.parametrize("patch_existing", [False, True])
+    @pytest.mark.parametrize("provider", list(ProviderID))
+    def test_provider_names_are_plain_yaml_strings(
+        self, tmp_path: Path, patch_existing: bool, provider: ProviderID
+    ) -> None:
+        config_path = tmp_path / ".wade.yml"
+        setup = ProviderSetup(name=provider, add_env_to_copy=True)
+        if patch_existing:
+            config_path.write_text("version: 2\nprovider:\n  name: github\n")
+            _patch_config(
+                config_path, None, ComplexityModelMapping(), provider_setup=setup, force=True
+            )
+        else:
+            _write_config(config_path, None, ComplexityModelMapping(), provider_setup=setup)
+
+        text = config_path.read_text()
+        assert "!!python/object" not in text
+        assert yaml.safe_load(text)["provider"] == {"name": provider.value}
+
+    def test_hook_yaml_contains_only_prompted_fields(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(
+            config_path,
+            None,
+            ComplexityModelMapping(),
+            hooks_setup=HooksSetup(post_worktree_create="scripts/setup.sh", copy_to_worktree=[]),
+        )
+        assert yaml.safe_load(config_path.read_text())["hooks"] == {
+            "post_worktree_create": "scripts/setup.sh"
+        }
+
+    @pytest.mark.parametrize(
+        ("setup", "expected"),
+        [
+            (ProviderSetup(), {"name": "github"}),
+            (
+                ProviderSetup(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"}),
+                {"name": "markdown", "settings": {"team_id": "1", "path": "ISSUES.md"}},
+            ),
+            (
+                ProviderSetup(name=ProviderID.MARKDOWN, settings={}),
+                {"name": "markdown", "settings": {"team_id": "1"}},
+            ),
+        ],
+    )
+    def test_provider_switch_preserves_exact_orphan_key_presence(
+        self, tmp_path: Path, setup: ProviderSetup, expected: dict[str, object]
+    ) -> None:
+        """Explicit empty settings keep the old mapping, as the dict carrier did."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nprovider:\n  name: clickup\n"
+            "  api_token_env: TOKEN\n  settings:\n    team_id: '1'\n"
+        )
+        _patch_config(config_path, None, ComplexityModelMapping(), provider_setup=setup, force=True)
+        assert yaml.safe_load(config_path.read_text())["provider"] == expected
+
+    def test_markdown_to_clickup_retains_present_settings(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nprovider:\n  name: markdown\n  settings:\n    path: ISSUES.md\n"
+        )
+        _patch_config(
+            config_path,
+            None,
+            ComplexityModelMapping(),
+            force=True,
+            provider_setup=ProviderSetup(
+                name=ProviderID.CLICKUP, api_token_env="TOKEN", settings={"team_id": "1"}
+            ),
+        )
+        assert yaml.safe_load(config_path.read_text())["provider"] == {
+            "name": "clickup",
+            "api_token_env": "TOKEN",
+            "settings": {"path": "ISSUES.md", "team_id": "1"},
+        }
+
+    def test_force_reinit_flips_both_flags_and_preserves_empty_bots(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nbot_review:\n  auto_trigger: true\n  offer_on_done: true\n  bots: []\n"
+        )
+        _patch_config(
+            config_path,
+            None,
+            ComplexityModelMapping(),
+            force=True,
+            bot_review_setup=BotReviewConfig(auto_trigger=False, offer_on_done=False),
+        )
+        assert yaml.safe_load(config_path.read_text())["bot_review"] == {
+            "auto_trigger": False,
+            "offer_on_done": False,
+            "bots": [],
+        }
+
+    def test_partial_empty_overrides_delete_stale_sections(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  plan:\n    tool: claude\n  deps:\n    tool: claude\n"
+        )
+        _patch_config(
+            config_path,
+            None,
+            ComplexityModelMapping(),
+            force=True,
+            command_overrides={"plan": AICommandConfig()},
+        )
+        assert yaml.safe_load(config_path.read_text())["ai"] == {}
+
+    def test_force_replace_drops_unprompted_keys_characterization(self, tmp_path: Path) -> None:
+        """#468 preserves the existing key loss; repairing force re-init is out of scope."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  plan:\n    tool: claude\n"
+            "    permission_mode: auto\n    sandbox: true\n    timeout: 30\n"
+        )
+        _patch_config(
+            config_path,
+            None,
+            ComplexityModelMapping(),
+            force=True,
+            command_overrides={"plan": AICommandConfig(tool="copilot")},
+        )
+        assert yaml.safe_load(config_path.read_text())["ai"]["plan"] == {"tool": "copilot"}
+
+    @pytest.mark.parametrize(("enabled", "expected"), [(False, 1), (True, 0), (None, 0)])
+    def test_review_enabled_preselection_preserves_unset(
+        self, enabled: bool | None, expected: int
+    ) -> None:
+        with patch("wade.ui.prompts.select") as select:
+            select.side_effect = lambda _title, _items, default=0, **_kw: default
+            _prompt_command_overrides(
+                ["claude"],
+                non_interactive=False,
+                default_tool="claude",
+                current_overrides={"review_plan": AICommandConfig(enabled=enabled)},
+            )
+        call = next(call for call in select.call_args_list if call.args[0] == "Enable plan review?")
+        assert call.kwargs["default"] == expected
+
+    def test_knowledge_normalization_copies_typed_answers(self, tmp_git_repo: Path) -> None:
+        from wade.services.init_service.config_io import _normalize_knowledge_setup
+
+        setup = KnowledgeConfig(enabled=True, path="  docs/LEARNINGS.md  ")
+        normalized = _normalize_knowledge_setup(tmp_git_repo, setup)
+        assert normalized == KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
+        assert setup.path == "  docs/LEARNINGS.md  "
+        assert _normalize_knowledge_setup(tmp_git_repo, KnowledgeConfig(enabled=True, path="")) == (
+            KnowledgeConfig(enabled=True, path="KNOWLEDGE.md")
+        )
+
+    def test_modify_retains_all_typed_answers_and_injects_env_once(
+        self, tmp_git_repo: Path
+    ) -> None:
+        provider = ProviderSetup(
+            name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"}, add_env_to_copy=True
+        )
+        hooks = HooksSetup(post_worktree_create="scripts/setup.sh", copy_to_worktree=[])
+        knowledge = KnowledgeConfig(enabled=True, path="docs/KNOWLEDGE.md")
+        bots = BotReviewConfig(auto_trigger=False, offer_on_done=False)
+        implementation = ImplementationSetup(tool="claude")
+        overrides = {"review_plan": AICommandConfig(enabled=False)}
+        mocks = {
+            "_prompt_provider_setup": MagicMock(return_value=provider),
+            "_prompt_project_settings": MagicMock(return_value=ProjectSettings(main_branch="main")),
+            "_prompt_ai_section": MagicMock(return_value=(None, None, None, None)),
+            "_prompt_implementation_setup": MagicMock(return_value=implementation),
+            "_prompt_command_overrides": MagicMock(return_value=overrides),
+            "_prompt_hooks_setup": MagicMock(return_value=hooks),
+            "_prompt_knowledge_setup": MagicMock(return_value=knowledge),
+            "_prompt_bot_review_setup": MagicMock(return_value=bots),
+            "_prompt_claude_code_settings": MagicMock(),
+            "_prompt_configure_shell_integration": MagicMock(),
+            "_prompt_configure_completions": MagicMock(),
+            "_show_init_summary": MagicMock(),
+        }
+        with (
+            patch.multiple("wade.services.init_service.commands", **mocks),
+            patch(
+                "wade.services.init_service.commands.AbstractAITool.detect_installed",
+                return_value=[],
+            ),
+            patch("wade.ui.prompts.select", side_effect=[1, 0]),
+        ):
+            assert init(project_root=tmp_git_repo)
+
+        assert (
+            mocks["_prompt_provider_setup"].call_args.kwargs["current_provider"]
+            is ProviderID.MARKDOWN
+        )
+        assert mocks["_prompt_hooks_setup"].call_args.kwargs["current_copy_to_worktree"] == [".env"]
+        assert (
+            mocks["_prompt_knowledge_setup"].call_args.kwargs["current_path"] == "docs/KNOWLEDGE.md"
+        )
+        assert mocks["_prompt_bot_review_setup"].call_args.kwargs["current_offer_on_done"] is False
+        assert (
+            mocks["_prompt_implementation_setup"].call_args.kwargs["current_implement_tool"]
+            == "claude"
+        )
+        assert mocks["_prompt_command_overrides"].call_args.kwargs["current_overrides"] == overrides
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        assert config["hooks"] == {
+            "post_worktree_create": "scripts/setup.sh",
+            "copy_to_worktree": [".env"],
+        }
+        assert config["provider"] == {"name": "markdown", "settings": {"path": "ISSUES.md"}}
+        assert config["ai"]["review_plan"] == {"enabled": False}
+        assert (tmp_git_repo / "ISSUES.md").is_file()
+        assert (tmp_git_repo / "docs/KNOWLEDGE.md").is_file()
