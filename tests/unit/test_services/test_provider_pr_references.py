@@ -147,6 +147,16 @@ class TestMergeTimeClosure:
         provider = self._run(tmp_path, None)
         provider.close_task.assert_not_called()
 
+    def test_unscannable_body_never_closes(self, merge: MagicMock, tmp_path: Path) -> None:
+        # An unclosed WADE marker hides the recorded --no-close intent.
+        body = f"Implements [clickup:abc1234]({URL})\n\n<!-- wade:summary:start -->\nText\n"
+        with pytest.raises(MarkdownStructureError):
+            task_close_intent(body, OPAQUE)
+        with patch("wade.services.implementation_service.lifecycle.console") as console:
+            provider = self._run(tmp_path, body)
+        provider.close_task.assert_not_called()
+        console.hint.assert_called_once_with("Close it when ready: wade task close abc1234")
+
     def test_legacy_body_without_a_reference_keeps_closing(
         self, merge: MagicMock, tmp_path: Path
     ) -> None:

@@ -642,7 +642,7 @@ def _close_task_after_merge(
     """Close the task through its provider, honoring the recorded ``--no-close``.
 
     Uses the exact task ID. An unknown provider (*ref* is ``None``), an unreadable
-    PR body, or a failed close leaves the task open with a retry command rather
+    or structurally unsafe PR body, or a failed close leaves the task open with a retry command rather
     than risk closing a task the completion kept open.
     """
     hint = f"Close it when ready: wade task close {shlex.quote(task_id)}"
@@ -659,7 +659,13 @@ def _close_task_after_merge(
         console.warn(f"Could not read the PR body to confirm closing {ref.label}; left open.")
         console.hint(hint)
         return
-    if task_close_intent(pr_body, ref) is False:
+    try:
+        intent = task_close_intent(pr_body, ref)
+    except MarkdownStructureError:
+        console.warn(f"Could not scan the PR body to confirm closing {ref.label}; left open.")
+        console.hint(hint)
+        return
+    if intent is False:
         console.info(f"Left {ref.label} open (completed with --no-close).")
         return
     try:
@@ -963,13 +969,13 @@ def task_close_intent(body: str, ref: TaskReference) -> bool | None:
     """Read the closure intent recorded by the WADE-owned PR reference line.
 
     ``True`` — completion asked to close the task; ``False`` — completion used
-    ``--no-close``; ``None`` — no WADE reference line for this task (or the body
-    is unsafe to scan), so the caller's legacy default applies.
+    ``--no-close``; ``None`` — the safely scanned body has no WADE reference line
+    for this task, so the caller's legacy default applies.
+
+    Raises :class:`MarkdownStructureError` when the body is unsafe to scan, so a
+    caller cannot mistake an unreadable intent for a legacy body.
     """
-    try:
-        lines = _editable_lines(body)
-    except MarkdownStructureError:
-        return None
+    lines = _editable_lines(body)
     token = ref.token_pattern()
     if ref.is_github_issue:
         closing, open_ = rf"Closes\s+{token}", rf"Implements\s+{token}"
