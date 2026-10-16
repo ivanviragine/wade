@@ -833,3 +833,9 @@ gh api -F converts integer-looking values but leaves fractional values as string
 NO_COLOR=1 suppresses Rich color but can leave bold ANSI sequences in Typer help; TERM=xterm-256color with FORCE_COLOR=1 exposes flags split across escape sequences even when dumb-terminal tests pass. Check semantic help with click.unstyle while retaining command exit assertions; keep exact-byte assertions for emitted commands and JSON.
 
 ---
+
+## bc71b692d0df | 2026-10-16 | implementation | kind: procedure | tags: git, docs, skip-worktree | Issue #547
+
+In a managed session of this repo, worktree bootstrap marks the tracked AGENTS.md --skip-worktree and injects the `<!-- wade:pointer:start -->` Git Workflow block into the working copy, so `git diff`/`git add AGENTS.md` silently ignore real documentation edits and committing the working file would leak the session pointer. To commit an AGENTS.md change, stage a pointer-free blob instead: apply the edit to `git show HEAD:AGENTS.md`, `git hash-object -w` that file, `git update-index --cacheinfo 100644,<blob>,AGENTS.md`, then re-run `git update-index --skip-worktree AGENTS.md`; verify with `git diff --cached -- AGENTS.md` and that `git show HEAD:AGENTS.md` contains no `wade:pointer` marker.
+
+---
