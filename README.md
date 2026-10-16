@@ -957,8 +957,8 @@ with a separator or `.md` suffix) to start from a plan file with that name.
   while in progress, `Completes [clickup:abc1234](<url>)` once `done` records
   that the task should close. After a WADE-driven merge, the task is closed
   through its own provider using the exact ID; a `--no-close` completion
-  (`Implements …` / GitHub's `Implements #N`) leaves it open, and an unreadable
-  PR body, an unloadable project configuration, or a failed provider close
+  (`Implements …` / GitHub's `Implements #N`) leaves it open, and an unreadable or
+  structurally unscannable PR body, an unloadable project configuration, or a failed provider close
   leaves it open with a `wade task close <id>` hint. `done` replaces
   legacy `Closes #<id>` lines it wrote for external tasks and refuses — with a
   repair message — when such a line cannot be corrected unambiguously.
