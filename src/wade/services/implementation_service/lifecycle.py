@@ -642,8 +642,8 @@ def _close_task_after_merge(
     """Close the task through its provider, honoring the recorded ``--no-close``.
 
     Uses the exact task ID. An unknown provider (*ref* is ``None``), an unreadable
-    or structurally unsafe PR body, or a failed close leaves the task open with a retry command rather
-    than risk closing a task the completion kept open.
+    or structurally unsafe PR body, or a failed close leaves the task open with a
+    retry command rather than risk closing a task the completion kept open.
     """
     hint = f"Close it when ready: wade task close {shlex.quote(task_id)}"
     if ref is None:
