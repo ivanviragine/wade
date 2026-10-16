@@ -71,16 +71,45 @@ logger = structlog.get_logger()
 _MAX_OPTIONAL_PLAN_BYTES = 256 * 1024
 
 
-def _announce_review_pass_budget(passes: int, limit: int) -> None:
-    """Surface the implementation-session review-pass budget from the command (#384).
+#: The session ``done`` command a successful mapped code review hands off to.
+_SESSION_COMPLETION_COMMANDS: dict[SessionKind | None, str] = {
+    SessionKind.IMPLEMENTATION: "wade implementation-session done",
+    SessionKind.REVIEW_PR_COMMENTS: "wade review-pr-comments-session done",
+}
 
-    The ``done`` cap stops requiring re-review of new commits after
-    ``done.max_review_passes`` passes. Printing the running count here means an
-    agent sees its remaining budget directly from ``wade review implementation``
-    rather than from buried skill/prompt prose. ``done`` remains the
-    authoritative completion classifier, while the review command prevents an
-    implementation session from dispatching a review beyond the same cap.
+
+def _announce_review_pass_budget(
+    passes: int,
+    limit: int,
+    *,
+    host_session: SessionKind | None,
+) -> None:
+    """Surface the host session's review-pass budget from the command (#384).
+
+    The implementation ``done`` cap stops requiring re-review of new commits
+    after ``done.max_review_passes`` passes. Printing the running count here
+    means an agent sees its remaining budget directly from
+    ``wade review implementation`` rather than from buried skill/prompt prose.
+    ``done`` remains the authoritative completion classifier, while the review
+    command prevents an implementation session from dispatching a review beyond
+    the same cap. That cap belongs to implementation sessions only: PR-comment
+    review is uncapped and its ``done`` always requires a satisfying review of
+    the current commit, so it must never hear an ``N of limit`` budget (#547).
     """
+    if host_session is SessionKind.REVIEW_PR_COMMENTS:
+        console.info(
+            f"Review pass {passes} recorded for the PR-comment review binding. PR-comment "
+            "review is not limited by `done.max_review_passes`; "
+            "`wade review-pr-comments-session done` still requires a satisfying review "
+            "of the current commit."
+        )
+        return
+    if host_session is not SessionKind.IMPLEMENTATION:
+        console.info(
+            f"Review pass {passes} recorded for this standalone review binding. "
+            "No session completion gate or `done.max_review_passes` cap applies."
+        )
+        return
     remaining = max(0, limit - passes)
     if remaining > 0:
         plural = "" if remaining == 1 else "es"
@@ -259,6 +288,43 @@ def _relaunch_command(
         permission_mode=permission_mode,
         skills=skills,
         staged=staged,
+    )
+
+
+_EMPTY_ASSESSMENT_FEEDBACK = (
+    "The reviewer exited successfully but returned no assessment output. Empty "
+    "output is not evidence of a review, so this attempt is a failed review."
+)
+
+
+def _require_review_assessment(result: DelegationResult) -> DelegationResult:
+    """Reject a launched reviewer's empty assessment as a failed review (#547).
+
+    Generic delegation deliberately permits empty output, so this check lives at
+    the review boundary. Only an actually launched, successful reviewer is
+    converted: it stays launched (never ``never_launched``), so receipt
+    accounting treats it like any other launched failure. Prompt, skipped and
+    failed results — including timeouts — keep their existing semantics. An
+    explicit nonempty no-findings assessment remains a successful review.
+    Idempotent, so the receipt-certifying caller may re-check a result.
+    """
+    if (
+        not result.success
+        or result.skipped
+        or result.mode is DelegationMode.PROMPT
+        or result.feedback.strip()
+    ):
+        return result
+    feedback = _EMPTY_ASSESSMENT_FEEDBACK
+    if result.diagnostics:
+        feedback = f"{feedback}\n\n{result.diagnostics}"
+    return result.model_copy(
+        update={
+            "success": False,
+            "exit_code": 1,
+            "feedback": feedback,
+            "empty_assessment": True,
+        }
     )
 
 
@@ -498,7 +564,7 @@ def _run_review_delegation(
             "please wait, do not move this to the background."
         )
 
-    result = delegate(request)
+    result = _require_review_assessment(delegate(request))
     if result.success:
         # Delegation feedback is untrusted, model-authored text/markdown that
         # routinely quotes source code (e.g. `console.print("[x]done[/]")`).
@@ -995,12 +1061,21 @@ def _report_failed_review(
         return
     if not result.never_launched:
         passes = _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.FAILED)
-        console.warn(
-            "The reviewer ran and failed; this attempt does not certify review completion. "
-            "Inspect the reviewer output above before retrying."
-        )
+        if result.empty_assessment:
+            console.warn(
+                "The reviewer ran but returned no assessment; this attempt does not "
+                "certify review completion. Retry the review — a different `--ai` or "
+                "`--model` may help — and never substitute a self-review for it."
+            )
+            if result.relaunch_command:
+                console.detail(result.relaunch_command, markup=False)
+        else:
+            console.warn(
+                "The reviewer ran and failed; this attempt does not certify review "
+                "completion. Inspect the reviewer output above before retrying."
+            )
         if isinstance(passes, int) and max_passes is not None:
-            _announce_review_pass_budget(passes, max_passes)
+            _announce_review_pass_budget(passes, max_passes, host_session=prepared.host_session)
         current = read_review_record(
             repo_root,
             delegation=DelegationKind.CODE_REVIEW,
@@ -1243,7 +1318,9 @@ def review_implementation(
                     mode=DelegationMode.PROMPT,
                     exit_code=1,
                 )
-            _announce_review_pass_budget(passes, config.done.max_review_passes)
+            _announce_review_pass_budget(
+                passes, config.done.max_review_passes, host_session=prepared.host_session
+            )
             return DelegationResult(
                 success=True,
                 feedback=(
@@ -1295,6 +1372,9 @@ def review_implementation(
                 mode=DelegationMode.PROMPT,
                 exit_code=1,
             )
+        # Re-check at the certification point: no path may write a satisfying
+        # receipt for a launched reviewer that returned no assessment.
+        result = _require_review_assessment(result)
         cleanup_delegation_bundle(prepared, preserve=not result.success)
         # Count completed reviews, launched failures and real timeouts. A
         # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
@@ -1313,7 +1393,17 @@ def review_implementation(
             # skill/prompt. Guarded by an int check so a mocked
             # a failed receipt write never triggers it.
             if isinstance(passes, int):
-                _announce_review_pass_budget(passes, config.done.max_review_passes)
+                _announce_review_pass_budget(
+                    passes, config.done.max_review_passes, host_session=prepared.host_session
+                )
+            if result.success:
+                result = result.model_copy(
+                    update={
+                        "completion_command": _SESSION_COMPLETION_COMMANDS.get(
+                            prepared.host_session
+                        )
+                    }
+                )
         elif result.success:
             console.info(
                 "Prompt emitted; no satisfying review receipt was written. Perform the "

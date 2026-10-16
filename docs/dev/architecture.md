@@ -1023,7 +1023,19 @@ remains the authoritative classifier for accepting an unreviewed later commit
 and projecting its cap-reached PR review status. A valid `--ack-self-review`
 still records the current binding receipt because it acknowledges work already
 performed rather than dispatching a reviewer. Plan and PR-comment reviews are
-uncapped.
+uncapped; `_announce_review_pass_budget` therefore prints `N of limit` cap
+semantics only for an implementation host session, and the CLI's completion
+line names the host session's own `done` command (none for a standalone review).
+
+Generic delegation permits empty headless output, so review evidence is checked
+at the review boundary: `_require_review_assessment` in
+`review_delegation_service.py` converts a launched, successful reviewer with an
+empty or whitespace-only assessment into a launched failure
+(`empty_assessment=True`, exit 1). It applies to plan, implementation and batch
+reviews through `_run_review_delegation`, and implementation review re-checks it
+before writing a receipt, so the result is a non-satisfying `failed` receipt that
+consumes a pass. A zero-exit child's stderr is carried separately as
+`DelegationResult.diagnostics` for that report and never becomes generic feedback.
 
 Review input converges without weakening completion evidence. The first mapped
 implementation review uses the full branch diff; later reviews may select the

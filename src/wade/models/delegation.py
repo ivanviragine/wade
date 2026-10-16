@@ -107,3 +107,14 @@ class DelegationResult(BaseModel):
     # later launch failure can repeat the same fully-resolved command instead of
     # falling back to a lossy operation-level default.
     relaunch_command: str | None = None
+    # Bounded stderr from a headless child that exited 0 without stdout. Never
+    # part of ``feedback``: generic delegations may legitimately print nothing,
+    # but a caller that rejects empty output can surface the child's own reason.
+    diagnostics: str = ""
+    # True when a launched reviewer exited successfully without any assessment
+    # text. Review callers convert that into a launched failure (#547): it
+    # consumes a pass like any other launched failure but never certifies review.
+    empty_assessment: bool = False
+    # Session completion command a successful review hands off to; ``None``
+    # outside a managed session, where no session ``done`` gate applies.
+    completion_command: str | None = None

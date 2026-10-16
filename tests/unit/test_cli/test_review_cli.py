@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from wade.cli.main import app
@@ -318,10 +319,72 @@ class TestReviewImplementationCli:
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
         assert "REVIEW COMPLETE" in result.output
+        # A standalone review has no session completion gate to point at.
+        assert "implementation-session done" not in result.output
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert "diff --git a/f.py" in request.prompt
         assert request.mode == DelegationMode.HEADLESS
+
+    @pytest.mark.parametrize("assessment", ["", "   \n\t"])
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._collect_review_diffs")
+    @patch("wade.git.repo.rev_parse")
+    @patch("wade.git.repo.get_repo_root")
+    def test_review_implementation_empty_assessment_exits_1(
+        self,
+        mock_repo_root: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_collect: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+        assessment: str,
+    ) -> None:
+        """Exit 0 with no assessment is not a completed review (#547)."""
+        mock_repo_root.return_value = tmp_path
+        mock_rev_parse.return_value = "a" * 40
+        mock_collect.return_value = MagicMock(
+            empty=False,
+            review_input=MagicMock(return_value="diff --git a/f.py\n+line\n"),
+        )
+        mock_template.return_value = "{diff_content}"
+        mock_config.return_value = _review_cli_config(review_implementation_mode="headless")
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback=assessment, mode=DelegationMode.HEADLESS
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 1
+        assert "REVIEW COMPLETE" not in result.output
+        assert "returned no assessment" in " ".join(result.output.split())
+
+    @pytest.mark.parametrize(
+        ("completion_command", "other_command"),
+        [
+            ("wade implementation-session done", "wade review-pr-comments-session done"),
+            ("wade review-pr-comments-session done", "wade implementation-session done"),
+        ],
+    )
+    @patch("wade.services.review_delegation_service.review_implementation")
+    def test_review_implementation_names_the_host_session_done_command(
+        self, mock_review: MagicMock, completion_command: str, other_command: str
+    ) -> None:
+        mock_review.return_value = DelegationResult(
+            success=True,
+            feedback="No findings.",
+            mode=DelegationMode.HEADLESS,
+            completion_command=completion_command,
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        output = " ".join(result.output.split())
+        assert result.exit_code == 0
+        assert f"then proceed to {completion_command}." in output
+        assert other_command not in output
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
