@@ -80,12 +80,14 @@ class TestRerootScaffoldBranch:
     ) -> None:
         # Scaffold-only (1 commit) and not checked out → rebuild on the new base.
         ok = reroot_scaffold_branch_for_retarget(
-            Path("/repo"), "feat/42-x", "develop", "main", "42"
+            Path("/repo"), "feat/42-x", "develop", "main", "clickup:abc1234"
         )
 
         assert ok is True
         mock_reset.assert_called_once_with(Path("/repo"), "feat/42-x", "main")
-        mock_scaffold.assert_called_once()
+        mock_scaffold.assert_called_once_with(
+            Path("/repo"), "feat/42-x", "chore: scaffold branch for clickup:abc1234"
+        )
         mock_push.assert_called_once_with(Path("/repo"), "feat/42-x", force=True)
 
     @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
@@ -485,8 +487,27 @@ class TestBootstrapRetargetReroots:
             )
 
         assert result == {"number": 5, "url": "http://x/5"}
-        mock_reroot.assert_called_once_with(Path("/repo"), "feat/42-x", "develop", "main", "42")
+        mock_reroot.assert_called_once_with(Path("/repo"), "feat/42-x", "develop", "main", "#42")
         mock_update.assert_called_once()
+
+    @patch(f"{_D}.reroot_scaffold_branch_for_retarget", return_value=True)
+    @patch(f"{_D}.git_pr.update_pr_base", return_value=True)
+    @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+    def test_reroot_labels_an_external_task_without_a_hash(
+        self,
+        _mk: MagicMock,
+        _update: MagicMock,
+        mock_reroot: MagicMock,
+    ) -> None:
+        # A numeric ClickUp ID must never become a GitHub-autolinked "#42".
+        cfg = _cfg()
+        cfg.provider.name = "clickup"
+        with patch(f"{_D}.git_pr.get_pr_for_branch", return_value=_open_pr("develop")):
+            bootstrap_draft_pr("42", "Title", "plan body", cfg, Path("/repo"), base_branch="main")
+
+        mock_reroot.assert_called_once_with(
+            Path("/repo"), "feat/42-x", "develop", "main", "clickup:42"
+        )
 
     @patch(f"{_D}.reroot_scaffold_branch_for_retarget", return_value=False)
     @patch(f"{_D}.git_pr.update_pr_base")

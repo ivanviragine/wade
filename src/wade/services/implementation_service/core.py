@@ -826,7 +826,11 @@ def start(
             head_ref = git_branch.resolve_start_point(repo_root, branch_name)
             pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
             if not reroot_scaffold_branch_for_retarget(
-                repo_root, branch_name, current_pr_base, resolved_base, task.id
+                repo_root,
+                branch_name,
+                current_pr_base,
+                resolved_base,
+                task_reference(config, task).label,
             ):
                 return ImplementResult(success=False)
             if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):

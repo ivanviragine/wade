@@ -246,7 +246,7 @@ def reroot_scaffold_branch_for_retarget(
     branch_name: str,
     old_base: str | None,
     new_base: str,
-    issue_number: str,
+    task_label: str,
 ) -> bool:
     """Re-root a scaffold-only branch on *new_base* before its PR is retargeted.
 
@@ -324,7 +324,7 @@ def reroot_scaffold_branch_for_retarget(
         else:
             git_branch.reset_branch(repo_root, branch_name, new_start)
         git_branch.create_scaffold_commit(
-            repo_root, branch_name, f"chore: scaffold branch for #{issue_number}"
+            repo_root, branch_name, f"chore: scaffold branch for {task_label}"
         )
         git_repo.push_branch(repo_root, branch_name, force=True)
     except GitError as e:
@@ -464,7 +464,7 @@ def bootstrap_draft_pr(
             head_ref = git_branch.resolve_start_point(repo_root, branch_name)
             pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
             if not reroot_scaffold_branch_for_retarget(
-                repo_root, branch_name, existing.base_ref_name, base_branch, issue_number
+                repo_root, branch_name, existing.base_ref_name, base_branch, reference.label
             ):
                 return None
             if not git_pr.update_pr_base(repo_root, existing.number, base_branch):
