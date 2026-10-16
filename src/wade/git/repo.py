@@ -19,6 +19,7 @@ def _run_git(
     *args: str,
     cwd: Path,
     check: bool = True,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a git command and return the CompletedProcess result.
 
@@ -36,13 +37,12 @@ def _run_git(
     cmd = ["git", *args]
     log.debug("git.run", cmd=cmd, cwd=str(cwd))
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+        if input_text is None:
+            result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
+        else:
+            result = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, check=check, input=input_text
+            )
     except subprocess.CalledProcessError as exc:
         raise GitError(
             f"git {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
@@ -291,6 +291,15 @@ def get_current_branch(path: Path) -> str:
     if branch == "HEAD":
         raise GitError("HEAD is detached — not on any branch")
     return branch
+
+
+def get_current_branch_ref(path: Path) -> str:
+    """Read HEAD's fully qualified local branch, without tag abbreviation."""
+    result = _run_git("symbolic-ref", "--quiet", "HEAD", cwd=path)
+    ref = result.stdout.strip()
+    if not ref.startswith("refs/heads/"):
+        raise GitError("HEAD does not name a local branch")
+    return ref
 
 
 def is_head_attached(path: Path) -> bool:
@@ -649,18 +658,22 @@ def rev_parse(repo_root: Path, ref: str) -> str:
     return result.stdout.strip()
 
 
-def fetch_ref(repo_root: Path, remote: str, refspec: str) -> None:
+def fetch_ref(repo_root: Path, remote: str, refspec: str, *, isolated: bool = False) -> None:
     """Fetch a specific refspec from a remote.
 
     Args:
         repo_root: Repository root directory.
         remote: Remote name (e.g. "origin").
         refspec: Refspec to fetch (e.g. "branch:branch").
+        isolated: Disable configured tracking mappings, tag following and pruning.
 
     Raises:
         GitError: If the fetch fails.
     """
-    _run_git("fetch", remote, refspec, cwd=repo_root)
+    if isolated:
+        _run_git("fetch", "--refmap=", "--no-tags", "--no-prune", remote, refspec, cwd=repo_root)
+    else:
+        _run_git("fetch", remote, refspec, cwd=repo_root)
 
 
 def has_remote(repo_root: Path) -> bool:

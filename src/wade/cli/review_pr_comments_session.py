@@ -82,7 +82,9 @@ def done(
     target: str | None = typer.Argument(None, help="Issue number, worktree name, or plan file."),
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
-    draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
+    draft: bool = typer.Option(
+        False, "--draft", help="Create or preserve a draft PR; never demote a ready PR."
+    ),
     skip_review: bool = typer.Option(
         False, "--skip-review", help="Skip the review-ran completion gate."
     ),
@@ -145,7 +147,7 @@ def done(
                 "PR-SUMMARY, Sync, Done) and its handles — PR number/URL, threads "
                 "resolved/remaining — then present the exit decision as a native dialog "
                 "whose first option is "
-                "'Exit now — reviewers are notified (recommended)'. "
+                "'Exit now — wade takes over (recommended)'. "
                 "Surface only what needs the developer's attention."
             )
         else:

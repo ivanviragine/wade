@@ -83,6 +83,13 @@ The AI merges the latest main into the branch, resolves any conflicts, writes th
 PR description from what it built, and marks it ready for review — you get a
 clean, already-integrated diff with no noise for your reviewer.
 
+Both session `done` commands promote draft PRs by default. If promotion fails,
+completion fails too: restore GitHub access and retry the same command. Pushed
+work, PR-body updates, and review evidence remain available. Use `--draft` to
+create or preserve a draft without promoting it; an already-ready PR stays ready.
+Automatic bot reviews are deferred while the resulting PR is draft, including
+with `--trigger-bots`, and can run after a later ready-for-review completion.
+
 Working on multiple tasks at once:
 
 ```bash
@@ -130,6 +137,168 @@ also grant the `project` scope. This is optional — everything else works witho
 ```bash
 gh auth refresh -s project
 ```
+
+## GitHub Projects v2
+
+`wade project items`, `rank`, `pick`, and `sync` operate on one explicit user or
+organization board. They currently require `provider.name: github`; other task
+providers and the existing best-effort startup Status move retain their behavior.
+Only `sync --apply` writes, and only to configured existing numeric fields.
+Outputs must have `isIssueField: false` in GitHub’s schema: organization issue
+fields and unknown ownership are rejected before any mutation, including when
+the output has no value yet.
+
+Configure optional top-level `github_projects` in `.wade.yml` (version stays 2):
+
+```yaml
+github_projects:
+  target:
+    owner: my-org
+    kind: organization             # or user
+    number: 7
+    hostname: github.com           # optional: selected gh/GH_HOST/origin host
+  fields:
+    impact: {name: Impact, type: NUMBER}
+    effort: {name: Effort, type: NUMBER}
+    priority:
+      name: Priority
+      type: SINGLE_SELECT
+      options:
+        high: {id: YOUR_HIGH_OPTION_ID, name: High}
+        low: {id: YOUR_LOW_OPTION_ID, name: Low}
+      option_order: [high, low]
+    status: {name: Status, type: SINGLE_SELECT}
+    computed_score: {name: Score, type: NUMBER}
+    computed_rank: {name: Rank, type: NUMBER}
+  columns: [repository, number, title, impact, effort, priority]
+  sort: [{field: impact, direction: desc}]
+  ranking:
+    factors:
+      - field: impact
+        weight: 2
+        minimum: 0
+        maximum: 10
+        missing: {policy: exclude}
+      - field: effort
+        weight: 1
+        minimum: 0
+        maximum: 10
+        lower_is_better: true
+        missing: {policy: value, normalized: 0.5}
+      - field: priority
+        weight: 1
+        options: {high: 10, low: 0}
+        missing: {policy: exclude}
+  wip:
+    status: status
+    ready: [Ready]                  # exact option names, IDs or configured aliases
+    in_progress: [Doing]
+    pool: project                  # assignee requires --assignee
+    limit: 3                       # zero deliberately permits no selections
+  outputs:
+    score: computed_score
+    rank: computed_rank
+```
+
+Discover actual project/field/option IDs with `gh project list --owner my-org`
+and `gh project field-list 7 --owner my-org --format json` (check `gh --help` for
+Enterprise host setup). Replace example option IDs before use. A field reference
+needs an ID or exact unique name and its expected type. IDs are authoritative;
+when both ID and name are supplied, both must match. Option aliases follow the
+same rules. Renames, ambiguous names, stale IDs, unknown nested settings and
+present-null sections fail explicitly. Init/update preserves this optional section
+without querying GitHub. It does not create a board or fields.
+
+```bash
+wade project items --columns repository,number,title,impact --sort impact:desc --json
+wade project items --filter 'priority=high' --label bug --assignee octocat
+wade project rank --repository my-org/my-repo --limit 10 --json
+wade project pick --count 2 --json
+wade project sync --dry-run --json
+wade project sync --apply --json
+# A complete CLI target overrides the configured target:
+wade project items --owner octocat --owner-kind user --number 3 --hostname github.com
+```
+
+Filters are exact `alias=value`, repeatable with AND semantics; quote shell spaces.
+`--repository` requires `owner/repo`; repository identity filters follow GitHub’s
+case-insensitive owner/name rules. Assignee filters and assignee-pool WIP counts
+likewise compare GitHub logins without case; output retains canonical API
+spelling. Other text and label filters remain case-sensitive. `--kind` accepts
+Issue, PullRequest or DraftIssue. `--status` uses the explicit `wip.status` mapping. Selected option
+filters accept IDs, unique exact names or configured aliases. Labels, assignees
+and multiselect fields support membership filters. Numeric filters reject
+nonfinite values; date filters require canonical `YYYY-MM-DD`. Listing can
+include archived items with `--include-archived`; ranking, selection and sync
+always exclude them.
+
+Listing sorts numbers numerically, canonical dates chronologically, and text
+case-sensitively by ordinal order. Single-select sorts use `option_order`, then
+remaining options by name and ID. Nulls sort last in both directions. Multivalue
+and iteration scalar sorts fail. Repeat `--sort alias:asc|desc` for listing keys;
+ranking commands always order by reported score descending. Final ties use
+qualified repository/content identity and item node ID, independent of API order.
+`--limit` is positive and applies only after the complete snapshot is evaluated;
+it does not truncate WIP counts or sync rank positions. JSON stdout is one
+object containing resolved project identity, rows, contributions, exclusions,
+visibility limits and, for sync, operation outcomes. Human tables use the same
+rows and ordering. Valid empty results exit zero; validation/provider errors go
+to stderr and exit nonzero. Human apply output also sends operation-specific
+permission, drift and readback failures to stderr; its outcome table preserves
+confirmed/failed/unknown/not-attempted results. JSON retains these messages in
+the single stdout object.
+
+Ranking uses fixed bounds, never the current population or clock. Numeric values
+are normalized to [0,1], clamped, and optionally inverted; explicit single-select
+scores are normalized using the minimum/maximum of the **configured score map**,
+which requires at least two distinct scores. Missing inputs explicitly exclude
+an item or supply its configured normalized value. Scores are
+`100 * sum(weight * normalized) / sum(weight)`, rounded half-even to six decimals;
+ordering uses that reported rounded score. In the example above, Impact=10,
+Effort=10 and Priority=low yields **50**; Impact=5, Effort=0 and Priority=high
+yields **75** (contributions 1, 1 and 1 over weight total 4). JSON reports
+raw inputs, normalized values, weights and weighted contributions. Initially,
+only NUMBER and SINGLE_SELECT fields can be ranking factors; text, date,
+iteration, multiselect, labels, assignees, repository and milestone mappings
+remain available for supported display/filter operations.
+
+`pick` is advisory: it neither reserves a slot nor starts implementation. It
+returns ranked ready open issues in the current repository unless
+`--repository owner/repo`, `--filter repository=owner/repo`, or a filter on a
+mapped repository field explicitly selects another. Explicit filters retain AND
+semantics; the current-repository default is added only without a repository
+constraint. PRs, drafts and closed/archived issues
+are never candidates. The nonarchived in-progress WIP denominator includes all
+content kinds and repositories before candidate filters; an assignee pool counts
+that assignee across the whole board. Missing status, unavailable content or an
+incomplete required connection fails instead of inventing capacity. GitHub may
+hide resources entirely from the authenticated principal; reported visibility is
+limited to that principal, never a guarantee of global board completeness.
+
+All reads use gh authentication for the selected hostname, bounded independent
+connection pagination and bounded read retry. Classic/OAuth credentials need
+`read:project` for reads and `project` for apply, plus underlying repository
+visibility. Apps/fine-grained credentials need the corresponding project and
+repository permissions. WADE does not refresh credentials automatically; a
+configured host conflicting with `GH_HOST` fails. Older Enterprise schemas may
+lack required unions/archive metadata and fail clearly rather than falling back
+to classic Projects. Errors with HTTP-success partial GraphQL data are errors,
+never successful partial boards.
+
+Sync preview reports numeric old/new values and exact item/field IDs. Score/rank
+outputs must differ from each other and every ranking/filter/WIP input by alias
+**and resolved field ID**. Excluded/filtered-out items retain their existing
+values; narrowed cohorts can intentionally leave stale values outside the cohort.
+Exactly equal stored numeric values are no-ops. `--apply` and `--dry-run` conflict;
+no config setting enables writes. Before apply, WADE refreshes the board and
+schema and sends zero writes if the baseline changed. It re-reads each affected
+item before its write and verifies identity and numeric readback afterward.
+This narrows races; GitHub does not provide a conditional-write transaction here.
+Writes are sequential, paced and never blindly retried. A failure exits nonzero
+and reports confirmed, failed/unknown and not-attempted operations; confirmed
+writes remain, with no automatic rollback. Re-run from current truth to converge;
+a second unchanged apply sends no mutations. Sync cannot create/remove/archive
+items, edit issues/status/schema, clear fields or reorder the board.
 
 ## Quick Start
 
@@ -226,6 +395,18 @@ Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review p
 Interactive pickers (the arrow-key menus commands like `wade task create` show)
 wrap long choices to the terminal width instead of cropping them, so no option
 text is lost in narrow terminals and the list reflows automatically on resize.
+
+`wade worktree remove <N> --force` skips confirmation while protecting uncommitted
+changes and unmerged local history. Clean squash/rebase leftovers can be removed
+when GitHub records that exact local branch tip as the final merged PR head for
+origin's repository and the configured base. WADE fetches that base and verifies
+its history still contains the PR merge commit; deleted source branches and later
+base edits are supported. Repository/head mismatches, unavailable API/fetches,
+and unverified cherry-picks remain protected. Ordinary ancestor-contained
+branches can still be cleaned up offline. The worktree may be removed while
+`git branch -d` conservatively retains its non-ancestral local branch.
+`--discard-dirty` is the separate explicit opt-in to discard work; `--force`
+never grants that permission.
 
 ### Session commands the AI runs
 
@@ -328,9 +509,47 @@ durably recorded rather than applying settings changed after collection. If even
 the retained plan count is unknown rather than reporting zero. WADE never changes
 OS privacy or sandbox settings for you.
 
+Malformed or unsupported persisted handoff/review metadata and incompatible
+frozen contracts also retain the intact original planning owner, including raw
+output, launch binding and existing progress. Required metadata is validated
+before editable Markdown; an invalid plan cannot mask a launch/progress failure
+and trigger owner cleanup. WADE reports bounded public field
+locations/error codes, the current reader version and available declared schema
+and workflow versions; an unrecorded writer version remains unavailable. Strict
+unknown-field/version rejection stays in force. This differs from editable plan
+validation: a copied plan archive cannot replace the registered owner or its
+review authority, and unresolved metadata failure stages no knowledge or tasks.
+
+Finish or safely stop active planning parents before changing their shared
+editable source or environment. A workflow refresh cannot replace Python models
+already imported by a running parent. After stabilizing the installation, start a
+fresh compatible WADE process and use the printed original-root recovery command.
+Recovery may initialize missing progress from valid original launch metadata;
+malformed or mismatched present progress is never silently replaced. If supported
+tooling can read the schema but frozen contracts need refresh, explicitly run
+`wade plan-session refresh <original-worktree>/.wade/plans`, genuinely review each
+plan, and run `wade plan-session done` before recovery. An unknown future or
+unreadable schema remains retained until supported tooling can interpret it.
+Deleted/unregistered owners and copied archives require a fresh planning owner,
+content-only import and new review/completion gates.
+
 `wade plan --issue <N>` re-plans an existing task. If the session produces a
-single plan file, it's attached to `#N` and the task stays open. If the
-session decides the work should be split into several independent pieces
+single plan file, its reviewed body replaces the plan in the task's existing
+open PR, and the task stays open. A task title change keeps the same PR and head
+branch. Current issue edits and unrelated PR sections are preserved; a missing
+Full plan link is appended to the freshly read issue body. A failed lookup,
+read, write, structural check, or retarget reconciliation retains the original
+planning workspace and handoff instead of reporting success and deleting it.
+Retry with `wade plan --recover <planning-worktree>` after repairing the cause.
+A completed, cleaned-up session or a copied archive cannot recover its old
+receipt authority: use a fresh `wade plan --issue <N>` session with archived
+content as input, then complete new review/done gates and verify the PR-backed
+plan before implementing. The next implementation reads the same structurally
+owned plan; fenced marker examples cannot redirect or truncate it. Generic
+implementation resume keeps the existing plan. Fresh PR creation rejects unsafe
+plan ownership before branch or PR creation.
+
+If the session decides the work should be split into several independent pieces
 (2+ plan files), `#N` is **superseded**: a new task + draft PR is created
 per plan file, a comment and a `> **Superseded by ...**` banner are added to
 `#N`, and it's closed as *not planned* (confirmed via prompt unless
@@ -370,6 +589,24 @@ WADE splits review into an **AI review pass** you or the agent can invoke, and
 | `wade review batch <N>` | Coherence across parallel implementation branches |
 | `wade review pr-comments <N>` | Starts a session to address human/bot PR comments |
 | `wade review trigger <N>` | Posts configured bot-review trigger comments on the task's PR |
+
+When `wade review pr-comments <N>` recreates a removed worktree, a successful
+fetch selects the current remote branch commit, including a force-pushed head.
+If the local branch points elsewhere, WADE first preserves that exact commit
+under `refs/wade/recovery/<branch>/<old-commit>` and prints a `git branch` command
+to recover it. These refs are retained automatically; existing worktrees are
+never realigned by this recovery path. Fetch never follows a symbolic tracking
+ref into a local branch.
+
+A failed fetch uses a local branch only after a live remote query confirms that
+the remote head is absent, and warns that the local code may be stale. Fetch or
+query errors, occupied destinations, and branches held by another worktree stop
+recovery without discarding local work. Partial recovery retains its worktree,
+backup refs and an incomplete-state record under the shared Git directory's
+`.wade/review-recovery/`. Later review startup refuses that destination before
+checking the PR or launching an agent. Inspect the reported files, branch tips,
+backup refs and marker to resolve it manually; running implementation or deleting
+the marker alone does not repair an incomplete checkout.
 
 Prompt-mode implementation review prints the bounded review prompt and exits 2;
 printing it does not certify that a review happened. After performing that
@@ -682,6 +919,21 @@ review-thread listing and resolution, PR comments, and review status — to GitH
 via the `gh` CLI, so `wade review pr-comments`, the auto-poll loop, and
 `wade review-pr-comments-session fetch` / `resolve` behave identically across
 providers. Only where a task itself lives differs.
+
+### ClickUp provider
+
+Task state follows ClickUp's canonical `status.type`, regardless of the display
+name: `closed` maps to WADE Closed; `done` and every other nonempty type remain
+Open. A renamed Closed status still closes the task, and a custom status named
+“Complete” does not. Legacy payloads with missing, null or blank type fall back
+to the names `closed`, `complete` and `done`; typeless “Done” is therefore
+ambiguous and retains the older Closed interpretation.
+
+Closing a task reads its home List's effective statuses, including inherited
+statuses, and sends the unique canonical Closed status's exact display name.
+Missing or ambiguous metadata fails before the update; the returned task must
+have canonical Closed type before WADE reports success. WADE does not assume
+that “closed” or “Done” is the configured closing name.
 
 ### Markdown provider
 
@@ -1056,8 +1308,9 @@ cannot make `gh`, Git metadata, or a network route available.
 If `wade review implementation` cannot launch its reviewer because of missing
 credentials, PATH, or sandbox execution access, it does not consume a
 `done.max_review_passes` slot: repair the runtime and retry. A real headless
-timeout still counts as a bounded review attempt, so the review/fix loop cannot
-run forever.
+timeout and a reviewer that launched but failed both consume a review pass
+without certifying completion. Prompt/preflight failures, skipped dispatches,
+and explicit human cancellation do not consume a pass.
 
 A reviewer that **never started** — including a sandbox-capability refusal before
 the launch — is recorded as an *unattempted* review so the state is auditable,
@@ -1066,8 +1319,18 @@ requirement, spends no review pass, cannot overwrite a real receipt already
 written for the same commit, and leaves `wade implementation-session done` and
 `wade review-pr-comments-session done` closed. An infrastructure failure must
 never be able to certify a commit. A reviewer that started and exited non-zero
-stays distinguishable from one that never ran, because the two need opposite
-remediation.
+writes a consuming, non-satisfying `failed` receipt: inspect its output before
+retrying. Failed receipts cannot serve as incremental review baselines. Below
+the configured cap, implementation completion still requires a satisfying
+review; PR-comment completion always requires one. At the existing implementation
+cap, completion reports unreviewed/cap-reached status rather than approval.
+
+Passes count distinct commit-and-frozen-binding tuples, not process launches.
+Repeated crashes on the same commit consume one tuple; a later successful review
+promotes that receipt without adding a pass. A timeout, no-diff, or successful
+receipt takes precedence over a later failure for the same tuple. Older WADE
+versions do not understand the new `failed` outcome; use the current runtime to
+read its receipts rather than expecting an older runtime to count them.
 
 For Codex, WADE launches unsandboxed by default so delegated tools keep their
 own host credentials; set `ai.sandbox: true` (or pass `--sandbox`) to keep

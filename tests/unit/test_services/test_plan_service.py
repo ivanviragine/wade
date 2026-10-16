@@ -436,6 +436,7 @@ def collected_harness(
             return_value={"number": "12", "url": "https://example.test/pull/12"},
         ),
         patch("wade.services.plan_service._cleanup_plan_dir_or_worktree", return_value=True),
+        patch("wade.git.pr.list_prs", return_value=[]),
         patch("wade.services.plan_service.set_terminal_title"),
         patch("wade.services.plan_service.start_title_keeper"),
         patch("wade.services.plan_service.stop_title_keeper"),
@@ -2417,6 +2418,7 @@ class TestAttachPlanToExistingIssue:
     def test_attaches_single_plan_file_preserving_original_body(self, tmp_path: Path) -> None:
         provider = MagicMock()
         issue = Task(id="42", title="Some issue", body="Original body")
+        provider.read_task.return_value = issue
         plan_path = tmp_path / "PLAN.md"
         plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
         plan_file = PlanFile.from_markdown(plan_path)
@@ -2455,6 +2457,7 @@ class TestAttachPlanToExistingIssue:
             title="Some issue",
             body="Original body\n\n**Full plan**: PR #99",
         )
+        provider.read_task.return_value = issue
         plan_path = tmp_path / "PLAN.md"
         plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
         plan_file = PlanFile.from_markdown(plan_path)
@@ -3390,13 +3393,20 @@ class TestPlanExistingIssueBranch:
         collected_harness: tuple[ProjectConfig, MagicMock, MagicMock, Path],
         tmp_path: Path,
     ) -> None:
-        _, provider, _, _ = collected_harness
+        from wade.models.workflow import SessionKind
+        from wade.services.session_composition_service import compose_session
+
+        config, provider, _, root = collected_harness
+        compose_session(root, tmp_path, config, kind=SessionKind.PLAN, task_id="330")
         with (
             patch("wade.services.plan_service._attach_plan_to_existing_issue", return_value=False),
-            patch("wade.services.plan_service._preserve_generated_plans") as preserve,
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as cleanup,
         ):
             assert not plan(project_root=tmp_path, issue_id="330")
-        preserve.assert_called_once()
+        cleanup.assert_not_called()
+        assert (root / ".wade/plans/PLAN.md").is_file()
+        assert (root / ".wade/plans/handoff-binding.json").is_file()
+        assert (root / ".wade/session/manifest.json").is_file()
         provider.create_task.assert_not_called()
 
     def test_handoff_cleanup_failure_requires_recovery(
@@ -3713,3 +3723,69 @@ class TestStrictValidationGateWiring:
         with patch("wade.services.plan_service._preserve_generated_plans"):
             assert not plan(project_root=tmp_path, yolo=True)
         provider.create_task.assert_not_called()
+
+
+@pytest.mark.parametrize("width", [40, 80])
+@pytest.mark.parametrize("registered", [False, True])
+def test_uncollectable_owner_commands_are_exact_and_never_grant_archive_authority(
+    tmp_path: Path, width: int, registered: bool
+) -> None:
+    import io
+    import shlex
+
+    from rich.console import Console
+
+    from wade.services import plan_service
+
+    owner = tmp_path / "original long owner with 'quotes' [red] $(not-executed)"
+    output = io.StringIO()
+    entry = Worktree(path=str(owner), branch="(detached)", head="abc123")
+    with (
+        patch.object(plan_service.console, "out", Console(file=output, width=width)),
+        patch("wade.git.worktree.list_worktrees", return_value=[entry] if registered else []),
+        patch.object(
+            plan_service, "list_state_files_strict", side_effect=ValueError("PRIVATE")
+        ) as enumerate_plans,
+    ):
+        plan_service._retain_uncollectable_handoff(str(owner / ".wade/plans"), tmp_path, owner)
+    lines = output.getvalue().splitlines()
+    commands = [line for line in lines if line.startswith("wade ")]
+    if registered:
+        expected = [
+            ["wade", "plan", "--recover", str(owner)],
+            ["wade", "plan-session", "refresh", str(owner / ".wade/plans")],
+        ]
+        assert commands == [shlex.join(argv) for argv in expected]
+        assert [shlex.split(line) for line in commands] == expected
+    else:
+        assert not commands
+        assert "content-only import" in output.getvalue()
+    enumerate_plans.assert_not_called()
+
+
+@pytest.mark.parametrize("metadata", ["handoff-binding.json", "handoff-progress.json"])
+def test_parent_metadata_unknown_fields_are_typed_and_preserved(
+    tmp_path: Path, metadata: str
+) -> None:
+    from wade.services import plan_service
+    from wade.services.planning_handoff_errors import UncollectableHandoffError
+
+    root = tmp_path
+    plans = root / ".wade/plans"
+    plans.mkdir(parents=True)
+    config = ProjectConfig()
+    plan_service._save_handoff_binding(root, None, config)
+    progress = plan_service._ensure_handoff_progress(root, "original", None, config)
+    path = plans / metadata
+    payload = json.loads(path.read_bytes())
+    payload["PRIVATE-KEY"] = "PRIVATE-VALUE"
+    path.write_text(json.dumps(payload))
+    snapshot = path.read_bytes()
+    with pytest.raises(UncollectableHandoffError) as rejected:
+        plan_service._ensure_handoff_progress(root, progress.session_id, None, config)
+    assert rejected.value.category == (
+        "launch-binding" if metadata == "handoff-binding.json" else "progress"
+    )
+    assert "PRIVATE" not in str(rejected.value)
+    assert "extra_forbidden" in str(rejected.value)
+    assert path.read_bytes() == snapshot

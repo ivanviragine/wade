@@ -68,6 +68,15 @@ to stderr and must keep stdout limited to the worktree path, even during recover
 Execute only non-destructive emitted inspection commands in disposable Git repos,
 from another working directory, and verify stash membership and data remain intact.
 
+## Help-output assertions
+
+Rich may retain bold ANSI styling with `NO_COLOR=1`; a forced-color terminal can
+therefore split the visible `--json` flag across escape sequences. For semantic
+help assertions, retain the exit-code check and compare `click.unstyle(stdout)`,
+covering both `TERM=dumb` without `FORCE_COLOR` and `TERM=xterm-256color` with
+`FORCE_COLOR=1`. Preserve raw bytes when the test contract concerns exact output
+or emitted shell commands instead of visible help text.
+
 ## Running Tests
 
 ```bash
@@ -127,6 +136,32 @@ ANTHROPIC_API_KEY=... ./scripts/test-live-ai-taskr.sh
 
 Live scripts are strict by design: they fail fast when required env vars,
 credentials, or binaries are missing.
+
+## Planning schema-skew retention
+
+Use public synthetic fixtures and test-local strict legacy models to reproduce
+the relevant old field surface (`bundle.knowledge_proposals` and
+`refresh_pending`), without another installed WADE or private archives. Inject
+the rejecting reader at normal parent collection in a real disposable registered
+detached worktree. Snapshot every original `.wade/session` and `.wade/plans` byte,
+including raw output, launch binding and any progress. Assert repeated unresolved
+recovery leaves those bytes and registration unchanged, with no cleanup,
+provider writes or knowledge staging, even when enumeration cannot run.
+
+Then use a compatible reader on that same owner through normal recovery. Create
+current review evidence by the production review service with a deterministic
+mock delegate, never copied historical receipts. Cover legitimate absent-progress
+initialization, malformed/mismatched present metadata, second parent collection,
+future fields/versions and malformed JSON. Combine unsupported/malformed review
+metadata with invalid Markdown or changed member sets, and missing, unsupported,
+malformed or mismatched launch/progress metadata with invalid Markdown: metadata
+retention must win before editable-content salvage, with knowledge on and off.
+The parent preflight must remain read-only and allow absent progress until valid
+collection. Explicit refresh must clear old
+completion/reviews and require new review/done. Diagnostic assertions include
+secret-like keys/values/messages, bounded long error lists, declared versions,
+and exact quoted command lines at widths 40/80. Preserve the separate editable
+Markdown validation and subset-consent coverage.
 
 ## Native planning dependency validation
 
@@ -370,6 +405,39 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - Replaced it with WADE-behavior live tests (`test_wade_live_gh.py`) and a gated live AI smoke (`test_wade_live_ai.py`).
 
 **When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+
+
+## Projects v2 fixtures
+
+`test_config/test_github_projects.py` proves optional config load/check/init
+patch preservation without network; `test_models/test_project.py` covers strict
+operation/config shapes. Provider tests exhaust independent connections beyond
+100 fields, items, field values, labels and assignees; reject malformed cursors,
+resource limits, partial GraphQL data, unsupported unions, auth/rate failures and
+ambiguous writes. Service expectations hard-code scores/half-even ties, null
+ordering, qualified identities, complete WIP denominators and drift/partial/
+idempotent sync results. The existing startup Status-move tests stay unchanged.
+
+`tests/e2e/test_project_contract.py` invokes the real CLI with stateful fake gh.
+`WADE_MOCK_PROJECTS_LOG` records parsed JSON request bodies separately from the
+existing gh argument log; the fake mutation rejects string numeric variables.
+All read/default/explicit-dry-run/invalid paths are audited for zero mutations.
+Run the prescribed focused script, full suite, static checks and Docker contract
+lane; no provider credentials are needed.
+
+`tests/live/test_wade_live_projects.py` is skipped unless RUN_LIVE_GH_TESTS=1 and
+WADE_LIVE_PROJECT_REPO identifies a configured, authorized disposable board.
+Actual numeric writes additionally require WADE_LIVE_PROJECT_WRITES=1 and an
+exact WADE_LIVE_PROJECT_ITEM. Its configured output fields must already contain
+numeric values and require a change. Cleanup unwinds confirmed/unknown operations
+from each actual apply result in reverse order, using that apply’s old/new values
+rather than the earlier
+preview. It skips no-op/rejected/unattempted writes and preserves current values
+that no longer match; an unavailable apply result or baseline requires manual
+inspection instead of guessed restoration. Deterministic unit tests simulate
+these races without enabling live access. Use the existing prescribed
+live-gh script only with these explicit opt-ins; ordinary CI must never execute
+live writes.
 
 Knowledge evidence coverage uses disposable real-Git source/receipt commits,
 linked owned sessions composed through the public composition service, changed

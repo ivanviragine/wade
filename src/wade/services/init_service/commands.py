@@ -21,10 +21,13 @@ from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.config import (
     AICommandConfig,
+    BotReviewConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
     ProjectSettings,
+    ProviderID,
 )
+from wade.models.init_setup import HooksSetup, ImplementationSetup, ProviderSetup
 from wade.services.init_service.config_io import (
     _COMMAND_OVERRIDE_NAMES,
     _ensure_markdown_file,
@@ -143,23 +146,23 @@ def init(
             )
 
     # --- Interactive wizard (loop supports Modify) ---
-    provider_setup: dict[str, Any] = {}
+    provider_setup = ProviderSetup()
     project_settings: ProjectSettings = ProjectSettings()
     selected_tool: str | None = None
     default_model: str | None = None
     default_effort: str | None = None
     default_yolo: bool | None = None
-    implementation_setup: dict[str, Any] = {}
-    command_overrides: dict[str, dict[str, Any]] = {}
-    hooks_setup: dict[str, Any] = {}
-    knowledge_setup: dict[str, Any] = {}
-    bot_review_setup: dict[str, Any] = {}
+    implementation_setup = ImplementationSetup()
+    command_overrides: dict[str, AICommandConfig] = {}
+    hooks_setup = HooksSetup()
+    knowledge_setup = KnowledgeConfig()
+    bot_review_setup = BotReviewConfig()
     tools_in_use: set[str] = set()
 
     # Current values for pre-fill — derived from existing config on first pass,
     # then updated from in-memory selections before each "Modify" iteration so
     # the second pass shows the values chosen in the first pass, not stale disk state.
-    _cur_provider: str | None = existing_config.provider.name.value if existing_config else None
+    _cur_provider: ProviderID | None = existing_config.provider.name if existing_config else None
     _cur_provider_api_token_env: str | None = (
         existing_config.provider.api_token_env if existing_config else None
     )
@@ -185,26 +188,21 @@ def init(
         else None
     )
     _cur_effective_tool: str | None = _cur_impl_tool or _cur_ai_tool
-    _cur_cmd_overrides: dict[str, dict[str, Any]] = {}
+    _cur_cmd_overrides: dict[str, AICommandConfig] = {}
     if existing_config:
         for _cmd in _COMMAND_OVERRIDE_NAMES:
             _cfg = getattr(existing_config.ai, _cmd, None)
             if isinstance(_cfg, AICommandConfig):
-                _entry: dict[str, Any] = {}
-                if _cfg.tool:
-                    _entry["tool"] = _cfg.tool
-                if _cfg.model:
-                    _entry["model"] = _cfg.model
-                if _cfg.mode:
-                    _entry["mode"] = _cfg.mode
-                if _cfg.effort:
-                    _entry["effort"] = _cfg.effort
-                if _cfg.enabled is not None:
-                    _entry["enabled"] = "true" if _cfg.enabled else "false"
-                if _cfg.yolo is not None:
-                    _entry["yolo"] = "true" if _cfg.yolo else "false"
-                if _entry:
-                    _cur_cmd_overrides[_cmd] = _entry
+                # Preserve the wizard's existing six-field pre-fill contract;
+                # permission_mode/sandbox/timeout preservation is a separate change.
+                _cur_cmd_overrides[_cmd] = AICommandConfig(
+                    tool=_cfg.tool,
+                    model=_cfg.model,
+                    mode=_cfg.mode,
+                    effort=_cfg.effort,
+                    enabled=_cfg.enabled,
+                    yolo=_cfg.yolo,
+                )
     _cur_hooks_post: str | None = (
         existing_config.hooks.post_worktree_create if existing_config else None
     )
@@ -277,11 +275,11 @@ def init(
         tools_in_use = set()
         if selected_tool:
             tools_in_use.add(selected_tool)
-        if implementation_setup.get("tool"):
-            tools_in_use.add(implementation_setup["tool"])
+        if implementation_setup.tool:
+            tools_in_use.add(implementation_setup.tool)
         for cmd_cfg in command_overrides.values():
-            if cmd_cfg.get("tool"):
-                tools_in_use.add(cmd_cfg["tool"])
+            if cmd_cfg.tool:
+                tools_in_use.add(cmd_cfg.tool)
 
         # 4g. Worktree hooks
         hooks_setup = _prompt_hooks_setup(
@@ -335,9 +333,9 @@ def init(
         if chosen == "Modify (re-run wizard)":
             # Update current values from this iteration so the next pass pre-fills
             # with the choices just made rather than the stale on-disk state.
-            _cur_provider = provider_setup.get("name")
-            _cur_provider_api_token_env = provider_setup.get("api_token_env")
-            _cur_provider_settings = dict(provider_setup.get("settings") or {})
+            _cur_provider = provider_setup.name
+            _cur_provider_api_token_env = provider_setup.api_token_env
+            _cur_provider_settings = dict(provider_setup.settings or {})
             _cur_main_branch = project_settings.main_branch
             _cur_branch_prefix = project_settings.branch_prefix
             _cur_issue_label = project_settings.issue_label
@@ -346,16 +344,16 @@ def init(
             _cur_ai_model = default_model
             _cur_ai_effort = default_effort if default_effort != "" else None
             _cur_ai_yolo = default_yolo
-            _cur_impl_tool = implementation_setup.get("tool")
-            _cur_model_mapping = implementation_setup.get("model_mapping")
+            _cur_impl_tool = implementation_setup.tool
+            _cur_model_mapping = implementation_setup.model_mapping
             _cur_effective_tool = _cur_impl_tool or selected_tool
             _cur_cmd_overrides = command_overrides
-            _cur_hooks_post = hooks_setup.get("post_worktree_create")
-            _cur_hooks_copy = hooks_setup.get("copy_to_worktree")
-            _cur_knowledge_enabled = bool(knowledge_setup.get("enabled"))
-            _cur_knowledge_path = str(knowledge_setup.get("path", "KNOWLEDGE.md"))
-            _cur_bot_review_auto = bool(bot_review_setup.get("auto_trigger"))
-            _cur_bot_review_offer = bool(bot_review_setup.get("offer_on_done", True))
+            _cur_hooks_post = hooks_setup.post_worktree_create
+            _cur_hooks_copy = hooks_setup.copy_to_worktree
+            _cur_knowledge_enabled = bool(knowledge_setup.enabled)
+            _cur_knowledge_path = str(knowledge_setup.path)
+            _cur_bot_review_auto = bool(bot_review_setup.auto_trigger)
+            _cur_bot_review_offer = bool(bot_review_setup.offer_on_done)
             continue
         break  # "Write .wade.yml" — proceed to write phase
 
@@ -367,11 +365,11 @@ def init(
     _prompt_configure_completions(non_interactive)
 
     # Post-wizard injections (idempotent — safe regardless of loop iterations)
-    if provider_setup.get("add_env_to_copy"):
-        copy_list: list[str] = hooks_setup.get("copy_to_worktree", [])
+    if provider_setup.add_env_to_copy:
+        copy_list: list[str] = hooks_setup.copy_to_worktree
         if ".env" not in copy_list:
             copy_list.append(".env")
-        hooks_setup["copy_to_worktree"] = copy_list
+        hooks_setup.copy_to_worktree = copy_list
 
     normalized_knowledge_setup = _normalize_knowledge_setup(root, knowledge_setup)
     if normalized_knowledge_setup is None:
@@ -388,7 +386,7 @@ def init(
 
     _write_config_kwargs: dict[str, Any] = dict(
         project_settings=project_settings,
-        implement_tool=implementation_setup["tool"],
+        implement_tool=implementation_setup.tool,
         default_model=default_model,
         default_effort=default_effort,
         default_yolo=default_yolo,
@@ -403,7 +401,7 @@ def init(
         _patch_config(
             config_path,
             selected_tool,
-            implementation_setup["model_mapping"],
+            implementation_setup.model_mapping,
             force=not non_interactive,
             **_write_config_kwargs,
         )
@@ -421,7 +419,7 @@ def init(
         _write_config(
             config_path,
             selected_tool,
-            implementation_setup["model_mapping"],
+            implementation_setup.model_mapping,
             **_write_config_kwargs,
         )
         console.success(f"Created {config_path.name}")
@@ -429,9 +427,9 @@ def init(
     # Create the markdown issues file if that's the chosen provider.
     # Failures (existing dir at path, write permission, etc.) shouldn't
     # take down the whole init — surface a fix hint and return False.
-    if provider_setup.get("name") == "markdown":
+    if provider_setup.name is ProviderID.MARKDOWN:
         try:
-            _ensure_markdown_file(root, provider_setup.get("settings") or {})
+            _ensure_markdown_file(root, provider_setup)
         except (ValueError, OSError) as exc:
             console.error_with_fix(
                 str(exc),
@@ -441,16 +439,12 @@ def init(
             return False
 
     # Create knowledge file if enabled
-    if knowledge_setup.get("enabled"):
+    if knowledge_setup.enabled:
         from wade.services.knowledge_service import ensure_knowledge_file
 
-        kconfig = KnowledgeConfig(
-            enabled=True,
-            path=knowledge_setup.get("path", "KNOWLEDGE.md"),
-        )
-        kpath = root / kconfig.path
+        kpath = root / knowledge_setup.path
         existed = kpath.exists()
-        ensure_knowledge_file(root, kconfig)
+        ensure_knowledge_file(root, knowledge_setup)
         if existed:
             console.info(f"Knowledge file {kpath.name} already exists")
         else:

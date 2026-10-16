@@ -18,11 +18,13 @@ from wade.config.loader import ConfigError, ensure_yaml_mapping
 from wade.models.config import (
     AI_COMMAND_NAMES,
     CONFIG_SCHEMA_VERSION,
+    AICommandConfig,
     BotReviewConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
     ProjectSettings,
 )
+from wade.models.init_setup import HooksSetup, ProviderSetup
 from wade.ui.console import console
 
 logger = structlog.get_logger()
@@ -31,6 +33,7 @@ _COMMAND_OVERRIDE_NAMES = tuple(cmd for cmd in AI_COMMAND_NAMES if cmd != "imple
 
 __all__ = [
     "_COMMAND_OVERRIDE_NAMES",
+    "_ai_command_config_dict",
     "_ensure_markdown_file",
     "_normalize_knowledge_setup",
     "_normalize_mapping",
@@ -97,7 +100,7 @@ def _normalize_mapping(
     )
 
 
-def _ensure_markdown_file(project_root: Path, settings: dict[str, Any]) -> None:
+def _ensure_markdown_file(project_root: Path, setup: ProviderSetup) -> None:
     """Create the markdown issues file with the default header if missing.
 
     Resolves the path through the same main-worktree resolver the provider
@@ -114,7 +117,7 @@ def _ensure_markdown_file(project_root: Path, settings: dict[str, Any]) -> None:
         _resolve_main_worktree,
     )
 
-    raw = settings.get("path") or DEFAULT_FILE_NAME
+    raw = setup.settings.get("path") or DEFAULT_FILE_NAME
     path_obj = Path(str(raw)).expanduser()
     if path_obj.is_absolute():
         md_path = path_obj
@@ -138,15 +141,15 @@ def _ensure_markdown_file(project_root: Path, settings: dict[str, Any]) -> None:
 
 def _normalize_knowledge_setup(
     project_root: Path,
-    knowledge_setup: dict[str, Any],
-) -> dict[str, Any] | None:
+    knowledge_setup: KnowledgeConfig,
+) -> KnowledgeConfig | None:
     """Validate and canonicalize knowledge config before writing config."""
-    if not knowledge_setup.get("enabled"):
+    if not knowledge_setup.enabled:
         return knowledge_setup
 
     from wade.services.knowledge_service import resolve_knowledge_path
 
-    path_value = str(knowledge_setup.get("path", "KNOWLEDGE.md")).strip() or "KNOWLEDGE.md"
+    path_value = str(knowledge_setup.path).strip() or "KNOWLEDGE.md"
     try:
         resolved = resolve_knowledge_path(
             project_root,
@@ -161,9 +164,7 @@ def _normalize_knowledge_setup(
         return None
 
     normalized = resolved.relative_to(project_root.resolve()).as_posix()
-    normalized_setup = dict(knowledge_setup)
-    normalized_setup["path"] = normalized
-    return normalized_setup
+    return knowledge_setup.model_copy(update={"path": normalized})
 
 
 def _tier_yaml_value(model: str | None, effort: str | None) -> dict[str, Any] | None:
@@ -177,23 +178,23 @@ def _tier_yaml_value(model: str | None, effort: str | None) -> dict[str, Any] | 
     return {"model": model, "effort": effort or None}
 
 
-def _bot_review_config_dict(auto_trigger: bool, offer_on_done: bool = True) -> dict[str, Any]:
-    """Build the ``bot_review`` YAML block: the chosen trigger mode + default bots.
+def _bot_review_config_dict(setup: BotReviewConfig) -> dict[str, Any]:
+    """Render the wizard trigger selection and model-owned bot defaults."""
+    return setup.model_dump()
 
-    ``auto_trigger`` / ``offer_on_done`` come from the wizard's three-way pick
-    (#431, #464). The bots list and the arrival/ack timeouts are derived from
-    :class:`BotReviewConfig`'s model defaults so the written block always matches
-    the built-in CodeRabbit/Codex/Bugbot defaults — one source of truth,
-    discoverable and fully overridable in ``.wade.yml``.
-    """
-    defaults = BotReviewConfig()
-    return {
-        "auto_trigger": bool(auto_trigger),
-        "offer_on_done": bool(offer_on_done),
-        "arrival_timeout": defaults.arrival_timeout,
-        "ack_timeout": defaults.ack_timeout,
-        "bots": [bot.model_dump() for bot in defaults.bots],
-    }
+
+def _ai_command_config_dict(overrides: AICommandConfig) -> dict[str, Any]:
+    """Render only wizard-owned command fields, retaining explicit false values."""
+    section: dict[str, Any] = {}
+    for key in ("tool", "model", "mode", "effort", "permission_mode"):
+        value = getattr(overrides, key)
+        if value:
+            section[key] = value
+    for key in ("enabled", "yolo"):
+        value = getattr(overrides, key)
+        if value is not None:
+            section[key] = value
+    return section
 
 
 def _write_config(
@@ -205,11 +206,11 @@ def _write_config(
     default_model: str | None = None,
     default_effort: str | None = None,
     default_yolo: bool | None = None,
-    command_overrides: dict[str, dict[str, Any]] | None = None,
-    hooks_setup: dict[str, Any] | None = None,
-    provider_setup: dict[str, Any] | None = None,
-    knowledge_setup: dict[str, Any] | None = None,
-    bot_review_setup: dict[str, Any] | None = None,
+    command_overrides: dict[str, AICommandConfig] | None = None,
+    hooks_setup: HooksSetup | None = None,
+    provider_setup: ProviderSetup | None = None,
+    knowledge_setup: KnowledgeConfig | None = None,
+    bot_review_setup: BotReviewConfig | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": CONFIG_SCHEMA_VERSION}
@@ -240,19 +241,9 @@ def _write_config(
     # Write per-command overrides.
     if command_overrides:
         for cmd_name in _COMMAND_OVERRIDE_NAMES:
-            overrides = command_overrides.get(cmd_name, {})
-            if overrides:
-                cmd_section: dict[str, Any] = {}
-                for key in ("tool", "model", "mode", "effort", "permission_mode"):
-                    if overrides.get(key):
-                        cmd_section[key] = overrides[key]
-                # Handle boolean fields (stored as strings in overrides)
-                if "enabled" in overrides:
-                    cmd_section["enabled"] = overrides["enabled"] == "true"
-                if "yolo" in overrides:
-                    cmd_section["yolo"] = overrides["yolo"] == "true"
-                if cmd_section:
-                    ai_section[cmd_name] = cmd_section
+            section = _ai_command_config_dict(command_overrides.get(cmd_name, AICommandConfig()))
+            if section:
+                ai_section[cmd_name] = section
 
     config_dict["ai"] = ai_section
 
@@ -280,39 +271,36 @@ def _write_config(
         }
 
     # Build provider section from setup results
-    provider_name = provider_setup.get("name", "github") if provider_setup else "github"
+    provider_name = provider_setup.name.value if provider_setup is not None else "github"
     provider_dict: dict[str, Any] = {"name": provider_name}
-    if provider_setup:
-        if provider_setup.get("api_token_env"):
-            provider_dict["api_token_env"] = provider_setup["api_token_env"]
-        if provider_setup.get("settings"):
-            provider_dict["settings"] = provider_setup["settings"]
+    if provider_setup is not None:
+        if provider_setup.api_token_env:
+            provider_dict["api_token_env"] = provider_setup.api_token_env
+        if provider_setup.settings:
+            provider_dict["settings"] = provider_setup.settings
     config_dict["provider"] = provider_dict
 
     # Build hooks section (internal files like .wade.yml are auto-copied at runtime)
     hooks_dict: dict[str, Any] = {}
-    if hooks_setup and hooks_setup.get("post_worktree_create"):
-        hooks_dict["post_worktree_create"] = hooks_setup["post_worktree_create"]
-    copy_files: list[str] = list(hooks_setup.get("copy_to_worktree", [])) if hooks_setup else []
+    if hooks_setup is not None and hooks_setup.post_worktree_create:
+        hooks_dict["post_worktree_create"] = hooks_setup.post_worktree_create
+    copy_files: list[str] = list(hooks_setup.copy_to_worktree) if hooks_setup is not None else []
     if copy_files:
         hooks_dict["copy_to_worktree"] = copy_files
     config_dict["hooks"] = hooks_dict
 
     # Build knowledge section
-    if knowledge_setup and knowledge_setup.get("enabled"):
+    if knowledge_setup is not None and knowledge_setup.enabled:
         config_dict["knowledge"] = {
             "enabled": True,
-            "path": knowledge_setup.get("path", "KNOWLEDGE.md"),
+            "path": knowledge_setup.path,
         }
 
     # Build bot_review section (#431). Always written when the wizard ran so the
     # feature is discoverable and every field overridable, even though the models
     # default it safely when the block is absent.
     if bot_review_setup is not None:
-        config_dict["bot_review"] = _bot_review_config_dict(
-            bool(bot_review_setup.get("auto_trigger")),
-            bool(bot_review_setup.get("offer_on_done", True)),
-        )
+        config_dict["bot_review"] = _bot_review_config_dict(bot_review_setup)
 
     config_path.write_text(
         yaml.dump(config_dict, default_flow_style=False, sort_keys=False),
@@ -329,12 +317,12 @@ def _patch_config(
     default_yolo: bool | None = None,
     project_settings: ProjectSettings | None = None,
     implement_tool: str | None = None,
-    command_overrides: dict[str, dict[str, Any]] | None = None,
-    hooks_setup: dict[str, Any] | None = None,
+    command_overrides: dict[str, AICommandConfig] | None = None,
+    hooks_setup: HooksSetup | None = None,
     force: bool = False,
-    provider_setup: dict[str, Any] | None = None,
-    knowledge_setup: dict[str, Any] | None = None,
-    bot_review_setup: dict[str, Any] | None = None,
+    provider_setup: ProviderSetup | None = None,
+    knowledge_setup: KnowledgeConfig | None = None,
+    bot_review_setup: BotReviewConfig | None = None,
 ) -> None:
     """Patch values into an existing config.
 
@@ -443,41 +431,24 @@ def _patch_config(
         raw["ai"] = ai
         changed = True
 
-    # Patch command overrides.
+    # Patch command overrides. Empty rendered answers still remove stale sections
+    # on force re-init; a model itself is always truthy.
     if command_overrides is not None:
         for cmd_name in _COMMAND_OVERRIDE_NAMES:
-            overrides = command_overrides.get(cmd_name, {})
+            section = _ai_command_config_dict(command_overrides.get(cmd_name, AICommandConfig()))
             if force:
-                if overrides:
-                    cmd_section: dict[str, Any] = {}
-                    for key in ("tool", "model", "mode", "effort", "permission_mode"):
-                        if overrides.get(key):
-                            cmd_section[key] = overrides[key]
-                    if "enabled" in overrides:
-                        cmd_section["enabled"] = overrides["enabled"] == "true"
-                    if "yolo" in overrides:
-                        cmd_section["yolo"] = overrides["yolo"] == "true"
-                    if cmd_section:
-                        ai[cmd_name] = cmd_section
-                        raw["ai"] = ai
-                        changed = True
+                if section:
+                    ai[cmd_name] = section
+                    raw["ai"] = ai
+                    changed = True
                 elif cmd_name in ai:
                     del ai[cmd_name]
                     raw["ai"] = ai
                     changed = True
-            elif overrides and not ai.get(cmd_name):
-                cmd_section = {}
-                for key in ("tool", "model", "mode", "effort", "permission_mode"):
-                    if overrides.get(key):
-                        cmd_section[key] = overrides[key]
-                if "enabled" in overrides:
-                    cmd_section["enabled"] = overrides["enabled"] == "true"
-                if "yolo" in overrides:
-                    cmd_section["yolo"] = overrides["yolo"] == "true"
-                if cmd_section:
-                    ai[cmd_name] = cmd_section
-                    raw["ai"] = ai
-                    changed = True
+            elif section and not ai.get(cmd_name):
+                ai[cmd_name] = section
+                raw["ai"] = ai
+                changed = True
 
     # Patch models — keyed by implement_tool when provided (matching _write_config)
     tool_key = str(implement_tool or ai_tool) if (implement_tool or ai_tool) else None
@@ -501,15 +472,15 @@ def _patch_config(
 
     # Patch hooks — setup script and copy_to_worktree
     hooks = raw.get("hooks") or {}
-    if hooks_setup:
-        script = hooks_setup.get("post_worktree_create")
+    if hooks_setup is not None:
+        script = hooks_setup.post_worktree_create
         if script and (force or not hooks.get("post_worktree_create")):
             hooks["post_worktree_create"] = script
             changed = True
         elif not script and force and "post_worktree_create" in hooks:
             del hooks["post_worktree_create"]
             changed = True
-        user_files: list[str] = hooks_setup.get("copy_to_worktree", [])
+        user_files: list[str] = hooks_setup.copy_to_worktree
         if user_files and (force or not hooks.get("copy_to_worktree")):
             existing_copy: list[str] = hooks.get("copy_to_worktree") or []
             for f in user_files:
@@ -520,10 +491,10 @@ def _patch_config(
     raw["hooks"] = hooks
 
     # Patch provider section
-    if provider_setup:
+    if provider_setup is not None:
         provider_raw = raw.get("provider")
         provider = provider_raw if isinstance(provider_raw, dict) else {}
-        name = provider_setup.get("name")
+        name = provider_setup.name.value
         if name and (force or not provider.get("name")):
             old_name = provider.get("name")
             provider["name"] = name
@@ -531,16 +502,16 @@ def _patch_config(
             # When force-switching providers, clean up keys from the old provider
             if force and old_name != name:
                 for orphan_key in ("api_token_env", "settings"):
-                    if orphan_key not in provider_setup and orphan_key in provider:
+                    if orphan_key not in provider_setup.model_fields_set and orphan_key in provider:
                         del provider[orphan_key]
         # Only merge provider-specific fields when the effective provider matches
         effective_name = provider.get("name")
-        if effective_name == provider_setup.get("name"):
-            token_env = provider_setup.get("api_token_env")
+        if effective_name == provider_setup.name.value:
+            token_env = provider_setup.api_token_env
             if token_env and (force or not provider.get("api_token_env")):
                 provider["api_token_env"] = token_env
                 changed = True
-            settings = provider_setup.get("settings")
+            settings = provider_setup.settings
             if settings:
                 settings_raw = provider.get("settings")
                 existing_settings: dict[str, str] = (
@@ -555,12 +526,12 @@ def _patch_config(
         raw["provider"] = provider
 
     # Patch knowledge section
-    if knowledge_setup and knowledge_setup.get("enabled"):
+    if knowledge_setup is not None and knowledge_setup.enabled:
         knowledge = raw.get("knowledge") or {}
         if force or not knowledge.get("enabled"):
             knowledge["enabled"] = True
             changed = True
-        k_path = knowledge_setup.get("path", "KNOWLEDGE.md")
+        k_path = knowledge_setup.path
         if k_path and (force or not knowledge.get("path")):
             knowledge["path"] = k_path
             changed = True
@@ -575,8 +546,8 @@ def _patch_config(
     if bot_review_setup is not None:
         existing_bot_review = raw.get("bot_review")
         section = existing_bot_review if isinstance(existing_bot_review, dict) else {}
-        for flag, default in (("auto_trigger", False), ("offer_on_done", True)):
-            value = bool(bot_review_setup.get(flag, default))
+        for flag in ("auto_trigger", "offer_on_done"):
+            value = getattr(bot_review_setup, flag)
             if (force or flag not in section) and section.get(flag) != value:
                 section[flag] = value
                 changed = True

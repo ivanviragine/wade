@@ -17,6 +17,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.git.pr import PRLookup, PRRef
 from wade.models.config import (
     AICommandConfig,
@@ -110,6 +112,36 @@ def _record_review(
 
 
 class TestClassifyReview:
+    @pytest.mark.parametrize(
+        "session_kind", (SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS)
+    )
+    @pytest.mark.parametrize("limit", (1, 2))
+    def test_failed_receipt_never_certifies_review_and_only_implementation_caps(
+        self,
+        tmp_path: Path,
+        session_kind: SessionKind,
+        limit: int,
+    ) -> None:
+        head = "a" * 40
+        _record_review(tmp_path, head, outcome=ReviewOutcome.FAILED, session_kind=session_kind)
+        status = _classify_review(
+            ProjectConfig(done=DoneConfig(max_review_passes=limit)),
+            tmp_path,
+            head,
+            skip_review=False,
+            session_type=session_kind.value,
+        )
+        expected = (
+            ReviewStatusKind.CAP_REACHED
+            if limit == 1 and session_kind is SessionKind.IMPLEMENTATION
+            else ReviewStatusKind.NOT_REVIEWED
+        )
+        assert status.kind is expected
+        assert status.passes == 1
+        rendered = _render_review_status(status)
+        assert "1" in rendered
+        assert "Reviewed commit" not in rendered
+
     def test_reviewed_when_exact_binding_receipt_present(self, tmp_path: Path) -> None:
         head = "a" * 40
         _record_review(tmp_path, head)

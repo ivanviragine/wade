@@ -4,6 +4,60 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.7] — 2026-10-15
+
+### Refactoring
+
+- type init-wizard setup carriers as Pydantic models instead of dicts (#498) (f3fc21d)
+
+## [v1.4.6] — 2026-10-15
+
+### Bug Fixes
+
+- classify ClickUp task state using canonical status types (#530) (f91926d)
+
+## [v1.4.5] — 2026-10-15
+
+### Bug Fixes
+
+- allow safe cleanup after multi-commit squash merges (#535) (d9e9665)
+
+## [v1.4.4] — 2026-10-15
+
+### Bug Fixes
+
+- preserve planning ownership across active runtime schema upgrades (#546) (dc55a53)
+
+## [v1.4.3] — 2026-10-15
+
+### Bug Fixes
+
+- _recover_worktree fetch fails on a diverged/force-pushed open-PR branch (#486) (49b3639)
+
+## [v1.4.2] — 2026-10-15
+
+### Bug Fixes
+
+- distinguish a reviewer that never launched from one that crashed (#485) (576cc61)
+
+## [v1.4.1] — 2026-10-15
+
+### Bug Fixes
+
+- enforce ready-for-review PR completion (#484) (626db05)
+
+## [v1.4.0] — 2026-10-15
+
+### Features
+
+- add GitHub Projects (v2) support: field-aware prioritization, sorting, and sync (#543) (1122e74)
+
+## [v1.3.1] — 2026-10-14
+
+### Bug Fixes
+
+- persist replacement plans when replanning an existing task (#536) (31c3e89)
+
 ## [v1.3.0] — 2026-10-14
 
 ### Features

@@ -63,6 +63,7 @@ src/wade/
 │   ├── hook.py          # `wade hook` — write-guard entry point for AI tool hooks
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
+│   ├── init_setup.py   # Typed transient init-wizard answers
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
@@ -73,6 +74,7 @@ src/wade/
 │   ├── permission.py    # PermissionMode (autonomy axis), launch-kwargs helpers
 │   ├── readiness.py     # phase capability requirements + stable failure IDs
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
+│   ├── review_recovery.py # Typed guarded-recovery phases and incomplete record
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
@@ -83,6 +85,7 @@ src/wade/
 │   ├── native_plan_service.py # Public collected-session boundary and safe artifact import
 │   ├── interactive_plan_service.py # Explicit native-terminal import/review/completion state
 │   ├── review_service.py           # PR review session lifecycle
+│   ├── review_recovery.py          # Remote snapshot recovery and incomplete-state gating
 │   ├── bot_trigger.py   # Marker-aware external-bot review triggering (done + menus)
 │   ├── review_delegation_service.py # AI-powered review delegation
 │   ├── session_composition_service.py # Resolve/freeze/refresh interactive bindings
@@ -102,6 +105,7 @@ src/wade/
 ├── providers/           # Task backend providers (ABC + registry)
 │   ├── base.py          # AbstractTaskProvider
 │   ├── github.py        # GitHubProvider (gh CLI subprocess)
+│   ├── github_projects.py # Strict Projects v2 GraphQL snapshots/numeric mutations
 │   ├── clickup.py       # ClickUpProvider (REST API)
 │   ├── markdown.py      # MarkdownIssueProvider (single central task file)
 │   ├── _pr_delegate.py  # GitHubPRDelegateMixin (routes PR/review APIs through gh)
@@ -271,6 +275,41 @@ binding, content, review, dependency, and strict plan-validation gates before
 persistence. Successful recovery resumes the ordinary finalization and cleanup
 path; WADE does not invoke platform privacy tools or weaken sandbox policy.
 
+`planning_handoff_errors.UncollectableHandoffError` distinguishes persisted
+metadata/frozen-binding failures from ordinary editable Markdown validation.
+Interactive collection (including the second parent collection), collector
+metadata loading, and launch/progress validation classify these failures before
+`plan_service` can enter copy-and-cleanup salvage. Required review metadata is
+validated against the stored completed bundle before editable files: invalid
+Markdown must not mask an unsupported receipt and destroy its owner. A read-only
+parent callback also validates original launch and any present progress metadata
+against that stored session before editable content is read, at both native
+collection passes. Missing progress is initialized only after valid collection.
+Valid metadata retains the separate editable-content validation/salvage contract.
+The failure handler does not
+parse state, enumerate plans, stage knowledge or mutate providers; it keeps the
+registered detached owner, frozen session, raw output, launch binding and existing
+progress byte-for-byte. Registration is checked only to decide whether an
+original-owner recovery command can be advertised. An unregistered fallback or
+copy remains content salvage, without recovery authority.
+
+Diagnostics use bounded public field locations/error codes, no validator
+messages, values, arbitrary map/extra keys, exception context or raw JSON. They
+report the already-imported reader version, safely available declared versions
+and an unavailable unrecorded writer version. Possible schema/runtime skew is
+qualified, not attributed to an adapter. Filesystem denial/I/O retain their
+existing failure contracts. Strict schema rejection is not softened. Missing
+progress after early collection failure may initialize from a validated original
+launch binding; malformed/mismatched present progress fails closed.
+
+Active planning parents must finish or safely stop before shared editable
+source/environment changes. Workflow refresh does not replace imported Python
+models. A fresh compatible process may recover only through the current original
+ownership, binding, content and review gates. Explicit supported handoff refresh
+invalidates completion/reviews and requires new genuine review/done; unreadable
+future state must stay retained. No copied/deleted owner or archive reconstructs
+authority, and retention never adopts historical knowledge observations.
+
 Recovery is idempotent because its launch binding and persistence are recorded as
 they happen. Before a managed planner launches, its worktree gets
 `.wade/plans/handoff-binding.json` (`PlanHandoffBinding`) with the resolved
@@ -298,12 +337,41 @@ failure therefore
 leaves a retry reusing those tasks — and the original model for `planned-by`
 provenance — instead of creating duplicates; a partial finalization with a
 pending marker retains the original worktree for the same reconciliation path.
-Attaching a plan to an existing issue is idempotent for the same reason:
-`bootstrap_draft_pr` reuses the open PR, and the plan link is appended only when
-the issue body lacks it. Recovery refreshes that PR's managed plan body before
-accepting the attachment, so an approved recovery edit cannot be lost. A binding
-or progress file that is unsafe, invalid, missing required data, or bound to
-another session aborts recovery rather than being silently replaced.
+Ordinary single-plan replanning and retained-handoff recovery explicitly refresh
+the existing PR before accepting attachment. Generic bootstrap/resume still
+defaults to reuse without replacing its plan. Required content/title persistence
+precedes a base retarget, so refresh failures cannot bypass worktree-pin
+reconciliation after a successful base edit. `DraftPRTarget` fixes the stable
+task-number branch and verified open PR once, using the existing branch policy
+and complete open-PR fallback. Lookup/listing errors, incomplete fallback results,
+or an unverifiable selected PR fail closed. Retarget safety, bootstrap and pin
+reconciliation consume that same identity rather than re-slugifying a changed
+title; fresh creation follows only trustworthy absence.
+
+Explicit refresh uses `replace_owned_section(name="plan", heading=None)` over a
+fresh body through the shared read/transform/budget/write helper. The stored
+content is exactly `PlanFile.body` (the artifact H1 is omitted). The plan extractor
+uses the same scanner-owned span so next startup materializes that body even with
+fenced marker examples before or inside it. Its public result remains `str | None`,
+including empty string for a valid empty pair and None for absent/unsafe ownership;
+interior bytes and the established outer-strip behavior are retained. Unrelated
+source slices/owners remain intact, including unknown and legacyPlan blocks; no legacy
+plan migration occurs. Empty-body reads are valid; unreadable bodies, malformed
+ownership/fences and oversized composition refuse before a body write. The size
+check runs before budget trimming so replacement cannot discard unrelated usage.
+Fresh creation validates the complete owned-plan composition and body limit
+before creating or pushing a branch, so next startup can consume every accepted
+PR-backed plan.
+The task is reread after required PR work; an exact plain Full plan link is
+appended only if absent, preserving current edits and distinguishing PR #7 from
+PR #70, including CRLF issue lines. Required issue read/link-write failures propagate even after partial PR
+success. All explicit-refresh attachment failures retain the original registered
+worktree, frozen bundle, native state, binding/progress, and plan files; filesystem
+fallback output stays at its original path. Supported recovery reruns the gates
+and current reads, then finalizes/cleans only after persistence succeeds. A copied
+cleaned-up archive cannot replace the original registered recovery authority.
+A binding or progress file that is unsafe, invalid, missing required data, or
+bound to another session aborts recovery rather than being silently replaced.
 
 ## Hook Guard Layer
 
@@ -804,7 +872,10 @@ counts as launched even though the call never returned. Everything after the
 adapter returns — the confirm prompt, the output-file read — is post-launch by
 position, whatever it raises. The headless path matters most — this repo configures
 `mode: headless` for `deps`, `review_plan` and `review_implementation`, and the
-receipt gate excludes `PROMPT` outright.
+receipt gate excludes `PROMPT` outright. A human decline on the non-blocking
+interactive confirmation is explicitly `cancelled=True`, even though the process
+launched; this exempts it from review-pass accounting. Output-read failures after
+launch remain ordinary launched failures.
 
 `launch_attempted` is a separate structured boundary: it becomes true only after
 dispatch has passed validation and is about to call the process launcher. A
@@ -832,7 +903,23 @@ less information than any outcome from one that did, so recording it can never
 downgrade or overwrite a real receipt for the same commit+binding. Budget
 protection (#462) and receipt *classification* remain separate problems: the gate
 at `review_delegation_service.py` already withheld budget, and `never_launched`
-is what now lets the remediation be trusted instead of hedged.
+is what lets the remediation distinguish a failed launch from a launched crash.
+`ReviewOutcome.FAILED` consumes a pass but never satisfies review or becomes an
+incremental baseline. Success and timeout retain their existing semantics;
+prompt/preflight failure, skipped dispatch and explicit cancellation are exempt.
+Implementation failure handling writes the receipt inside the existing binding
+reservation before releasing concurrent admission. The budget announcement uses
+the persisted count and does not claim consumption when the write failed.
+
+Receipt precedence is `UNATTEMPTED < NOTHING_STAGED < FAILED < TIMED_OUT < NO_DIFF
+< REVIEWED`. Accounting remains idempotent per commit+binding, not per dispatch:
+repeated crashes on one commit spend one tuple, and success promotes failure
+without adding a tuple. Existing implementation cap policy alone permits an
+unreviewed cap-reached completion; failed receipts never certify implementation
+or PR-comment completion. Plan-review failures still leave plan validation
+closed, with no plan-review cap. Receipt schema version stays unchanged; older
+runtimes reject the new enum value and cannot be relied on to count it. No
+historical receipt is rewritten.
 `_report_failed_review()` grades it by what wade actually knows — (1) known
 sandboxed parent **and** an explicit policy denial → state the cause and exact
 relaunch command; (2) a generic denial-shaped failure → explain it might also be
@@ -1027,6 +1114,17 @@ is upgraded — **no re-init, resync, or migration is needed.**
 
 ## Completion Gates & the `done`-marker
 
+The shared finalizer requires default draft-to-ready promotion before label
+removal, bot reviews, or completion-success output. Promotion failure revokes
+only the active worktree/repository root's done markers and remains retryable;
+pushed work, body updates, other receipts and feedback-cycle history survive.
+Fallback creation may recover an existing PR, so completion verifies its matching
+number, OPEN state and explicit Boolean draft status through the git lookup.
+`--draft` preserves observed state without demoting ready PRs. Automatic bot
+posting and offers, including `--trigger-bots`, run only for a ready result;
+drafts consume no bot-trigger markers. Planning/bootstrap drafts and manual
+review-trigger commands keep their existing behavior.
+
 `done` (`implementation_service/done.py`) is the authoritative completion gate.
 Both `implementation-session done` and `review-pr-comments-session done` call the
 same `done()` service, parameterized by `session_type`; the gate set branches on
@@ -1180,6 +1278,45 @@ the exact buffered stdin) rather than silently shadowing it. The same
 and `commit-msg` in one call so their chaining stays correct. **Honesty:**
 `git push --no-verify` bypasses it in one flag — a quality/backstop layer, not a
 boundary.
+
+## Removed review-worktree recovery
+
+`services/review_recovery.py` delegates to a Git-layer fetch into a unique
+`refs/wade/review-fetch/` pin, using `--refmap= --no-tags --no-prune` to disable
+configured opportunistic tracking updates, tag following and pruning. It captures the fetched commit and installs the tracking ref
+with expected-old/no-deref semantics; fetch never follows a symbolic tracking
+ref into a checked-out local branch. Preexisting symbolic destinations refuse
+before fetch, and tracking races cannot move their symbolic targets. Successful
+installation deletes only the owned temporary pin at its captured OID; failure
+reports its inspection ref. The captured commit stays fixed for the entire
+recovery operation. Cached tracking refs establish
+neither a fresh PR head after a failed fetch nor live remote absence:
+`git/branch.py:live_remote_head_exists` accepts absence only from an exact
+`ls-remote --exit-code --refs` no-match response. Only that result permits a
+warned local-only fallback; query and fetch failures remain distinct.
+
+`git/worktree.py:recover_branch_worktree` reserves an unused destination with
+ordinary `worktree add --no-checkout`, rechecks ownership and reads the actual
+local tip. A single expected-old `update-ref --stdin` transaction preserves a
+differing tip under `refs/wade/recovery/<branch>/<old-OID>` and aligns the task
+head. Existing backups are verified, never overwritten; lock or CAS failures
+stop without retrying an unconditional update. Index-only `read-tree` and
+non-forcing `checkout-index` populate the pinned tree without discarding ignored
+or untracked collisions. Local fallback reserves detached first, then attaches
+with `checkout --no-guess --no-overwrite-ignore <branch> --`; the trailing `--`
+prevents a deleted branch from becoming a tracked-path restoration. Final
+verification checks the fully qualified symbolic branch, HEAD, index and working
+files against the pin, so a same-named tag cannot cause a false refusal.
+
+A destination-keyed Pydantic record in `<git-common-dir>/.wade/review-recovery/`
+is atomically persisted before reservation and updated through the recovery
+phases under a shared lock. Only verified success clears it. Failure or
+interruption retains all partial files and refs. `review_service.start` checks
+this record before accepting an existing worktree, looking up its PR or taking
+the quiet-success path; corrupt, unreadable and unsafe markers fail closed.
+This mutable state is separate from frozen session bundles and scaffold
+retarget recovery. Existing ordinary worktrees and shared checkout helpers keep
+their previous behavior.
 
 ## Command Dispatch
 
@@ -1616,6 +1753,34 @@ This preflight does not provide isolation from concurrent filesystem writers.
 
 **`wade worktree remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).
+- `--force` skips confirmation; `--discard-dirty` explicitly permits data loss.
+
+Cleanup and staleness share typed operation-scoped `MergeAssessment` results
+from `git/merge_evidence.py`. Local branch containment permits offline cleanup.
+Otherwise `git/pr.py` exhausts paginated closed-PR records for the configured
+origin's explicit host/owner/repository, validating source repository/branch,
+base repository/name, recorded final `head.sha` and `merge_commit_sha`. It ignores
+`GH_REPO` and live source refs, so deleted/reused branches cannot substitute a
+new tip. Unknown, malformed, ambiguous and failed queries remain distinct from
+no exact match. Individual patch IDs and equal trees do not authorize removal.
+
+The PR path pins the configured origin URL and reuses recovery's
+`git/branch.py::fetch_review_snapshot` primitive with that explicit URL. Only a
+unique operation-owned pin is a fetch destination; expected-old, `--no-deref`
+installation updates the remote-tracking ref without following a symbolic ref
+into local history. Unsafe tracking refs or raced installation fail closed and
+retain any fetched pin for inspection. Failed refreshes never reuse cached PR
+proof; the recorded merge must be an ancestor of the fresh base. Later edits/reverts are allowed, base rewrites excluding the merge are not.
+Commit/object checks disable Git replacement objects. Cleanup normalizes the
+worktree inventory path, binds its full symbolic branch ref and actual HEAD
+without tag-name abbreviation, and rechecks the head, base, origin and cleanliness after queries/session-data preservation. Git's
+non-forced worktree removal provides the final dirty-file refusal. These checks
+bound revalidation; they do not promise atomicity against arbitrary writers.
+Stale listing is only a snapshot: cleanup revalidates its operation-scoped proof,
+open/unknown tasks remain ACTIVE, and remote disappearance alone proves no merge.
+Safe branch deletion remains `-d`; a squash/rebase branch may remain after its
+worktree is removed. No refusal escalates to `-D` without explicit discard.
+
 
 **`wade update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.
@@ -1652,3 +1817,33 @@ Dev:
 - `ruff>=0.4` — Linting and formatting
 - `pre-commit>=3.7` — Git hook management
 - `types-PyYAML>=6.0` — Type stubs for PyYAML
+
+
+## GitHub Projects v2 commands
+
+`cli/project.py` exposes items/rank/pick/sync as thin parsers/renderers.
+`services/project_service.py` resolves the optional top-level `github_projects`
+configuration and schema, evaluates deterministic fixed-bound scoring/filtering,
+counts the complete WIP pool before candidate filters, and orchestrates explicit
+numeric write-back. `models/project.py` contains pure typed configuration,
+connection results, contributions and operation outcomes. Loader, check-config
+and the schema re-export all accept the same nested model; init patching preserves
+it without introducing network calls.
+
+`providers/github_projects.py` is separate from AbstractTaskProvider and is
+constructed directly by the service. It owns explicit cwd/hostname gh transport,
+JSON stdin variables, bounded independent fields/items/fieldValues/content
+pagination, safe errors and one-number mutations. Field schemas retain the
+required Boolean `isIssueField`; sync rejects issue-backed or unknown output
+ownership before planning any write, even for unset numeric outputs. Label/assignee field values
+are not GraphQL Nodes: complete underlying content connections supply these
+values instead of assuming a value-node cursor. Unfetched connections have
+explicit completeness flags. Unknown selected unions and malformed pagination
+fail, and observed inaccessible content cannot imply available WIP capacity.
+
+Read/default sync never mutates; apply alone performs full baseline refresh,
+affected-item drift checks and sequential readback-verified numeric updates.
+No new task-provider ABC methods, lifecycle hooks, database state or writes to
+issue-owned fields are introduced. Existing best-effort move_to_in_progress
+behavior remains independent. See README for credentials, schema compatibility,
+visibility, scoring and non-atomic partial-failure contracts.

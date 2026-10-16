@@ -76,6 +76,9 @@ class DelegationResult(BaseModel):
     mode: DelegationMode
     exit_code: int = 0
     skipped: bool = False
+    # An explicit human decline after an interactive session is not a crash or
+    # a completed assessment, even when that session's process already ran.
+    cancelled: bool = False
     # True only when a headless subprocess exceeded its budget. Stays
     # ``success=False`` (a timeout is still a non-success), but lets callers tell
     # a timeout — which may carry partial output and is worth retrying longer —

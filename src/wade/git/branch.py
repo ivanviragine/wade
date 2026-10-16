@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import subprocess
+import uuid
 from pathlib import Path
 
 import structlog
 
+from wade.git import repo as git_repo
 from wade.git.repo import GitError, _run_git, _run_git_with_retry
 from wade.utils.slug import slugify
 
@@ -373,31 +376,6 @@ def is_merged_into(repo_root: Path, branch: str, base: str) -> bool | None:
     return None
 
 
-def all_patches_present(repo_root: Path, base: str, branch: str) -> bool:
-    """Return True when every commit on *branch* already has a patch on *base*.
-
-    Wraps ``git cherry <base> <branch>``, which compares *patch ids* rather than
-    commit ids — so it recognizes a squash- or rebase-merged branch whose tip is
-    NOT an ancestor of *base*. ``git cherry`` marks an already-applied commit
-    with ``-`` and a genuinely-absent one with ``+``; this returns True only
-    when the command succeeds and no line starts with ``+``.
-
-    Returns False on any git error (fail closed) and when *branch* has no
-    commits to compare (empty output) — an empty result must never read as
-    "safe to delete".
-
-    Caveat: ``git cherry`` compares individual patch ids, so squashing several
-    commits into one may still report ``+`` for each original commit. Treat a
-    True result as authoritative; a False result may still be a squash merge, so
-    callers fall back to it only *after* an exact ancestor check.
-    """
-    result = _run_git("cherry", base, branch, cwd=repo_root, check=False)
-    if result.returncode != 0:
-        return False
-    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    return bool(lines) and not any(ln.startswith("+") for ln in lines)
-
-
 def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
     """Count commits on *branch* that are not on *base*.
 
@@ -452,3 +430,130 @@ def tip_commit_is_empty(repo_root: Path, ref: str) -> bool | None:
         # No first parent → a root commit, which is never WADE's scaffold.
         return False
     return tip.stdout.strip() == parent.stdout.strip()
+
+
+def resolve_ref_commit(repo_root: Path, ref: str) -> str | None:
+    """Resolve one fully qualified ref; only show-ref's no-match status is absence."""
+    if not ref.startswith("refs/"):
+        raise GitError("Recovery requires a fully qualified ref")
+    _run_git("check-ref-format", ref, cwd=repo_root)
+    present = _run_git("show-ref", "--verify", "--quiet", "--", ref, cwd=repo_root, check=False)
+    if present.returncode == 1:
+        return None
+    if present.returncode != 0:
+        raise GitError(f"Cannot inspect {ref}: {present.stderr.strip()}")
+    symbolic = _run_git("symbolic-ref", "--quiet", ref, cwd=repo_root, check=False)
+    if symbolic.returncode != 1:
+        raise GitError(f"Recovery requires a direct ref, not a symbolic/unreadable ref: {ref}")
+    oid = _run_git("rev-parse", "--verify", ref + "^{commit}", cwd=repo_root).stdout.strip()
+    if len(oid) not in (40, 64) or any(c not in "0123456789abcdef" for c in oid):
+        raise GitError(f"Invalid commit identity for {ref}: {oid!r}")
+    return oid
+
+
+def live_remote_head_exists(repo_root: Path, branch_name: str, remote: str = "origin") -> bool:
+    """Query the exact live head, never cached tracking refs or stderr guesses."""
+    ref = f"refs/heads/{branch_name}"
+    _run_git("check-ref-format", ref, cwd=repo_root)
+    result = _run_git("ls-remote", "--exit-code", "--refs", remote, ref, cwd=repo_root, check=False)
+    if result.returncode == 2 and not result.stdout.strip():
+        return False
+    if result.returncode != 0:
+        raise GitError(
+            f"Live remote query for {ref} failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+    lines = result.stdout.splitlines()
+    fields = lines[0].split("\t") if len(lines) == 1 else []
+    if (
+        len(fields) != 2
+        or fields[1] != ref
+        or len(fields[0]) not in (40, 64)
+        or any(c not in "0123456789abcdef" for c in fields[0])
+    ):
+        raise GitError(f"Malformed or ambiguous live remote response for {ref}: {result.stdout!r}")
+    return True
+
+
+def preserve_and_align_branch(
+    repo_root: Path, branch_name: str, old_oid: str, selected_oid: str
+) -> str | None:
+    """Atomically preserve the observed tip and CAS-align a reserved branch.
+
+    Call only after Git has reserved this branch in the new recovery worktree.
+    A lock/CAS failure is never retried here: a changed tip needs fresh preparation.
+    """
+    ref = f"refs/heads/{branch_name}"
+    _run_git("check-ref-format", ref, cwd=repo_root)
+    for oid in (old_oid, selected_oid):
+        if len(oid) not in (40, 64) or any(c not in "0123456789abcdef" for c in oid):
+            raise GitError("Recovery requires full commit object identities")
+    if old_oid == selected_oid:
+        commands = f"start\nverify {ref} {old_oid}\nprepare\ncommit\n"
+        backup = None
+    else:
+        backup = f"refs/wade/recovery/{branch_name}/{old_oid}"
+        existing = resolve_ref_commit(repo_root, backup)
+        if existing is not None and existing != old_oid:
+            raise GitError(f"Recovery ref {backup} does not preserve the expected tip {old_oid}")
+        preserve = (
+            f"verify {backup} {old_oid}" if existing is not None else f"create {backup} {old_oid}"
+        )
+        commands = f"start\n{preserve}\nupdate {ref} {selected_oid} {old_oid}\nprepare\ncommit\n"
+    _run_git("update-ref", "--no-deref", "--stdin", cwd=repo_root, input_text=commands)
+    return backup
+
+
+def recovery_branch_command(repo_root: Path, backup_ref: str) -> str:
+    """Quote a non-forcing command that makes a preserved tip an ordinary branch."""
+    name = "recovered-" + backup_ref.rsplit("/", 1)[-1][:12]
+    return shlex.join(["git", "-C", str(repo_root), "branch", name, backup_ref])
+
+
+class ReviewTrackingError(GitError):
+    """Snapshot validation/installation failed; never permit local fallback."""
+
+
+def fetch_review_snapshot(repo_root: Path, branch_name: str, *, remote: str = "origin") -> str:
+    """Fetch to an isolated pin, then CAS-install tracking without dereferencing.
+
+    Fetch follows symbolic destination refs, so even a pre-fetch symbolic-ref
+    check cannot protect a checked-out branch against an intervening ref swap.
+    Only the isolated ref is a fetch destination; the tracking update uses
+    expected-old/no-deref semantics and the returned pin never changes with it.
+    Verified cleanup may supply its pinned origin URL as ``remote``; review
+    recovery retains the ordinary named-origin default.
+    """
+    tracking = f"refs/remotes/origin/{branch_name}"
+    isolated = "refs/wade/review-fetch/" + uuid.uuid4().hex
+    try:
+        previous = resolve_ref_commit(repo_root, tracking)
+        if resolve_ref_commit(repo_root, isolated) is not None:
+            raise GitError(f"Isolated review fetch ref already exists: {isolated}")
+    except (GitError, OSError) as exc:
+        raise ReviewTrackingError(f"Unsafe review tracking destination: {exc}") from exc
+    # A unique, non-forcing destination cannot follow the task's tracking symref
+    # or discard a stale/divergent local head when the remote was force-pushed.
+    # Even explicit refspecs otherwise opportunistically update configured
+    # tracking refs; empty refmap plus no tags/pruning confines ref writes to this pin.
+    git_repo.fetch_ref(repo_root, remote, f"refs/heads/{branch_name}:{isolated}", isolated=True)
+    try:
+        selected = resolve_ref_commit(repo_root, isolated)
+        if selected is None:
+            raise GitError("Successful fetch did not provide its isolated commit pin")
+        _run_git(
+            "update-ref",
+            "--no-deref",
+            tracking,
+            selected,
+            previous if previous is not None else "0" * len(selected),
+            cwd=repo_root,
+        )
+        # Delete only this operation's temporary ref at its captured identity.
+        # Any changed ref or installation failure is retained and reported.
+        _run_git("update-ref", "--no-deref", "-d", isolated, selected, cwd=repo_root)
+    except (GitError, OSError) as exc:
+        raise ReviewTrackingError(
+            f"Cannot install fetched review snapshot; inspect pin {isolated}: {exc}"
+        ) from exc
+    return selected

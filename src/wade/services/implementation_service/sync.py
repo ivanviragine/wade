@@ -18,11 +18,13 @@ from pydantic import BaseModel, Field
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
+from wade.git import merge_evidence as git_merge
 from wade.git import repo as git_repo
 from wade.git import stash as git_stash
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.merge_evidence import MergeAssessmentCache, MergeEvidenceState
 from wade.models.session import (
     SyncEvent,
     SyncEventType,
@@ -60,6 +62,7 @@ def classify_staleness(
     task: Task | None = None,
     task_lookup_attempted: bool = False,
     task_lookup_failed: bool = False,
+    merge_cache: MergeAssessmentCache | None = None,
 ) -> WorktreeState:
     """Classify a worktree's staleness.
 
@@ -108,14 +111,11 @@ def classify_staleness(
     if ahead == 0:
         return WorktreeState.STALE_EMPTY
 
-    # 3. Check if merged (merge-base equals branch tip)
-    try:
-        mb = git_repo.merge_base(repo_root, branch, main_branch)
-        tip = git_repo.rev_parse(repo_root, branch)
-        if mb == tip:
-            return WorktreeState.STALE_MERGED
-    except GitError:
-        logger.debug("staleness.merge_base_check_failed", exc_info=True)
+    # Exact merged-PR evidence handles squash/rebase without equating content
+    # similarity or a vanished tracking branch with historical merge proof.
+    assessment = git_merge.assess_branch(repo_root, branch, main_branch, merge_cache)
+    if assessment.state == MergeEvidenceState.VERIFIED:
+        return WorktreeState.STALE_MERGED
 
     # 4. Check if remote tracking branch gone
     try:

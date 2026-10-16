@@ -8,13 +8,20 @@ model prompts from ``prompts_ai``, and the statusline prompt from ``shell``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import structlog
 from crossby.ai_tools import AbstractAITool
 
 from wade.git import repo
-from wade.models.config import ComplexityModelMapping, ProjectSettings
+from wade.models.config import (
+    AICommandConfig,
+    BotReviewConfig,
+    ComplexityModelMapping,
+    KnowledgeConfig,
+    ProjectSettings,
+    ProviderID,
+)
+from wade.models.init_setup import HooksSetup, ImplementationSetup, ProviderSetup
 from wade.services.ai_resolution import valid_effort_levels
 from wade.services.init_service.auth import (
     _check_gh_auth,
@@ -94,21 +101,20 @@ def _prompt_claude_code_settings(non_interactive: bool) -> None:
 def _prompt_provider_setup(
     project_root: Path,
     non_interactive: bool,
-    current_provider: str | None = None,
+    current_provider: ProviderID | None = None,
     current_api_token_env: str | None = None,
     current_settings: dict[str, str] | None = None,
-) -> dict[str, Any]:
+) -> ProviderSetup:
     """Collect task provider selection and authentication setup.
 
-    Returns a dict with keys: name, api_token_env (optional),
-    settings (optional), add_env_to_copy (optional).
+    Returns typed provider answers; token-copy selection is wizard-only.
     """
     import subprocess
     import webbrowser
 
     from wade.ui import prompts
 
-    default_result: dict[str, Any] = {"name": "github"}
+    default_result = ProviderSetup()
 
     if non_interactive:
         return default_result
@@ -138,7 +144,7 @@ def _prompt_provider_setup(
         # File creation is deferred to the post-wizard write phase so
         # "Modify" / "Cancel" doesn't leave stray files behind. See
         # _ensure_markdown_file() invoked alongside the config write.
-        return {"name": "markdown", "settings": {"path": path}}
+        return ProviderSetup(name=ProviderID.MARKDOWN, settings={"path": path})
 
     # --- GitHub path ---
     if idx == 0:
@@ -155,14 +161,14 @@ def _prompt_provider_setup(
                         "gh CLI is not installed",
                         "Install it from https://cli.github.com/",
                     )
-                    return {"name": "github"}
+                    return ProviderSetup()
                 if _check_gh_auth():
                     console.success("GitHub CLI authenticated")
                 else:
                     console.hint("Run 'gh auth login' before using wade commands")
             else:
                 console.hint("Run 'gh auth login' or set GH_TOKEN before using wade commands")
-        return {"name": "github"}
+        return ProviderSetup()
 
     # --- ClickUp path ---
     console.info("To get your ClickUp API token:")
@@ -195,7 +201,7 @@ def _prompt_provider_setup(
 
     if not token and not token_validated:
         console.error("No token provided — falling back to GitHub")
-        return {"name": "github"}
+        return ProviderSetup()
 
     # Env var name — validate format
     import re
@@ -247,12 +253,12 @@ def _prompt_provider_setup(
     if space_id:
         settings["space_id"] = space_id
 
-    return {
-        "name": "clickup",
-        "api_token_env": env_var,
-        "settings": settings,
-        "add_env_to_copy": add_env_to_copy,
-    }
+    return ProviderSetup(
+        name=ProviderID.CLICKUP,
+        api_token_env=env_var,
+        settings=settings,
+        add_env_to_copy=add_env_to_copy,
+    )
 
 
 def _prompt_project_settings(
@@ -303,17 +309,17 @@ def _prompt_hooks_setup(
     *,
     current_post_worktree_create: str | None = None,
     current_copy_to_worktree: list[str] | None = None,
-) -> dict[str, Any]:
+) -> HooksSetup:
     """Collect worktree hooks settings — setup script and files to copy.
 
-    Returns a dict with keys: post_worktree_create (str | None), copy_to_worktree (list[str]).
+    Returns typed answers: post_worktree_create (str | None), copy_to_worktree (list[str]).
     """
     from wade.ui import prompts
 
-    defaults: dict[str, Any] = {
-        "post_worktree_create": current_post_worktree_create,
-        "copy_to_worktree": current_copy_to_worktree or [],
-    }
+    defaults = HooksSetup(
+        post_worktree_create=current_post_worktree_create,
+        copy_to_worktree=current_copy_to_worktree or [],
+    )
 
     if non_interactive:
         return defaults
@@ -325,7 +331,7 @@ def _prompt_hooks_setup(
         default=current_post_worktree_create or "",
         allow_empty=True,
     )
-    defaults["post_worktree_create"] = script_path.strip() or None
+    defaults.post_worktree_create = script_path.strip() or None
 
     current_copy_str = ", ".join(current_copy_to_worktree or [])
     copy_files = prompts.input_prompt(
@@ -334,9 +340,9 @@ def _prompt_hooks_setup(
         allow_empty=True,
     )
     if copy_files.strip():
-        defaults["copy_to_worktree"] = [f.strip() for f in copy_files.split(",") if f.strip()]
+        defaults.copy_to_worktree = [f.strip() for f in copy_files.split(",") if f.strip()]
     else:
-        defaults["copy_to_worktree"] = []
+        defaults.copy_to_worktree = []
 
     return defaults
 
@@ -346,17 +352,17 @@ def _prompt_knowledge_setup(
     *,
     current_enabled: bool = False,
     current_path: str = "KNOWLEDGE.md",
-) -> dict[str, Any]:
+) -> KnowledgeConfig:
     """Collect knowledge file settings — opt-in feature for cross-session learning.
 
-    Returns a dict with keys: enabled (bool), path (str).
+    Returns typed answers: enabled (bool), path (str).
     """
     from wade.ui import prompts
 
-    defaults: dict[str, Any] = {
-        "enabled": current_enabled,
-        "path": current_path,
-    }
+    defaults = KnowledgeConfig(
+        enabled=current_enabled,
+        path=current_path,
+    )
 
     if non_interactive:
         return defaults
@@ -367,17 +373,17 @@ def _prompt_knowledge_setup(
         "Enable project knowledge file for cross-session AI learning?", default=current_enabled
     )
     if not enabled:
-        defaults["enabled"] = False
+        defaults.enabled = False
         return defaults
 
-    defaults["enabled"] = True
+    defaults.enabled = True
     path = prompts.input_prompt(
         "Knowledge file path",
         default=current_path,
         allow_empty=False,
     )
     if path.strip():
-        defaults["path"] = path.strip()
+        defaults.path = path.strip()
 
     return defaults
 
@@ -387,7 +393,7 @@ def _prompt_bot_review_setup(
     *,
     current_auto_trigger: bool = False,
     current_offer_on_done: bool = True,
-) -> dict[str, Any]:
+) -> BotReviewConfig:
     """Collect what ``done`` should do about bot-review triggers (#431, #464).
 
     One three-way pick rather than two yes/no questions (consistent with the
@@ -399,15 +405,15 @@ def _prompt_bot_review_setup(
 
     Non-interactive/CI takes the current/default answer without prompting — the
     model defaults already provide ``auto_trigger: false`` /
-    ``offer_on_done: true``, so a missing answer never errors. Returns a dict with
-    keys: ``auto_trigger`` (bool), ``offer_on_done`` (bool).
+    ``offer_on_done: true``, so a missing answer never errors. Returns typed answers with
+    fields: ``auto_trigger`` (bool), ``offer_on_done`` (bool).
     """
     from wade.ui import prompts
 
-    defaults: dict[str, Any] = {
-        "auto_trigger": current_auto_trigger,
-        "offer_on_done": current_offer_on_done,
-    }
+    defaults = BotReviewConfig(
+        auto_trigger=current_auto_trigger,
+        offer_on_done=current_offer_on_done,
+    )
     if non_interactive:
         return defaults
 
@@ -428,8 +434,8 @@ def _prompt_bot_review_setup(
         modes,
         default=current_index,
     )
-    defaults["auto_trigger"] = choice == 1
-    defaults["offer_on_done"] = choice == 0
+    defaults.auto_trigger = choice == 1
+    defaults.offer_on_done = choice == 0
     return defaults
 
 
@@ -441,19 +447,19 @@ def _prompt_implementation_setup(
     current_implement_tool: str | None = None,
     current_model_mapping: ComplexityModelMapping | None = None,
     current_effective_tool: str | None = None,
-) -> dict[str, Any]:
+) -> ImplementationSetup:
     """Prompt for implementation tool and per-complexity model overrides.
 
     The default tool and default model are set in the AI section. This section
     only handles implementation-specific overrides that fall back to those defaults.
 
-    Returns a dict with keys:
+    Returns typed answers:
         ``tool``          - implement-specific tool override, or None (use default_tool)
         ``model_mapping`` - ComplexityModelMapping for the effective tool
     """
     if non_interactive:
         mapping = current_model_mapping or _resolve_models(default_tool)
-        return {"tool": None, "model_mapping": mapping}
+        return ImplementationSetup(model_mapping=mapping)
 
     console.rule("Implementation")
 
@@ -468,7 +474,7 @@ def _prompt_implementation_setup(
     mapping = cached or _resolve_models(current_effective)
     mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
 
-    return {"tool": implement_tool, "model_mapping": mapping}
+    return ImplementationSetup(tool=implement_tool, model_mapping=mapping)
 
 
 def _prompt_command_overrides(
@@ -476,27 +482,19 @@ def _prompt_command_overrides(
     non_interactive: bool,
     default_model: str | None = None,
     default_tool: str | None = None,
-    current_overrides: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, dict[str, Any]]:
+    current_overrides: dict[str, AICommandConfig] | None = None,
+) -> dict[str, AICommandConfig]:
     """Prompt for per-command AI tool, model, effort, and yolo overrides.
 
     Implementation configuration is handled separately by ``_prompt_implementation_setup()``.
 
-    Returns a dict like:
-        {"plan": {"tool": "claude", "model": "...", "effort": "high", "yolo": "true"},
-         "deps": {},
-         "review_plan": {"enabled": "true", "mode": "prompt"},
-         "review_implementation": {"enabled": "false"},
-         "review_batch": {"enabled": "true", "mode": "interactive"}}
-
-    Empty dicts for commands with no overrides.
-    Review commands include an "enabled" key ("true"/"false" as strings).
-    Effort and yolo values are stored as strings for uniform serialization.
+    Returns one typed answer per command, with unset optional fields for
+    inherited defaults. Enabled and yolo selections remain real booleans.
     """
     from wade.ui import prompts
 
     if non_interactive:
-        return {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
+        return {cmd_name: AICommandConfig() for cmd_name in _COMMAND_OVERRIDE_NAMES}
 
     current = current_overrides or {}
 
@@ -513,7 +511,9 @@ def _prompt_command_overrides(
         ("review_implementation", "AI tool", "Implementation review"),
         ("review_batch", "AI tool", "Batch review"),
     ]
-    result: dict[str, dict[str, Any]] = {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
+    result: dict[str, AICommandConfig] = {
+        cmd_name: AICommandConfig() for cmd_name in _COMMAND_OVERRIDE_NAMES
+    }
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
 
     def _ask_effort_and_permission_mode(
@@ -532,14 +532,14 @@ def _prompt_command_overrides(
         except (ValueError, KeyError):
             return
 
-        current_cmd = current.get(cmd_name, {})
+        current_cmd = current.get(cmd_name, AICommandConfig())
 
         if caps.supports_effort:
             effort_choices = [
                 "Skip (inherit defaults)",
                 *[e.value for e in valid_effort_levels(effective_tool)],
             ]
-            current_effort = current_cmd.get("effort")
+            current_effort = current_cmd.effort
             effort_default_idx = 0
             if current_effort and current_effort in effort_choices:
                 effort_default_idx = effort_choices.index(current_effort)
@@ -547,7 +547,7 @@ def _prompt_command_overrides(
                 "  Effort level", effort_choices, default=effort_default_idx
             )
             if effort_idx > 0:
-                result[cmd_name]["effort"] = effort_choices[effort_idx]
+                result[cmd_name].effort = effort_choices[effort_idx]
 
         if not skip_autonomy:
             # Offer default plus each autonomy tier the tool supports. crossby
@@ -564,10 +564,8 @@ def _prompt_command_overrides(
             if len(tiers) > 1:
                 # Seed the default from an existing permission_mode, falling back
                 # to the legacy yolo alias (yolo: true → yolo tier).
-                current_pm = current_cmd.get("permission_mode")
-                if current_pm is None and (
-                    current_cmd.get("yolo") == "true" or current_cmd.get("yolo") is True
-                ):
+                current_pm = current_cmd.permission_mode
+                if current_pm is None and current_cmd.yolo:
                     current_pm = "yolo"
 
                 pm_choices = ["Skip (use default)", *tiers]
@@ -578,7 +576,7 @@ def _prompt_command_overrides(
                     default=pm_default,
                 )
                 if pm_idx > 0:
-                    result[cmd_name]["permission_mode"] = tiers[pm_idx - 1]
+                    result[cmd_name].permission_mode = tiers[pm_idx - 1]
                 # idx == 0 means Skip — omit to inherit the global setting
 
     def _ask_tool_and_model(
@@ -590,13 +588,13 @@ def _prompt_command_overrides(
         allow_skip: bool = True,
     ) -> None:
         """Ask for AI tool and model, updating result and tool_for_cmd in place."""
-        current_cmd = current.get(cmd_name, {})
+        current_cmd = current.get(cmd_name, AICommandConfig())
         selectable_tools = (
             tool_options if allow_skip else [t for t in tool_options if t != skip_label]
         )
         # Pre-select current tool if present
         tool_default_idx = len(selectable_tools) - 1 if allow_skip else 0
-        current_tool_val = current_cmd.get("tool")
+        current_tool_val = current_cmd.tool
         if current_tool_val and current_tool_val in selectable_tools:
             tool_default_idx = selectable_tools.index(current_tool_val)
 
@@ -605,12 +603,12 @@ def _prompt_command_overrides(
         tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
 
         if tool_for_cmd[cmd_idx] is not None:
-            result[cmd_name]["tool"] = selected_tool
+            result[cmd_name].tool = selected_tool
             maybe_tool = selected_tool
 
             available = _collect_model_options(maybe_tool)
             suggested = _suggest_model_for_tool(maybe_tool)
-            current_model_val = current_cmd.get("model")
+            current_model_val = current_cmd.model
             if current_model_val and current_model_val in available:
                 model_default = current_model_val
             elif default_model and default_model in available:
@@ -638,14 +636,14 @@ def _prompt_command_overrides(
                     f"  Model for {section.lower()} (model ID)", model_default
                 )
             if chosen and chosen != skip_model_label:
-                result[cmd_name]["model"] = chosen
+                result[cmd_name].model = chosen
 
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
         console.rule(section)
-        current_cmd = current.get(cmd_name, {})
+        current_cmd = current.get(cmd_name, AICommandConfig())
 
         if cmd_name == "plan":
-            result[cmd_name] = {}
+            result[cmd_name] = AICommandConfig()
             _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
             effective_tool = tool_for_cmd[cmd_idx] or default_tool
             if effective_tool:
@@ -653,17 +651,17 @@ def _prompt_command_overrides(
 
         elif cmd_name.startswith("review_"):
             # 1. Enable?
-            current_enabled = current_cmd.get("enabled")
-            enabled_default = 0 if current_enabled != "false" else 1
+            current_enabled = current_cmd.enabled
+            enabled_default = 1 if current_enabled is False else 0
             enable_idx = prompts.select(
                 f"Enable {section.lower()}?",
                 ["Yes", "No"],
                 default=enabled_default,
             )
             if enable_idx == 1:
-                result[cmd_name] = {"enabled": "false"}
+                result[cmd_name] = AICommandConfig(enabled=False)
                 continue
-            result[cmd_name] = {"enabled": "true"}
+            result[cmd_name] = AICommandConfig(enabled=True)
 
             # 2. Delegation mode (before tool/model — if "prompt", no AI needed)
             mode_options = [
@@ -672,7 +670,7 @@ def _prompt_command_overrides(
                 "interactive (AI session)",
             ]
             mode_values = ["prompt", "headless", "interactive"]
-            current_mode = current_cmd.get("mode")
+            current_mode = current_cmd.mode
             if current_mode and current_mode in mode_values:
                 default_mode_idx = mode_values.index(current_mode)
             else:
@@ -683,7 +681,7 @@ def _prompt_command_overrides(
                 default=default_mode_idx,
             )
             mode = mode_values[mode_idx]
-            result[cmd_name]["mode"] = mode
+            result[cmd_name].mode = mode
 
             # 3. Tool, model, effort, and (for interactive) yolo — only for AI-backed modes.
             # When no default_tool is configured, skip is not a valid choice —
@@ -704,7 +702,7 @@ def _prompt_command_overrides(
                     )
 
         elif cmd_name == "deps":
-            result[cmd_name] = {}
+            result[cmd_name] = AICommandConfig()
 
             # 1. Tool and model
             _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
@@ -717,7 +715,7 @@ def _prompt_command_overrides(
                     "interactive (AI session)",
                 ]
                 deps_mode_values = ["headless", "interactive"]
-                current_mode = current_cmd.get("mode")
+                current_mode = current_cmd.mode
                 deps_mode_default = 0
                 if current_mode and current_mode in deps_mode_values:
                     deps_mode_default = deps_mode_values.index(current_mode)
@@ -727,7 +725,7 @@ def _prompt_command_overrides(
                     default=deps_mode_default,
                 )
                 deps_mode = deps_mode_values[mode_idx]
-                result[cmd_name]["mode"] = deps_mode
+                result[cmd_name].mode = deps_mode
 
                 # 3. Effort + yolo (yolo skipped when mode=headless)
                 _ask_effort_and_permission_mode(

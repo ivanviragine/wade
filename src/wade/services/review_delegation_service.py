@@ -924,7 +924,10 @@ def _record_binding_outcome(
         if outcome is ReviewOutcome.UNATTEMPTED:
             console.warn("Could not persist the unattempted-review audit record.")
         else:
-            console.warn("Review completed, but its binding-aware receipt could not be persisted.")
+            console.warn(
+                f"The {outcome.value} review outcome could not be persisted "
+                "in its binding-aware receipt."
+            )
         return None
     return count_binding_passes(
         repo_root,
@@ -933,14 +936,11 @@ def _record_binding_outcome(
     )
 
 
-# Today's wording for a failed review whose cause wade cannot pin down. Kept
-# verbatim and used unchanged whenever the parent assessment is ``UNKNOWN``: the
-# disjunction is not sloppiness, it is the honest statement of what is known when
-# the runtime publishes no sandbox signal (#462 review).
+# The structured result proves that no reviewer started, even when its exact
+# configuration/runtime failure is unknown. Do not offer crash remediation here.
 _HEDGED_REVIEW_FAILURE = (
-    "Review did not complete, so no review-pass budget was consumed. "
-    "Check the reviewer output above for the cause — a launch failure "
-    "(missing login/PATH, sandbox denial) or a nonzero exit — fix that, "
+    "The reviewer never started, so no review-pass budget was consumed. "
+    "Check the runtime or configuration failure above, repair it, "
     "then re-run `wade review implementation`."
 )
 
@@ -950,8 +950,10 @@ def _report_failed_review(
     head: str,
     prepared: PreparedDelegationMethod,
     result: DelegationResult,
+    *,
+    max_passes: int | None = None,
 ) -> None:
-    """Record and explain a review that produced no usable outcome.
+    """Record and explain a non-success without certifying review completion.
 
     A reviewer that never started is an *unattempted* review: it is recorded so
     the state is auditable, but the record neither satisfies the gate nor
@@ -959,8 +961,9 @@ def _report_failed_review(
     `done` skip a required review (#462), and satisfying the gate with it would
     be worse still.
 
-    The remediation is graded by how much wade actually knows, because the value
-    of the diagnosis is that it can be trusted:
+    Explicit cancellation, skipped dispatch, and prompt/preflight failure are
+    exempt. A launched failure spends budget through a non-satisfying receipt.
+    The never-launched remediation is graded by how much wade actually knows:
 
     1. a known-sandboxed parent **and** an attempted unrestricted-profile mismatch
        **and** a denial-shaped failure — state the cause and the exact relaunch
@@ -978,6 +981,47 @@ def _report_failed_review(
     generic remediation — a confident wrong cause, which is worse than the hedged
     one it replaced (#481 review).
     """
+    if result.cancelled:
+        console.warn("Review cancelled by user; no review-pass budget was consumed.")
+        return
+    if result.skipped:
+        console.info("Review skipped; no review-pass budget was consumed.")
+        return
+    if result.mode is DelegationMode.PROMPT:
+        console.warn(
+            "Review preparation did not complete; no review-pass budget was consumed. "
+            "Fix the reported configuration error before retrying."
+        )
+        return
+    if not result.never_launched:
+        passes = _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.FAILED)
+        console.warn(
+            "The reviewer ran and failed; this attempt does not certify review completion. "
+            "Inspect the reviewer output above before retrying."
+        )
+        if isinstance(passes, int) and max_passes is not None:
+            _announce_review_pass_budget(passes, max_passes)
+        current = read_review_record(
+            repo_root,
+            delegation=DelegationKind.CODE_REVIEW,
+            commit=head,
+            binding=prepared.binding,
+        )
+        if current is not None and current.outcome is ReviewOutcome.FAILED:
+            console.detail(
+                "The current failed receipt consumes a pass but does not satisfy review."
+            )
+        elif current is not None:
+            console.detail(
+                f"The existing {current.outcome.value} review record was retained; "
+                "its gate state is unchanged."
+            )
+        else:
+            console.warn(
+                "Could not confirm a failed-review receipt; inspect the persistence error."
+            )
+        return
+
     current_record = None
     if result.never_launched:
         _record_binding_outcome(repo_root, head, prepared, ReviewOutcome.UNATTEMPTED)
@@ -1252,11 +1296,15 @@ def review_implementation(
                 exit_code=1,
             )
         cleanup_delegation_bundle(prepared, preserve=not result.success)
-        # Count completed reviews and real headless timeouts toward the cap. A
+        # Count completed reviews, launched failures and real timeouts. A
         # reviewer that could not launch (missing login/PATH, sandbox denial, etc.)
         # has not consumed a review→fix cycle; counting it would make `done` skip a
         # required review for an infrastructure failure (#462).
-        if (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
+        if result.skipped or result.cancelled:
+            _report_failed_review(
+                repo_root, head, prepared, result, max_passes=config.done.max_review_passes
+            )
+        elif (result.success and result.mode is not DelegationMode.PROMPT) or result.timed_out:
             outcome = ReviewOutcome.REVIEWED if result.success else ReviewOutcome.TIMED_OUT
             passes = _record_binding_outcome(repo_root, head, prepared, outcome)
             # Surface the running budget from the command itself so the caller sees
@@ -1272,7 +1320,9 @@ def review_implementation(
                 "self-review, then acknowledge it explicitly."
             )
         else:
-            _report_failed_review(repo_root, head, prepared, result)
+            _report_failed_review(
+                repo_root, head, prepared, result, max_passes=config.done.max_review_passes
+            )
         return result
 
     # An acknowledgement records a review the user has already performed; it

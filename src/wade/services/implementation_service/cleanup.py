@@ -12,11 +12,14 @@ from crossby.ai_tools import AbstractAITool
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
+from wade.git import merge_evidence as git_merge
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
+from wade.models.merge_evidence import MergeAssessment, MergeAssessmentCache, MergeEvidenceState
 from wade.models.session import WorktreeState
 from wade.models.task import Task
+from wade.models.worktree import Worktree
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service._shared import (
@@ -70,6 +73,7 @@ def list_sessions(
     worktrees = git_worktree.list_worktrees(repo_root)
     sessions: list[dict[str, Any]] = []
     provider_inst = get_provider(config)
+    merge_cache = MergeAssessmentCache()
 
     # The first worktree is the main checkout — skip unless --all
     for i, wt in enumerate(worktrees):
@@ -117,6 +121,7 @@ def list_sessions(
             task=task_info,
             task_lookup_attempted=task_lookup_attempted,
             task_lookup_failed=task_lookup_failed,
+            merge_cache=merge_cache,
         )
 
         # Count commits ahead
@@ -236,6 +241,7 @@ def _remove_stale(
     """Remove all stale worktrees."""
     worktrees = git_worktree.list_worktrees(repo_root)
     stale_wts: list[dict[str, Any]] = []
+    merge_cache = MergeAssessmentCache()
 
     for i, wt in enumerate(worktrees):
         if i == 0:
@@ -275,6 +281,7 @@ def _remove_stale(
             task=task_info,
             task_lookup_attempted=task_lookup_attempted,
             task_lookup_failed=task_lookup_failed,
+            merge_cache=merge_cache,
         )
 
         if staleness != WorktreeState.ACTIVE:
@@ -307,7 +314,11 @@ def _remove_stale(
         # nothing about local commits, so a remote-gone branch with unpushed
         # work is preserved here, not silently nuked.
         if _cleanup_worktree(
-            repo_root, Path(stale["path"]), main_branch, discard_dirty=discard_dirty
+            repo_root,
+            Path(stale["path"]),
+            main_branch,
+            discard_dirty=discard_dirty,
+            merge_cache=merge_cache,
         ):
             removed += 1
 
@@ -355,64 +366,53 @@ def _worktree_loss_risk(
     wt_path: Path,
     branch_name: str | None,
     main_branch: str,
+    *,
+    assessment: MergeAssessment | None = None,
 ) -> list[str]:
-    """Return human-readable descriptions of work removing this worktree destroys.
-
-    An empty list means removal is safe: a clean working tree AND a branch that
-    is either empty (zero commits ahead of main) or fully merged into main.
-    A non-empty list names each hazard — uncommitted changes and/or unmerged
-    local commits — so the caller can refuse and tell the user exactly what
-    ``--discard-dirty`` would throw away (A2).
-    """
+    """Require independent cleanliness and pinned commit-disposal proof."""
     losses: list[str] = []
-
-    # 1. Uncommitted changes in the worktree's working directory.
-    if wt_path.is_dir():
+    try:
+        if not wt_path.is_dir():
+            losses.append("worktree directory is unavailable — could not verify its contents")
+        elif not git_repo.is_clean(wt_path):
+            status = git_repo.get_dirty_status(wt_path)
+            losses.append(
+                f"uncommitted changes ({status['staged']} staged, "
+                f"{status['unstaged']} unstaged, {status['untracked']} untracked)"
+            )
+    except GitError:
+        losses.append("uncommitted changes (could not verify — treating as unsafe)")
+    if not branch_name or branch_name in {main_branch, "(detached)"}:
+        losses.append("could not identify a removable local branch — treating as unsafe")
+        return losses
+    proof = assessment or git_merge.assess_branch(main_root, branch_name, main_branch)
+    if proof.state != MergeEvidenceState.VERIFIED:
+        losses.append(f"could not verify commits on '{branch_name}': {proof.reason}")
+    else:
         try:
-            if not git_repo.is_clean(wt_path):
-                status = git_repo.get_dirty_status(wt_path)
-                losses.append(
-                    f"uncommitted changes ({status['staged']} staged, "
-                    f"{status['unstaged']} unstaged, {status['untracked']} untracked)"
-                )
-        except GitError:
-            losses.append("uncommitted changes (could not verify — treating as unsafe)")
-
-    # 2. Local commits not merged into main — would be lost by `git branch -D`.
-    if branch_name and branch_name != main_branch:
-        # Prefer the remote-tracking base: a local main that is behind origin
-        # makes an already-merged branch look unmerged (a false loss).
-        base_ref = main_branch
-        with contextlib.suppress(GitError):
-            git_repo.rev_parse(main_root, f"origin/{main_branch}")
-            base_ref = f"origin/{main_branch}"
-        try:
-            ahead = git_branch.commits_ahead(main_root, branch_name, base_ref)
-        except GitError:
-            # Fail CLOSED — an unverifiable branch state is treated as unsafe,
-            # same as the is_clean check above. Never read "could not check" as
-            # "no work to lose".
-            losses.append(f"could not verify commits on '{branch_name}' — treating as unsafe")
-            return losses
-        if ahead > 0:
-            merged = False
-            try:
-                mb = git_repo.merge_base(main_root, branch_name, base_ref)
-                tip = git_repo.rev_parse(main_root, branch_name)
-                merged = mb == tip
-            except GitError:
-                merged = False
-            if not merged:
-                # Squash/rebase merge: the branch tip is not an ancestor of the
-                # base, yet every patch is already applied there. `git cherry`
-                # (patch-id based) recognizes this — the completion path for this
-                # PR is squash-merge, so this is the routine cleanup case, not a
-                # loss. Fails closed on any git error.
-                merged = git_branch.all_patches_present(main_root, base_ref, branch_name)
-            if not merged:
-                losses.append(f"{ahead} local commit(s) not merged into {base_ref}")
-
+            git_merge.revalidate_assessment(main_root, proof)
+        except GitError as exc:
+            losses.append(str(exc))
     return losses
+
+
+def _worktree_identity(main_root: Path, wt_path: Path, main_branch: str) -> Worktree:
+    matches = [
+        wt
+        for wt in git_worktree.list_worktrees(main_root)
+        if Path(wt.path).resolve() == wt_path.resolve()
+    ]
+    if len(matches) != 1:
+        raise GitError("worktree inventory does not identify exactly one target")
+    wt = matches[0]
+    if not wt.branch or wt.branch in {main_branch, "(detached)"} or not wt.head:
+        raise GitError("worktree inventory has no removable branch/head")
+    head = git_merge.commit_oid(wt_path, "HEAD")
+    if head != wt.head or head != git_merge.commit_oid(main_root, f"refs/heads/{wt.branch}"):
+        raise GitError("worktree HEAD and inventoried local branch head do not match")
+    if git_repo.get_current_branch_ref(wt_path) != f"refs/heads/{wt.branch}":
+        raise GitError("worktree checked-out branch does not match inventory")
+    return wt
 
 
 def _cleanup_worktree(
@@ -421,6 +421,7 @@ def _cleanup_worktree(
     main_branch: str,
     *,
     discard_dirty: bool = False,
+    merge_cache: MergeAssessmentCache | None = None,
 ) -> bool:
     """Remove a single worktree and its branch.
 
@@ -434,28 +435,39 @@ def _cleanup_worktree(
     # checkout — not a linked worktree root — or git refuses / corrupts state.
     main_root = git_repo.main_checkout_root(repo_root)
 
-    # Find the branch name for this worktree
-    worktrees = git_worktree.list_worktrees(main_root)
-    branch_name: str | None = None
-    for wt in worktrees:
-        if wt.path == str(wt_path):
-            branch_name = wt.branch
-            break
-
-    # A2 loss guard — never silently discard a dirty worktree or force-delete a
-    # branch carrying unmerged commits.
-    losses = _worktree_loss_risk(main_root, wt_path, branch_name, main_branch)
+    try:
+        identity = _worktree_identity(main_root, wt_path, main_branch)
+    except GitError as exc:
+        console.error(f"Refusing cleanup: {exc}")
+        return False
+    branch_name = identity.branch
+    assert branch_name is not None
+    assessment = git_merge.assess_branch(main_root, branch_name, main_branch, merge_cache)
+    losses = _worktree_loss_risk(
+        main_root, wt_path, branch_name, main_branch, assessment=assessment
+    )
     if losses and not discard_dirty:
-        console.error(f"Refusing to remove {wt_path.name} — this would lose work:")
+        console.error(f"Refusing to remove {wt_path.name} — cleanup is not verified:")
         for loss in losses:
             console.detail(loss)
-        console.hint("Push/commit the work, or re-run with --discard-dirty to discard it.")
+        console.hint(
+            "Inspect the worktree and origin/PR access, then retry. "
+            "--force only skips confirmation."
+        )
         return False
 
     _preserve_session_data(main_root, wt_path)
 
     try:
-        git_worktree.remove_worktree(main_root, wt_path)
+        if _worktree_identity(main_root, wt_path, main_branch) != identity:
+            raise GitError("worktree identity changed during cleanup")
+        if not discard_dirty:
+            late_losses = _worktree_loss_risk(
+                main_root, wt_path, branch_name, main_branch, assessment=assessment
+            )
+            if late_losses:
+                raise GitError("; ".join(late_losses))
+        git_worktree.remove_worktree(main_root, wt_path, force=discard_dirty)
     except GitError as e:
         console.warn(f"Worktree removal failed: {e}")
         return False

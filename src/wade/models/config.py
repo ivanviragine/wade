@@ -37,6 +37,7 @@ from crossby.models.config import ComplexityModelMapping as ComplexityModelMappi
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from wade.models.permission import PermissionMode, coerce_permission_mode
+from wade.models.project import GitHubProjectsConfig
 from wade.models.session import MergeStrategy
 from wade.models.skill import SkillRef
 from wade.models.workflow import AICommandKey
@@ -519,6 +520,7 @@ class ProjectConfig(BaseModel):
     ai: AIConfig = AIConfig()
     models: dict[str, ComplexityModelMapping] = {}
     provider: ProviderConfig = ProviderConfig()
+    github_projects: GitHubProjectsConfig | None = None
     permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
