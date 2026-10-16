@@ -2208,7 +2208,7 @@ def _base_retarget_is_safe(
             f"Plan removed the '## Base Branch' section, but PR #{lookup.pr.number} "
             f"keeps its current base '{current_base}' (wade does not auto-revert an "
             "existing PR's base). Retarget it explicitly with "
-            f"`wade implement {issue.id} --base {main_branch}` if intended."
+            f"`wade implement {shlex.quote(issue.id)} --base {main_branch}` if intended."
         )
         return True
 
@@ -2232,7 +2232,7 @@ def _base_retarget_is_safe(
         return True
     console.info(
         f"Left PR #{lookup.pr.number} targeting '{current_base}'. "
-        f"To retarget deliberately, run `wade implement {issue.id} "
+        f"To retarget deliberately, run `wade implement {shlex.quote(issue.id)} "
         f"--base {desired_effective}`."
     )
     return False

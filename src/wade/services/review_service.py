@@ -1089,9 +1089,10 @@ def start(
     # --- No review signals: check bot status, commit freshness, quiet-exit ---
     if not effective_threads and not status.has_changes_requested:
         if status.bot_status == ReviewBotStatus.PAUSED:
+            trigger = f"wade review trigger {shlex.quote(task.id)}"
             console.warn(
                 "CodeRabbit review is paused — comments may arrive when resumed.\n"
-                f"    Run `wade review trigger {task.id}` to post a fresh bot review trigger."
+                f"    Run `{trigger}` to post a fresh bot review trigger."
             )
             return True
         if status.bot_status == ReviewBotStatus.IN_PROGRESS:

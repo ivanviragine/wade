@@ -154,7 +154,7 @@ def smart_start(
         return ctx.run_implement()
 
     # Read the issue
-    issue_number = target.lstrip("#")
+    issue_number = target.removeprefix("#")
     try:
         task = provider.read_task(issue_number)
     except Exception:
