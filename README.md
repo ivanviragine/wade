@@ -349,9 +349,13 @@ wade plan ─▶ tasks + draft PRs ─▶ wade <N> ─▶ AI implements in an is
 
 ### Commands you run
 
+`<N>` is any task ID your provider reports — `42`, or an opaque ClickUp ID such
+as `abc1234` (see [Task IDs and references](#task-ids-and-references)). Only the
+`wade <N>` shorthand is numeric-only.
+
 | Command | Description |
 |---------|-------------|
-| `wade <N>` | Smart entry — routes by the task's PR state to implement, continue, review, merge, or open-in-browser |
+| `wade <N>` | Smart entry for numeric IDs — routes by the task's PR state to implement, continue, review, merge, or open-in-browser |
 | `wade plan` | AI planning session — writes validated plans that become tasks + draft PRs |
 | `wade implement <N>` | Create a worktree and start an implementation session for a task |
 | `wade implement-batch <N> <M> ...` | Start parallel sessions for multiple tasks *(beta)* |
@@ -920,6 +924,44 @@ via the `gh` CLI, so `wade review pr-comments`, the auto-poll loop, and
 `wade review-pr-comments-session fetch` / `resolve` behave identically across
 providers. Only where a task itself lives differs.
 
+### Task IDs and references
+
+A task ID is the exact string its provider reports — GitHub numbers, Markdown's
+generated decimals, or opaque ClickUp IDs such as `abc1234`. WADE never converts
+it to a number, folds its case, or strips leading zeros, so `42` and `0042` are
+different tasks. Pass IDs as-is everywhere: `wade implement abc1234`,
+`wade task read abc1234`, `wade task deps abc1234 def5678`,
+`wade implement-batch abc1234 def5678`, `wade review pr-comments abc1234`.
+The numeric shorthand `wade 42` stays numeric-only; use the explicit commands
+for other IDs. A bare token is always a task ID — pass `./name` (or any path
+with a separator or `.md` suffix) to start from a plan file with that name.
+
+- **Branches and worktrees.** Canonical decimal IDs keep the
+  `feat/42-add-auth` shape. Any other ID is encoded as one delimiter-free token,
+  `feat/idv1_61626331323334-add-auth` (`idv1_` + lowercase UTF-8 hex), so
+  punctuation, case and leading zeros cannot collide with the title slug or with
+  another task. Resolution decodes only that exact token, which keeps title
+  edits, re-entry, remote-only review recovery and cleanup bound to the same
+  task. Empty IDs, IDs containing whitespace, and IDs over 64 UTF-8 bytes are
+  rejected before any branch, worktree, PR or task mutation.
+- **Task-body references.** Dependency sections and tracking checklists use
+  `#42` for GitHub and Markdown and `clickup:abc1234` for ClickUp (characters
+  outside `[A-Za-z0-9_-]` are percent-encoded). Readers decode only complete
+  references of the configured provider, so `#123abc` is never task `123`.
+  Legacy `- [ ] #abc1234` ClickUp checklist items and `**Depends on:**` lines
+  are still read.
+- **PR references.** Only GitHub tasks get GitHub issue syntax (`Implements #42`,
+  `Closes #42`, `Part of #42`). Every other provider — including numeric
+  ClickUp and Markdown IDs — gets a qualified, linked reference that GitHub
+  cannot treat as a closing keyword: `Implements [clickup:abc1234](<url>)`
+  while in progress, `Completes [clickup:abc1234](<url>)` once `done` records
+  that the task should close. After a WADE-driven merge, the task is closed
+  through its own provider using the exact ID; a `--no-close` completion
+  (`Implements …` / GitHub's `Implements #N`) leaves it open, and an unreadable
+  PR body leaves it open with a `wade task close <id>` hint. `done` replaces
+  legacy `Closes #<id>` lines it wrote for external tasks and refuses — with a
+  repair message — when such a line cannot be corrected unambiguously.
+
 ### ClickUp provider
 
 Task state follows ClickUp's canonical `status.type`, regardless of the display
@@ -934,6 +976,12 @@ statuses, and sends the unique canonical Closed status's exact display name.
 Missing or ambiguous metadata fails before the update; the returned task must
 have canonical Closed type before WADE reports success. WADE does not assume
 that “closed” or “Done” is the configured closing name.
+
+Tracking tasks work like GitHub's: `wade task deps` writes
+`- [ ] clickup:<id> — <title>` checklists and `**Depends on:** clickup:<id>`
+sections, and `done` finds a task's open tracking parent by scanning every page
+of the configured List (filtered to the issue label) for that exact child. A
+failed scan is reported as a lookup failure, never as "no parent".
 
 ### Markdown provider
 
@@ -957,8 +1005,8 @@ Description body here. Sub-headings, code blocks, anything markdown.
   worktree reads/writes the same physical file. No textual merge conflicts
   on `ISSUES.md`.
 - IDs are random 8-digit decimal so two parallel `wade implement` sessions
-  in different worktrees can't collide. They stay numeric so existing
-  `#NN` checklist refs in tracking-issue bodies still work.
+  in different worktrees can't collide. Task bodies keep `#NN` checklist and
+  dependency refs; PR bodies use `markdown:NN`, never GitHub's `#NN`.
 - Configure via `.wade.yml`:
 
   ```yaml
@@ -972,7 +1020,7 @@ Description body here. Sub-headings, code blocks, anything markdown.
 - After a PR merges, `provider.close_task` flips the section's `state` to
   `closed` in `ISSUES.md`. By default the file is left modified in your
   working tree — commit it yourself. Set `auto_commit: true` to have
-  wade attempt a `chore: close #N` commit containing only the selected task's
+  wade attempt a `chore: close markdown task N` commit containing only the selected task's
   state and `in-progress` label changes. Other file content and line endings
   remain intact, and unrelated staged or unstaged work stays untouched.
 - Auto-commit requires the task file to be a clean tracked regular file with

@@ -741,7 +741,8 @@ The **explicit** `--sandbox`/`--no-sandbox` override (the tri-state
 so it survives instead of the next session silently re-resolving it: the
 post-implementation "Wait for reviews" path forwards it via
 `_post_implementation_lifecycle` → `review_service.start`, and the numeric
-`wade <N>` shorthand forwards it via `SmartStartContext` to whichever route it
+`wade <N>` shorthand (numeric IDs only; other IDs use `wade implement <id>` /
+`wade review pr-comments <id>`) forwards it via `SmartStartContext` to whichever route it
 picks (implement / batch / review). `_build_implement_cmd` keeps the same
 explicit-only rule — an unset value emits no flag, so a child re-resolves from
 its own config rather than freezing the parent's resolved value. `None` (unset)
@@ -1675,6 +1676,49 @@ edges exist. Failures preserve recoverable output and report incomplete
 persistence, rather than pretending already-created external state was rolled
 back. The single-task implementation offer is a separate human confirmation,
 including under YOLO. Successful vote flushing and cleanup remain required.
+
+## Task identity and references
+
+Provider task IDs are authoritative strings end to end (#490): CLI arguments,
+models, graph nodes/edges, plan-bundle mappings, labels, comments, review-cycle
+state, tracking parents, PR references and closure all carry the exact
+`Task.id`. Nothing applies `int()`, case folding or substring matching to a task
+ID; numeric normalization, if any, belongs at a numeric provider's boundary.
+
+Three pieces own the representation, each at the lowest layer that needs it:
+
+| Concern | Owner | Contract |
+|---------|-------|----------|
+| Branch/path identity | `utils/task_identity.py` (leaf, stdlib only) | Canonical decimals stay `feat/42-slug`; any other ID becomes `idv1_<lowercase UTF-8 hex>` before the slug. `task_id_from_branch` decodes only the final segment's token and rejects malformed or non-canonical tokens (no numeric fallback). `encode_task_id` also names review-cycle files (`review-cycle@42.json`, `review-cycle@idv1_….json`). IDs that are empty, contain whitespace, or exceed 64 UTF-8 bytes raise `TaskIdentityError` before any ref/worktree/provider mutation. |
+| Task-body reference grammar | `models/task.py` (pure) | `format_task_ref` / `parse_task_refs`: `#42` for GitHub and Markdown, `clickup:abc1234` (percent-encoded beyond `[A-Za-z0-9_-]`) otherwise. Only complete tokens of the configured provider's namespace decode; legacy `#<opaque>` is accepted only in checklist items and `**Depends on:**`/`**Blocks:**` lines. `format_issue_heading` / `parse_issue_heading` own the runtime `# Issue #<id>: <title>` heading shared by `PLAN.md`, `.wade/plan-issue.md` and the SessionStart hook. |
+| PR reference policy | `models/task.py::TaskReference`, built by `implementation_service/_shared.py::task_reference` from `config.provider.name` | Only the GitHub provider renders `#N` and closing keywords. External tasks (including numeric ClickUp/Markdown IDs) render `Implements`/`Completes <provider>:<id>` linked to `Task.url`. Never inferred from `id.isdigit()` or the GitHub PR delegate. |
+
+Resolution (`_shared.py`): `resolve_task_branch`, `find_existing_branch_for_issue`
+and `find_open_pr_branch_for_issue` compare decoded IDs exactly; review, batch
+status/PR indexing, batch review and cleanup reuse them instead of rebuilding
+branch names. `match_worktree_target` fixes precedence for command targets:
+exact branch identity, then exact branch name, then exact worktree directory,
+then (only for navigation/plan-title callers) a fuzzy directory fragment. `done`
+uses exact matching only and refuses an explicit target that disagrees with the
+branch it would finalize. A bare token is a task ID; only explicit path syntax
+(`is_explicit_plan_path`) selects a plan file.
+
+PR content: `lifecycle._apply_pr_refs` edits only WADE-owned reference lines
+outside managed blocks and fences (it rescans the surviving text with
+`utils/markdown.py`). External tasks replace legacy whole-line `Closes #<id>` /
+`Implements #<id>` lines; a partial legacy closing line for a GitHub-interpretable
+ID raises `MarkdownStructureError` rather than publishing closure metadata.
+`task_close_intent` reads the recorded intent back: `_merge_pr` reads the PR
+body before merging and, after a successful merge, closes the task through the
+configured provider with the exact ID unless the body records `--no-close`; an
+unreadable body leaves the task open. Markdown's optional close commit uses
+`chore: close markdown task N`, never a GitHub `close #N` keyword.
+
+Tracking parents: GitHub and Markdown keep their checklist scans; ClickUp's
+`find_parent_issue` pages through the whole configured List (issue-label tag)
+with the shared checklist parser and propagates API failures instead of
+returning "no parent". Mermaid graphs use stable `t0`, `t1`… node aliases with the
+exact reference in escaped labels.
 
 ## Merge Strategy
 

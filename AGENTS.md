@@ -150,6 +150,7 @@ Status move. See README and developer architecture/testing docs for contracts.
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.
+- **Task IDs are exact strings**: never `int()`, case-fold, or substring-match a provider task ID. Branch/path identity goes through `utils/task_identity.py` (`idv1_` codec), task-body references through `models/task.py` (`format_task_ref`/`parse_task_refs`), and PR references through `TaskReference` built from the configured provider — only GitHub tasks get `#N`/closing keywords. See `docs/dev/architecture.md` ("Task identity and references").
 
 Uncollectable planning metadata uses `planning_handoff_errors.UncollectableHandoffError`.
 Parent collection retains the intact original registered owner before editable-plan
