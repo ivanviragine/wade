@@ -95,8 +95,9 @@ def decode_task_token(token: str) -> str | None:
         return None
     try:
         decoded = bytes.fromhex(match.group(1)).decode("utf-8")
-        # Exactly one token per ID: reject e.g. idv1_3432 (an encoded "42"),
-        # uppercase hex, and IDs the encoder itself would refuse.
+        # Exactly one token per ID: reject e.g. idv1_3432 (an encoded "42") and
+        # IDs the encoder itself would refuse. (The pattern already rejects
+        # uppercase hex.)
         if encode_task_id(decoded) != token:
             return None
     except (UnicodeDecodeError, TaskIdentityError):
