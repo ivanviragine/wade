@@ -1565,6 +1565,18 @@ class TestOpaqueDependencyIds:
         text = "123abc -> 2\n0042 -> 2\n1 -> 2abc\nABC1234 -> 2\n1->2->3\n"
         assert parse_deps_output(text, {"123", "42", "2", "abc1234", "1", "3"}) == []
 
+    def test_only_a_comment_may_follow_the_destination(self) -> None:
+        text = (
+            "abc1234 -> def5678 -> ghi9012\n"
+            "abc1234 -> ghi9012 -> def5678 # chained\n"
+            "def5678 -> ghi9012 because schema\n"
+            "def5678 -> abc1234   # spaced reason\n"
+        )
+        edges = parse_deps_output(text, {"abc1234", "def5678", "ghi9012"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
+            ("def5678", "abc1234", "spaced reason"),
+        ]
+
     def test_sections_and_tracking_use_provider_references(self) -> None:
         edges = [DependencyEdge(from_task="abc1234", to_task="def5678")]
         assert "**Depends on:** clickup:abc1234" in build_deps_section("def5678", edges, "clickup")

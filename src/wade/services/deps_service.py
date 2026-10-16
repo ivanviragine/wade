@@ -125,6 +125,7 @@ def build_deps_prompt(context: str, method_section: str) -> str:
 # dropped) and are accepted only when they exactly match an analyzed task ID,
 # so ``123abc`` can never become task ``123``.
 _ARROW_RE = re.compile(r"^\s*#?(?P<from>[^\s#]+?)\s*->\s*#?(?P<to>[^\s#]+)(?P<rest>.*)$")
+_SUFFIX_RE = re.compile(r"\s*(?:#.*)?")
 _COMMENT_RE = re.compile(r"#\s*(.*)")
 
 
@@ -162,7 +163,8 @@ def parse_deps_output(
         from_id = match.group("from")
         to_id = match.group("to")
         rest = match.group("rest")
-        if rest and not rest[0].isspace() and not rest.startswith("#"):
+        # Only an optional "# reason" may follow — never a further "-> <id>".
+        if not _SUFFIX_RE.fullmatch(rest):
             continue
 
         # Validate both endpoints against the analyzed set
