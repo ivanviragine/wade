@@ -17,6 +17,7 @@ from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import sync as git_sync
+from wade.git.pr import GhCliError, PRLookup
 from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, ProjectConfig
@@ -24,7 +25,10 @@ from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.task import TaskReference, format_task_ref, parse_tracking_child_ids
 from wade.models.workflow import DelegationKind
 from wade.providers.registry import get_provider
-from wade.services.implementation_service._shared import resolve_task_branch
+from wade.services.implementation_service._shared import (
+    find_open_pr_branch_for_issue,
+    resolve_task_branch,
+)
 from wade.services.review_delegation_service import (
     _check_review_enabled,
     _load_review_config,
@@ -167,6 +171,26 @@ def gather_batch_context(
             issues.append(BatchIssueContext(issue_number=num, issue_title=task.title))
             continue
 
+        lookup = git_pr.get_pr_for_branch(repo, branch_name)
+        pr_lookup_failed = lookup.lookup_failed
+        if not pr_lookup_failed and not lookup.is_open:
+            # The resolved branch can be a stale same-ID branch left by a closed
+            # PR while the live PR sits on another branch. Settle by PR state,
+            # like implementation resume, so the merge uses the live head.
+            try:
+                open_branch = find_open_pr_branch_for_issue(repo, task.id)
+            except GhCliError:
+                # Absence of a live PR is unproven, so the stale PR's identity
+                # must not be reported as this task's PR.
+                logger.debug("batch_review.open_pr_scan_failed", issue_num=num, exc_info=True)
+                lookup = PRLookup(lookup_failed=True)
+                pr_lookup_failed = True
+            else:
+                if open_branch and open_branch != branch_name:
+                    branch_name = open_branch
+                    lookup = git_pr.get_pr_for_branch(repo, branch_name)
+                    pr_lookup_failed = lookup.lookup_failed or not lookup.is_open
+
         # Check if branch exists locally (may need fetch first)
         if not git_branch.branch_exists(repo, branch_name):
             # Try fetching from remote
@@ -175,8 +199,6 @@ def gather_batch_context(
             except GitError:
                 logger.debug("batch_review.fetch_failed", branch=branch_name, exc_info=True)
 
-        lookup = git_pr.get_pr_for_branch(repo, branch_name)
-        pr_lookup_failed = lookup.lookup_failed
         if pr_lookup_failed:
             logger.debug("batch_review.pr_lookup_failed", branch=branch_name)
             console.warn(
