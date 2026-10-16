@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.8] — 2026-10-16
+
+### Bug Fixes
+
+- reject empty reviewer output and report session-aware review budgets (#548) (153ee3a)
+
 ## [v1.4.7] — 2026-10-15
 
 ### Refactoring
