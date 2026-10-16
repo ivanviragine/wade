@@ -260,7 +260,8 @@ def create_integration_branch(
     Returns:
         Updated context with merge results and integration branch name set.
     """
-    integration_branch = f"batch-review/{encode_task_id(ctx.tracking_issue or '')}"
+    tracking = encode_task_id(ctx.tracking_issue) if ctx.tracking_issue else "untracked"
+    integration_branch = f"batch-review/{tracking}"
     main_branch = ctx.main_branch
 
     # Validate clean tree before checkout to avoid conflicts with uncommitted work
