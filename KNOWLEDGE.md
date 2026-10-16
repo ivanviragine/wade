@@ -833,3 +833,9 @@ gh api -F converts integer-looking values but leaves fractional values as string
 NO_COLOR=1 suppresses Rich color but can leave bold ANSI sequences in Typer help; TERM=xterm-256color with FORCE_COLOR=1 exposes flags split across escape sequences even when dumb-terminal tests pass. Check semantic help with click.unstyle while retaining command exit assertions; keep exact-byte assertions for emitted commands and JSON.
 
 ---
+
+## 98283f6753b5 | 2026-10-16 | implementation | kind: invariant | key: provider-task-identity | tags: providers, clickup, deps | Issue #490
+
+Provider task IDs are exact strings, and GitHub PR delegation does not make an external task's ID a GitHub issue number: only the GitHub provider may emit #N or closing keywords, while ClickUp and Markdown (even numeric IDs) use qualified <provider>:<id> PR references and are closed through their own provider after a WADE merge. Branches encode non-decimal IDs as idv1_<lowercase UTF-8 hex> (utils/task_identity.py) and resolution decodes only that exact final token, so never re-derive identity with int(), digit regexes, prefixes or zero padding. Dependency/tracking references share models/task.py's grammar (#42 for GitHub/Markdown, clickup:abc1234 otherwise; #123abc is never 123), and ClickUp's find_parent_issue scans every List page for the exact child.
+
+---
