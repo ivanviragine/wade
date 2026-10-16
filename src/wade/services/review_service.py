@@ -90,6 +90,7 @@ from wade.ui.console import console
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
 from wade.utils.runtime_env import parent_runtime, requires_unsandboxed_relaunch
+from wade.utils.task_identity import encode_task_id
 from wade.utils.terminal import (
     compose_review_title,
     launch_in_new_terminal,
@@ -1377,7 +1378,7 @@ def start(
     transcript_path: Path | None = None
     try:
         transcript_dir = tempfile.mkdtemp(prefix="wade-review-")
-        transcript_path = Path(transcript_dir) / f"transcript-review-{task.id}.log"
+        transcript_path = Path(transcript_dir) / f"transcript-review-{encode_task_id(task.id)}.log"
         console.hint(f"Transcript: {transcript_path}")
     except OSError:
         logger.warning("review.transcript_dir_failed")

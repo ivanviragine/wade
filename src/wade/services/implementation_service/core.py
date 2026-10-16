@@ -88,7 +88,7 @@ from wade.utils.runtime_env import (
     parent_runtime,
     requires_unsandboxed_relaunch,
 )
-from wade.utils.task_identity import TaskIdentityError
+from wade.utils.task_identity import TaskIdentityError, encode_task_id
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -1052,7 +1052,7 @@ def start(
         transcript_path: Path | None = None
         try:
             transcript_dir = tempfile.mkdtemp(prefix="wade-implement-")
-            transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
+            transcript_path = Path(transcript_dir) / f"transcript-{encode_task_id(task.id)}.log"
             console.hint(f"Transcript: {transcript_path}")
         except OSError:
             logger.warning("implementation.transcript_dir_failed")
