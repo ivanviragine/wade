@@ -14,25 +14,34 @@ import structlog
 from wade.git import repo as git_repo
 from wade.git.repo import GitError, _run_git, _run_git_with_retry
 from wade.utils.slug import slugify
+from wade.utils.task_identity import encode_task_id
 
 log = structlog.get_logger(__name__)
 
 
-def make_branch_name(prefix: str, issue_number: int, title: str) -> str:
-    """Build a branch name from a prefix, issue number, and title slug.
+def make_branch_name(prefix: str, issue_number: int | str, title: str) -> str:
+    """Build a branch name from a prefix, task ID, and title slug.
 
-    Produces names like ``feat/42-add-user-auth``.
+    Produces ``feat/42-add-user-auth`` for canonical decimal IDs and
+    ``feat/idv1_61626331323334-add-user-auth`` for an opaque ID such as
+    ``abc1234`` (see :mod:`wade.utils.task_identity`). The exact ID round-trips
+    through :func:`wade.utils.task_identity.task_id_from_branch`.
 
     Args:
         prefix: Branch prefix (e.g., "feat", "fix", "chore").
-        issue_number: GitHub issue number.
+        issue_number: The provider's exact task ID (``int`` kept for callers
+            that still hold GitHub numbers).
         title: Human-readable title to slugify.
 
     Returns:
         A valid git branch name.
+
+    Raises:
+        TaskIdentityError: If the ID is empty, oversized, or contains control
+            characters — before any ref is created.
     """
     slug = slugify(title, max_length=50)
-    return f"{prefix}/{issue_number}-{slug}"
+    return f"{prefix}/{encode_task_id(issue_number)}-{slug}"
 
 
 def branch_exists(repo_root: Path, branch_name: str) -> bool:

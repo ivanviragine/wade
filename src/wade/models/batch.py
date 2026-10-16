@@ -28,6 +28,8 @@ class BatchReviewContext(BaseModel):
     issues: list[BatchIssueContext] = Field(default_factory=list)
     main_branch: str = "main"
     tracking_issue: str | None = None
+    # Configured task provider: decides GitHub ``#N`` vs qualified references.
+    provider: str = "github"
     integration_branch: str | None = None
     pr_number: int | None = None
     pr_url: str | None = None

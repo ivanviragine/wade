@@ -34,6 +34,7 @@ def _cfg() -> MagicMock:
     cfg = MagicMock()
     cfg.project.main_branch = "main"
     cfg.project.branch_prefix = "feat"
+    cfg.provider.name = "github"
     return cfg
 
 

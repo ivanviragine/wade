@@ -67,6 +67,7 @@ from pathlib import Path
 from crossby.hooks.runtime import HookDecision, HookEvent
 
 from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase, StopGuard
+from wade.models.task import parse_issue_heading
 from wade.utils import markers
 
 __all__ = [
@@ -1300,8 +1301,9 @@ _SESSION_CONTEXT_MAX_CHARS = 800
 # Cap the echoed issue title so one very long title cannot dominate the budget.
 _SESSION_CONTEXT_TITLE_MAX = 140
 
-# ``write_plan_md`` writes ``# Issue #<id>: <title>`` as PLAN.md's first line.
-_ISSUE_LINE_RE = re.compile(r"^#\s*Issue\s+#(\d+):\s*(.+)$")
+# ``write_plan_md`` writes ``# Issue #<id>: <title>`` as PLAN.md's first line
+# (see :func:`wade.models.task.format_issue_heading`; legacy numeric headings
+# parse unchanged and opaque IDs round-trip exactly).
 
 # Phase -> the prompt template holding that phase's static instruction prose.
 # The prose is AI-facing content, so it is sourced from ``templates/prompts/``
@@ -1337,10 +1339,7 @@ def _parse_issue_heading(path: Path) -> tuple[str, str] | None:
             first_line = fd.readline().strip()
     except (OSError, UnicodeDecodeError):
         return None
-    match = _ISSUE_LINE_RE.match(first_line)
-    if match is None:
-        return None
-    return match.group(1), match.group(2).strip()
+    return parse_issue_heading(first_line)
 
 
 def _issue_line(parsed: tuple[str, str]) -> str:

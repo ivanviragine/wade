@@ -286,7 +286,7 @@ def review_trigger_cmd(
 
 @review_app.command("batch")
 def review_batch_cmd(
-    tracking_issue: int = typer.Argument(..., help="Tracking issue number."),
+    tracking_issue: str = typer.Argument(..., help="Tracking task ID (e.g. 42 or abc1234)."),
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
     ),
@@ -323,7 +323,7 @@ def review_batch_cmd(
     from wade.services.batch_review_service import review_batch
 
     result = review_batch(
-        str(tracking_issue),
+        tracking_issue,
         ai_tool=ai,
         model=model,
         mode=mode.value if mode else None,

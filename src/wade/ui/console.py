@@ -339,10 +339,14 @@ class Console:
             grouped.setdefault(from_id, []).append((to_id, reason))
 
         for from_id, deps in grouped.items():
-            from_label = f"[task.number]#{from_id}[/] {_rich_escape(titles.get(from_id, ''))}"
+            from_label = (
+                f"[task.number]#{_rich_escape(from_id)}[/] {_rich_escape(titles.get(from_id, ''))}"
+            )
             branch = tree.add(from_label)
             for to_id, reason in deps:
-                to_label = f"[task.number]#{to_id}[/] {_rich_escape(titles.get(to_id, ''))}"
+                to_label = (
+                    f"[task.number]#{_rich_escape(to_id)}[/] {_rich_escape(titles.get(to_id, ''))}"
+                )
                 if reason:
                     to_label += f"  [dim]({reason})[/]"
                 branch.add(to_label)
@@ -372,7 +376,7 @@ class Console:
         markup and raising ``MarkupError`` at every call site that prints this
         string with markup enabled (kv/panel/success/…). See :meth:`escape_markup`.
         """
-        ref = f"[task.number]#{number}[/]"
+        ref = f"[task.number]#{_rich_escape(number)}[/]"
         if title:
             ref += f"  {_rich_escape(title)}"
         return ref

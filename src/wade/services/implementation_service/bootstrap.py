@@ -24,7 +24,7 @@ from wade.models.config import (
     with_wade_base_pattern,
 )
 from wade.models.hooks import SessionPhase, StopGuard
-from wade.models.task import Task
+from wade.models.task import Task, format_issue_heading
 from wade.models.workflow import SessionKind
 from wade.skills.pointer import is_pointer_only
 from wade.utils.markdown import has_marker_block, remove_marker_block
@@ -203,7 +203,7 @@ def write_plan_md(
     """
     plan_path = worktree_path / "PLAN.md"
     lines = [
-        f"# Issue #{task.id}: {task.title}",
+        format_issue_heading(task.id, task.title),
         "",
     ]
     body = plan_content if plan_content is not None else task.body

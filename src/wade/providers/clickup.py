@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from wade.models.config import ProviderConfig
+from wade.models.config import ProviderConfig, ProviderID
 from wade.models.task import (
     CloseReason,
     Label,
@@ -20,6 +20,7 @@ from wade.models.task import (
     TaskState,
     parse_complexity_from_body,
     parse_complexity_from_labels,
+    parse_tracking_child_ids,
 )
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
@@ -364,6 +365,44 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
                 task_id=task_id,
                 tag=label_name,
             )
+
+    # --- Parent / tracking-task detection ---
+
+    def find_parent_issue(self, task_id: str, label: str | None = None) -> str | None:
+        """Find the open tracking task whose checklist lists exactly *task_id*.
+
+        Scans every page of the configured List (constrained to the ``label``
+        tag when given) with the shared checklist parser, so ``- [ ]
+        clickup:abc1234`` and legacy ``- [ ] #abc1234`` items match while a
+        longer or differently-cased ID never does. Checked and unchecked items
+        both count, and the task itself is excluded. API failures propagate:
+        an incomplete scan is never reported as "no parent".
+        """
+        page = 0
+        while True:
+            params: dict[str, Any] = {
+                "page": str(page),
+                "subtasks": "false",
+                "include_closed": "false",
+                "include_markdown_description": "true",
+                "list_ids[]": self._list_id,
+            }
+            if label:
+                params["tags[]"] = label
+            data = self._client.get(f"/api/v2/team/{self._team_id}/task", params=params)
+            raw_tasks: list[dict[str, Any]] = data.get("tasks", [])
+            for raw in raw_tasks:
+                candidate = _parse_clickup_task(raw)
+                if candidate.id == task_id or candidate.state != TaskState.OPEN:
+                    continue
+                children = parse_tracking_child_ids(
+                    candidate.body, include_checked=True, provider=ProviderID.CLICKUP
+                )
+                if task_id in children:
+                    return candidate.id
+            if len(raw_tasks) < self._PAGE_SIZE:
+                return None
+            page += 1
 
     # --- Project board operations ---
 

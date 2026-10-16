@@ -20,6 +20,7 @@ from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.permission import PermissionMode
+from wade.models.task import format_task_ref
 from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -82,19 +83,23 @@ def build_context(
     provider: AbstractTaskProvider,
     issue_numbers: list[str],
 ) -> str:
-    """Build a context string with issue details for AI consumption."""
+    """Build a context string with task details for AI consumption.
+
+    Each heading presents the exact task ID the edge contract requires
+    (``## Task ID `abc1234`: title``) — never a ``#``-prefixed or numeric form.
+    """
     lines: list[str] = []
     for num in issue_numbers:
         try:
             task = provider.read_task(num)
-            lines.append(f"## Issue #{num}: {task.title}")
+            lines.append(f"## Task ID `{num}`: {task.title}")
             lines.append("")
             if task.body:
                 lines.append(task.body.strip())
             lines.append("")
         except Exception as e:
             logger.warning("deps.context_failed", issue=num, error=str(e))
-            lines.append(f"## Issue #{num}: (could not read)")
+            lines.append(f"## Task ID `{num}`: (could not read)")
             lines.append("")
     return "\n".join(lines)
 
@@ -115,11 +120,11 @@ def build_deps_prompt(context: str, method_section: str) -> str:
 # Edge parsing
 # ---------------------------------------------------------------------------
 
-# Regex for "X -> Y" edges with optional "# reason" comment
-_ARROW_RE = re.compile(
-    r"^\s*(\d+)\s*->\s*(\d+)(.*?)$",
-    re.MULTILINE,
-)
+# "<id> -> <id>" edges with an optional "# reason" comment. Endpoints are
+# whole whitespace/``#``-free tokens (an optional legacy leading ``#`` is
+# dropped) and are accepted only when they exactly match an analyzed task ID,
+# so ``123abc`` can never become task ``123``.
+_ARROW_RE = re.compile(r"^\s*#?(?P<from>[^\s#]+?)\s*->\s*#?(?P<to>[^\s#]+)(?P<rest>.*)$")
 _COMMENT_RE = re.compile(r"#\s*(.*)")
 
 
@@ -131,12 +136,14 @@ def parse_deps_output(
 
     Args:
         text: Raw AI output containing "X -> Y # reason" lines.
-        valid_numbers: Set of valid issue numbers to filter against.
+        valid_numbers: The exact task IDs that were analyzed; an endpoint must
+            match one of them exactly (no numeric or prefix matching).
 
     Returns:
-        List of validated DependencyEdge objects.
+        Validated, de-duplicated DependencyEdge objects (self-edges dropped).
     """
     edges: list[DependencyEdge] = []
+    seen: set[tuple[str, str]] = set()
 
     for line in text.splitlines():
         line = line.strip()
@@ -152,14 +159,23 @@ def parse_deps_output(
         if not match:
             continue
 
-        from_id = match.group(1)
-        to_id = match.group(2)
-        rest = match.group(3)
-
-        # Validate both numbers
-        if from_id not in valid_numbers or to_id not in valid_numbers:
-            console.warn(f"Skipping invalid edge {from_id} -> {to_id} (unknown issue number)")
+        from_id = match.group("from")
+        to_id = match.group("to")
+        rest = match.group("rest")
+        if rest and not rest[0].isspace() and not rest.startswith("#"):
             continue
+
+        # Validate both endpoints against the analyzed set
+        if from_id not in valid_numbers or to_id not in valid_numbers:
+            console.warn(
+                console.escape_markup(
+                    f"Skipping invalid edge {from_id} -> {to_id} (unknown task ID)"
+                )
+            )
+            continue
+        if from_id == to_id or (from_id, to_id) in seen:
+            continue
+        seen.add((from_id, to_id))
 
         # Extract comment
         reason = ""
@@ -187,19 +203,21 @@ def strip_deps_section(body: str) -> str:
 def build_deps_section(
     issue_id: str,
     edges: list[DependencyEdge],
+    provider: str = "github",
 ) -> str:
-    """Build the ## Dependencies section for a single issue.
+    """Build the ## Dependencies section for a single task.
 
-    Shows "Depends on" and "Blocks" references.
+    Shows "Depends on" and "Blocks" references in the provider's task-reference
+    form (``#42`` for GitHub/Markdown, ``clickup:abc1234`` otherwise).
     """
     depends_on: list[str] = []
     blocks: list[str] = []
 
     for edge in edges:
         if edge.to_task == issue_id:
-            depends_on.append(f"#{edge.from_task}")
+            depends_on.append(format_task_ref(edge.from_task, provider))
         if edge.from_task == issue_id:
-            blocks.append(f"#{edge.to_task}")
+            blocks.append(format_task_ref(edge.to_task, provider))
 
     if not depends_on and not blocks:
         return ""
@@ -222,6 +240,8 @@ def apply_deps_to_issues(
     provider: AbstractTaskProvider,
     issue_numbers: list[str],
     edges: list[DependencyEdge],
+    *,
+    provider_name: str = "github",
 ) -> int:
     """Update each issue body with dependency cross-references.
 
@@ -239,7 +259,7 @@ def apply_deps_to_issues(
     updated = 0
 
     for issue_id in issue_numbers:
-        deps_inner = build_deps_section(issue_id, edges).strip()
+        deps_inner = build_deps_section(issue_id, edges, provider_name).strip()
 
         try:
             task = provider.read_task(issue_id)
@@ -309,9 +329,10 @@ def create_tracking_issue(
     If a tracking issue with the same title already exists, returns
     its ID instead of creating a duplicate.
     """
+    provider_name = str(config.provider.name)
     # Determine title first so we can check for duplicates
     if len(issue_numbers) <= 3:
-        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
+        issue_refs = ", ".join(format_task_ref(n, provider_name) for n in issue_numbers)
         title = f"Tracking: {issue_refs}"
     else:
         title = f"Tracking: {len(issue_numbers)} issues"
@@ -319,7 +340,12 @@ def create_tracking_issue(
     # Check for existing tracking issue with the same title
     existing_id = _find_existing_tracking_issue(provider, config.project.issue_label, title)
     if existing_id:
-        console.info(f"Tracking issue #{existing_id} already exists — skipping creation")
+        console.info(
+            console.escape_markup(
+                f"Tracking issue {format_task_ref(existing_id, provider_name)} already exists "
+                "— skipping creation"
+            )
+        )
         return existing_id
 
     # Compute execution order
@@ -332,12 +358,13 @@ def create_tracking_issue(
     # Build checklist body
     lines = ["## Execution Plan", ""]
     for num in ordered:
-        title_text = task_titles.get(num, f"Issue #{num}")
-        lines.append(f"- [ ] #{num} — {title_text}")
+        ref = format_task_ref(num, provider_name)
+        title_text = task_titles.get(num, f"Task {ref}")
+        lines.append(f"- [ ] {ref} — {title_text}")
     lines.append("")
 
     # Add Mermaid diagram
-    mermaid = graph.generate_mermaid(task_titles)
+    mermaid = graph.generate_mermaid(task_titles, provider_name)
     lines.append("## Dependency Graph")
     lines.append("")
     lines.append("```mermaid")
@@ -354,7 +381,11 @@ def create_tracking_issue(
             body=body,
             labels=[config.project.issue_label],
         )
-        console.success(f"Created tracking issue #{task.id}")
+        console.success(
+            console.escape_markup(
+                f"Created tracking issue {format_task_ref(task.id, provider_name)}"
+            )
+        )
         return task.id
     except Exception as e:
         console.error(f"Failed to create tracking issue: {e}")
@@ -734,10 +765,10 @@ def analyze_deps(
                 task = provider.read_task(num)
                 task_titles[num] = task.title
                 verified_task_ids.append(task.id)
-                console.step(f"#{num}: {console.escape_markup(task.title)}")
+                console.step(console.escape_markup(f"{num}: {task.title}"))
             except Exception:
                 logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
-                task_titles[num] = f"Issue #{num}"
+                task_titles[num] = f"Task {num}"
 
     # Run AI analysis via delegation infrastructure
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
@@ -914,7 +945,7 @@ def analyze_deps(
     graph = DependencyGraph(edges=edges)
 
     # Generate Mermaid
-    mermaid = graph.generate_mermaid(task_titles)
+    mermaid = graph.generate_mermaid(task_titles, str(config.provider.name))
     graph.mermaid_diagram = mermaid
     console.empty()
     console.dep_tree([(e.from_task, e.to_task, e.reason) for e in edges], task_titles)
@@ -927,7 +958,9 @@ def analyze_deps(
         graph.topological_order = issue_numbers
 
     # Apply cross-references to issues
-    updated = apply_deps_to_issues(provider, issue_numbers, edges)
+    updated = apply_deps_to_issues(
+        provider, issue_numbers, edges, provider_name=str(config.provider.name)
+    )
     console.info(f"Updated {updated} issue(s) with dependency refs")
 
     # Create tracking issue (2+ issues)

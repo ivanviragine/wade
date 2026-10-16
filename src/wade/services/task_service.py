@@ -22,6 +22,7 @@ from wade.models.task import (
     PlanFile,
     Task,
     TaskState,
+    format_task_ref,
     parse_complexity_from_body,
     parse_complexity_from_labels,
 )
@@ -568,7 +569,7 @@ def list_tasks(
 
         for task in tasks:
             if task.body:
-                deps_info = parse_dependency_refs(task.body)
+                deps_info = parse_dependency_refs(task.body, provider=str(config.provider.name))
                 if deps_info["depends_on"] or deps_info["blocks"]:
                     deps_map[task.id] = deps_info
 
@@ -611,12 +612,11 @@ def list_tasks(
             console.detail(label_str)
         if show_deps and task.id in deps_map:
             dep_info = deps_map[task.id]
-            if dep_info["depends_on"]:
-                console.detail(
-                    f"  Depends on: {', '.join(f'#{n}' for n in dep_info['depends_on'])}"
-                )
-            if dep_info["blocks"]:
-                console.detail(f"  Blocks: {', '.join(f'#{n}' for n in dep_info['blocks'])}")
+            provider_name = str(config.provider.name)
+            for heading, key in (("Depends on", "depends_on"), ("Blocks", "blocks")):
+                if dep_info[key]:
+                    refs = ", ".join(format_task_ref(n, provider_name) for n in dep_info[key])
+                    console.detail(f"  {heading}: {refs}", markup=False)
 
     return tasks
 

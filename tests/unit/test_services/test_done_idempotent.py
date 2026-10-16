@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.config import ProjectConfig, ProjectSettings
+from wade.services.implementation_service._shared import WorktreeTarget
 from wade.services.implementation_service.done import done
 
 _DONE = "wade.services.implementation_service.done"
@@ -38,7 +39,14 @@ def _run_done(
         stack.enter_context(patch(f"{_DONE}.load_config", return_value=config))
         stack.enter_context(patch(f"{_DONE}.get_provider"))
         stack.enter_context(patch(f"{_DONE}.git_repo.get_repo_root", return_value=repo_root))
-        stack.enter_context(patch(f"{_DONE}.find_worktree_path", return_value=wt_path))
+        stack.enter_context(
+            patch(
+                f"{_DONE}.match_worktree_target",
+                return_value=WorktreeTarget(
+                    path=wt_path, branch="feat/42-x", task_id="42", by_identity=True
+                ),
+            )
+        )
         stack.enter_context(patch(f"{_DONE}.git_repo.get_current_branch", return_value="feat/42-x"))
         stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
         stack.enter_context(patch(f"{_DONE}._check_tracked_managed_files", return_value=[]))
@@ -97,7 +105,14 @@ class TestDoneDefersStrip:
             stack.enter_context(patch(f"{_DONE}.load_config", return_value=config))
             stack.enter_context(patch(f"{_DONE}.get_provider"))
             stack.enter_context(patch(f"{_DONE}.git_repo.get_repo_root", return_value=repo_root))
-            stack.enter_context(patch(f"{_DONE}.find_worktree_path", return_value=wt_path))
+            stack.enter_context(
+                patch(
+                    f"{_DONE}.match_worktree_target",
+                    return_value=WorktreeTarget(
+                        path=wt_path, branch="feat/42-x", task_id="42", by_identity=True
+                    ),
+                )
+            )
             stack.enter_context(
                 patch(f"{_DONE}.git_repo.get_current_branch", return_value="feat/42-x")
             )

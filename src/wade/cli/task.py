@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 import typer
@@ -159,7 +160,7 @@ def create(
     if task:
         console.empty()
         console.info("When you're ready to implement, run:")
-        console.detail(f"wade implement {task.id}")
+        console.detail(f"wade implement {shlex.quote(task.id)}", markup=False)
     raise typer.Exit(0 if task else 1)
 
 
@@ -179,7 +180,7 @@ def list_tasks(
     # Interactive picker: offer to start work on a task (only for open, non-JSON, TTY)
     if tasks and not json_output and state == "open" and prompts.is_tty():
         console.empty()
-        items = [f"#{t.id} — {t.title}" for t in tasks]
+        items = [f"{t.id} — {t.title}" for t in tasks]
         items.append("(none — exit)")
         idx = prompts.select("Start work on an issue?", items)
         if idx < len(tasks):
@@ -193,50 +194,50 @@ def list_tasks(
 
 @task_app.command()
 def read(
-    number: int = typer.Argument(..., help="Issue number to read."),
+    number: str = typer.Argument(..., help="Task ID to read (e.g. 42 or abc1234)."),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
-    """Read a GitHub Issue."""
+    """Read a task."""
     from wade.services.task_service import read_task
 
-    task = read_task(str(number), json_mode=json_output)
+    task = read_task(number, json_mode=json_output)
     raise typer.Exit(0 if task else 1)
 
 
 @task_app.command()
 def update(
-    number: int = typer.Argument(..., help="Issue number to update."),
+    number: str = typer.Argument(..., help="Task ID to update (e.g. 42 or abc1234)."),
     plan_file: str | None = typer.Option(
         None, "--plan-file", help="Path to markdown file with new body."
     ),
     comment: str | None = typer.Option(None, "--comment", help="Comment text to add."),
 ) -> None:
-    """Update a GitHub Issue body or add a comment."""
+    """Update a task body or add a comment."""
     from wade.services.task_service import update_task
 
     plan_path = Path(plan_file).expanduser() if plan_file else None
-    success = update_task(str(number), body_file=plan_path, comment=comment)
+    success = update_task(number, body_file=plan_path, comment=comment)
     raise typer.Exit(0 if success else 1)
 
 
 @task_app.command()
 def close(
-    number: int = typer.Argument(..., help="Issue number to close."),
+    number: str = typer.Argument(..., help="Task ID to close (e.g. 42 or abc1234)."),
     comment: str | None = typer.Option(None, "--comment", help="Final comment before closing."),
 ) -> None:
-    """Close a GitHub Issue."""
+    """Close a task."""
     from wade.services.task_service import close_task
 
-    success = close_task(str(number), comment=comment)
+    success = close_task(number, comment=comment)
     raise typer.Exit(0 if success else 1)
 
 
-_DEPS_NUMBERS = typer.Argument(None, help="Issue numbers to analyze.")
+_DEPS_NUMBERS = typer.Argument(None, help="Task IDs to analyze (e.g. 42 43 or abc1234 def5678).")
 
 
 @task_app.command()
 def deps(
-    numbers: list[int] = _DEPS_NUMBERS,
+    numbers: list[str] = _DEPS_NUMBERS,
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool for analysis.", autocompletion=complete_ai_tools
     ),
@@ -289,44 +290,50 @@ def deps(
             console.error("Need at least 2 issues for dependency analysis.")
             raise typer.Exit(1)
 
-        numbers = [int(id_str) for id_str in selected_ids]
+        numbers = list(selected_ids)
 
     if not numbers:
         console.error("Provide at least 2 issue numbers.")
         raise typer.Exit(1)
 
-    issue_ids = [str(n) for n in numbers]
+    issue_ids = list(numbers)
 
     # --check mode: validate existing dependencies without re-running AI
     if check:
         from wade.config.loader import load_config
-        from wade.models.task import parse_dependency_refs
+        from wade.models.task import format_task_ref, parse_dependency_refs
         from wade.providers.registry import get_provider
 
         config = load_config()
         provider = get_provider(config)
+        provider_name = str(config.provider.name)
         valid_set = set(issue_ids)
+
+        def label(task_id: str) -> str:
+            return console.escape_markup(format_task_ref(task_id, provider_name))
 
         console.header("Dependency validation")
         all_valid = True
         for issue_id in issue_ids:
             try:
                 task = provider.read_task(issue_id)
-                refs = parse_dependency_refs(task.body)
+                refs = parse_dependency_refs(task.body, provider=provider_name)
                 for ref in refs["depends_on"]:
                     if ref not in valid_set:
-                        console.warn(f"#{issue_id} depends on #{ref} (not in analyzed set)")
+                        console.warn(
+                            f"{label(issue_id)} depends on {label(ref)} (not in analyzed set)"
+                        )
                         all_valid = False
                     else:
-                        console.detail(f"#{issue_id} → #{ref} (valid)")
+                        console.detail(f"{label(issue_id)} → {label(ref)} (valid)")
                 for ref in refs["blocks"]:
                     if ref not in valid_set:
-                        console.warn(f"#{issue_id} blocks #{ref} (not in analyzed set)")
+                        console.warn(f"{label(issue_id)} blocks {label(ref)} (not in analyzed set)")
                         all_valid = False
                     else:
-                        console.detail(f"#{issue_id} blocks #{ref} (valid)")
+                        console.detail(f"{label(issue_id)} blocks {label(ref)} (valid)")
             except Exception as e:
-                console.warn(f"Could not read #{issue_id}: {e}")
+                console.warn(console.escape_markup(f"Could not read {issue_id}: {e}"))
                 all_valid = False
 
         if all_valid:

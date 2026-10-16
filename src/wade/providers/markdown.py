@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pydantic import BaseModel, ConfigDict
 
-from wade.models.config import ProviderConfig
+from wade.models.config import ProviderConfig, ProviderID
 from wade.models.task import (
     CloseReason,
     Label,
@@ -767,7 +767,9 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
                     continue
             if section.id == task_id:
                 continue
-            children = parse_tracking_child_ids(section.body, include_checked=True)
+            children = parse_tracking_child_ids(
+                section.body, include_checked=True, provider=ProviderID.MARKDOWN
+            )
             if task_id in children:
                 return section.id
         return None

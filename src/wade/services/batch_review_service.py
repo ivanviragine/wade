@@ -21,9 +21,10 @@ from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
-from wade.models.task import parse_tracking_child_ids
+from wade.models.task import TaskReference, format_task_ref, parse_tracking_child_ids
 from wade.models.workflow import DelegationKind
 from wade.providers.registry import get_provider
+from wade.services.implementation_service._shared import resolve_task_branch
 from wade.services.review_delegation_service import (
     _check_review_enabled,
     _load_review_config,
@@ -37,19 +38,18 @@ from wade.services.skill_invocation_service import (
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
+from wade.utils.task_identity import TaskIdentityError, encode_task_id
 
 logger = structlog.get_logger()
 
 
-def extract_child_issues(tracking_body: str) -> list[str]:
-    """Parse child issue numbers from a tracking issue checklist.
+def extract_child_issues(tracking_body: str, provider: str = "github") -> list[str]:
+    """Parse exact child task IDs from a tracking task checklist.
 
-    Matches ``- [ ] #N`` and ``- [x] #N`` patterns.
-
-    Returns:
-        List of issue number strings (without ``#`` prefix).
+    Matches checked and unchecked items that start with a task reference of
+    *provider* (``- [ ] #42``, ``- [x] clickup:abc1234``).
     """
-    return parse_tracking_child_ids(tracking_body, include_checked=True)
+    return parse_tracking_child_ids(tracking_body, include_checked=True, provider=provider)
 
 
 def _detect_chains(issues: list[BatchIssueContext]) -> list[list[str]]:
@@ -126,11 +126,21 @@ def gather_batch_context(
 
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo)
 
+    provider_name = str(config.provider.name)
     tracking_task = provider.read_task(tracking_issue_id)
-    child_numbers = extract_child_issues(tracking_task.body)
+    child_numbers = [
+        child
+        for child in extract_child_issues(tracking_task.body, provider_name)
+        if child != tracking_task.id
+    ]
 
     if not child_numbers:
-        console.warn(f"No child issues found in tracking issue #{tracking_issue_id}")
+        console.warn(
+            console.escape_markup(
+                f"No child issues found in tracking issue "
+                f"{format_task_ref(tracking_issue_id, provider_name)}"
+            )
+        )
 
     issues: list[BatchIssueContext] = []
     for num in child_numbers:
@@ -138,12 +148,24 @@ def gather_batch_context(
             task = provider.read_task(num)
         except Exception:
             logger.debug("batch_review.issue_read_failed", issue_num=num, exc_info=True)
-            issues.append(BatchIssueContext(issue_number=num, issue_title=f"(unreadable #{num})"))
+            issues.append(
+                BatchIssueContext(
+                    issue_number=num,
+                    issue_title=f"(unreadable {format_task_ref(num, provider_name)})",
+                )
+            )
             continue
 
-        branch_name = git_branch.make_branch_name(
-            config.project.branch_prefix, int(num), task.title
-        )
+        # Identity-based resolution: survives title drift and never derives a
+        # different task's branch from a numeric substring.
+        try:
+            branch_name = resolve_task_branch(
+                repo, task.id, task.title, config.project.branch_prefix
+            )
+        except TaskIdentityError:
+            logger.debug("batch_review.unsupported_task_id", issue_num=num, exc_info=True)
+            issues.append(BatchIssueContext(issue_number=num, issue_title=task.title))
+            continue
 
         # Check if branch exists locally (may need fetch first)
         if not git_branch.branch_exists(repo, branch_name):
@@ -220,6 +242,7 @@ def gather_batch_context(
         issues=issues,
         main_branch=main_branch,
         tracking_issue=tracking_issue_id,
+        provider=provider_name,
         chains=chains,
     )
 
@@ -237,7 +260,7 @@ def create_integration_branch(
     Returns:
         Updated context with merge results and integration branch name set.
     """
-    integration_branch = f"batch-review/{ctx.tracking_issue}"
+    integration_branch = f"batch-review/{encode_task_id(ctx.tracking_issue or '')}"
     main_branch = ctx.main_branch
 
     # Validate clean tree before checkout to avoid conflicts with uncommitted work
@@ -315,15 +338,19 @@ def create_review_pr(
 
     git_repo.push_branch(repo_root, ctx.integration_branch, set_upstream=True, force=True)
 
-    merged_list = [f"- #{i.issue_number} {i.issue_title}" for i in ctx.issues if i.merged]
-    conflict_list = [f"- #{i.issue_number} {i.issue_title}" for i in ctx.issues if i.conflict]
+    def label(task_id: str) -> str:
+        return TaskReference(provider=ctx.provider, task_id=task_id).label
+
+    merged_list = [f"- {label(i.issue_number)} {i.issue_title}" for i in ctx.issues if i.merged]
+    conflict_list = [f"- {label(i.issue_number)} {i.issue_title}" for i in ctx.issues if i.conflict]
     skipped_list = [
-        f"- #{i.issue_number} {i.issue_title}"
+        f"- {label(i.issue_number)} {i.issue_title}"
         for i in ctx.issues
         if not i.merged and not i.conflict
     ]
 
-    body_parts = [f"Part of #{ctx.tracking_issue}\n"]
+    tracking = TaskReference(provider=ctx.provider, task_id=ctx.tracking_issue or "")
+    body_parts = [f"{tracking.part_of_line()}\n"]
     body_parts.append("## Batch coherence review\n")
 
     if merged_list:
@@ -354,7 +381,7 @@ def create_review_pr(
     else:
         pr_info = git_pr.create_pr(
             repo_root,
-            title=f"Batch review: tracking #{ctx.tracking_issue}",
+            title=f"Batch review: tracking {tracking.label}",
             body=body,
             base=ctx.main_branch,
             head=ctx.integration_branch,
@@ -371,7 +398,11 @@ def create_review_pr(
 def _format_batch_context(ctx: BatchReviewContext) -> str:
     """Format batch context as markdown for the AI prompt."""
     lines: list[str] = []
-    lines.append(f"## Tracking issue: #{ctx.tracking_issue}")
+
+    def label(task_id: str) -> str:
+        return TaskReference(provider=ctx.provider, task_id=task_id).label
+
+    lines.append(f"## Tracking issue: {label(ctx.tracking_issue or '')}")
     lines.append(f"**Main branch:** {ctx.main_branch}")
     if ctx.integration_branch:
         lines.append(f"**Integration branch:** {ctx.integration_branch}")
@@ -383,12 +414,12 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
         lines.append("")
         lines.append("These issues form stacked PR chains. Review incremental changes per member:")
         for chain in ctx.chains:
-            chain_str = " → ".join(f"#{num}" for num in chain)
+            chain_str = " → ".join(label(num) for num in chain)
             lines.append(f"- **Chain:** {chain_str}")
     lines.append("")
 
     for issue in ctx.issues:
-        lines.append(f"### Issue #{issue.issue_number}: {issue.issue_title}")
+        lines.append(f"### Issue {label(issue.issue_number)}: {issue.issue_title}")
         lines.append(f"- **Branch:** {issue.branch_name or '(no branch)'}")
         if issue.pr_lookup_failed:
             lines.append("- **PR:** lookup failed — status unknown (a PR may exist)")
@@ -552,7 +583,7 @@ def review_batch(
     if skip is not None:
         return skip
 
-    console.rule(f"Batch coherence review — tracking #{tracking_issue_id}")
+    console.rule(f"Batch coherence review — tracking {tracking_issue_id}")
 
     # Step 1: Gather context
     console.step("Gathering batch context...")

@@ -48,7 +48,9 @@ from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
     find_open_pr_branch_for_issue,
     find_worktree_path,
+    is_explicit_plan_path,
     resolve_task_branch,
+    task_reference,
 )
 from wade.services.implementation_service.bootstrap import (
     _resolve_worktrees_dir,
@@ -86,6 +88,7 @@ from wade.utils.runtime_env import (
     parent_runtime,
     requires_unsandboxed_relaunch,
 )
+from wade.utils.task_identity import TaskIdentityError
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -525,9 +528,14 @@ def start(
         # A reconstructed name would then drift from the real branch, so the
         # PR/plan lookup below would miss the live draft PR and re-bootstrap a
         # duplicate — leaving the resumed task with "no plan attached".
-        branch_name = resolve_task_branch(
-            repo_root, task.id, task.title, config.project.branch_prefix
-        )
+        try:
+            branch_name = resolve_task_branch(
+                repo_root, task.id, task.title, config.project.branch_prefix
+            )
+        except TaskIdentityError as exc:
+            # Refuse before any ref, worktree, PR, or provider mutation.
+            console.error(str(exc), markup=False)
+            return ImplementResult(success=False)
 
         # Check for existing draft PR (from plan flow) before AI selection so that
         # "Plan first" can short-circuit without ever showing the AI confirmation menu.
@@ -561,12 +569,12 @@ def start(
                 # same-issue branch we simply cannot see. Abort, like a failed PR
                 # lookup, rather than treat an unknown listing as absence (#428).
                 console.error_with_fix(
-                    f"Could not list open PRs for issue #{task.id}",
+                    f"Could not list open PRs for task {task.id}",
                     "Transient gh error — try again shortly",
                 )
                 return ImplementResult(success=False)
             resume_branch = open_pr_branch or git_branch.make_branch_name(
-                config.project.branch_prefix, int(task.id), task.title
+                config.project.branch_prefix, task.id, task.title
             )
             if resume_branch != branch_name:
                 branch_name = resume_branch
@@ -837,13 +845,15 @@ def start(
         # Bootstrap the draft PR only after the session skills are known-good.
         if proceed_needs_bootstrap:
             console.step("Bootstrapping draft PR...")
+            reference = task_reference(config, task)
             pr_info = bootstrap_draft_pr(
                 issue_number=task.id,
                 issue_title=task.title,
-                plan_body=task.body or f"Implements #{task.id}: {task.title}",
+                plan_body=task.body or f"Implements {reference.link}: {task.title}",
                 config=config,
                 repo_root=repo_root,
                 base_branch=base_branch,
+                issue_url=task.url,
             )
             if pr_info:
                 console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
@@ -1268,9 +1278,10 @@ def _resolve_task_target(
 
     If the target is a path to a plan file, create the issue first.
     """
-    # Check if target is a file path
+    # Only explicit path syntax selects a plan file, so a provider ID such as
+    # ``abc1234`` stays an ID even if a same-named file exists in the cwd.
     target_path = Path(target).expanduser()
-    if target_path.is_file():
+    if is_explicit_plan_path(target) and target_path.is_file():
         from wade.services.task_service import create_from_plan_file
         from wade.utils.conventional import ConventionalTitleError
 
@@ -1288,13 +1299,16 @@ def _resolve_task_target(
             return None
         return task
 
-    # Treat as issue number — strip leading "#" so "#123" and "123" both work
-    issue_id = target.lstrip("#")
+    # Treat as a task ID — strip one leading "#" so "#123" and "123" both work,
+    # without stripping meaningful characters from an opaque provider ID.
+    issue_id = target.removeprefix("#")
     try:
         task = provider.read_task(issue_id)
         return task
     except Exception as e:
-        console.error(f"Could not read issue #{issue_id}: {e}")
+        console.error(f"Could not read task {issue_id}: {e}", markup=False)
+        if target_path.is_file():
+            console.hint(f"To create a task from the plan file, pass a path: ./{target}")
         return None
 
 

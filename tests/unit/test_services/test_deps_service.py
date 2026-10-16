@@ -41,10 +41,10 @@ class TestPromptTemplate:
 
     def test_build_prompt(self) -> None:
         prompt = build_deps_prompt(
-            "## Issue #1: Add auth\n\nAdd login page.",
+            "## Task ID `1`: Add auth\n\nAdd login page.",
             '<method position="0" ref="builtin:dependency-analysis">\nMethod\n</method>',
         )
-        assert "## Issue #1: Add auth" in prompt
+        assert "## Task ID `1`: Add auth" in prompt
         assert "Add login page" in prompt
         assert "builtin:dependency-analysis" in prompt
         assert "<operation-input>" in prompt
@@ -64,15 +64,15 @@ class TestBuildContext:
             Task(id="2", title="Add DB", body="SQLite schema"),
         ]
         context = build_context(provider, ["1", "2"])
-        assert "## Issue #1: Add auth" in context
-        assert "## Issue #2: Add DB" in context
+        assert "## Task ID `1`: Add auth" in context
+        assert "## Task ID `2`: Add DB" in context
         assert "Login page needed" in context
 
     def test_handles_read_failure(self) -> None:
         provider = MagicMock()
         provider.read_task.side_effect = Exception("not found")
         context = build_context(provider, ["99"])
-        assert "## Issue #99: (could not read)" in context
+        assert "## Task ID `99`: (could not read)" in context
 
 
 # ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ from wade.models.interactive_plan import (
 )
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle, PlanKnowledgeProposal, PlanKnowledgeVote
-from wade.models.task import CloseReason, PlanFile, Task, TaskState
+from wade.models.task import CloseReason, PlanFile, Task, TaskState, format_issue_heading
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -505,9 +505,9 @@ def _build_issue_context_header(issue: Task) -> str:
     """Build a Markdown header injected into the planning prompt for an existing issue."""
     body = (issue.body or "_No description provided._").strip()
     lines = [
-        f"# Existing Issue #{issue.id}: {issue.title}",
+        f"# Existing {format_issue_heading(issue.id, issue.title).removeprefix('# ')}",
         "",
-        "You are planning the following existing GitHub issue.",
+        "You are planning the following existing task (exact ID above).",
         "**Do NOT ask the user what to plan** — still perform readiness and every fixed step.",
         "Return the native plan artifact for this specific issue.",
         "",
@@ -542,7 +542,7 @@ def _persist_plan_issue_ref(worktree_root: Path, issue: Task) -> None:
         return
     try:
         wade_dir.mkdir(parents=True, exist_ok=True)
-        ref_path.write_text(f"# Issue #{issue.id}: {issue.title}\n", encoding="utf-8")
+        ref_path.write_text(format_issue_heading(issue.id, issue.title) + "\n", encoding="utf-8")
     except OSError as e:  # pragma: no cover - defensive; must never break planning
         logger.warning("plan.issue_ref_persist_failed", error=str(e))
 
@@ -2036,6 +2036,7 @@ def _create_issues_from_plans(
                 base_branch=plan.base_branch,
                 refresh_existing_plan=reconciled is not None,
                 refresh_title=plan.title if reconciled is not None else None,
+                issue_url=task.url,
             )
             if pr_info:
                 pr_number = pr_info.get("number", "?")
@@ -2171,7 +2172,7 @@ def _base_retarget_is_safe(
     branch_name = (
         resolved_target.branch_name
         if resolved_target is not None
-        else git_branch.make_branch_name(config.project.branch_prefix, int(issue.id), issue.title)
+        else git_branch.make_branch_name(config.project.branch_prefix, issue.id, issue.title)
     )
     lookup = (
         resolved_target.lookup
@@ -2271,7 +2272,7 @@ def _reconcile_inflight_worktree_base(
 
     if branch_name is None:
         branch_name = git_branch.make_branch_name(
-            config.project.branch_prefix, int(issue.id), issue.title
+            config.project.branch_prefix, issue.id, issue.title
         )
     try:
         wt_path = next(
@@ -2396,6 +2397,7 @@ def _attach_plan_to_existing_issue(
             refresh_existing_plan=refresh_existing_plan,
             resolved_target=resolved_target,
             refresh_title=issue.title if refresh_existing_plan else None,
+            issue_url=issue.url,
         )
         if pr_info:
             pr_number = pr_info.get("number", "?")
@@ -2690,7 +2692,12 @@ def _finalize_issues(
             affected = sorted(
                 {node for edge in declared_graph.edges for node in (edge.from_task, edge.to_task)}
             )
-            if apply_deps_to_issues(provider, affected, declared_graph.edges) != len(affected):
+            if apply_deps_to_issues(
+                provider,
+                affected,
+                declared_graph.edges,
+                provider_name=str(config.provider.name),
+            ) != len(affected):
                 console.error(
                     "Task dependency persistence was incomplete; planning output must be recovered."
                 )
@@ -2764,7 +2771,7 @@ def _finalize_issues(
 def _print_implement_hint(issue_number: str) -> None:
     """Print the hint for manually starting an implementation session."""
     console.info("When you're ready to implement, run:")
-    console.detail(f"wade implement {issue_number}")
+    console.detail(f"wade implement {shlex.quote(issue_number)}")
 
 
 def _flush_planning_votes_before_implementation(

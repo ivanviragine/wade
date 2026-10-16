@@ -8,6 +8,7 @@ import cycles between those modules.
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 from pathlib import Path
 
@@ -18,59 +19,139 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
+from wade.models.config import ProjectConfig
+from wade.models.task import Task, TaskReference
+from wade.utils.task_identity import task_id_from_branch, validate_task_id
 
 __all__ = [
     "DraftPRTarget",
+    "WorktreeTarget",
     "extract_issue_from_branch",
     "find_existing_branch_for_issue",
     "find_open_pr_branch_for_issue",
     "find_worktree_path",
+    "is_explicit_plan_path",
+    "match_worktree_target",
     "resolve_draft_pr_target",
     "resolve_task_branch",
+    "task_reference",
 ]
 
 
-def find_worktree_path(
+def task_reference(
+    config: ProjectConfig, task: Task | str, url: str | None = None
+) -> TaskReference:
+    """Build the PR-content reference for *task* under the configured provider.
+
+    The configured task provider decides whether a task is a GitHub issue — never
+    the shape of its ID or the presence of a GitHub PR delegate.
+    """
+    if isinstance(task, Task):
+        task_id, url = task.id, task.url or url
+    else:
+        task_id = task
+    return TaskReference(provider=str(config.provider.name), task_id=task_id, url=url or None)
+
+
+def is_explicit_plan_path(target: str) -> bool:
+    """Whether *target* uses explicit path syntax and may therefore name a plan file.
+
+    A bare token (``42``, ``abc1234``) is always a task ID even when a file with
+    that name exists in the cwd; pass ``./name`` to select such a file.
+    """
+    separators = {"/", os.sep} | ({os.altsep} if os.altsep else set())
+    return (
+        any(sep in target for sep in separators)
+        or target.startswith(("~", "."))
+        or target.lower().endswith(".md")
+    )
+
+
+class WorktreeTarget(BaseModel):
+    """One worktree selected for a command target, and how it was selected."""
+
+    path: Path
+    branch: str
+    task_id: str | None = None
+    by_identity: bool = False
+
+
+def match_worktree_target(
     target: str,
     project_root: Path | None = None,
-) -> Path | None:
-    """Find the worktree path for a given issue number or branch name."""
+    *,
+    fuzzy: bool = True,
+) -> WorktreeTarget | None:
+    """Select the worktree for *target* with deterministic precedence.
+
+    1. a worktree whose branch decodes to exactly the task ID *target*;
+    2. a worktree whose branch name is exactly *target*;
+    3. a worktree whose directory name is exactly *target*;
+    4. only with ``fuzzy``: a boundary-aware directory-name fragment (navigation
+       conveniences such as ``wade cd add-auth`` and plan-title lookup).
+
+    Exact identity always wins over a name match, and task identity is never
+    inferred from a numeric substring, so ``42`` does not select ``0042`` and an
+    opaque ID cannot select another task's worktree whose title happens to
+    contain it — unless the caller explicitly allows fuzzy name matching.
+    """
     cwd = project_root or Path.cwd()
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
         return None
 
-    worktrees = git_worktree.list_worktrees(repo_root)
-
-    for wt in worktrees:
-        wt_branch = wt.branch or ""
-        wt_path = wt.path
-
-        # Match by issue number in branch name
-        if f"/{target}-" in wt_branch or wt_branch.endswith(f"/{target}"):
-            return Path(wt_path)
-
-        # Match by worktree directory name (boundary-aware to avoid
-        # target="1" matching "feat-10-something")
-        if re.search(rf"(?:^|-){re.escape(target)}(?:-|$)", Path(wt_path).name):
-            return Path(wt_path)
-
+    entries = [
+        WorktreeTarget(
+            path=Path(wt.path),
+            branch=wt.branch or "",
+            task_id=task_id_from_branch(wt.branch) if wt.branch else None,
+        )
+        for wt in git_worktree.list_worktrees(repo_root)
+    ]
+    for entry in entries:
+        if entry.task_id is not None and entry.task_id == target:
+            return entry.model_copy(update={"by_identity": True})
+    for entry in entries:
+        if entry.branch == target:
+            return entry
+    for entry in entries:
+        if entry.path.name == target:
+            return entry
+    if fuzzy:
+        # Boundary-aware so target="1" cannot match "feat-10-something".
+        pattern = re.compile(rf"(?:^|-){re.escape(target)}(?:-|$)")
+        for entry in entries:
+            if pattern.search(entry.path.name):
+                return entry
     return None
 
 
-def extract_issue_from_branch(branch: str) -> str | None:
-    """Extract the issue number from a branch name like ``feat/42-slug``.
+def find_worktree_path(
+    target: str,
+    project_root: Path | None = None,
+    *,
+    fuzzy: bool = True,
+) -> Path | None:
+    """Find the worktree path for a task ID, branch, or worktree name.
 
-    wade names branches ``{prefix}/{issue}-{slug}``, so the issue number is the
-    ``/{digits}-`` segment — the digits immediately before the slug. Preferring
-    that boundary keeps a *numeric* multi-segment prefix honest: e.g.
-    ``release/2026`` yields ``release/2026/42-title``, which must resolve to
-    ``42``, not the prefix's ``2026`` (#428 review). Fall back to a bare
-    ``/{digits}`` for hyphenless branches (``feat/42``).
+    See :func:`match_worktree_target` for the precedence rules.
     """
-    m = re.search(r"/(\d+)-", branch) or re.search(r"/(\d+)", branch)
-    return m.group(1) if m else None
+    match = match_worktree_target(target, project_root, fuzzy=fuzzy)
+    return match.path if match is not None else None
+
+
+def extract_issue_from_branch(branch: str) -> str | None:
+    """Recover the exact task ID from a WADE branch name like ``feat/42-slug``.
+
+    Compatibility wrapper over :func:`wade.utils.task_identity.task_id_from_branch`.
+    Only the final segment's identity token is decoded, so a numeric
+    multi-segment prefix stays honest (``release/2026/42-title`` -> ``42``,
+    #428 review), ``feat/idv1_61626331323334-x`` -> ``abc1234``, and a
+    malformed token never falls back to a numeric substring
+    (``feat/123abc`` -> ``None``).
+    """
+    return task_id_from_branch(branch)
 
 
 def find_existing_branch_for_issue(
@@ -120,7 +201,7 @@ def resolve_task_branch(
     title: str,
     branch_prefix: str,
 ) -> str:
-    """Resolve the branch name for a task by its stable issue *number*.
+    """Resolve the branch name for a task by its stable, exact task ID.
 
     Resolution order:
 
@@ -138,7 +219,7 @@ def resolve_task_branch(
     so ``implement``/``smart_start`` re-runs would otherwise miss the live PR and
     re-bootstrap a duplicate.
     """
-    issue = str(int(issue_id))
+    issue = validate_task_id(str(issue_id))
 
     with contextlib.suppress(GitError):
         current_branch = git_repo.get_current_branch(repo_root)
@@ -148,7 +229,7 @@ def resolve_task_branch(
     # Reconstruct the current-title name once: it is both the tiebreaker
     # preference for find_existing_branch_for_issue (prefer the freshest branch
     # when an issue has several) and the fallback when no branch exists yet.
-    reconstructed = git_branch.make_branch_name(branch_prefix, int(issue_id), title)
+    reconstructed = git_branch.make_branch_name(branch_prefix, issue, title)
     existing = find_existing_branch_for_issue(repo_root, issue, preferred=reconstructed)
     return existing if existing is not None else reconstructed
 
@@ -180,7 +261,7 @@ def find_open_pr_branch_for_issue(
     bootstrap a duplicate. With ``require_complete=True``, even a full page
     containing a match refuses: replanning must not select from a truncated set.
     """
-    issue = str(int(issue_id))
+    issue = validate_task_id(str(issue_id))
     open_prs = git_pr.list_prs(
         repo_root, state="open", limit=_OPEN_PR_SCAN_LIMIT, raise_on_error=True
     )
@@ -197,7 +278,7 @@ def find_open_pr_branch_for_issue(
         # A full page with no match — an open PR for this issue could be beyond it,
         # so absence is unproven. Fail loud rather than risk a duplicate PR.
         raise git_pr.GhCliError(
-            f"more than {_OPEN_PR_SCAN_LIMIT} open PRs — cannot rule out an open PR for #{issue}"
+            f"more than {_OPEN_PR_SCAN_LIMIT} open PRs — cannot rule out an open PR for {issue}"
         )
     return None
 
@@ -226,6 +307,6 @@ def resolve_draft_pr_target(
             raise git_pr.GhCliError(f"Could not verify the open PR for branch {live_branch}")
         return DraftPRTarget(branch_name=live_branch, lookup=live_lookup)
     return DraftPRTarget(
-        branch_name=git_branch.make_branch_name(branch_prefix, int(issue_id), title),
+        branch_name=git_branch.make_branch_name(branch_prefix, issue_id, title),
         lookup=git_pr.PRLookup(),
     )

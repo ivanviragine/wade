@@ -15,8 +15,8 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
-from wade.models.task import Task
-from wade.services.implementation_service._shared import DraftPRTarget
+from wade.models.task import Task, TaskReference
+from wade.services.implementation_service._shared import DraftPRTarget, task_reference
 from wade.ui.console import console
 from wade.utils.body_markers import GITHUB_BODY_MAX, update_body_preserving_markers
 from wade.utils.markdown import (
@@ -24,6 +24,7 @@ from wade.utils.markdown import (
     replace_owned_section,
     scan_markdown_structure,
 )
+from wade.utils.task_identity import TaskIdentityError
 
 logger = structlog.get_logger()
 
@@ -44,10 +45,16 @@ PLAN_MARKER_START = "<!-- wade:plan:start -->"
 PLAN_MARKER_END = "<!-- wade:plan:end -->"
 
 
-def _build_draft_pr_body(plan_body: str, issue_number: str) -> str:
-    """Format draft PR body with plan content in markers."""
+def _build_draft_pr_body(plan_body: str, reference: TaskReference | str) -> str:
+    """Format draft PR body with plan content in markers.
+
+    The leading line is the task's non-closing reference: ``Implements #42`` for
+    GitHub issues, ``Implements [clickup:abc1234](<url>)`` for external tasks.
+    """
+    if isinstance(reference, str):
+        reference = TaskReference(task_id=reference)
     lines = [
-        f"Implements #{issue_number}",
+        reference.reference_line(close=False),
         "",
         PLAN_MARKER_START,
         "",
@@ -337,6 +344,7 @@ def bootstrap_draft_pr(
     refresh_existing_plan: bool = False,
     refresh_title: str | None = None,
     resolved_target: DraftPRTarget | None = None,
+    issue_url: str | None = None,
 ) -> dict[str, str | int] | None:
     """Create branch + push + draft PR for an issue.
 
@@ -358,18 +366,25 @@ def bootstrap_draft_pr(
             the branch from ``issue_title``.
         resolved_target: Optional stable task identity selected once by planning;
             all retarget/refresh operations use its branch and verified lookup.
+        issue_url: The provider URL for the task, linked from external-task
+            PR references (GitHub issues use ``#N``).
 
     Returns:
         Dict with "number" (int) and "url" (str) keys, or None on failure.
     """
+    reference = task_reference(config, issue_number, issue_url)
     # Planning passes its verified identity; generic bootstrap retains its default.
-    branch_name = (
-        resolved_target.branch_name
-        if resolved_target is not None
-        else git_branch.make_branch_name(
-            config.project.branch_prefix, int(issue_number), issue_title
+    try:
+        branch_name = (
+            resolved_target.branch_name
+            if resolved_target is not None
+            else git_branch.make_branch_name(
+                config.project.branch_prefix, issue_number, issue_title
+            )
         )
-    )
+    except TaskIdentityError as exc:
+        console.error(str(exc), markup=False)
+        return None
 
     # Reuse only an OPEN PR for this branch. A merged/closed PR must not be
     # reused (its branch work is done); fall through and create a fresh one.
@@ -394,7 +409,7 @@ def bootstrap_draft_pr(
             def transform(current: str) -> str:
                 # Empty is a successful read; retain the existing reference
                 # convention without reconstructing any nonempty remote body.
-                source = current if current else f"Implements #{issue_number}\n\n"
+                source = current if current else f"{reference.reference_line(close=False)}\n\n"
                 candidate = replace_owned_section(
                     source, name="plan", heading=None, content=plan_body
                 )
@@ -471,14 +486,14 @@ def bootstrap_draft_pr(
 
     # Creation must satisfy the same owned-plan contract as extraction and
     # refresh before any branch/push side effect can outlive a rejected handoff.
-    body = _build_draft_pr_body(plan_body, issue_number)
+    body = _build_draft_pr_body(plan_body, reference)
     try:
         if scan_markdown_structure(body).owned("plan") is None:
             raise MarkdownStructureError("composed draft PR has no owned plan")
         if len(body) > GITHUB_BODY_MAX:
             raise ValueError("plan exceeds the PR body limit; shorten it and retry")
     except (MarkdownStructureError, ValueError) as exc:
-        console.error(f"Could not compose draft PR for #{issue_number}: {exc}", markup=False)
+        console.error(f"Could not compose draft PR for {reference.label}: {exc}", markup=False)
         return None
 
     # Resolve the effective base for branch creation and PR target
@@ -501,7 +516,7 @@ def bootstrap_draft_pr(
         git_branch.create_scaffold_commit(
             repo_root,
             branch_name,
-            f"chore: scaffold branch for #{issue_number}",
+            f"chore: scaffold branch for {reference.label}",
         )
 
     # Push branch to origin
