@@ -573,7 +573,8 @@ def _merge_pr(
             git_repo.checkout_detach(worktree_path)
 
     # Read the completion's recorded closure intent before the irreversible merge.
-    close_ref = _merge_close_reference(repo_root, issue_number)
+    close_task_id = str(issue_number) if issue_number else None
+    close_ref = _merge_close_reference(repo_root, close_task_id) if close_task_id else None
     pr_body: str | None = None
     if close_ref is not None:
         try:
@@ -610,43 +611,63 @@ def _merge_pr(
 
     _pull_main_after_merge(main_root)
 
-    if close_ref is not None:
-        _close_task_after_merge(provider, close_ref, pr_body)
+    if close_task_id is not None:
+        _close_task_after_merge(provider, close_task_id, close_ref, pr_body)
 
     return MergeStatus.MERGED
 
 
-def _merge_close_reference(repo_root: Path, issue_number: str | int | None) -> TaskReference | None:
-    """The configured provider's reference for the merged task, if any."""
-    if not issue_number:
-        return None
-    provider_name = "github"
+def _merge_close_reference(repo_root: Path, task_id: str) -> TaskReference | None:
+    """The configured provider's reference for the merged task.
+
+    ``None`` when the configuration cannot be loaded: the provider is then
+    unknown, and assuming GitHub would miss a non-GitHub ``--no-close`` marker.
+    """
     try:
         from wade.config.loader import load_config
 
         provider_name = str(load_config(repo_root).provider.name)
     except Exception:
         logger.debug("merge.config_load_failed", exc_info=True)
-    return TaskReference(provider=provider_name, task_id=str(issue_number))
+        return None
+    return TaskReference(provider=provider_name, task_id=task_id)
 
 
 def _close_task_after_merge(
-    provider: AbstractTaskProvider, ref: TaskReference, pr_body: str | None
+    provider: AbstractTaskProvider,
+    task_id: str,
+    ref: TaskReference | None,
+    pr_body: str | None,
 ) -> None:
     """Close the task through its provider, honoring the recorded ``--no-close``.
 
-    Uses the exact task ID. An unreadable PR body leaves the task open with a
-    retry command rather than risk closing a task the completion kept open.
+    Uses the exact task ID. An unknown provider (*ref* is ``None``), an unreadable
+    PR body, or a failed close leaves the task open with a retry command rather
+    than risk closing a task the completion kept open.
     """
+    hint = f"Close it when ready: wade task close {shlex.quote(task_id)}"
+    if ref is None:
+        console.warn(
+            console.escape_markup(
+                f"Could not load the project configuration to confirm closing task "
+                f"'{task_id}'; left open."
+            )
+        )
+        console.hint(hint)
+        return
     if pr_body is None:
         console.warn(f"Could not read the PR body to confirm closing {ref.label}; left open.")
-        console.hint(f"Close it when ready: wade task close {shlex.quote(ref.task_id)}")
+        console.hint(hint)
         return
     if task_close_intent(pr_body, ref) is False:
         console.info(f"Left {ref.label} open (completed with --no-close).")
         return
-    with contextlib.suppress(Exception):
+    try:
         provider.close_task(ref.task_id)
+    except Exception:
+        logger.warning("merge.task_close_failed", task_id=ref.task_id, exc_info=True)
+        console.warn(f"Could not close {ref.label} after merge.")
+        console.hint(hint)
 
 
 SUMMARY_MARKER_START = "<!-- wade:summary:start -->"

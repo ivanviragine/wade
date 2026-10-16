@@ -153,6 +153,32 @@ class TestMergeTimeClosure:
         provider = self._run(tmp_path, "Manually written PR body.")
         provider.close_task.assert_called_once_with("abc1234")
 
+    def test_unknown_provider_never_closes(self, merge: MagicMock, tmp_path: Path) -> None:
+        # Assuming GitHub would miss the ClickUp "Implements" (--no-close) marker.
+        with (
+            patch("wade.config.loader.load_config", side_effect=RuntimeError("bad config")),
+            patch("wade.services.implementation_service.lifecycle.console") as console,
+        ):
+            provider = self._run(tmp_path, "Implements [clickup:42](https://x/42)\n")
+        provider.close_task.assert_not_called()
+        console.hint.assert_called_once_with("Close it when ready: wade task close abc1234")
+
+    def test_failed_close_reports_a_retry_command(self, merge: MagicMock, tmp_path: Path) -> None:
+        provider = MagicMock()
+        provider.close_task.side_effect = RuntimeError("ClickUp down")
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_pr.get_pr_body",
+                return_value=f"Completes [clickup:abc1234]({URL})\n",
+            ),
+            patch("wade.services.implementation_service.lifecycle.console") as console,
+        ):
+            status = _merge_pr(tmp_path, "feat/x", 5, "abc1234", None, provider)
+        assert status == MergeStatus.MERGED
+        provider.close_task.assert_called_once_with("abc1234")
+        console.warn.assert_called_once_with("Could not close clickup:abc1234 after merge.")
+        console.hint.assert_called_once_with("Close it when ready: wade task close abc1234")
+
     def test_failed_merge_never_closes(self, merge: MagicMock, tmp_path: Path) -> None:
         merge.side_effect = RuntimeError("merge blocked")
         provider = MagicMock()

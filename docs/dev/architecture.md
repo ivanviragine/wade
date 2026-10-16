@@ -1711,7 +1711,8 @@ ID raises `MarkdownStructureError` rather than publishing closure metadata.
 `task_close_intent` reads the recorded intent back: `_merge_pr` reads the PR
 body before merging and, after a successful merge, closes the task through the
 configured provider with the exact ID unless the body records `--no-close`; an
-unreadable body leaves the task open. Markdown's optional close commit uses
+unreadable body, an unloadable configuration (unknown provider — never assumed
+GitHub), or a failed close leaves the task open with a retry hint. Markdown's optional close commit uses
 `chore: close markdown task N`, never a GitHub `close #N` keyword.
 
 Tracking parents: GitHub and Markdown keep their checklist scans; ClickUp's
