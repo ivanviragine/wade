@@ -259,9 +259,8 @@ def _timeout_result(partial: str) -> DelegationResult:
     )
 
 
-def _format_headless_failure(stdout: str, stderr: str) -> str:
-    """Combine failed headless output while bounding stderr diagnostics."""
-    stdout = stdout.strip()
+def _bounded_stderr(stderr: str) -> str:
+    """Labelled tail of headless stderr, bounded by line and character limits."""
     stderr_lines = [line.strip() for line in stderr.splitlines() if line.strip()]
     stderr_truncated = len(stderr_lines) > MAX_HEADLESS_STDERR_LINES
     stderr_lines = stderr_lines[-MAX_HEADLESS_STDERR_LINES:]
@@ -272,12 +271,20 @@ def _format_headless_failure(stdout: str, stderr: str) -> str:
         stderr_truncated = True
 
     if not stderr_output:
-        return stdout or "Headless session failed with no output"
+        return ""
 
     stderr_label = "Headless session stderr"
     if stderr_truncated:
         stderr_label += " (truncated)"
-    stderr_feedback = f"{stderr_label}:\n{stderr_output}"
+    return f"{stderr_label}:\n{stderr_output}"
+
+
+def _format_headless_failure(stdout: str, stderr: str) -> str:
+    """Combine failed headless output while bounding stderr diagnostics."""
+    stdout = stdout.strip()
+    stderr_feedback = _bounded_stderr(stderr)
+    if not stderr_feedback:
+        return stdout or "Headless session failed with no output"
     return f"{stdout}\n\n{stderr_feedback}" if stdout else stderr_feedback
 
 
@@ -306,14 +313,17 @@ def _run_headless_once(cmd: list[str], timeout: int, session_cwd: Path) -> Deleg
     """
     result = run(cmd, check=False, timeout=timeout, cwd=session_cwd)
     stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
+    stderr = result.stderr if isinstance(result.stderr, str) else ""
     if result.returncode == 0:
+        # Empty output stays a generic success; callers that require content
+        # (reviews) can explain the rejection with the child's own stderr.
         return DelegationResult(
             success=True,
             feedback=stdout,
             mode=DelegationMode.HEADLESS,
             exit_code=0,
+            diagnostics="" if stdout else _bounded_stderr(stderr),
         )
-    stderr = result.stderr if isinstance(result.stderr, str) else ""
     return DelegationResult(
         success=False,
         feedback=_format_headless_failure(stdout, stderr),

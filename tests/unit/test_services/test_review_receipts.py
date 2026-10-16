@@ -10,17 +10,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wade.models.config import DoneConfig, ProjectConfig
+from wade.models.config import AICommandConfig, AIConfig, DoneConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
-from wade.models.session_manifest import ResolvedBinding, ReviewOutcome, ReviewRecord
-from wade.models.skill import ResolvedSkill
-from wade.models.workflow import DelegationKind, SessionKind
+from wade.models.session_manifest import (
+    ResolvedBinding,
+    ReviewOutcome,
+    ReviewRecord,
+    SessionManifest,
+)
+from wade.models.skill import ResolvedSkill, SkillSlot
+from wade.models.workflow import SESSION_DEFINITIONS, AICommandKey, DelegationKind, SessionKind
+from wade.services.implementation_service.done import _gate_review_ran
 from wade.services.review_record_service import (
     count_binding_passes,
     read_review_record,
     write_review_record,
 )
 from wade.services.skill_invocation_service import PreparedDelegationMethod
+from wade.skills.materializer import compute_session_bundle_digest
+from wade.skills.validation import inspect_skill
 from wade.utils.runtime_env import CODEX_SANDBOX_ENV
 
 rds = importlib.import_module("wade.services.review_delegation_service")
@@ -144,7 +152,7 @@ class TestReviewImplementationReceipts:
         delegate.assert_not_called()
         assert record.call_args.args[2] is review_preflight
         assert record.call_args.args[3] is ReviewOutcome.REVIEWED
-        announce.assert_called_once_with(1, 2)
+        announce.assert_called_once_with(1, 2, host_session=None)
 
     def test_staged_self_review_ack_cannot_certify_an_empty_index(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
@@ -696,17 +704,40 @@ class TestImplementationReviewPreflightCap:
 
 class TestAnnounceReviewPassBudget:
     def test_remaining_budget_message(self, capsys: pytest.CaptureFixture[str]) -> None:
-        rds._announce_review_pass_budget(1, 2)
+        rds._announce_review_pass_budget(1, 2, host_session=SessionKind.IMPLEMENTATION)
         text = _cap(capsys).lower()
         assert "review pass 1 of 2" in text
         assert "1 pass left" in text
         assert "done.max_review_passes" in text
 
     def test_cap_reached_message(self, capsys: pytest.CaptureFixture[str]) -> None:
-        rds._announce_review_pass_budget(2, 2)
+        rds._announce_review_pass_budget(2, 2, host_session=SessionKind.IMPLEMENTATION)
         text = _cap(capsys).lower()
         assert "review pass 2 of 2" in text
         assert "reached" in text
+
+    def test_pr_comment_session_never_reports_the_implementation_cap(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """PR-comment review is uncapped; ``3 of 2`` must never be printed (#547)."""
+        rds._announce_review_pass_budget(3, 2, host_session=SessionKind.REVIEW_PR_COMMENTS)
+        text = _cap(capsys)
+        assert "Review pass 3 recorded for the PR-comment review binding" in text
+        assert "wade review-pr-comments-session done" in text
+        assert "satisfying review of the current commit" in text
+        assert "3 of 2" not in text
+        assert "cap is now reached" not in text
+        assert "without requiring re-review" not in text
+        assert "implementation-session" not in text
+
+    def test_standalone_review_reports_no_session_cap(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rds._announce_review_pass_budget(3, 2, host_session=None)
+        text = _cap(capsys)
+        assert "Review pass 3 recorded for this standalone review binding" in text
+        assert "3 of 2" not in text
+        assert "implementation-session" not in text
 
     def test_review_forwards_persisted_binding_count(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
@@ -721,7 +752,7 @@ class TestAnnounceReviewPassBudget:
         ):
             rds.review_implementation()
 
-        announce.assert_called_once_with(2, 2)
+        announce.assert_called_once_with(2, 2, host_session=None)
 
     def test_failed_receipt_write_is_not_announced(
         self, tmp_path: Path, review_preflight: PreparedDelegationMethod
@@ -870,7 +901,8 @@ class TestUnattemptedReviewGate:
         )
         text = _cap(capsys)
         assert "reviewer ran and failed" in text
-        assert "Review pass 1 of 2 recorded" in text
+        assert "Review pass 1 recorded for this standalone review binding" in text
+        assert "1 of 2" not in text
         assert "reviewer never started" not in text
 
     def test_failed_receipt_write_does_not_claim_budget_or_persistence(
@@ -1093,3 +1125,269 @@ class TestUnattemptedReviewRecordPrecedence:
         assert record is not None
         assert record.outcome is ReviewOutcome.REVIEWED
         assert record.consumes_pass is True
+
+
+def _write_session(root: Path, session_kind: SessionKind) -> ResolvedBinding:
+    """Freeze a real mapped session bundle whose REVIEW binding the command resolves."""
+
+    session = root / ".wade" / "session"
+    skill_dir = session / "skills" / "builtin" / "code-review"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (session / "WORKFLOW.md").write_text("# Workflow\n", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("# Code review methodology\n", encoding="utf-8")
+    inspected = inspect_skill(skill_dir, project_root=session)
+    binding = ResolvedBinding.from_skills(
+        (
+            ResolvedSkill(
+                canonical_ref="builtin:code-review",
+                source_path="templates/skills/code-review",
+                materialized_path=".wade/session/skills/builtin/code-review",
+                content_digest=inspected.digest,
+                files=inspected.files,
+            ),
+        )
+    )
+    manifest = SessionManifest(
+        session=session_kind,
+        workflow_revision=SESSION_DEFINITIONS[session_kind].workflow_revision,
+        bundle_digest=compute_session_bundle_digest(session),
+        task_id="42",
+        ai_command=(
+            AICommandKey.REVIEW_PR_COMMENTS
+            if session_kind is SessionKind.REVIEW_PR_COMMENTS
+            else AICommandKey.IMPLEMENT
+        ),
+        bindings={SkillSlot.WORK: binding, SkillSlot.REVIEW: binding},
+    )
+    (session / "manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
+    return binding
+
+
+class TestEmptyReviewerAssessment:
+    """A zero-exit reviewer without an assessment is a launched failure (#547).
+
+    These run the real mapped-binding preparation, assessment validation,
+    receipt persistence and ``done`` review gate; only the external reviewer
+    process and Git/PR lookups are replaced.
+    """
+
+    HEAD = "a" * 40
+
+    def _review(
+        self,
+        root: Path,
+        delegated: DelegationResult,
+        *,
+        limit: int = 2,
+    ) -> tuple[DelegationResult, MagicMock]:
+        config = ProjectConfig(
+            ai=AIConfig(
+                default_tool="claude",
+                review_implementation=AICommandConfig(mode="headless", enabled=True),
+            ),
+            done=DoneConfig(max_review_passes=limit),
+        )
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=root),
+            patch.object(rds.git_repo, "rev_parse", return_value=self.HEAD),
+            patch.object(
+                rds,
+                "_load_review_config",
+                return_value=(config, config.ai.review_implementation),
+            ),
+            patch.object(rds, "_review_input_context", return_value=rds._ReviewInputContext()),
+            patch.object(
+                rds,
+                "_collect_review_diffs",
+                return_value=rds._ReviewDiffs(committed="diff --git a b", staged="", unstaged=""),
+            ),
+            patch.object(
+                rds,
+                "confirm_ai_selection",
+                side_effect=lambda tool, model, **kw: (
+                    tool,
+                    model,
+                    kw["resolved_effort"],
+                    kw["resolved_permission_mode"],
+                ),
+            ),
+            patch.object(rds, "delegate", return_value=delegated) as delegate,
+        ):
+            result = rds.review_implementation()
+        return result, delegate
+
+    def _gate(self, root: Path, session_kind: SessionKind, *, limit: int = 2) -> bool:
+        return _gate_review_ran(
+            ProjectConfig(done=DoneConfig(max_review_passes=limit)),
+            root,
+            self.HEAD,
+            skip_review=False,
+            session_type=session_kind.value,
+        )
+
+    @pytest.mark.parametrize(
+        "session_kind", (SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS)
+    )
+    @pytest.mark.parametrize("assessment", ("", "  \n\t \n"))
+    def test_empty_assessment_records_a_failed_non_satisfying_pass(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        session_kind: SessionKind,
+        assessment: str,
+    ) -> None:
+        binding = _write_session(tmp_path, session_kind)
+        delegated = DelegationResult(
+            success=True,
+            feedback=assessment,
+            mode=DelegationMode.HEADLESS,
+            diagnostics="Headless session stderr:\nquota exhausted",
+            relaunch_command="wade review implementation --mode headless --ai claude",
+        )
+
+        result, delegate = self._review(tmp_path, delegated)
+
+        delegate.assert_called_once()
+        assert result.success is False
+        assert result.exit_code == 1
+        assert result.empty_assessment is True
+        assert result.never_launched is False
+        assert result.completion_command is None
+        receipt = read_review_record(
+            tmp_path, delegation=DelegationKind.CODE_REVIEW, commit=self.HEAD, binding=binding
+        )
+        assert receipt is not None and receipt.outcome is ReviewOutcome.FAILED
+        assert receipt.consumes_pass and not receipt.satisfies_review
+        assert (
+            count_binding_passes(tmp_path, delegation=DelegationKind.CODE_REVIEW, binding=binding)
+            == 1
+        )
+        assert self._gate(tmp_path, session_kind) is False
+
+        text = _cap(capsys)
+        assert "returned no assessment output" in text
+        assert "quota exhausted" in text
+        assert "never substitute a self-review" in text
+        assert "wade review implementation --mode headless --ai claude" in text
+        assert "reviewer never started" not in text
+        if session_kind is SessionKind.IMPLEMENTATION:
+            assert "Review pass 1 of 2 recorded" in text
+        else:
+            assert "Review pass 1 recorded for the PR-comment review binding" in text
+            assert "1 of 2" not in text
+            assert "implementation-session" not in text
+
+    def test_empty_assessment_only_passes_through_the_explicit_implementation_cap(
+        self, tmp_path: Path
+    ) -> None:
+        """The cap remains explicit policy; the failed receipt itself never satisfies."""
+        _write_session(tmp_path, SessionKind.IMPLEMENTATION)
+        empty = DelegationResult(success=True, feedback="", mode=DelegationMode.HEADLESS)
+
+        self._review(tmp_path, empty, limit=1)
+
+        assert self._gate(tmp_path, SessionKind.IMPLEMENTATION, limit=2) is False
+        assert self._gate(tmp_path, SessionKind.IMPLEMENTATION, limit=1) is True
+
+    @pytest.mark.parametrize(
+        ("session_kind", "completion"),
+        (
+            (SessionKind.IMPLEMENTATION, "wade implementation-session done"),
+            (SessionKind.REVIEW_PR_COMMENTS, "wade review-pr-comments-session done"),
+        ),
+    )
+    def test_explicit_no_findings_assessment_satisfies_review(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        session_kind: SessionKind,
+        completion: str,
+    ) -> None:
+        binding = _write_session(tmp_path, session_kind)
+        delegated = DelegationResult(
+            success=True, feedback="No findings.", mode=DelegationMode.HEADLESS
+        )
+
+        result, _ = self._review(tmp_path, delegated)
+
+        assert result.success is True
+        assert result.feedback == "No findings."
+        assert result.completion_command == completion
+        receipt = read_review_record(
+            tmp_path, delegation=DelegationKind.CODE_REVIEW, commit=self.HEAD, binding=binding
+        )
+        assert receipt is not None and receipt.outcome is ReviewOutcome.REVIEWED
+        assert self._gate(tmp_path, session_kind) is True
+        assert "No findings." in _cap(capsys)
+
+    def test_pr_comment_review_beyond_the_implementation_cap_still_dispatches(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        binding = _write_session(tmp_path, SessionKind.REVIEW_PR_COMMENTS)
+        for commit in ("1" * 40, "2" * 40):
+            assert (
+                write_review_record(
+                    tmp_path,
+                    delegation=DelegationKind.CODE_REVIEW,
+                    commit=commit,
+                    binding=binding,
+                    outcome=ReviewOutcome.REVIEWED,
+                )
+                is not None
+            )
+        delegated = DelegationResult(
+            success=True, feedback="One finding.", mode=DelegationMode.HEADLESS
+        )
+
+        result, delegate = self._review(tmp_path, delegated, limit=2)
+
+        delegate.assert_called_once()
+        assert result.success is True and result.skipped is False
+        text = _cap(capsys)
+        assert "Review pass 3 recorded for the PR-comment review binding" in text
+        assert "3 of 2" not in text
+        assert "cap is now reached" not in text
+        assert "implementation-session done" not in text
+        assert self._gate(tmp_path, SessionKind.REVIEW_PR_COMMENTS) is True
+
+
+class TestRequireReviewAssessment:
+    @pytest.mark.parametrize(
+        "result",
+        (
+            DelegationResult(success=True, feedback="Findings", mode=DelegationMode.HEADLESS),
+            DelegationResult(success=True, feedback="Review this.", mode=DelegationMode.PROMPT),
+            DelegationResult(success=True, feedback="", mode=DelegationMode.HEADLESS, skipped=True),
+            DelegationResult(
+                success=False,
+                feedback="<no output before the budget elapsed>",
+                mode=DelegationMode.HEADLESS,
+                exit_code=1,
+                timed_out=True,
+            ),
+            DelegationResult(
+                success=False,
+                feedback="Unknown AI tool: x",
+                mode=DelegationMode.HEADLESS,
+                exit_code=1,
+                never_launched=True,
+            ),
+        ),
+    )
+    def test_non_empty_or_non_success_results_are_unchanged(self, result: DelegationResult) -> None:
+        assert rds._require_review_assessment(result) is result
+
+    @pytest.mark.parametrize("mode", (DelegationMode.HEADLESS, DelegationMode.INTERACTIVE))
+    def test_empty_success_becomes_an_idempotent_launched_failure(
+        self, mode: DelegationMode
+    ) -> None:
+        converted = rds._require_review_assessment(
+            DelegationResult(success=True, feedback=" \n", mode=mode)
+        )
+        assert converted.success is False
+        assert converted.exit_code == 1
+        assert converted.empty_assessment is True
+        assert converted.never_launched is False
+        assert converted.mode is mode
+        assert converted.feedback == rds._EMPTY_ASSESSMENT_FEEDBACK
+        assert rds._require_review_assessment(converted) is converted
