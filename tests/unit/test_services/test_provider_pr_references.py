@@ -99,6 +99,13 @@ class TestGitHubReferenceLines:
         assert updated == "Implements #42\nCloses #420\n"
         assert task_close_intent(updated, TaskReference(task_id="42")) is False
 
+    def test_no_close_records_intent_when_reference_is_absent(self) -> None:
+        body = f"Manual PR description.\n\n```\nCloses #42\n```\n\n{PLAN}"
+        updated = _apply_pr_refs(body, "42", False, None)
+        assert updated == f"Implements #42\n\n{body}"
+        assert _apply_pr_refs(updated, "42", False, None) == updated
+        assert task_close_intent(updated, TaskReference(task_id="42")) is False
+
     def test_absent_reference_is_unknown_intent(self) -> None:
         assert task_close_intent("No references here.", TaskReference(task_id="42")) is None
         assert task_close_intent("Closes #420", TaskReference(task_id="42")) is None

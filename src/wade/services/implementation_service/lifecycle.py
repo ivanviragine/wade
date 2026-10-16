@@ -874,7 +874,8 @@ def _apply_pr_refs(
     summaries, examples and other user content are never edited.
 
     GitHub issues keep ``Closes #N`` / ``Implements #N`` (``--no-close``
-    downgrades a closing line). External tasks — including numeric ClickUp and
+    downgrades a closing line, or adds ``Implements #N`` when none exists, so
+    merge-time closure sees the recorded intent). External tasks — including numeric ClickUp and
     Markdown IDs — use ``Completes``/``Implements`` with a qualified reference
     and never a GitHub closing keyword; legacy ``Closes #<id>`` / ``Implements
     #<id>`` lines WADE wrote for them are replaced. A legacy closing line that
@@ -915,7 +916,12 @@ def _apply_github_task_ref(body: str, ref: TaskReference, close_issue: bool) -> 
         for index, line in enumerate(lines)
         if re.match(rf"Closes\s+{token}", line.text)
     }
-    return _edit_lines(body, dict(downgrades), lines)
+    if downgrades:
+        return _edit_lines(body, dict(downgrades), lines)
+    if any(re.match(rf"Implements\s+{token}", line.text) for line in lines):
+        return body
+    # No reference yet: record the no-close intent so merge-time closure honors it.
+    return f"{ref.reference_line(close=False)}\n\n" + body.lstrip("\n")
 
 
 def _apply_external_task_ref(body: str, ref: TaskReference, close_issue: bool) -> str:
