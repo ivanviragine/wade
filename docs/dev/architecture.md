@@ -1708,6 +1708,8 @@ outside managed blocks and fences (it rescans the surviving text with
 `utils/markdown.py`). External tasks replace legacy whole-line `Closes #<id>` /
 `Implements #<id>` lines; a partial legacy closing line for a GitHub-interpretable
 ID raises `MarkdownStructureError` rather than publishing closure metadata.
+`--no-close` always leaves a non-closing line (downgrading, keeping or adding
+`Implements …`), so an updated PR never falls back to the legacy close default.
 `task_close_intent` reads the recorded intent back: `_merge_pr` reads the PR
 body before merging and, after a successful merge, closes the task through the
 configured provider with the exact ID unless the body records `--no-close`; an
