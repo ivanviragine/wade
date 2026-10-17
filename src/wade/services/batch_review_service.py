@@ -193,6 +193,9 @@ def gather_batch_context(
                     branch_name = open_branch
                     lookup = git_pr.get_pr_for_branch(repo, branch_name)
                     pr_lookup_failed = lookup.lookup_failed or not lookup.is_open
+                    # The alternate branch is only trusted as the live head;
+                    # if its PR is not reconfirmed open, never merge it.
+                    branch_unverified = pr_lookup_failed
 
         # Check if branch exists locally (may need fetch first)
         if not branch_unverified and not git_branch.branch_exists(repo, branch_name):
