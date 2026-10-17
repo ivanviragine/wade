@@ -67,16 +67,23 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ### Every release
 
-Merging a conventional-commit-titled PR into `main` runs Auto Version Bump.
-It uses the same script as this explicit local release command:
+Merged PRs run CI and do not bump versions. Choose a release for a batch of
+changes using the [deliberate release process](docs/dev/releases.md), including
+its fresh-clone prerequisite so unpublished local version tags cannot affect
+the changelog. Confirm repository Actions and the draft-release workflow are
+enabled before pushing; a paused tag-push event will not replay later. In that
+fresh release clone, use the version script explicitly when ready to ship:
 
 ```bash
-uv run python scripts/auto_version.py patch --push   # or minor / major
+uv run python scripts/auto_version.py patch   # or minor / major
+release_tag="$(git describe --tags --exact-match HEAD)"
+git push --atomic origin HEAD:main "refs/tags/$release_tag"
 ```
 
 This bumps the source and manifest versions, runs `uv lock` against the script's
 project root, and includes the synchronized `uv.lock` with `CHANGELOG.md` in the
-release commit before tagging and pushing. Compatible dependency resolutions
+release commit before tagging. The explicit atomic push sends that commit and
+only its selected tag. Compatible dependency resolutions
 are retained; no upgrade flags are used. The lock child process clears inherited
 `UV_FROZEN` so frozen installation preferences cannot silently skip the refresh;
 the caller's environment is unchanged. uv must be on PATH, including for direct
@@ -91,7 +98,10 @@ CI then:
 2. You review it on GitHub and click **Publish Release**
 3. CI publishes the wheel to PyPI automatically, authenticated via [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no API tokens stored anywhere. If PyPI ever rejects the publish with `invalid-publisher`, the trusted publisher for `wade-cli` needs to be (re-)registered on pypi.org under **Publishing** settings, matching `ivanviragine/wade`, workflow `publish.yml`, environment `pypi`.
 
-If you have `./scripts/install-hooks.sh` set up (see below), you rarely need to run the bump command manually — pushing a conventional-commit-prefixed commit straight to `main` auto-bumps, tags, and pushes for you via a `pre-push` hook.
+The legacy local `pre-push` hook described below can still auto-version direct
+pushes to `main`. Do not install that optional hook when using deliberate
+batch releases; an already-installed copy must be removed explicitly. This
+does not affect WADE's separate worktree quality and guard hooks.
 
 ### Git Hooks
 
@@ -119,11 +129,11 @@ changing dependency resolutions. The resulting coherent lock was verified with
 `uv sync --all-extras --locked` under both uv 0.9.27 and 0.13.1. No global uv
 upgrade is required for this repair.
 
-If an automatic bump failed before push because a prior release omitted lock
-metadata, merge the reviewed release fix through the normal workflow and verify
-remote main, the tag target, postmerge CI and the draft release. Do not manually
-bump main, discard the lock edit, or rerun the unchanged failing workflow. The
-next generated changelog includes the pending conventional commits.
+If a deliberate bump fails while synchronizing the lock, stop and inspect the
+working tree. Resolve the lock problem before rerunning the version script;
+do not publish a tag with mismatched source and lock versions. There is no
+per-merge bump workflow to rerun. Verify the release commit, tag, CI, and draft
+before publishing it.
 
 ## Detailed Reference
 

@@ -1670,6 +1670,9 @@ Detects your install method (`uv tool`, `pipx`, Homebrew) and upgrades automatic
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Maintainers ship batches through the [deliberate release process](docs/dev/releases.md).
+Merged PRs run CI; they do not automatically bump versions or create releases.
+
 ## License
 
 MIT

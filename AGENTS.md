@@ -49,6 +49,10 @@ uv run python scripts/auto_version.py patch # Version bump (patch/minor/major)
 # manually, as the script generates CHANGELOG.md and git tags automatically.
 ```
 
+Release versions are chosen deliberately for a batch of changes. Merging a PR
+does not bump the version or create a draft release. Follow
+[`docs/dev/releases.md`](docs/dev/releases.md) when shipping a release.
+
 > Full commands reference: see `docs/dev/architecture.md`
 
 ## Architecture
