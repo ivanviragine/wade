@@ -179,7 +179,6 @@ class TestGatherBatchContext:
         assert ctx.issues[1].issue_number == "11"
         assert ctx.issues[1].issue_title == "(unreadable #11)"
 
-
     @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
     @patch("wade.services.batch_review_service.resolve_task_branch")
     @patch("wade.services.batch_review_service.git_repo")
