@@ -72,12 +72,15 @@ changes using the [deliberate release process](docs/dev/releases.md). Use the
 version script explicitly when ready to ship:
 
 ```bash
-uv run python scripts/auto_version.py patch --push   # or minor / major
+uv run python scripts/auto_version.py patch   # or minor / major
+release_tag="$(git describe --tags --exact-match HEAD)"
+git push --atomic origin HEAD:main "refs/tags/$release_tag"
 ```
 
 This bumps the source and manifest versions, runs `uv lock` against the script's
 project root, and includes the synchronized `uv.lock` with `CHANGELOG.md` in the
-release commit before tagging and pushing. Compatible dependency resolutions
+release commit before tagging. The explicit atomic push sends that commit and
+only its selected tag. Compatible dependency resolutions
 are retained; no upgrade flags are used. The lock child process clears inherited
 `UV_FROZEN` so frozen installation preferences cannot silently skip the refresh;
 the caller's environment is unchanged. uv must be on PATH, including for direct
