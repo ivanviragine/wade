@@ -189,10 +189,14 @@ def review_implementation_cmd(
 
             console.info(result.feedback)
         raise typer.Exit(0 if result.success else 1)
+    # The service names the host session's own completion gate; a standalone
+    # review has none, so it must not point at an implementation session.
+    next_step = (
+        f", then proceed to {result.completion_command}." if result.completion_command else "."
+    )
     _finalize_review_result(
         result,
-        "REVIEW COMPLETE — address any actionable feedback above, "
-        "then proceed to wade implementation-session done.",
+        f"REVIEW COMPLETE — address any actionable feedback above{next_step}",
         self_review_followup=(
             "When the self-review is complete, run "
             "`wade review implementation --ack-self-review` to write the receipt."

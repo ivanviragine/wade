@@ -6,7 +6,9 @@ kill, background, or early-exit a bounded review before that budget elapses.
 A headless timeout is a budget overrun, not a successful review. Use any
 salvaged findings, retry once, and do not loop on the same commit. A non-timeout
 exit 1 is an execution error: diagnose it before retrying, and never treat it
-as a successful review. In an implementation session,
+as a successful review. A reviewer that returns no assessment is reported as
+such an exit 1 failure; retry the external review instead of substituting a
+self-review. In an implementation session,
 `wade review implementation` stops before dispatching another reviewer once
 `done.max_review_passes` is reached; proceed to `wade implementation-session done`,
 which remains authoritative for completion and PR review status. A valid

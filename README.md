@@ -622,6 +622,10 @@ review binding has consumed `done.max_review_passes` (default 2), `wade review
 implementation` exits successfully without launching another reviewer and directs
 you to `wade implementation-session done`. The dispatch cap does not block a
 valid `--ack-self-review`, which still writes its active-binding receipt.
+PR-comment sessions have no such cap: their review pass notice reports only the
+running count and the `wade review-pr-comments-session done` requirement for a
+satisfying review of the current commit, and a successful review there points
+to that command rather than `implementation-session done`.
 
 The first implementation review for a frozen reviewer binding receives the
 complete branch change. After a successful review and a new fix commit, a
@@ -1358,7 +1362,12 @@ If `wade review implementation` cannot launch its reviewer because of missing
 credentials, PATH, or sandbox execution access, it does not consume a
 `done.max_review_passes` slot: repair the runtime and retry. A real headless
 timeout and a reviewer that launched but failed both consume a review pass
-without certifying completion. Prompt/preflight failures, skipped dispatches,
+without certifying completion. A reviewer that exits successfully with empty or
+whitespace-only output is such a launched failure: empty output is not evidence
+of a review, so the command reports the missing assessment (with any reviewer
+stderr), records a non-satisfying `failed` receipt, exits 1 and repeats the exact
+retry command. An explicit nonempty "no findings" assessment is still a
+successful review. Prompt/preflight failures, skipped dispatches,
 and explicit human cancellation do not consume a pass.
 
 A reviewer that **never started** — including a sandbox-capability refusal before

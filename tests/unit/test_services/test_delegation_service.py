@@ -152,6 +152,24 @@ class TestDelegateHeadless:
         assert result.exit_code == 0
 
     @patch("wade.services.delegation_service.run")
+    def test_headless_empty_output_keeps_stderr_out_of_feedback(self, mock_run: MagicMock) -> None:
+        """Successful-run stderr is a diagnostic only, never generic feedback (#547)."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="  \n", stderr="model quota hit\n")
+        req = DelegationRequest(mode=DelegationMode.HEADLESS, prompt="Review", ai_tool="claude")
+        result = _delegate_headless(req)
+        assert result.success is True
+        assert result.feedback == ""
+        assert result.diagnostics == "Headless session stderr:\nmodel quota hit"
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_output_carries_no_stderr_diagnostic(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Findings", stderr="noise")
+        req = DelegationRequest(mode=DelegationMode.HEADLESS, prompt="Review", ai_tool="claude")
+        result = _delegate_headless(req)
+        assert result.feedback == "Findings"
+        assert result.diagnostics == ""
+
+    @patch("wade.services.delegation_service.run")
     def test_headless_nonzero_exit(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
         req = DelegationRequest(
