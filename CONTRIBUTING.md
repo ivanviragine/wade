@@ -68,8 +68,11 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 ### Every release
 
 Merged PRs run CI and do not bump versions. Choose a release for a batch of
-changes using the [deliberate release process](docs/dev/releases.md). Use the
-version script explicitly when ready to ship:
+changes using the [deliberate release process](docs/dev/releases.md), including
+its fresh-clone prerequisite so unpublished local version tags cannot affect
+the changelog. Confirm repository Actions and the draft-release workflow are
+enabled before pushing; a paused tag-push event will not replay later. In that
+fresh release clone, use the version script explicitly when ready to ship:
 
 ```bash
 uv run python scripts/auto_version.py patch   # or minor / major
