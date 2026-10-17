@@ -280,6 +280,11 @@ class TestGatherBatchContext:
         assert issue.pr_lookup_failed is True
         assert issue.status == "unknown"
         assert issue.pr_number is None
+        # The possibly stale branch is never diffed or merged.
+        assert issue.local_ref_exists is False
+        assert issue.diff_stat == ""
+        mock_repo.diff_stat_between.assert_not_called()
+        mock_repo.fetch_ref.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

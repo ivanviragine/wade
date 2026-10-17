@@ -173,6 +173,8 @@ def gather_batch_context(
 
         lookup = git_pr.get_pr_for_branch(repo, branch_name)
         pr_lookup_failed = lookup.lookup_failed
+        # Set when the resolved branch may be stale and the live one is unknown.
+        branch_unverified = False
         if not pr_lookup_failed and not lookup.is_open:
             # The resolved branch can be a stale same-ID branch left by a closed
             # PR while the live PR sits on another branch. Settle by PR state,
@@ -180,11 +182,12 @@ def gather_batch_context(
             try:
                 open_branch = find_open_pr_branch_for_issue(repo, task.id)
             except GhCliError:
-                # Absence of a live PR is unproven, so the stale PR's identity
-                # must not be reported as this task's PR.
+                # Absence of a live PR is unproven, so neither the stale PR's
+                # identity nor its branch may stand in for this task's work.
                 logger.debug("batch_review.open_pr_scan_failed", issue_num=num, exc_info=True)
                 lookup = PRLookup(lookup_failed=True)
                 pr_lookup_failed = True
+                branch_unverified = True
             else:
                 if open_branch and open_branch != branch_name:
                     branch_name = open_branch
@@ -192,7 +195,7 @@ def gather_batch_context(
                     pr_lookup_failed = lookup.lookup_failed or not lookup.is_open
 
         # Check if branch exists locally (may need fetch first)
-        if not git_branch.branch_exists(repo, branch_name):
+        if not branch_unverified and not git_branch.branch_exists(repo, branch_name):
             # Try fetching from remote
             try:
                 git_repo.fetch_ref(repo, "origin", f"{branch_name}:{branch_name}")
@@ -205,6 +208,11 @@ def gather_batch_context(
                 f"Could not look up the PR for {branch_name} — its status is unknown, "
                 "not necessarily absent."
             )
+        if branch_unverified:
+            console.warn(
+                f"Excluding {branch_name} from the batch: could not confirm it is the "
+                "live branch for its task."
+            )
         pr_number = lookup.number
         pr_url = lookup.url or None
         # An explicit "unknown" keeps a failed lookup distinguishable from a
@@ -216,7 +224,7 @@ def gather_batch_context(
         if pr_number:
             pr_base_branch = git_pr.get_pr_base_branch(repo, pr_number)
 
-        branch_available = git_branch.branch_exists(repo, branch_name)
+        branch_available = not branch_unverified and git_branch.branch_exists(repo, branch_name)
         diff_stat = ""
         if branch_available:
             diff_stat = git_repo.diff_stat_between(repo, main_branch, branch_name)
