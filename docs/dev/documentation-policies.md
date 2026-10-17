@@ -30,7 +30,7 @@ Before considering any work complete, verify each item:
 - [ ] **`templates/skills/`** — generic built-ins updated only for WADE-agnostic methodology; support skills updated for their narrow purpose
 - [ ] **Workflow/skill boundary** — WADE lifecycle belongs in workflows and deterministic services, never in replaceable skills; the AGENTS.md pointer stays minimal
 - [ ] **`docs/dev/`** — updated if architecture details, testing patterns, extension guides, or skills system docs changed
-- [ ] **Commit** — uses conventional-commit prefix for correct auto-versioning
+- [ ] **Commit** — uses conventional-commit prefix for changelog grouping
 
 ## Documentation Feedback Loop
 
