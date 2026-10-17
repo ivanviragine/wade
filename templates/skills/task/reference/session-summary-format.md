@@ -22,8 +22,9 @@ End the session with a compact block — no prose recap:
 1. **One status line for all steps**, each led by its glyph and joined with ` · `
    (e.g. `✅ Review · ✅ Docs · ✅ Sync · ✅ Done`). Mark a step that config
    disabled with ⏭️, not ✅ — e.g. `⏭️ Review · ✅ Docs · …` when reviews are off.
-2. **Actionable handles** on their own line — issue/PR number + URL, `closes #N
-   on merge` (or `stays open` when `--no-close`), branch when relevant.
+2. **Actionable handles** on their own line — task/PR ID + URL, `closes #N on
+   merge` for a GitHub issue or `closes <provider>:<id> on merge` for another
+   provider (or `stays open` when `--no-close`), branch when relevant.
 3. **An attention line** — either `✅ Nothing needs your attention.` or
    `⚠️ N item(s) need your attention:` followed by terse bullets, one per item,
    each with its reason.

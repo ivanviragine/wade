@@ -351,7 +351,8 @@ def commit_close(
                 "commit",
                 "--only",
                 "-m",
-                f"chore: close #{task_id}",
+                # Never "close #N": GitHub would close an unrelated issue #N on push.
+                f"chore: close markdown task {task_id}",
                 "--",
                 baseline.relative_path,
                 check=False,

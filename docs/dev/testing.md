@@ -407,6 +407,23 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 **When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
 
 
+## Opaque ClickUp identity contract
+
+`tests/e2e/test_clickup_opaque_contract.py` (#490) drives the real CLI, a real
+`ClickUpProvider`, real Git repositories/worktrees with a local bare origin and
+the stateful mock `gh`. `tests/e2e/_clickup_support.py` installs a test-only
+`wade` launcher that replaces only process boundaries: ClickUp's HTTP transport
+(a stateful JSON fixture with home-List statuses, tag/closed filtering,
+pagination and `fail` injection, logged to `WADE_MOCK_CLICKUP_LOG`), the merge
+menu's terminal interaction (`WADE_MOCK_TTY_SELECT`), and Codex's collector
+capability for planning. No production endpoint, config or credential exists for
+it. Branch resolution, bootstrap, dependency persistence, review-cycle state and
+completion run unmocked, and assertions check Git state and external operations
+(never only exit codes) — including zero `gh issue` calls for ClickUp tasks and
+closure on the original ClickUp ID with both ordinary and renamed Closed
+statuses. Codec, grammar, review-cycle, parent-lookup and PR-reference edge
+cases live in focused unit tests.
+
 ## Projects v2 fixtures
 
 `test_config/test_github_projects.py` proves optional config load/check/init

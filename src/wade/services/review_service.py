@@ -7,6 +7,7 @@ post-session token tracking, and label management.
 from __future__ import annotations
 
 import contextlib
+import shlex
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -68,6 +69,10 @@ from wade.services.implementation_service import (
     bootstrap_worktree,
     extract_issue_from_branch,
 )
+from wade.services.implementation_service._shared import (
+    find_existing_branch_for_issue,
+    resolve_task_branch,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.review_cycle_service import (
     initialize_or_refresh_review_cycle,
@@ -85,6 +90,7 @@ from wade.ui.console import console
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
 from wade.utils.runtime_env import parent_runtime, requires_unsandboxed_relaunch
+from wade.utils.task_identity import encode_task_id
 from wade.utils.terminal import (
     compose_review_title,
     launch_in_new_terminal,
@@ -192,84 +198,20 @@ def _record_review_cycle(
         console.warn(f"{result.diagnostic}; closing review will use the complete branch diff.")
 
 
-def _find_existing_branch_for_issue(
-    repo_root: Path, issue: str, preferred: str | None = None
-) -> str | None:
-    """Return the name of an existing branch that belongs to *issue*, or ``None``.
-
-    Matches by the stable issue *number* — first the worktrees, then local and
-    remote branches — never by a freshly slugified title. The slug is frozen into
-    the branch at ``wade implement`` time, so a title edited afterward (commonly:
-    the issue renamed to conventional-commit form when its PR opens) would make a
-    reconstructed name drift from the real branch. A worktree's branch is
-    preferred because it is the exact ref checked out for the issue.
-
-    When more than one branch carries the issue number (e.g. a closed PR was
-    retitled and implementation restarted), selection is deterministic:
-    ``list_branch_names`` returns an unordered set, so prefer *preferred* — the
-    name reconstructed from the issue's *current* title, i.e. the freshest
-    branch — and otherwise fall back to sorted order rather than returning a
-    hash-ordered (across-run nondeterministic) element.
-    """
-    with contextlib.suppress(GitError):
-        for wt in git_worktree.list_worktrees(repo_root):
-            if wt.branch and extract_issue_from_branch(wt.branch) == issue:
-                return wt.branch
-
-    # No live worktree (e.g. it was cleaned up while the PR stayed open) — fall
-    # back to any local or remote branch carrying the issue number so the
-    # remote-recovery path fetches the *real* branch rather than a drifted name.
-    with contextlib.suppress(GitError):
-        matches: set[str] = set()
-        for name in git_branch.list_branch_names(repo_root):
-            short = name[len("origin/") :] if name.startswith("origin/") else name
-            if extract_issue_from_branch(short) == issue:
-                matches.add(short)
-        if preferred is not None and preferred in matches:
-            return preferred
-        if matches:
-            return sorted(matches)[0]
-
-    return None
+# Review resolution shares the implementation resolver: one exact-ID identity
+# decision (worktree, local/remote branch, then current-title reconstruction),
+# never an independent numeric reconstruction (#490).
+_find_existing_branch_for_issue = find_existing_branch_for_issue
 
 
 def _resolve_task_branch(config: ProjectConfig, task: Task, repo_root: Path) -> str:
-    """Resolve the branch name for a task by its stable issue *number*.
+    """Resolve the branch for *task* by its exact, stable task ID.
 
-    Resolution order:
-
-    1. the currently checked-out branch, when it already carries this issue
-       (an in-worktree caller — authoritative);
-    2. an existing worktree / local / remote branch carrying this issue number
-       (see :func:`_find_existing_branch_for_issue`);
-    3. a name reconstructed from the current title — only when nothing for this
-       issue exists yet (first-time creation).
-
-    Resolving by number rather than by re-slugifying ``task.title`` is
-    deliberate: the branch slug is frozen at ``wade implement`` time, so a title
-    edited afterward regenerates a *different* name and orphans the real
-    worktree/PR — the "No worktree or remote branch found for issue #N" failure
-    this guards against.
+    See :func:`wade.services.implementation_service._shared.resolve_task_branch`:
+    the slug is frozen at ``wade implement`` time, so a title edited afterward
+    must not orphan the real worktree/PR ("No worktree or remote branch found").
     """
-    issue = str(int(task.id))
-
-    try:
-        current_branch = git_repo.get_current_branch(repo_root)
-        if extract_issue_from_branch(current_branch) == issue:
-            return current_branch
-    except GitError:
-        pass
-
-    # Reconstruct the current-title name once: it is both the tiebreaker preference
-    # for _find_existing_branch_for_issue (prefer the freshest branch when an issue
-    # has several) and the fallback when no branch for the issue exists yet.
-    reconstructed = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
-    existing = _find_existing_branch_for_issue(repo_root, issue, preferred=reconstructed)
-    return existing if existing is not None else reconstructed
+    return resolve_task_branch(repo_root, task.id, task.title, config.project.branch_prefix)
 
 
 def fetch_reviews(
@@ -295,11 +237,11 @@ def fetch_reviews(
         return False
 
     # Read the issue
-    issue_number = target.lstrip("#")
+    issue_number = target.removeprefix("#")
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
-        console.error(f"Could not read issue #{issue_number}: {e}")
+        console.error(f"Could not read task {issue_number}: {e}", markup=False)
         return False
 
     # Resolve the branch by issue number (worktree / local / remote), not by
@@ -457,14 +399,14 @@ def trigger_bot_reviews(
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return BotTriggerReport(resolution_error="not inside a git repository")
 
-    issue_number = target.lstrip("#")
+    issue_number = target.removeprefix("#")
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
         # Provider-controlled error text — disable markup so a bracket token in it
         # can't raise MarkupError instead of returning the structured exit-1 report.
-        console.error(f"Could not read issue #{issue_number}: {e}", markup=False)
-        return BotTriggerReport(resolution_error=f"could not read issue #{issue_number}")
+        console.error(f"Could not read task {issue_number}: {e}", markup=False)
+        return BotTriggerReport(resolution_error=f"could not read task {issue_number}")
 
     branch_name = _resolve_task_branch(config, task, repo_root)
 
@@ -475,7 +417,7 @@ def trigger_bot_reviews(
     if not lookup.is_open or lookup.pr is None:
         console.error_with_fix(
             f"No open PR found for branch {branch_name}",
-            f"Run `wade implementation-session done` for #{task.id} to open a PR first",
+            f"Run `wade implementation-session done` for task {task.id} to open a PR first",
         )
         return BotTriggerReport(resolution_error="no open PR")
 
@@ -1054,14 +996,14 @@ def start(
         permission_mode_explicit = True
 
     # 1. Read the issue
-    issue_number = target.lstrip("#")
+    issue_number = target.removeprefix("#")
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
-        console.error(f"Could not read issue #{issue_number}: {e}")
+        console.error(f"Could not read task {issue_number}: {e}", markup=False)
         return False
 
-    console.rule(f"review pr-comments #{task.id}")
+    console.rule(f"review pr-comments {task.id}")
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # 2. Find existing worktree for the issue (or recover from remote branch)
@@ -1148,9 +1090,10 @@ def start(
     # --- No review signals: check bot status, commit freshness, quiet-exit ---
     if not effective_threads and not status.has_changes_requested:
         if status.bot_status == ReviewBotStatus.PAUSED:
+            trigger = f"wade review trigger {shlex.quote(task.id)}"
             console.warn(
                 "CodeRabbit review is paused — comments may arrive when resumed.\n"
-                f"    Run `wade review trigger {task.id}` to post a fresh bot review trigger."
+                f"    Run `{trigger}` to post a fresh bot review trigger."
             )
             return True
         if status.bot_status == ReviewBotStatus.IN_PROGRESS:
@@ -1435,7 +1378,7 @@ def start(
     transcript_path: Path | None = None
     try:
         transcript_dir = tempfile.mkdtemp(prefix="wade-review-")
-        transcript_path = Path(transcript_dir) / f"transcript-review-{task.id}.log"
+        transcript_path = Path(transcript_dir) / f"transcript-review-{encode_task_id(task.id)}.log"
         console.hint(f"Transcript: {transcript_path}")
     except OSError:
         logger.warning("review.transcript_dir_failed")
@@ -1616,8 +1559,8 @@ def _show_recovery_command(repo_root: Path, backup_ref: str) -> None:
 def _report_recovery_failure(result: RecoveryOutcome, issue_id: str, repo_root: Path) -> None:
     if result.failure == RecoveryFailure.NO_BRANCH:
         console.error_with_fix(
-            f"No worktree or remote/local branch found for issue #{issue_id}",
-            f"Run `wade implement {issue_id}` first to create a worktree",
+            f"No worktree or remote/local branch found for task {issue_id}",
+            f"Run `wade implement {shlex.quote(issue_id)}` first to create a worktree",
         )
         return
     console.error(f"Review recovery refused ({result.failure}): {result.detail}", markup=False)

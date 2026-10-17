@@ -16,6 +16,7 @@ from wade.utils.safe_state import (
     read_state_file,
     state_file_present,
 )
+from wade.utils.task_identity import encode_task_id
 
 _DIRECTORIES = ("review-cycles",)
 _INVALIDATION_DIRECTORIES = ("review-cycle-invalidations",)
@@ -32,12 +33,14 @@ class ReviewCycleLookup:
 
 
 def review_cycle_filename(issue_number: str) -> str:
-    """Return the one canonical context filename for an issue's active cycle."""
+    """Return the one canonical context filename for a task's active cycle.
 
-    normalized = issue_number.strip().lstrip("#")
-    if not normalized.isdigit() or int(normalized) <= 0:
-        raise ValueError("Review-cycle issue number must be positive")
-    return f"{_PREFIX}{int(normalized)}.json"
+    The exact task ID goes through the shared branch/path codec: canonical
+    decimals keep the existing ``review-cycle@42.json`` name, and any other ID
+    (``abc1234``, ``0042``) gets a reversible, collision-free token.
+    """
+
+    return f"{_PREFIX}{encode_task_id(issue_number)}.json"
 
 
 def read_review_cycle(
@@ -69,7 +72,7 @@ def read_review_cycle(
         context = ReviewCycleContext.model_validate_json(raw)
     except (ValidationError, ValueError):
         return ReviewCycleLookup(None, "PR-comment review-cycle state is malformed")
-    if context.issue_number != str(int(issue_number.lstrip("#"))):
+    if context.issue_number != issue_number:
         return ReviewCycleLookup(None, "PR-comment review-cycle issue identity does not match")
     if context.pr_number != pr_number:
         return ReviewCycleLookup(None, "PR-comment review-cycle PR identity does not match")
