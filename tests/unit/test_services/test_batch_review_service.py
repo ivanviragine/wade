@@ -351,6 +351,110 @@ class TestGatherBatchContext:
         mock_repo.diff_stat_between.assert_not_called()
         mock_repo.fetch_ref.assert_not_called()
 
+    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.resolve_task_branch")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_branch")
+    @patch("wade.services.batch_review_service.get_provider")
+    @patch("wade.services.batch_review_service.load_config")
+    def test_excludes_resolved_branch_when_initial_lookup_and_scan_fail(
+        self,
+        mock_config: MagicMock,
+        mock_provider_fn: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_repo: MagicMock,
+        mock_resolve: MagicMock,
+        mock_find_open: MagicMock,
+    ) -> None:
+        from wade.git.pr import GhCliError
+        from wade.services.batch_review_service import gather_batch_context
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = Path("/repo")
+        provider = MagicMock()
+        mock_provider_fn.return_value = provider
+        tracking = MagicMock()
+        tracking.id = "99"
+        tracking.body = "- [ ] #10\n"
+        child = MagicMock()
+        child.id = "10"
+        child.title = "Feature"
+        provider.read_task.side_effect = [tracking, child]
+
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_resolve.return_value = "feat/10-old-title"
+        mock_pr.get_pr_for_branch.return_value = PRLookup(lookup_failed=True)
+        mock_find_open.side_effect = GhCliError("gh down")
+        mock_branch.branch_exists.return_value = True
+
+        ctx = gather_batch_context("99", repo_root=Path("/repo"))
+
+        issue = ctx.issues[0]
+        mock_find_open.assert_called_once_with(Path("/repo"), "10")
+        assert issue.pr_lookup_failed is True
+        assert issue.status == "unknown"
+        # A possibly stale same-ID branch is never diffed or merged.
+        assert issue.local_ref_exists is False
+        assert issue.diff_stat == ""
+        mock_repo.diff_stat_between.assert_not_called()
+        mock_repo.fetch_ref.assert_not_called()
+
+    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.resolve_task_branch")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_branch")
+    @patch("wade.services.batch_review_service.get_provider")
+    @patch("wade.services.batch_review_service.load_config")
+    def test_initial_lookup_failure_switches_to_live_open_pr_branch(
+        self,
+        mock_config: MagicMock,
+        mock_provider_fn: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_repo: MagicMock,
+        mock_resolve: MagicMock,
+        mock_find_open: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import gather_batch_context
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = Path("/repo")
+        provider = MagicMock()
+        mock_provider_fn.return_value = provider
+        tracking = MagicMock()
+        tracking.id = "99"
+        tracking.body = "- [ ] #10\n"
+        child = MagicMock()
+        child.id = "10"
+        child.title = "Renamed feature"
+        provider.read_task.side_effect = [tracking, child]
+
+        stale = "feat/10-old-title"
+        live = "feat/10-live-title"
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_resolve.return_value = stale
+        mock_find_open.return_value = live
+        lookups = {
+            stale: PRLookup(lookup_failed=True),
+            live: PRLookup(found=True, pr=PRRef(number=7, url="u7", state="OPEN")),
+        }
+        mock_pr.get_pr_for_branch.side_effect = lambda _repo, branch: lookups[branch]
+        mock_pr.get_pr_base_branch.return_value = "main"
+        mock_branch.branch_exists.return_value = True
+        mock_repo.diff_stat_between.return_value = " 1 file changed"
+
+        ctx = gather_batch_context("99", repo_root=Path("/repo"))
+
+        issue = ctx.issues[0]
+        assert issue.branch_name == live
+        assert issue.pr_number == 7
+        assert issue.pr_lookup_failed is False
+        assert issue.status == "OPEN"
+        mock_repo.diff_stat_between.assert_called_once_with(Path("/repo"), "main", live)
+
 
 # ---------------------------------------------------------------------------
 # create_integration_branch

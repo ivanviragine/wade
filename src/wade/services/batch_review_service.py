@@ -175,10 +175,12 @@ def gather_batch_context(
         pr_lookup_failed = lookup.lookup_failed
         # Set when the resolved branch may be stale and the live one is unknown.
         branch_unverified = False
-        if not pr_lookup_failed and not lookup.is_open:
+        if pr_lookup_failed or not lookup.is_open:
             # The resolved branch can be a stale same-ID branch left by a closed
             # PR while the live PR sits on another branch. Settle by PR state,
-            # like implementation resume, so the merge uses the live head.
+            # like implementation resume, so the merge uses the live head. A
+            # failed lookup proves nothing about the resolved branch either, so
+            # it also needs the trusted open-PR scan before the branch is used.
             try:
                 open_branch = find_open_pr_branch_for_issue(repo, task.id)
             except GhCliError:
