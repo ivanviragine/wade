@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import structlog
 
@@ -33,6 +34,16 @@ logger = structlog.get_logger()
 
 # Compatibility names only for task payloads without a canonical status type.
 _LEGACY_CLOSED_STATUSES = frozenset({"closed", "complete", "done"})
+
+
+def _segment(value: str) -> str:
+    """Percent-encode one URL path segment so ``/``, ``?`` and ``#`` stay literal."""
+    return quote(value, safe="")
+
+
+def _task_path(task_id: str) -> str:
+    """Endpoint for one task; the opaque ID is never parsed as URL syntax."""
+    return f"/api/v2/task/{_segment(task_id)}"
 
 
 def _epoch_ms_to_datetime(ms: str | None) -> datetime | None:
@@ -261,7 +272,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
             payload["name"] = title
 
         if payload:
-            self._client.put(f"/api/v2/task/{task_id}", json=payload)
+            self._client.put(_task_path(task_id), json=payload)
 
         return self.read_task(task_id)
 
@@ -281,7 +292,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         if not isinstance(list_id, str) or not list_id.strip():
             raise ValueError(f"Cannot close ClickUp task {task_id}: missing home List ID")
 
-        metadata = self._client.get(f"/api/v2/list/{list_id}")
+        metadata = self._client.get(f"/api/v2/list/{_segment(list_id)}")
         statuses = metadata.get("statuses")
         if not isinstance(statuses, list):
             raise ValueError(f"Cannot resolve Closed status for ClickUp List {list_id}")
@@ -298,7 +309,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         if not isinstance(target, str) or not target.strip():
             raise ValueError(f"Closed status for ClickUp List {list_id} has no usable name")
 
-        self._client.put(f"/api/v2/task/{task_id}", json={"status": target})
+        self._client.put(_task_path(task_id), json={"status": target})
         updated = self._read_task_data(task_id)
         if not _is_canonical_closed(updated.get("status") or {}):
             raise ValueError(
@@ -311,7 +322,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     def comment_on_task(self, task_id: str, body: str) -> None:
         """Add a comment to a task."""
         self._client.post(
-            f"/api/v2/task/{task_id}/comment",
+            f"{_task_path(task_id)}/comment",
             json={"comment_text": body},
         )
 
@@ -347,7 +358,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     def add_label(self, task_id: str, label_name: str) -> None:
         """Add a tag to a task (non-fatal on failure)."""
         try:
-            self._client.post(f"/api/v2/task/{task_id}/tag/{label_name}", json={})
+            self._client.post(f"{_task_path(task_id)}/tag/{_segment(label_name)}", json={})
         except APIError:
             logger.warning(
                 "clickup.tag_add_failed",
@@ -358,7 +369,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     def remove_label(self, task_id: str, label_name: str) -> None:
         """Remove a tag from a task (non-fatal on failure)."""
         try:
-            self._client.delete(f"/api/v2/task/{task_id}/tag/{label_name}")
+            self._client.delete(f"{_task_path(task_id)}/tag/{_segment(label_name)}")
         except APIError:
             logger.warning(
                 "clickup.tag_remove_failed",
@@ -410,7 +421,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         """Move a task to 'in progress' status."""
         try:
             self._client.put(
-                f"/api/v2/task/{task_id}",
+                _task_path(task_id),
                 json={"status": "in progress"},
             )
             logger.info("clickup.moved_to_in_progress", task_id=task_id)
@@ -423,7 +434,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     def _read_task_data(self, task_id: str) -> dict[str, Any]:
         """Retain raw canonical status and home List metadata for close verification."""
         return self._client.get(
-            f"/api/v2/task/{task_id}",
+            _task_path(task_id),
             params={"include_markdown_description": "true"},
         )
 

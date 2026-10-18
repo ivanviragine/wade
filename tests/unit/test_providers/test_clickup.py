@@ -321,6 +321,22 @@ class TestReadTask:
         assert task.title == "Test task"
         provider._client.get.assert_called_once()
 
+    def test_opaque_id_is_one_encoded_path_segment(self, provider: ClickUpProvider) -> None:
+        """URL delimiters in an opaque ID never become path, query, or fragment syntax."""
+        provider._client = MagicMock()
+        provider._client.get.return_value = _make_raw_task(task_id="a/b?c#d%e")
+
+        provider.read_task("a/b?c#d%e")
+        provider.update_task("a/b?c#d%e", title="T")
+        provider.comment_on_task("a/b?c#d%e", "hi")
+        provider.add_label("a/b?c#d%e", "x/y")
+
+        encoded = "/api/v2/task/a%2Fb%3Fc%23d%25e"
+        assert provider._client.get.call_args_list[0][0][0] == encoded
+        assert provider._client.put.call_args[0][0] == encoded
+        assert provider._client.post.call_args_list[0][0][0] == f"{encoded}/comment"
+        assert provider._client.post.call_args_list[1][0][0] == f"{encoded}/tag/x%2Fy"
+
 
 class TestUpdateTask:
     def test_update_body(self, provider: ClickUpProvider) -> None:
