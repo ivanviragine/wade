@@ -915,8 +915,8 @@ def _gate_review_ran(
     )
     console.hint("Run `wade review implementation` (or pass --skip-review), then re-run done.")
     console.detail(
-        "A clean merge of main is accepted without re-review, but new commits "
-        "require a fresh review — the marker is keyed to the commit sha."
+        "The review receipt must match the current commit and active reviewer binding. "
+        "If a sync changed HEAD, even through a clean merge, review the new commit."
     )
     console.hint(
         "If review keeps looping, break it with `wade implementation-session done --skip-review`."
@@ -929,8 +929,8 @@ def _print_review_refusal() -> None:
     console.error("Review has not run for the current commit.")
     console.hint("Run `wade review implementation` (or pass --skip-review), then re-run done.")
     console.detail(
-        "A clean merge of main is accepted without re-review, but new commits "
-        "require a fresh review — the marker is keyed to the commit sha."
+        "The review receipt must match the current commit and active reviewer binding. "
+        "If a sync changed HEAD, even through a clean merge, review the new commit."
     )
 
 

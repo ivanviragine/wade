@@ -636,6 +636,11 @@ receipt is still written for the exact current commit. An unreadable record,
 changed binding, unreachable baseline, or merge on the baseline-to-HEAD path
 falls back to the complete branch change.
 
+If you run session sync after review and it changes HEAD, the earlier receipt
+does not satisfy the review gate for the new commit, even for a clean merge.
+Run `wade review implementation` again before retrying `done`; the existing
+implementation review-pass cap and explicit bypasses still apply.
+
 To fetch the unresolved comments themselves during a review session, the agent
 runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads with
 `wade review-pr-comments-session resolve`.

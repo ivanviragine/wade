@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.9] — 2026-10-18
+
+### Bug Fixes
+
+- clarify review gate refusal after session sync (#551) (e6aef30)
+
+### CI/CD
+
+- replace per-merge releases with deliberate versioning (#550) (e977c4a)
+
 ## [v1.4.8] — 2026-10-16
 
 ### Bug Fixes
