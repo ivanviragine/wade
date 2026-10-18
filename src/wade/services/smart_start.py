@@ -24,6 +24,7 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.permission import PermissionMode
 from wade.models.session import MergeStatus, SessionRecord
+from wade.models.task import task_id_from_target
 from wade.models.worktree import Worktree
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -154,7 +155,7 @@ def smart_start(
         return ctx.run_implement()
 
     # Read the issue
-    issue_number = target.removeprefix("#")
+    issue_number = task_id_from_target(target, str(config.provider.name))
     try:
         task = provider.read_task(issue_number)
     except Exception:

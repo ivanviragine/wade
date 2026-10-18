@@ -27,7 +27,7 @@ from wade.models.config import ProjectConfig
 from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus, SyncEventType, SyncResult
-from wade.models.task import Task
+from wade.models.task import Task, task_id_from_target
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -1303,9 +1303,9 @@ def _resolve_task_target(
             return None
         return task
 
-    # Treat as a task ID — strip one leading "#" so "#123" and "123" both work,
-    # without stripping meaningful characters from an opaque provider ID.
-    issue_id = target.removeprefix("#")
+    # Treat as a task ID — "#123" and "123" both work where "#" is reference
+    # syntax; an opaque provider ID is used exactly, even with a leading "#".
+    issue_id = task_id_from_target(target, str(config.provider.name))
     try:
         task = provider.read_task(issue_id)
         return task

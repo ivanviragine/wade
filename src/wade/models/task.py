@@ -258,6 +258,18 @@ def format_task_ref(task_id: str, provider: str = "github") -> str:
     return f"{namespace}:{escape_reference_id(task_id)}"
 
 
+def task_id_from_target(target: str, provider: str = "github") -> str:
+    """Return the exact task ID named by a CLI *target*.
+
+    ``#42`` is reference shorthand only for hash-reference providers, so one
+    leading ``#`` is dropped there; any other provider's target is already the
+    exact opaque ID (``#abc`` stays ``#abc``).
+    """
+    if _uses_hash_refs(str(provider)):
+        return target.removeprefix("#")
+    return target
+
+
 def _task_ref_regex(provider: str, *, legacy_hash: bool) -> re.Pattern[str]:
     namespace = str(provider)
     alternatives = [

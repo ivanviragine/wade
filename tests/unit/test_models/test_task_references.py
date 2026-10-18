@@ -15,8 +15,27 @@ from wade.models.task import (
     parse_issue_heading,
     parse_task_refs,
     parse_tracking_child_ids,
+    task_id_from_target,
     unescape_reference_id,
 )
+
+
+class TestTaskIdFromTarget:
+    @pytest.mark.parametrize(
+        ("provider", "target", "task_id"),
+        [
+            ("github", "#42", "42"),
+            ("github", "42", "42"),
+            ("markdown", "#47239185", "47239185"),
+            # Opaque providers have no "#" shorthand: the target is the exact ID.
+            ("clickup", "#abc", "#abc"),
+            ("clickup", "abc1234", "abc1234"),
+        ],
+    )
+    def test_hash_shorthand_only_for_hash_reference_providers(
+        self, provider: str, target: str, task_id: str
+    ) -> None:
+        assert task_id_from_target(target, provider) == task_id
 
 
 class TestFormatAndParse:

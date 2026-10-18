@@ -42,7 +42,7 @@ from wade.models.review import (
     filter_unresolved_threads,
     format_review_threads_markdown,
 )
-from wade.models.task import Task
+from wade.models.task import Task, task_id_from_target
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -237,7 +237,7 @@ def fetch_reviews(
         return False
 
     # Read the issue
-    issue_number = target.removeprefix("#")
+    issue_number = task_id_from_target(target, str(config.provider.name))
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
@@ -399,7 +399,7 @@ def trigger_bot_reviews(
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return BotTriggerReport(resolution_error="not inside a git repository")
 
-    issue_number = target.removeprefix("#")
+    issue_number = task_id_from_target(target, str(config.provider.name))
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
@@ -996,7 +996,7 @@ def start(
         permission_mode_explicit = True
 
     # 1. Read the issue
-    issue_number = target.removeprefix("#")
+    issue_number = task_id_from_target(target, str(config.provider.name))
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
