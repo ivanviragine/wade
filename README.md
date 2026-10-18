@@ -944,6 +944,9 @@ different tasks. Pass IDs as-is everywhere: `wade implement abc1234`,
 The numeric shorthand `wade 42` stays numeric-only; use the explicit commands
 for other IDs. A bare token is always a task ID — pass `./name` (or any path
 with a separator or `.md` suffix) to start from a plan file with that name.
+`#42` works as shorthand for `42` only with GitHub and Markdown; ClickUp
+targets are used exactly, and the ClickUp provider percent-encodes each ID in
+its API paths.
 
 - **Branches and worktrees.** Canonical decimal IDs keep the
   `feat/42-add-auth` shape. Any other ID is encoded as one delimiter-free token,

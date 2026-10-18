@@ -1713,7 +1713,11 @@ exact branch identity, then exact branch name, then exact worktree directory,
 then (only for navigation/plan-title callers) a fuzzy directory fragment. `done`
 uses exact matching only and refuses an explicit target that disagrees with the
 branch it would finalize. A bare token is a task ID; only explicit path syntax
-(`is_explicit_plan_path`) selects a plan file.
+(`is_explicit_plan_path`) selects a plan file. `models/task.py::task_id_from_target`
+drops one leading `#` only for hash-reference providers (GitHub/Markdown), so an
+opaque ID is passed to the provider exactly. Batch review uses
+`find_open_pr_for_issue`'s summary when the open-PR scan confirms the resolved
+branch after a failed or stale branch lookup.
 
 PR content: `lifecycle._apply_pr_refs` edits only WADE-owned reference lines
 outside managed blocks and fences (it rescans the surviving text with
