@@ -121,12 +121,35 @@ def build_deps_prompt(context: str, method_section: str) -> str:
 # ---------------------------------------------------------------------------
 
 # "<id> -> <id>" edges with an optional "# reason" comment. Endpoints are
-# whole whitespace/``#``-free tokens (an optional legacy leading ``#`` is
-# dropped) and are accepted only when they exactly match an analyzed task ID,
-# so ``123abc`` can never become task ``123``.
-_ARROW_RE = re.compile(r"^\s*#?(?P<from>[^\s#]+?)\s*->\s*#?(?P<to>[^\s#]+)(?P<rest>.*)$")
+# whole whitespace-free tokens resolved by :func:`_resolve_endpoint`, so an ID
+# may itself contain ``#`` (``a#b``) and ``123abc`` can never become task ``123``.
+_ARROW_RE = re.compile(r"^\s*(?P<from>\S+?)\s*->\s*(?P<to>\S+)(?P<rest>.*)$")
 _SUFFIX_RE = re.compile(r"\s*(?:#.*)?")
 _COMMENT_RE = re.compile(r"#\s*(.*)")
+
+
+def _resolve_endpoint(token: str, valid_numbers: set[str]) -> str | None:
+    """Exact analyzed task ID for *token*, tolerating one legacy leading ``#``."""
+    if token in valid_numbers:
+        return token
+    if token.startswith("#") and token[1:] in valid_numbers:
+        return token[1:]
+    return None
+
+
+def _split_destination(token: str, valid_numbers: set[str]) -> tuple[str, str]:
+    """Split a destination token into ``(endpoint, glued_suffix)``.
+
+    The whole token wins when it is an analyzed ID (``a#b``); otherwise the
+    longest analyzed-ID prefix ending before a ``#`` keeps a glued comment
+    (``2#reason``) working. Unresolvable tokens come back whole.
+    """
+    if _resolve_endpoint(token, valid_numbers) is not None:
+        return token, ""
+    for i in range(len(token) - 1, 0, -1):
+        if token[i] == "#" and _resolve_endpoint(token[:i], valid_numbers) is not None:
+            return token[:i], token[i:]
+    return token, ""
 
 
 def parse_deps_output(
@@ -148,7 +171,9 @@ def parse_deps_output(
 
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
+        # Comment lines ("# No dependencies found") never match an edge, so they
+        # need no separate skip — which would wrongly drop an ID starting with #.
+        if not line:
             continue
 
         # Strip markdown formatting (backticks, bullets, numbering)
@@ -160,18 +185,20 @@ def parse_deps_output(
         if not match:
             continue
 
-        from_id = match.group("from")
-        to_id = match.group("to")
-        rest = match.group("rest")
+        from_token = match.group("from")
+        to_token, glued = _split_destination(match.group("to"), valid_numbers)
+        rest = glued + match.group("rest")
         # Only an optional "# reason" may follow — never a further "-> <id>".
         if not _SUFFIX_RE.fullmatch(rest):
             continue
 
         # Validate both endpoints against the analyzed set
-        if from_id not in valid_numbers or to_id not in valid_numbers:
+        from_id = _resolve_endpoint(from_token, valid_numbers)
+        to_id = _resolve_endpoint(to_token, valid_numbers)
+        if from_id is None or to_id is None:
             console.warn(
                 console.escape_markup(
-                    f"Skipping invalid edge {from_id} -> {to_id} (unknown task ID)"
+                    f"Skipping invalid edge {from_token} -> {to_token} (unknown task ID)"
                 )
             )
             continue

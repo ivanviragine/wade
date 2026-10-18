@@ -1565,6 +1565,23 @@ class TestOpaqueDependencyIds:
         text = "123abc -> 2\n0042 -> 2\n1 -> 2abc\nABC1234 -> 2\n1->2->3\n"
         assert parse_deps_output(text, {"123", "42", "2", "abc1234", "1", "3"}) == []
 
+    def test_hash_characters_inside_ids_are_preserved(self) -> None:
+        text = (
+            "a#b -> c # hash in source\n"
+            "c -> a#b\n"
+            "#lead -> c # id starts with a hash\n"
+            "x -> c#glued reason\n"
+            "c -> a # not a#b\n"
+        )
+        edges = parse_deps_output(text, {"a#b", "c", "#lead", "x", "a"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
+            ("a#b", "c", "hash in source"),
+            ("c", "a#b", ""),
+            ("#lead", "c", "id starts with a hash"),
+            ("x", "c", "glued reason"),
+            ("c", "a", "not a#b"),
+        ]
+
     def test_only_a_comment_may_follow_the_destination(self) -> None:
         text = (
             "abc1234 -> def5678 -> ghi9012\n"
