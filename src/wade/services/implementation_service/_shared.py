@@ -29,6 +29,7 @@ __all__ = [
     "extract_issue_from_branch",
     "find_existing_branch_for_issue",
     "find_open_pr_branch_for_issue",
+    "find_open_pr_for_issue",
     "find_worktree_path",
     "is_explicit_plan_path",
     "match_worktree_target",
@@ -244,7 +245,15 @@ _OPEN_PR_SCAN_LIMIT = 1000
 def find_open_pr_branch_for_issue(
     repo_root: Path, issue_id: int | str, *, require_complete: bool = False
 ) -> str | None:
-    """Head branch of the OPEN PR that belongs to *issue_id*, or ``None``.
+    """Head branch of :func:`find_open_pr_for_issue`'s PR, or ``None``."""
+    open_pr = find_open_pr_for_issue(repo_root, issue_id, require_complete=require_complete)
+    return open_pr.head_ref_name if open_pr is not None else None
+
+
+def find_open_pr_for_issue(
+    repo_root: Path, issue_id: int | str, *, require_complete: bool = False
+) -> git_pr.PRSummary | None:
+    """The OPEN PR that belongs to *issue_id*, or ``None``.
 
     Where :func:`find_existing_branch_for_issue` matches branches by name, this
     settles resume ambiguity by PR *state*: among any branches carrying the issue
@@ -273,7 +282,7 @@ def find_open_pr_branch_for_issue(
         # most recently updated wins. ``updated_at`` is an ISO-8601 string, so a
         # reverse lexical sort is chronological; the PR number breaks exact ties.
         matches.sort(key=lambda pr: (pr.updated_at or "", pr.number), reverse=True)
-        return matches[0].head_ref_name
+        return matches[0]
     if len(open_prs) >= _OPEN_PR_SCAN_LIMIT:
         # A full page with no match — an open PR for this issue could be beyond it,
         # so absence is unproven. Fail loud rather than risk a duplicate PR.

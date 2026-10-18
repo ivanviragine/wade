@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wade.git.pr import PRLookup, PRRef
+from wade.git.pr import PRLookup, PRRef, PRSummary
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
@@ -16,6 +16,13 @@ from wade.services.batch_review_service import (
     _format_batch_context,
     extract_child_issues,
 )
+
+
+def _open_pr(branch: str, number: int = 7) -> PRSummary:
+    """An open-PR scan match whose head is *branch*."""
+    return PRSummary(
+        number=number, url=f"u{number}", headRefName=branch, state="OPEN", isDraft=False
+    )
 
 
 def _batch_review_config(
@@ -179,7 +186,7 @@ class TestGatherBatchContext:
         assert ctx.issues[1].issue_number == "11"
         assert ctx.issues[1].issue_title == "(unreadable #11)"
 
-    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.find_open_pr_for_issue")
     @patch("wade.services.batch_review_service.resolve_task_branch")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service.git_pr")
@@ -214,7 +221,7 @@ class TestGatherBatchContext:
         live = "feat/10-live-title"
         mock_repo.detect_main_branch.return_value = "main"
         mock_resolve.return_value = stale
-        mock_find_open.return_value = live
+        mock_find_open.return_value = _open_pr(live)
         lookups = {
             stale: PRLookup(found=True, pr=PRRef(number=5, url="u5", state="CLOSED")),
             live: PRLookup(found=True, pr=PRRef(number=7, url="u7", state="OPEN")),
@@ -241,7 +248,7 @@ class TestGatherBatchContext:
         ],
         ids=["lookup-failed", "closed-between-queries"],
     )
-    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.find_open_pr_for_issue")
     @patch("wade.services.batch_review_service.resolve_task_branch")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service.git_pr")
@@ -277,7 +284,7 @@ class TestGatherBatchContext:
         live = "feat/10-live-title"
         mock_repo.detect_main_branch.return_value = "main"
         mock_resolve.return_value = stale
-        mock_find_open.return_value = live
+        mock_find_open.return_value = _open_pr(live)
         lookups = {
             stale: PRLookup(found=True, pr=PRRef(number=5, url="u5", state="CLOSED")),
             live: live_lookup,
@@ -298,7 +305,7 @@ class TestGatherBatchContext:
         mock_repo.diff_stat_between.assert_not_called()
         mock_repo.fetch_ref.assert_not_called()
 
-    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.find_open_pr_for_issue")
     @patch("wade.services.batch_review_service.resolve_task_branch")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service.git_pr")
@@ -351,7 +358,7 @@ class TestGatherBatchContext:
         mock_repo.diff_stat_between.assert_not_called()
         mock_repo.fetch_ref.assert_not_called()
 
-    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.find_open_pr_for_issue")
     @patch("wade.services.batch_review_service.resolve_task_branch")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service.git_pr")
@@ -401,7 +408,7 @@ class TestGatherBatchContext:
         mock_repo.diff_stat_between.assert_not_called()
         mock_repo.fetch_ref.assert_not_called()
 
-    @patch("wade.services.batch_review_service.find_open_pr_branch_for_issue")
+    @patch("wade.services.batch_review_service.find_open_pr_for_issue")
     @patch("wade.services.batch_review_service.resolve_task_branch")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service.git_pr")
@@ -436,7 +443,7 @@ class TestGatherBatchContext:
         live = "feat/10-live-title"
         mock_repo.detect_main_branch.return_value = "main"
         mock_resolve.return_value = stale
-        mock_find_open.return_value = live
+        mock_find_open.return_value = _open_pr(live)
         lookups = {
             stale: PRLookup(lookup_failed=True),
             live: PRLookup(found=True, pr=PRRef(number=7, url="u7", state="OPEN")),
@@ -454,6 +461,60 @@ class TestGatherBatchContext:
         assert issue.pr_lookup_failed is False
         assert issue.status == "OPEN"
         mock_repo.diff_stat_between.assert_called_once_with(Path("/repo"), "main", live)
+
+    @patch("wade.services.batch_review_service.find_open_pr_for_issue")
+    @patch("wade.services.batch_review_service.resolve_task_branch")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_branch")
+    @patch("wade.services.batch_review_service.get_provider")
+    @patch("wade.services.batch_review_service.load_config")
+    def test_initial_lookup_failure_recovers_same_branch_pr_from_scan(
+        self,
+        mock_config: MagicMock,
+        mock_provider_fn: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_repo: MagicMock,
+        mock_resolve: MagicMock,
+        mock_find_open: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import gather_batch_context
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = Path("/repo")
+        provider = MagicMock()
+        mock_provider_fn.return_value = provider
+        tracking = MagicMock()
+        tracking.id = "99"
+        tracking.body = "- [ ] #10\n"
+        child = MagicMock()
+        child.id = "10"
+        child.title = "Feature"
+        provider.read_task.side_effect = [tracking, child]
+
+        branch = "feat/10-feature"
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_resolve.return_value = branch
+        mock_find_open.return_value = _open_pr(branch, number=8)
+        mock_pr.get_pr_for_branch.return_value = PRLookup(lookup_failed=True)
+        mock_pr.get_pr_base_branch.return_value = "feat/9-parent"
+        mock_branch.branch_exists.return_value = True
+        mock_repo.diff_stat_between.return_value = " 1 file changed"
+
+        ctx = gather_batch_context("99", repo_root=Path("/repo"))
+
+        issue = ctx.issues[0]
+        assert issue.branch_name == branch
+        assert issue.pr_number == 8
+        assert issue.pr_url == "u8"
+        assert issue.pr_lookup_failed is False
+        assert issue.status == "OPEN"
+        assert issue.base_branch == "feat/9-parent"
+        # The failed lookup is not retried; the trusted scan supplies the PR.
+        mock_pr.get_pr_for_branch.assert_called_once_with(Path("/repo"), branch)
+        mock_pr.get_pr_base_branch.assert_called_once_with(Path("/repo"), 8)
+        mock_repo.diff_stat_between.assert_called_once_with(Path("/repo"), "main", branch)
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import sync as git_sync
-from wade.git.pr import GhCliError, PRLookup
+from wade.git.pr import GhCliError, PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, ProjectConfig
@@ -26,7 +26,7 @@ from wade.models.task import TaskReference, format_task_ref, parse_tracking_chil
 from wade.models.workflow import DelegationKind
 from wade.providers.registry import get_provider
 from wade.services.implementation_service._shared import (
-    find_open_pr_branch_for_issue,
+    find_open_pr_for_issue,
     resolve_task_branch,
 )
 from wade.services.review_delegation_service import (
@@ -182,7 +182,7 @@ def gather_batch_context(
             # failed lookup proves nothing about the resolved branch either, so
             # it also needs the trusted open-PR scan before the branch is used.
             try:
-                open_branch = find_open_pr_branch_for_issue(repo, task.id)
+                open_pr = find_open_pr_for_issue(repo, task.id)
             except GhCliError:
                 # Absence of a live PR is unproven, so neither the stale PR's
                 # identity nor its branch may stand in for this task's work.
@@ -191,8 +191,21 @@ def gather_batch_context(
                 pr_lookup_failed = True
                 branch_unverified = True
             else:
-                if open_branch and open_branch != branch_name:
-                    branch_name = open_branch
+                if open_pr is not None and open_pr.head_ref_name == branch_name:
+                    # The trusted scan confirms the resolved branch is live, so
+                    # its PR identity stands in for the failed/stale lookup.
+                    lookup = PRLookup(
+                        found=True,
+                        pr=PRRef(
+                            number=open_pr.number,
+                            url=open_pr.url,
+                            state=open_pr.state,
+                            isDraft=open_pr.is_draft,
+                        ),
+                    )
+                    pr_lookup_failed = False
+                elif open_pr is not None:
+                    branch_name = open_pr.head_ref_name
                     lookup = git_pr.get_pr_for_branch(repo, branch_name)
                     pr_lookup_failed = lookup.lookup_failed or not lookup.is_open
                     # The alternate branch is only trusted as the live head;
