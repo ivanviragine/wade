@@ -285,9 +285,28 @@ class TestReviewRanGate:
         assert _gate_review_ran(ProjectConfig(), tmp_path, head, skip_review=False) is False
         assert "bundle failed integrity validation" in _captured_text(capsys)
 
-    def test_receipt_for_other_sha_refuses(self, tmp_path: Path) -> None:
-        _record_review(tmp_path, "a" * 40)
-        assert _gate_review_ran(ProjectConfig(), tmp_path, "b" * 40, skip_review=False) is False
+    @pytest.mark.parametrize(
+        "session_kind", (SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS)
+    )
+    def test_receipt_for_other_sha_refuses(
+        self, tmp_path: Path, capsys, session_kind: SessionKind
+    ) -> None:
+        _record_review(tmp_path, "a" * 40, session_kind=session_kind)
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "b" * 40,
+                skip_review=False,
+                session_type=session_kind.value,
+            )
+            is False
+        )
+        text = " ".join(_captured_text(capsys).split())
+        assert "Run `wade review implementation`" in text
+        assert "review receipt must match the current commit and active reviewer binding" in text
+        assert "If a sync changed HEAD, even through a clean merge, review the new commit." in text
+        assert "accepted without re-review" not in text
 
     @pytest.mark.parametrize(
         "session_kind", (SessionKind.IMPLEMENTATION, SessionKind.REVIEW_PR_COMMENTS)
