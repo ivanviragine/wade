@@ -960,8 +960,10 @@ with a separator or `.md` suffix) to start from a plan file with that name.
   cannot treat as a closing keyword: `Implements [clickup:abc1234](<url>)`
   while in progress, `Completes [clickup:abc1234](<url>)` once `done` records
   that the task should close. After a WADE-driven merge, the task is closed
-  through its own provider using the exact ID; a `--no-close` completion
-  (`Implements …` / GitHub's `Implements #N`) leaves it open, and an unreadable or
+  through its own provider using the exact ID, even when the PR is merged from
+  the post-session menu before `done` ran; a `--no-close` completion (an
+  `Implements …` line carrying a hidden `<!-- wade:no-close -->` marker) leaves
+  it open, and an unreadable or
   structurally unscannable PR body, an unloadable project configuration, or a failed provider close
   leaves it open with a `wade task close <id>` hint. `done` replaces
   legacy `Closes #<id>` lines it wrote for external tasks and refuses — with a

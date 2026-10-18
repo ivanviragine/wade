@@ -13,6 +13,7 @@ from wade.models.session import MergeStatus
 from wade.models.task import Task, TaskReference
 from wade.services.implementation_service.draft_pr import _build_draft_pr_body
 from wade.services.implementation_service.lifecycle import (
+    NO_CLOSE_MARKER,
     _apply_pr_refs,
     _build_pr_body,
     _merge_pr,
@@ -49,10 +50,21 @@ class TestExternalReferenceLines:
         assert _apply(closing, OPAQUE, True, parent="parent789") == closing
         kept_open = _apply(closing, OPAQUE, False, parent="parent789")
         assert kept_open.startswith(
-            f"Part of clickup:parent789\nImplements [clickup:abc1234]({URL})\n"
+            f"Part of clickup:parent789\nImplements [clickup:abc1234]({URL}) {NO_CLOSE_MARKER}\n"
         )
         assert _apply(kept_open, OPAQUE, False, parent="parent789") == kept_open
         assert task_close_intent(closing, OPAQUE) is True
+        assert task_close_intent(kept_open, OPAQUE) is False
+        assert _apply(kept_open, OPAQUE, True, parent="parent789") == closing
+
+    def test_bootstrap_draft_line_records_no_intent(self) -> None:
+        # The draft's plain "Implements" line is not a --no-close request.
+        draft = _build_draft_pr_body("Plan text", OPAQUE)
+        assert task_close_intent(draft, OPAQUE) is None
+        github_draft = _build_draft_pr_body("Plan", "42")
+        assert task_close_intent(github_draft, TaskReference(task_id="42")) is None
+        kept_open = _apply(draft, OPAQUE, False)
+        assert kept_open.startswith(f"Implements [clickup:abc1234]({URL}) {NO_CLOSE_MARKER}\n")
         assert task_close_intent(kept_open, OPAQUE) is False
 
     @pytest.mark.parametrize("legacy", ["Closes #42", "Implements #42"])
@@ -60,7 +72,7 @@ class TestExternalReferenceLines:
         body = f"Part of #7\n{legacy}\n\n## Notes\nSee also #42 in prose.\n\n{PLAN}"
         updated = _apply(body, NUMERIC, False, parent="7")
         lines = updated.splitlines()
-        assert lines[:2] == ["Part of clickup:7", f"Implements {NUMERIC.link}"]
+        assert lines[:2] == ["Part of clickup:7", f"Implements {NUMERIC.link} {NO_CLOSE_MARKER}"]
         assert "See also #42 in prose." in updated  # unrelated prose preserved
         assert PLAN in updated  # protected block untouched
         outside = updated.replace(PLAN, "")
@@ -81,9 +93,9 @@ class TestExternalReferenceLines:
         closing = _build_pr_body(task, reference=OPAQUE, parent_reference=None)
         assert closing == f"Completes [clickup:abc1234]({URL})"
         kept_open = _build_pr_body(task, close_issue=False, reference=OPAQUE)
-        assert kept_open == f"Implements [clickup:abc1234]({URL})"
+        assert kept_open == f"Implements [clickup:abc1234]({URL}) {NO_CLOSE_MARKER}"
         github = _build_pr_body(Task(id="42", title="fix: x"), close_issue=False)
-        assert github == "Implements #42"
+        assert github == f"Implements #42 {NO_CLOSE_MARKER}"
 
 
 class TestGitHubReferenceLines:
@@ -96,13 +108,23 @@ class TestGitHubReferenceLines:
     def test_no_close_downgrades_only_this_task(self) -> None:
         body = "Closes #42\nCloses #420\n"
         updated = _apply_pr_refs(body, "42", False, None)
-        assert updated == "Implements #42\nCloses #420\n"
+        assert updated == f"Implements #42 {NO_CLOSE_MARKER}\nCloses #420\n"
         assert task_close_intent(updated, TaskReference(task_id="42")) is False
+
+    def test_no_close_marks_the_bootstrap_draft_line(self) -> None:
+        draft = _build_draft_pr_body("Plan", "42")
+        updated = _apply_pr_refs(draft, "42", False, None)
+        assert updated.startswith(f"Implements #42 {NO_CLOSE_MARKER}\n")
+        assert _apply_pr_refs(updated, "42", False, None) == updated
+        assert task_close_intent(updated, TaskReference(task_id="42")) is False
+        closing = _apply_pr_refs(updated, "42", True, None)
+        assert closing.startswith("Closes #42\n")
+        assert NO_CLOSE_MARKER not in closing
 
     def test_no_close_records_intent_when_reference_is_absent(self) -> None:
         body = f"Manual PR description.\n\n```\nCloses #42\n```\n\n{PLAN}"
         updated = _apply_pr_refs(body, "42", False, None)
-        assert updated == f"Implements #42\n\n{body}"
+        assert updated == f"Implements #42 {NO_CLOSE_MARKER}\n\n{body}"
         assert _apply_pr_refs(updated, "42", False, None) == updated
         assert task_close_intent(updated, TaskReference(task_id="42")) is False
 
@@ -147,8 +169,15 @@ class TestMergeTimeClosure:
         merge.assert_called_once()
 
     def test_no_close_intent_leaves_the_task_open(self, merge: MagicMock, tmp_path: Path) -> None:
-        provider = self._run(tmp_path, f"Implements [clickup:abc1234]({URL})\n")
+        provider = self._run(tmp_path, f"Implements [clickup:abc1234]({URL}) {NO_CLOSE_MARKER}\n")
         provider.close_task.assert_not_called()
+
+    def test_bootstrap_draft_merged_without_done_closes(
+        self, merge: MagicMock, tmp_path: Path
+    ) -> None:
+        # Post-session "Merge PR" before `done`: the draft line requested nothing.
+        provider = self._run(tmp_path, _build_draft_pr_body("Plan text", OPAQUE))
+        provider.close_task.assert_called_once_with("abc1234")
 
     def test_unreadable_body_never_closes(self, merge: MagicMock, tmp_path: Path) -> None:
         provider = self._run(tmp_path, None)

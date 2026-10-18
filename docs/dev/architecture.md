@@ -1720,10 +1720,14 @@ outside managed blocks and fences (it rescans the surviving text with
 `utils/markdown.py`). External tasks replace legacy whole-line `Closes #<id>` /
 `Implements #<id>` lines; a partial legacy closing line for a GitHub-interpretable
 ID raises `MarkdownStructureError` rather than publishing closure metadata.
-`--no-close` always leaves a non-closing line (downgrading, keeping or adding
-`Implements …`), so an updated PR never falls back to the legacy close default.
-`task_close_intent` reads the recorded intent back: `_merge_pr` reads the PR
-body before merging and, after a successful merge, closes the task through the
+`--no-close` always leaves a non-closing line (downgrading, marking or adding
+`Implements …`) suffixed with the hidden `<!-- wade:no-close -->` marker
+(`lifecycle.NO_CLOSE_MARKER`). The bootstrap draft PR already carries a plain
+`Implements …` line, so the marker, never the verb alone, records the request.
+`task_close_intent` reads the recorded intent back (`Closes`/`Completes` →
+close, marked `Implements` → keep open, plain draft line or none → no intent):
+`_merge_pr` reads the PR body before merging and, after a successful merge,
+including a post-session menu merge before `done`, closes the task through the
 configured provider with the exact ID unless the body records `--no-close`; an
 unreadable body, a body `task_close_intent` cannot safely scan (it raises
 `MarkdownStructureError` rather than reporting "no reference"), an unloadable configuration (unknown provider — never assumed

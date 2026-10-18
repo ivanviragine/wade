@@ -858,6 +858,26 @@ def _legacy_hash(task_id: str) -> str:
     return rf"#{re.escape(task_id)}(?!\w)"
 
 
+# Hidden suffix ``--no-close`` appends to the non-closing reference line. The
+# bootstrap draft PR already carries a plain ``Implements …`` line, so only this
+# marker — never the verb alone — records an explicit request to keep the task
+# open; a plain line means no intent was recorded and merge closes as default.
+NO_CLOSE_MARKER = "<!-- wade:no-close -->"
+_NO_CLOSE_SUFFIX = rf"[ \t]+{re.escape(NO_CLOSE_MARKER)}"
+
+
+def _no_close_line(ref: TaskReference) -> str:
+    return f"{ref.reference_line(close=False)} {NO_CLOSE_MARKER}"
+
+
+def _with_no_close_marker(text: str) -> str:
+    return (
+        text
+        if re.search(rf"{_NO_CLOSE_SUFFIX}\s*$", text)
+        else f"{text.rstrip()} {NO_CLOSE_MARKER}"
+    )
+
+
 def _apply_pr_refs(
     body: str,
     issue_number: str,
@@ -873,9 +893,10 @@ def _apply_pr_refs(
     managed blocks and code fences are inspected or rewritten, so embedded plans,
     summaries, examples and other user content are never edited.
 
-    GitHub issues keep ``Closes #N`` / ``Implements #N`` (``--no-close``
-    downgrades a closing line, or adds ``Implements #N`` when none exists, so
-    merge-time closure sees the recorded intent). External tasks — including numeric ClickUp and
+    GitHub issues keep ``Closes #N`` / ``Implements #N``. ``--no-close``
+    downgrades a closing line, marks an existing ``Implements #N`` line, or adds
+    one, always suffixed with :data:`NO_CLOSE_MARKER` so merge-time closure can
+    tell it from the bootstrap draft's plain line. External tasks — including numeric ClickUp and
     Markdown IDs — use ``Completes``/``Implements`` with a qualified reference
     and never a GitHub closing keyword; legacy ``Closes #<id>`` / ``Implements
     #<id>`` lines WADE wrote for them are replaced. A legacy closing line that
@@ -906,22 +927,30 @@ def _apply_github_task_ref(body: str, ref: TaskReference, close_issue: bool) -> 
         stale = {
             index: None
             for index, line in enumerate(lines)
-            if re.fullmatch(rf"Implements\s+{token}\s*", line.text)
+            if re.fullmatch(rf"Implements\s+{token}(?:{_NO_CLOSE_SUFFIX})?\s*", line.text)
         }
         updated = _edit_lines(body, stale, lines)
         return f"{ref.reference_line(close=True)}\n\n" + updated.lstrip("\n")
     # --no-close: downgrade any closing line so merging cannot auto-close the issue.
     downgrades = {
-        index: re.sub(rf"^Closes\s+{token}", ref.reference_line(close=False), line.text)
+        index: _with_no_close_marker(
+            re.sub(rf"^Closes\s+{token}", ref.reference_line(close=False), line.text)
+        )
         for index, line in enumerate(lines)
         if re.match(rf"Closes\s+{token}", line.text)
     }
     if downgrades:
         return _edit_lines(body, dict(downgrades), lines)
-    if any(re.match(rf"Implements\s+{token}", line.text) for line in lines):
-        return body
+    implements = [
+        index for index, line in enumerate(lines) if re.match(rf"Implements\s+{token}", line.text)
+    ]
+    if implements:
+        # Mark the existing (e.g. bootstrap draft) line as an explicit no-close.
+        first = implements[0]
+        marked = _with_no_close_marker(lines[first].text)
+        return body if marked == lines[first].text else _edit_lines(body, {first: marked}, lines)
     # No reference yet: record the no-close intent so merge-time closure honors it.
-    return f"{ref.reference_line(close=False)}\n\n" + body.lstrip("\n")
+    return f"{_no_close_line(ref)}\n\n" + body.lstrip("\n")
 
 
 def _apply_external_task_ref(body: str, ref: TaskReference, close_issue: bool) -> str:
@@ -930,8 +959,10 @@ def _apply_external_task_ref(body: str, ref: TaskReference, close_issue: bool) -
     lines = _editable_lines(body)
     owned: list[int] = []
     for index, line in enumerate(lines):
-        if re.fullmatch(rf"(?:Implements|Completes)\s+{token}\s*", line.text) or re.fullmatch(
-            rf"(?:Implements|Closes)\s+{legacy}\s*", line.text
+        if re.fullmatch(
+            rf"(?:Implements|Completes)\s+{token}(?:{_NO_CLOSE_SUFFIX})?\s*", line.text
+        ) or re.fullmatch(
+            rf"(?:Implements|Closes)\s+{legacy}(?:{_NO_CLOSE_SUFFIX})?\s*", line.text
         ):
             owned.append(index)
         elif (
@@ -943,7 +974,7 @@ def _apply_external_task_ref(body: str, ref: TaskReference, close_issue: bool) -
                 f"line {line.text!r} would close GitHub issue #{ref.task_id}, but this PR "
                 f"implements {ref.label}; edit the PR body to remove or reword it"
             )
-    desired = ref.reference_line(close=close_issue)
+    desired = ref.reference_line(close=True) if close_issue else _no_close_line(ref)
     if not owned:
         return f"{desired}\n\n" + body.lstrip("\n")
     edits: dict[int, str | None] = {index: None for index in owned[1:]}
@@ -975,8 +1006,9 @@ def task_close_intent(body: str, ref: TaskReference) -> bool | None:
     """Read the closure intent recorded by the WADE-owned PR reference line.
 
     ``True`` — completion asked to close the task; ``False`` — completion used
-    ``--no-close``; ``None`` — the safely scanned body has no WADE reference line
-    for this task, so the caller's legacy default applies.
+    ``--no-close`` (the reference line carries :data:`NO_CLOSE_MARKER`); ``None``
+    — no intent was recorded for this task (no reference line, or only the
+    bootstrap draft's plain ``Implements`` line), so the caller's default applies.
 
     Raises :class:`MarkdownStructureError` when the body is unsafe to scan, so a
     caller cannot mistake an unreadable intent for a legacy body.
@@ -984,16 +1016,19 @@ def task_close_intent(body: str, ref: TaskReference) -> bool | None:
     lines = _editable_lines(body)
     token = ref.token_pattern()
     if ref.is_github_issue:
-        closing, open_ = rf"Closes\s+{token}", rf"Implements\s+{token}"
+        closing, open_ = rf"Closes\s+{token}", rf"Implements\s+{token}.*{_NO_CLOSE_SUFFIX}\s*"
         if any(re.match(closing, line.text) for line in lines):
             return True
-        return False if any(re.match(open_, line.text) for line in lines) else None
+        return False if any(re.fullmatch(open_, line.text) for line in lines) else None
     legacy = _legacy_hash(ref.task_id)
     if any(
         re.fullmatch(rf"(?:Completes\s+{token}|Closes\s+{legacy})\s*", line.text) for line in lines
     ):
         return True
-    if any(re.fullmatch(rf"Implements\s+(?:{token}|{legacy})\s*", line.text) for line in lines):
+    if any(
+        re.fullmatch(rf"Implements\s+(?:{token}|{legacy}){_NO_CLOSE_SUFFIX}\s*", line.text)
+        for line in lines
+    ):
         return False
     return None
 
@@ -1034,7 +1069,7 @@ def _build_pr_body(
     if parent is not None:
         ref_lines.append(parent.part_of_line())
     # Always record the closure intent, so a later merge honors --no-close.
-    ref_lines.append(ref.reference_line(close=close_issue))
+    ref_lines.append(ref.reference_line(close=True) if close_issue else _no_close_line(ref))
     if ref_lines:
         parts.append("\n".join(ref_lines))
 
