@@ -37,7 +37,13 @@ _LEGACY_CLOSED_STATUSES = frozenset({"closed", "complete", "done"})
 
 
 def _segment(value: str) -> str:
-    """Percent-encode one URL path segment so ``/``, ``?`` and ``#`` stay literal."""
+    """Percent-encode one URL path segment so ``/``, ``?`` and ``#`` stay literal.
+
+    Dot-only segments (``.``, ``..``) are encoded too; otherwise HTTP clients
+    remove them as relative path segments and the request hits another endpoint.
+    """
+    if value and value.strip(".") == "":
+        return "%2E" * len(value)
     return quote(value, safe="")
 
 

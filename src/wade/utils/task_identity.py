@@ -53,9 +53,10 @@ def is_canonical_decimal(value: str) -> bool:
 def validate_task_id(task_id: str) -> str:
     """Return *task_id* unchanged when it is a supported identity, else raise.
 
-    Supported IDs are non-empty printable text without whitespace, at most
-    :data:`MAX_TASK_ID_BYTES` UTF-8 bytes, so every ID is one argv element and one
-    dependency-output token. Validation never normalizes:
+    Supported IDs are non-empty printable text without whitespace, not starting
+    with ``-``, at most :data:`MAX_TASK_ID_BYTES` UTF-8 bytes, so every ID is one
+    positional argv element (never parsed as an option) and one dependency-output
+    token. Validation never normalizes:
     case, leading zeros and punctuation are part of the identity.
     """
     if not task_id:
@@ -64,6 +65,11 @@ def validate_task_id(task_id: str) -> str:
         raise TaskIdentityError(
             f"Task ID {task_id!r} contains whitespace or control characters; "
             "pass the exact ID the task provider reports."
+        )
+    if task_id.startswith("-"):
+        raise TaskIdentityError(
+            f"Task ID {task_id!r} starts with '-' and would be parsed as a command-line "
+            "option; IDs beginning with '-' are not supported."
         )
     if len(task_id.encode("utf-8")) > MAX_TASK_ID_BYTES:
         raise TaskIdentityError(

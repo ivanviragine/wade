@@ -955,8 +955,8 @@ its API paths.
   punctuation, case and leading zeros cannot collide with the title slug or with
   another task. Resolution decodes only that exact token, which keeps title
   edits, re-entry, remote-only review recovery and cleanup bound to the same
-  task. Empty IDs, IDs containing whitespace, and IDs over 64 UTF-8 bytes are
-  rejected before any branch, worktree, PR or task mutation.
+  task. Empty IDs, IDs containing whitespace, IDs starting with `-` (they would
+  parse as CLI options), and IDs over 64 UTF-8 bytes are rejected before any branch, worktree, PR or task mutation.
 - **Task-body references.** Dependency sections and tracking checklists use
   `#42` for GitHub and Markdown and `clickup:abc1234` for ClickUp (characters
   outside `[A-Za-z0-9_-]` are percent-encoded). Readers decode only complete

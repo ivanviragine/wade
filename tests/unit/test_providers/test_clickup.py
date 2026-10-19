@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, call, patch
 
+import httpx
 import pytest
 
 from wade.models.config import ProviderConfig, ProviderID
@@ -336,6 +337,20 @@ class TestReadTask:
         assert provider._client.put.call_args[0][0] == encoded
         assert provider._client.post.call_args_list[0][0][0] == f"{encoded}/comment"
         assert provider._client.post.call_args_list[1][0][0] == f"{encoded}/tag/x%2Fy"
+
+    @pytest.mark.parametrize(("task_id", "encoded"), [(".", "%2E"), ("..", "%2E%2E")])
+    def test_dot_only_id_is_not_a_relative_path_segment(
+        self, provider: ClickUpProvider, task_id: str, encoded: str
+    ) -> None:
+        """HTTP clients drop ``.``/``..`` segments; dot-only IDs must stay addressed."""
+        provider._client = MagicMock()
+        provider._client.get.return_value = _make_raw_task(task_id=task_id)
+
+        provider.read_task(task_id)
+
+        path = provider._client.get.call_args[0][0]
+        assert path == f"/api/v2/task/{encoded}"
+        assert httpx.URL(f"https://api.clickup.com{path}").raw_path == path.encode()
 
 
 class TestUpdateTask:

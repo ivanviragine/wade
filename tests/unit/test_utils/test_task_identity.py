@@ -67,6 +67,7 @@ class TestCodec:
             "IDV1_6162",  # wrong prefix case
             "idv1_ff",  # invalid UTF-8
             "idv1_6162 ",  # whitespace
+            "idv1_2d616263",  # "-abc" is option-like and unsupported
             "idv1_" + "61" * (MAX_TASK_ID_BYTES + 1),  # oversized
             "0042",  # non-canonical decimal is not a token
             "123abc",
@@ -80,7 +81,9 @@ class TestCodec:
         assert decode_task_token("idv1_7a") == "z"
         assert decode_task_token("idv1_7A") is None
 
-    @pytest.mark.parametrize("task_id", ["", " 42", "a b", "a\nb", "\t", "x" * 65])
+    @pytest.mark.parametrize(
+        "task_id", ["", " 42", "a b", "a\nb", "\t", "x" * 65, "-abc", "--help", "-"]
+    )
     def test_unsupported_ids_raise_before_any_ref(self, task_id: str) -> None:
         with pytest.raises(TaskIdentityError):
             validate_task_id(task_id)
