@@ -1720,6 +1720,12 @@ opaque ID is passed to the provider exactly. Batch review uses
 `find_open_pr_for_issue`'s summary when the open-PR scan confirms the resolved
 branch after a failed or stale branch lookup.
 
+`task_service.update_task`/`close_task` and `deps_service.analyze_deps` run
+`validate_task_id` before any provider call, and task output passes IDs with
+Rich markup disabled or escaped. Dependency-output parsing
+(`parse_deps_output`) resolves the exact line first, so an ID such as `1.` or
+`*` wins over a Markdown list marker; the marker is stripped only as a fallback.
+
 PR content: `lifecycle._apply_pr_refs` edits only WADE-owned reference lines
 outside managed blocks and fences (it rescans the surviving text with
 `utils/markdown.py`). External tasks replace legacy whole-line `Closes #<id>` /
