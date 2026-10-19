@@ -942,8 +942,9 @@ different tasks. Pass IDs as-is everywhere: `wade implement abc1234`,
 `wade task read abc1234`, `wade task deps abc1234 def5678`,
 `wade implement-batch abc1234 def5678`, `wade review pr-comments abc1234`.
 The numeric shorthand `wade 42` stays numeric-only; use the explicit commands
-for other IDs. A bare token is always a task ID — pass `./name` (or any path
-with a separator or `.md` suffix) to start from a plan file with that name.
+for other IDs. Any target that is not an anchored path is a task ID, even
+`a/b` or `plan.md` — pass `./plan.md` (or an absolute, `../` or `~/` path) to
+start from a plan file.
 `#42` works as shorthand for `42` only with GitHub and Markdown; ClickUp
 targets are used exactly, and the ClickUp provider percent-encodes each ID in
 its API paths.
