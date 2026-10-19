@@ -493,6 +493,13 @@ class TestReadTask:
         task = read_task("999", config=config, provider=mock_provider)
         assert task is None
 
+    def test_read_markup_like_id(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        mock_provider.read_task.return_value = Task(id="[/]x", title="[red]t")
+        task = read_task("[/]x", config=config, provider=mock_provider)
+        assert task is not None
+        mock_provider.read_task.side_effect = Exception("[/] boom")
+        assert read_task("[red]", config=config, provider=mock_provider) is None
+
 
 class TestUpdateTask:
     def test_update_with_body_file(
@@ -517,6 +524,23 @@ class TestUpdateTask:
     def test_update_no_args(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         result = update_task("42", config=config, provider=mock_provider)
         assert result is False
+
+    @pytest.mark.parametrize("task_id", ["a b", "", "-x"])
+    def test_rejects_unsupported_id_before_provider_call(
+        self, mock_provider: MagicMock, config: ProjectConfig, task_id: str
+    ) -> None:
+        assert update_task(task_id, comment="c", config=config, provider=mock_provider) is False
+        mock_provider.comment_on_task.assert_not_called()
+        mock_provider.update_task.assert_not_called()
+
+    def test_markup_like_id_reports_success(
+        self, tmp_path: Path, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        plan = tmp_path / "update.md"
+        plan.write_text("# Title\n\nBody.\n")
+        assert update_task("[/]x", body_file=plan, comment="c", config=config, provider=mock_provider)
+        mock_provider.comment_on_task.side_effect = Exception("[red] boom")
+        assert not update_task("[red]", comment="c", config=config, provider=mock_provider)
 
 
 class TestTaskHasPlan:
@@ -571,6 +595,21 @@ class TestCloseTask:
         mock_provider.close_task.side_effect = Exception("API error")
         result = close_task("42", config=config, provider=mock_provider)
         assert result is False
+
+    @pytest.mark.parametrize("task_id", ["a b", "", "-x"])
+    def test_rejects_unsupported_id_before_provider_call(
+        self, mock_provider: MagicMock, config: ProjectConfig, task_id: str
+    ) -> None:
+        assert close_task(task_id, comment="c", config=config, provider=mock_provider) is False
+        mock_provider.comment_on_task.assert_not_called()
+        mock_provider.close_task.assert_not_called()
+
+    def test_markup_like_id_reports_success(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        assert close_task("[/]x", config=config, provider=mock_provider) is True
+        mock_provider.close_task.side_effect = Exception("[red] boom")
+        assert close_task("[red]", config=config, provider=mock_provider) is False
 
 
 def test_markdown_service_leaves_label_cleanup_to_close(config, monkeypatch) -> None:

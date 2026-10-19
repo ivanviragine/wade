@@ -53,6 +53,7 @@ from wade.services.skill_invocation_service import (
 )
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
+from wade.utils.task_identity import TaskIdentityError, validate_task_id
 
 logger = structlog.get_logger()
 
@@ -126,6 +127,7 @@ def build_deps_prompt(context: str, method_section: str) -> str:
 _ARROW_RE = re.compile(r"^\s*(?P<from>\S+?)\s*->\s*(?P<to>\S+)(?P<rest>.*)$")
 _SUFFIX_RE = re.compile(r"\s*(?:#.*)?")
 _COMMENT_RE = re.compile(r"#\s*(.*)")
+_LIST_MARKER_RES = (re.compile(r"^[-*]\s+"), re.compile(r"^\d+[.)]\s+"))
 
 
 def _resolve_endpoint(token: str, valid_numbers: set[str]) -> str | None:
@@ -152,6 +154,31 @@ def _split_destination(token: str, valid_numbers: set[str]) -> tuple[str, str]:
     return token, ""
 
 
+def _match_edge(text: str, valid_numbers: set[str]) -> tuple[str, str, str] | None:
+    """Split one edge line into ``(from_token, to_token, rest)``, or None."""
+    match = _ARROW_RE.match(text)
+    if not match:
+        return None
+    to_token, glued = _split_destination(match.group("to"), valid_numbers)
+    rest = glued + match.group("rest")
+    # Only an optional "# reason" may follow — never a further "-> <id>".
+    if not _SUFFIX_RE.fullmatch(rest):
+        return None
+    return match.group("from"), to_token, rest
+
+
+def _edge_candidates(line: str) -> list[str]:
+    """The exact line, then the line without a Markdown bullet/number marker.
+
+    Punctuation is part of an exact task ID, so ``1. -> 2`` is first tried as an
+    edge from task ``1.``; the marker is stripped only as a fallback.
+    """
+    stripped = line
+    for marker_re in _LIST_MARKER_RES:
+        stripped = marker_re.sub("", stripped)
+    return [line] if stripped == line else [line, stripped]
+
+
 def parse_deps_output(
     text: str,
     valid_numbers: set[str],
@@ -176,25 +203,25 @@ def parse_deps_output(
         if not line:
             continue
 
-        # Strip markdown formatting (backticks, bullets, numbering)
-        cleaned = line.replace("`", "")
-        cleaned = re.sub(r"^[-*]\s+", "", cleaned)
-        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned)
-
-        match = _ARROW_RE.match(cleaned)
-        if not match:
+        # Strip markdown formatting (backticks); bullets and numbering are
+        # removed only when the exact line does not already resolve as an edge.
+        parsed: tuple[str, str, str] | None = None
+        from_id: str | None = None
+        to_id: str | None = None
+        for candidate in _edge_candidates(line.replace("`", "")):
+            edge_parts = _match_edge(candidate, valid_numbers)
+            if edge_parts is None:
+                continue
+            parsed = edge_parts
+            # Validate both endpoints against the analyzed set
+            from_id = _resolve_endpoint(edge_parts[0], valid_numbers)
+            to_id = _resolve_endpoint(edge_parts[1], valid_numbers)
+            if from_id is not None and to_id is not None:
+                break
+        if parsed is None:
             continue
 
-        from_token = match.group("from")
-        to_token, glued = _split_destination(match.group("to"), valid_numbers)
-        rest = glued + match.group("rest")
-        # Only an optional "# reason" may follow — never a further "-> <id>".
-        if not _SUFFIX_RE.fullmatch(rest):
-            continue
-
-        # Validate both endpoints against the analyzed set
-        from_id = _resolve_endpoint(from_token, valid_numbers)
-        to_id = _resolve_endpoint(to_token, valid_numbers)
+        from_token, to_token, rest = parsed
         if from_id is None or to_id is None:
             console.warn(
                 console.escape_markup(
@@ -545,6 +572,12 @@ def analyze_deps(
     if len(issue_numbers) < 2:
         console.error("Need at least 2 issues for dependency analysis.")
         return None
+    for issue_id in issue_numbers:
+        try:
+            validate_task_id(issue_id)
+        except TaskIdentityError as exc:
+            console.error(str(exc), markup=False)
+            return None
 
     # Resolve delegation mode (default to headless for deps)
     cmd_config = config.ai.deps

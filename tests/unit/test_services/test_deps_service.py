@@ -130,6 +130,29 @@ class TestParseEdges:
         edges = parse_deps_output(text, {"1", "2", "3"})
         assert len(edges) == 2
 
+    @pytest.mark.parametrize("source", ["1.", "1)", "*"])
+    def test_exact_id_wins_over_list_marker(self, source: str) -> None:
+        edges = parse_deps_output(f"{source} -> child # reason\n", {source, "child"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
+            (source, "child", "reason")
+        ]
+
+    def test_list_marker_stripped_when_exact_line_unresolved(self) -> None:
+        edges = parse_deps_output("1. 3 -> 4\n* 5 -> 4\n", {"1.", "3", "4", "5", "*"})
+        assert [(e.from_task, e.to_task) for e in edges] == [("3", "4"), ("5", "4")]
+
+
+class TestAnalyzeDepsIdValidation:
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_rejects_unsupported_id_before_provider_work(
+        self, mock_config: MagicMock, mock_provider: MagicMock
+    ) -> None:
+        mock_config.return_value = ProjectConfig()
+        assert analyze_deps(["1", "a b"]) is None
+        mock_provider.return_value.read_task.assert_not_called()
+        mock_provider.return_value.update_task.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Cross-reference tests
