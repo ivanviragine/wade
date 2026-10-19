@@ -55,17 +55,16 @@ def task_reference(
 
 
 def is_explicit_plan_path(target: str) -> bool:
-    """Whether *target* uses explicit path syntax and may therefore name a plan file.
+    """Whether *target* is an anchored path and may therefore name a plan file.
 
-    A bare token (``42``, ``abc1234``) is always a task ID even when a file with
-    that name exists in the cwd; pass ``./name`` to select such a file.
+    Supported task IDs may contain ``/``, start with ``.`` or end in ``.md``, so
+    only an absolute path or one starting with ``./``, ``../`` or ``~/`` selects
+    a plan file. Any other token (``42``, ``abc1234``, ``a/b``, ``plan.md``) is a
+    task ID even when a file with that name exists; pass ``./name`` to select it.
     """
-    separators = {"/", os.sep} | ({os.altsep} if os.altsep else set())
-    return (
-        any(sep in target for sep in separators)
-        or target.startswith(("~", "."))
-        or target.lower().endswith(".md")
-    )
+    separators = (os.sep,) + ((os.altsep,) if os.altsep else ())
+    anchors = tuple(f"{prefix}{sep}" for prefix in (".", "..", "~") for sep in separators)
+    return os.path.isabs(target) or target.startswith(anchors)
 
 
 class WorktreeTarget(BaseModel):

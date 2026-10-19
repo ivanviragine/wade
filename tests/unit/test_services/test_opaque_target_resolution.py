@@ -14,14 +14,18 @@ from wade.services.implementation_service._shared import WorktreeTarget, is_expl
 from wade.services.implementation_service.bootstrap import write_plan_md
 from wade.services.implementation_service.core import _resolve_task_target
 from wade.services.implementation_service.done import done
+from wade.utils.task_identity import encode_task_id
 
 
 class TestExplicitPlanPaths:
-    @pytest.mark.parametrize("target", ["./plan", "plans/a", "~/plan", ".plan", "PLAN.md", "x.MD"])
-    def test_explicit_path_syntax(self, target: str) -> None:
+    @pytest.mark.parametrize("target", ["./plan", "../plan", "~/plan", "/abs/plan.md", "./a/b"])
+    def test_anchored_paths_select_plan_files(self, target: str) -> None:
         assert is_explicit_plan_path(target)
 
-    @pytest.mark.parametrize("target", ["42", "abc1234", "#42", "DEV-123", "plan"])
+    @pytest.mark.parametrize(
+        "target",
+        ["42", "abc1234", "#42", "DEV-123", "plan", "a/b", "plans/a", ".plan", "~plan", "PLAN.md"],
+    )
     def test_bare_tokens_are_task_ids(self, target: str) -> None:
         assert not is_explicit_plan_path(target)
 
@@ -54,6 +58,20 @@ class TestResolveTaskTarget:
         assert task == created
         create.assert_called_once()
         provider.read_task.assert_not_called()
+
+    def test_slash_bearing_id_is_never_a_same_named_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "b").write_text("# feat: not a plan\n")
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="a/b", title="fix: slash id")
+        with patch("wade.services.task_service.create_from_plan_file") as create:
+            task = _resolve_task_target("a/b", provider, ProjectConfig())
+        assert task is not None and task.id == "a/b"
+        provider.read_task.assert_called_once_with("a/b")
+        create.assert_not_called()
 
     def test_only_one_hash_prefix_is_removed(self) -> None:
         provider = MagicMock()
@@ -126,3 +144,17 @@ class TestDoneTargetAgreement:
         ok, gates = self._done(tmp_path, "scratch", "scratch", match)
         assert ok is False
         gates.assert_not_called()
+
+    def test_slash_bearing_id_is_not_a_plan_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "b").write_text("# feat: not a plan\n")
+        branch = f"feat/{encode_task_id('a/b')}-x"
+        match = WorktreeTarget(path=tmp_path, branch=branch, task_id="a/b", by_identity=True)
+        with patch("wade.services.task_service.create_from_plan_file") as create:
+            ok, gates = self._done(tmp_path, "a/b", branch, match)
+        create.assert_not_called()
+        assert ok is True
+        assert gates.call_args.kwargs["issue_number"] == "a/b"

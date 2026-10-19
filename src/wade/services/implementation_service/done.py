@@ -198,7 +198,7 @@ def done(
             console.error(str(e))
             return False
 
-    # Only explicit path syntax creates a task from a plan file, so a provider ID
+    # Only an anchored path creates a task from a plan file, so a provider ID
     # such as ``abc1234`` is never mistaken for a same-named file in the cwd.
     if target and is_explicit_plan_path(target):
         target_path = Path(target).expanduser()

@@ -1282,7 +1282,7 @@ def _resolve_task_target(
 
     If the target is a path to a plan file, create the issue first.
     """
-    # Only explicit path syntax selects a plan file, so a provider ID such as
+    # Only an anchored path selects a plan file, so a provider ID such as
     # ``abc1234`` stays an ID even if a same-named file exists in the cwd.
     target_path = Path(target).expanduser()
     if is_explicit_plan_path(target) and target_path.is_file():
