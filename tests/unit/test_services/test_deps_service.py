@@ -133,9 +133,7 @@ class TestParseEdges:
     @pytest.mark.parametrize("source", ["1.", "1)", "*"])
     def test_exact_id_wins_over_list_marker(self, source: str) -> None:
         edges = parse_deps_output(f"{source} -> child # reason\n", {source, "child"})
-        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
-            (source, "child", "reason")
-        ]
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [(source, "child", "reason")]
 
     def test_list_marker_stripped_when_exact_line_unresolved(self) -> None:
         edges = parse_deps_output("1. 3 -> 4\n* 5 -> 4\n", {"1.", "3", "4", "5", "*"})

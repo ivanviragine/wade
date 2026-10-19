@@ -538,7 +538,9 @@ class TestUpdateTask:
     ) -> None:
         plan = tmp_path / "update.md"
         plan.write_text("# Title\n\nBody.\n")
-        assert update_task("[/]x", body_file=plan, comment="c", config=config, provider=mock_provider)
+        assert update_task(
+            "[/]x", body_file=plan, comment="c", config=config, provider=mock_provider
+        )
         mock_provider.comment_on_task.side_effect = Exception("[red] boom")
         assert not update_task("[red]", comment="c", config=config, provider=mock_provider)
 
