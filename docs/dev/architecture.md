@@ -1753,6 +1753,11 @@ with the shared checklist parser and propagates API failures instead of
 returning "no parent". Mermaid graphs use stable `t0`, `t1`… node aliases with the
 exact reference in escaped labels.
 
+Legacy opaque hash references accept only `[A-Za-z0-9_-]` IDs terminated by a
+structured delimiter (whitespace, end of input, comma separator or Markdown
+code/link closure). Ambiguous punctuation-bearing tokens such as `#a/b` are
+rejected whole, never shortened to `a`; write `clickup:a%2Fb` to name that ID.
+
 ## Merge Strategy
 
 `MergeStrategy` (config key `project.merge_strategy`) has a single value, `PR` — the `direct` strategy was retired in #357. A config that still carries `merge_strategy: direct` is migrated to `PR` with a warning on load (`config/loader.py` `_migrate_merge_strategy`), and `wade check-config` rejects it.

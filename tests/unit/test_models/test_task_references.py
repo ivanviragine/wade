@@ -87,6 +87,33 @@ class TestFormatAndParse:
 
 
 class TestTrackingAndDependencies:
+    @pytest.mark.parametrize(
+        "task_id",
+        ["a/b", "a.b", "a:b", "a%b", "a+b", "a]b", "a`b", "a,b", "a:#b", "a`#b", "a[#b", "aé"],
+    )
+    def test_ambiguous_legacy_refs_never_resolve_a_prefix(self, task_id: str) -> None:
+        assert parse_tracking_child_ids(f"- [ ] #{task_id}", provider="clickup") == []
+        assert parse_dependency_refs(
+            f"**Depends on:** #{task_id}, #valid\n**Blocks:** #{task_id}", "clickup"
+        ) == {"depends_on": ["valid"], "blocks": []}
+
+    def test_legacy_structured_delimiters_and_encoded_punctuation(self) -> None:
+        body = (
+            "- [ ] #plain — title\n"
+            "- [ ] `#code`\n"
+            "- [ ] [#linked](https://app.clickup.com/t/linked)\n"
+            "- [ ] clickup:a%2Fb\n"
+        )
+        assert parse_tracking_child_ids(body, provider="clickup") == [
+            "plain",
+            "code",
+            "linked",
+            "a/b",
+        ]
+        assert parse_dependency_refs(
+            "**Depends on:** #plain, `#code`, [#linked](url), clickup:a%2Fb", "clickup"
+        ) == {"depends_on": ["plain", "code", "linked", "a/b"], "blocks": []}
+
     def test_github_checklist_never_truncates(self) -> None:
         body = "- [ ] #42 — a\n- [ ] #123abc\n  - [x] `#7`\n- [ ] Fix #9\n"
         assert parse_tracking_child_ids(body, include_checked=True) == ["42", "7"]

@@ -965,7 +965,8 @@ its API paths.
   outside `[A-Za-z0-9_-]` are percent-encoded). Readers decode only complete
   references of the configured provider, so `#123abc` is never task `123`.
   Legacy `- [ ] #abc1234` ClickUp checklist items and `**Depends on:**` lines
-  are still read.
+  are still read for IDs containing only `[A-Za-z0-9_-]`. Ambiguous legacy
+  punctuation such as `#a/b` is ignored as a whole; use `clickup:a%2Fb` instead.
 - **PR references.** Only GitHub tasks get GitHub issue syntax (`Implements #42`,
   `Closes #42`, `Part of #42`). Every other provider — including numeric
   ClickUp and Markdown IDs — gets a qualified, linked reference that GitHub

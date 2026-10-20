@@ -215,7 +215,13 @@ _CANONICAL_DECIMAL_RE = re.compile(r"[1-9][0-9]*")
 _HASH_REF_PATTERN = r"(?<![\w&/#])#(?P<hash>[0-9]+)(?!\w)"
 # Legacy WADE content wrote ``#<id>`` for every provider. Opaque IDs are read in
 # that form only inside structured positions (checklist items, dependency lines).
-_LEGACY_HASH_PATTERN = r"(?<![\w&/#])#(?P<legacy>[A-Za-z0-9_-]+)(?![\w-])"
+# Require a complete safe ID with a structured delimiter (including code/link
+# wrappers). Ambiguous punctuation-bearing IDs must use qualified encoding;
+# never read ``#a/b`` as ``a`` or a later ``#b`` inside the same token.
+_LEGACY_HASH_PATTERN = (
+    r"(?<!\S)[`\[]?#(?P<legacy>[A-Za-z0-9_-]+)"
+    r"(?=$|\s|,(?:\s|$)|`(?=\s|,|$)|\]\()"
+)
 
 
 def escape_reference_id(task_id: str) -> str:

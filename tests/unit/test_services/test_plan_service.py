@@ -2291,12 +2291,13 @@ class TestOfferToImplement:
             assert result is None
             mock_prompts.confirm.assert_not_called()
             mock_start.assert_not_called()
-            mock_console.detail.assert_called_once_with("wade implement 42", markup=False)
+            mock_console.command.assert_called_once_with("wade implement 42")
 
     @pytest.mark.parametrize("is_tty", [False, True])
     @pytest.mark.parametrize("width", [40, 80])
+    @pytest.mark.parametrize("task_id", ["[/]", "a" * 64, "a" * 60 + "'[/]"])
     def test_opaque_id_hint_is_literal_when_handoff_is_skipped(
-        self, is_tty: bool, width: int
+        self, is_tty: bool, width: int, task_id: str
     ) -> None:
         import io
         import shlex
@@ -2312,12 +2313,12 @@ class TestOfferToImplement:
             patch.object(plan_service.prompts, "confirm", return_value=False),
             patch.object(plan_service, "start_implementation_session") as start,
         ):
-            assert _offer_to_implement("[/]") is None
+            assert _offer_to_implement(task_id) is None
 
         start.assert_not_called()
-        commands = [line.strip() for line in output.getvalue().splitlines() if "wade " in line]
-        assert commands == ["wade implement '[/]'"]
-        assert shlex.split(commands[0]) == ["wade", "implement", "[/]"]
+        commands = [line for line in output.getvalue().splitlines() if "wade " in line]
+        assert commands == [f"wade implement {shlex.quote(task_id)}"]
+        assert shlex.split(commands[0]) == ["wade", "implement", task_id]
 
     def test_implementation_session_failure_returns_false(self) -> None:
         """If start_implementation_session fails, the failure is propagated."""
