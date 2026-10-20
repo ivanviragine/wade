@@ -1513,6 +1513,8 @@ Consumers, all fed from that one module:
   This offer runs *after* the push and PR finalize, so a Ctrl+C at the confirm is
   treated as a declined offer (`prompts.confirm(cancel_default=False)`) rather
   than aborting `done` and skipping its worktree cleanup for an already-live PR.
+  Task-derived retry commands use `console.command` as separate shell-quoted
+  physical lines so Rich cannot interpret ID markup or wrap inside arguments.
 - `implementation_service.lifecycle._post_implementation_lifecycle_pr` and
   `review_service._post_review_lifecycle` / `_quiet_next_steps_prompt` — each
   **appends** (never inserts) a `Trigger bot reviews (…)` entry, so existing
@@ -1716,7 +1718,9 @@ branch it would finalize. Only an anchored path (`is_explicit_plan_path`:
 absolute, `./`, `../` or `~/`, shared from `utils/task_identity.py`) selects a
 plan file. The identity validator rejects those reserved forms as task IDs,
 including when decoding existing branch tokens. Every other target —
-including `a/b` or `plan.md`, which are valid IDs — is a task ID. `models/task.py::task_id_from_target`
+including `a/b`, `plan.md` or `~clickup490`, which are valid IDs — is a task ID.
+Home-directory expansion runs only after anchored path classification.
+`models/task.py::task_id_from_target`
 drops one leading `#` only for hash-reference providers (GitHub/Markdown), so an
 opaque ID is passed to the provider exactly. Batch review uses
 `find_open_pr_for_issue`'s summary when the open-PR scan confirms the resolved

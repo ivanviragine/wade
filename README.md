@@ -747,6 +747,9 @@ work is pushed, so you never have to remember `wade review trigger <N>`:
 | the post-session menu (`Merge PR` / `Wait for reviews`) | an extra `Trigger bot reviews (…), then wait` entry |
 | the quiet-PR menu (`Keep polling` / …) | an extra `Trigger bot reviews (…)` entry |
 
+Bot-trigger retry commands print on a separate, literal shell line, preserving
+quoted task IDs even when they contain brackets or shell punctuation.
+
 Both `done` commands also take an explicit override for a single run:
 
 ```bash
@@ -943,8 +946,8 @@ different tasks. Pass IDs as-is everywhere: `wade implement abc1234`,
 `wade implement-batch abc1234 def5678`, `wade review pr-comments abc1234`.
 The numeric shorthand `wade 42` stays numeric-only; use the explicit commands
 for other IDs. Any target that is not an anchored path is a task ID, even
-`a/b` or `plan.md` — pass `./plan.md` (or an absolute, `../` or `~/` path) to
-start from a plan file.
+`a/b`, `plan.md` or `~clickup490` — pass `./plan.md` (or an absolute, `../` or
+`~/` path) to start from a plan file.
 Anchored path forms are reserved for plan files and are unsupported as task
 IDs, even when the provider reports such an ID.
 `#42` works as shorthand for `42` only with GitHub and Markdown; ClickUp

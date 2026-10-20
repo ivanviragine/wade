@@ -1301,8 +1301,9 @@ def _maybe_trigger_bot_reviews(
             if trigger_bots:
                 console.detail(
                     "Bot review triggers already posted for this commit — "
-                    f"run `wade review trigger {shlex.quote(issue_number)}` to post them again."
+                    "run this command to post them again:"
                 )
+                console.command(f"wade review trigger {shlex.quote(issue_number)}")
             return
         bot_trigger.post_bot_triggers(
             repo_root, pr_number, pending, marker_root=marker_root, sha=sha
@@ -1328,8 +1329,8 @@ def _maybe_trigger_bot_reviews(
                 repo_root, pr_number, pending, marker_root=marker_root, sha=sha
             )
         else:
-            command = f"wade review trigger {shlex.quote(issue_number)}"
-            console.detail(f"Skipped — run `{command}` when you want them.")
+            console.detail("Skipped — run this command when you want them:")
+            console.command(f"wade review trigger {shlex.quote(issue_number)}")
         return
 
     # Non-TTY: the AI agent runs `done`, so hand it the decision to surface —
@@ -1338,9 +1339,9 @@ def _maybe_trigger_bot_reviews(
     console.info(
         f"Bot review triggers NOT posted ({names}) — `bot_review.auto_trigger` is off. "
         "Add an extra option to your closing dialog, after the recommended exit one: "
-        f"'Post bot review triggers' → "
-        f"`wade review trigger {shlex.quote(issue_number)} {bot_args}`."
+        "'Post bot review triggers' → run this command:"
     )
+    console.command(f"wade review trigger {shlex.quote(issue_number)} {bot_args}")
     console.hint(
         "Always post them: `bot_review.auto_trigger: true` (or `done --trigger-bots`). "
         "Never ask again: `bot_review.offer_on_done: false`."

@@ -1284,7 +1284,7 @@ def _resolve_task_target(
     """
     # Only an anchored path selects a plan file, so a provider ID such as
     # ``abc1234`` stays an ID even if a same-named file exists in the cwd.
-    target_path = Path(target).expanduser()
+    target_path = Path(target).expanduser() if is_explicit_plan_path(target) else Path(target)
     if is_explicit_plan_path(target) and target_path.is_file():
         from wade.services.task_service import create_from_plan_file
         from wade.utils.conventional import ConventionalTitleError

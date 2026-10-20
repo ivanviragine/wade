@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wade.hooks.policies import _parse_issue_heading
-from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.config import ProjectConfig, ProjectSettings, ProviderConfig
 from wade.models.task import Task
 from wade.services.implementation_service._shared import WorktreeTarget, is_explicit_plan_path
 from wade.services.implementation_service.bootstrap import write_plan_md
@@ -31,6 +31,36 @@ class TestExplicitPlanPaths:
 
 
 class TestResolveTaskTarget:
+    @pytest.mark.parametrize("read_fails", [False, True])
+    @pytest.mark.parametrize("task_id", ["~clickup490", "~clickup490/task"])
+    def test_tilde_id_never_expands_a_home_directory(self, task_id: str, read_fails: bool) -> None:
+        provider = MagicMock()
+        expected = Task(id=task_id, title="fix: tilde id")
+        provider.read_task.return_value = expected
+        if read_fails:
+            provider.read_task.side_effect = ValueError("Task not found")
+        config = ProjectConfig(provider=ProviderConfig(name="clickup"))
+        with patch.object(Path, "expanduser", side_effect=RuntimeError("Unknown user")) as expand:
+            task = _resolve_task_target(task_id, provider, config)
+        assert task == (None if read_fails else expected)
+        provider.read_task.assert_called_once_with(task_id)
+        expand.assert_not_called()
+
+    def test_explicit_home_path_expands_to_a_plan_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text("# feat: home plan\n")
+        provider = MagicMock()
+        created = Task(id="new1", title="feat: home plan")
+        with patch(
+            "wade.services.task_service.create_from_plan_file", return_value=created
+        ) as create:
+            assert _resolve_task_target("~/plan.md", provider, ProjectConfig()) == created
+        create.assert_called_once_with(plan_path, config=ProjectConfig(), provider=provider)
+        provider.read_task.assert_not_called()
+
     def test_bare_id_is_never_a_same_named_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
