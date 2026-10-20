@@ -230,7 +230,9 @@ def _capture_post_session_usage(
                 has_session,
             )
             new_body = enforce_body_budget(
-                new_body, warn=console.warn, label=f"issue #{issue_number} body"
+                new_body,
+                warn=console.warn,
+                label=console.escape_markup(f"issue #{issue_number} body"),
             )
             provider.update_task(str(issue_number), body=new_body)
             if has_tokens:
@@ -569,7 +571,7 @@ def start(
                 # same-issue branch we simply cannot see. Abort, like a failed PR
                 # lookup, rather than treat an unknown listing as absence (#428).
                 console.error_with_fix(
-                    f"Could not list open PRs for task {task.id}",
+                    console.escape_markup(f"Could not list open PRs for task {task.id}"),
                     "Transient gh error — try again shortly",
                 )
                 return ImplementResult(success=False)
@@ -1109,7 +1111,7 @@ def start(
                     cwd=str(worktree_path),
                     title=work_title,
                 ):
-                    console.success(f"Detached AI session for #{task.id}")
+                    console.success(console.escape_markup(f"Detached AI session for #{task.id}"))
                     stop_title_keeper()
                     return ImplementResult(success=True)
             console.warn("Could not launch in new terminal — falling back to inline")
@@ -1289,7 +1291,7 @@ def _resolve_task_target(
         from wade.services.task_service import create_from_plan_file
         from wade.utils.conventional import ConventionalTitleError
 
-        console.info(f"Creating issue from plan file: {target}")
+        console.info(console.escape_markup(f"Creating issue from plan file: {target}"))
         try:
             task = create_from_plan_file(target_path, config=config, provider=provider)
         except ConventionalTitleError as e:
@@ -1297,8 +1299,10 @@ def _resolve_task_target(
             # tokens in it are shown literally rather than parsed as markup.
             console.error(str(e), markup=False)
             console.hint(
-                f"Fix the plan file's `# Title` heading in {target} to a "
-                "conventional-commit title, then re-run."
+                console.escape_markup(
+                    f"Fix the plan file's `# Title` heading in {target} to a "
+                    "conventional-commit title, then re-run."
+                )
             )
             return None
         return task
@@ -1312,7 +1316,11 @@ def _resolve_task_target(
     except Exception as e:
         console.error(f"Could not read task {issue_id}: {e}", markup=False)
         if target_path.is_file():
-            console.hint(f"To create a task from the plan file, pass a path: ./{target}")
+            console.hint(
+                console.escape_markup(
+                    f"To create a task from the plan file, pass a path: ./{target}"
+                )
+            )
         return None
 
 

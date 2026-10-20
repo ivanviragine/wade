@@ -124,7 +124,7 @@ def build_deps_prompt(context: str, method_section: str) -> str:
 # "<id> -> <id>" edges with an optional "# reason" comment. Endpoints are
 # whole whitespace-free tokens resolved by :func:`_resolve_endpoint`, so an ID
 # may itself contain ``#`` (``a#b``) and ``123abc`` can never become task ``123``.
-_ARROW_RE = re.compile(r"^\s*(?P<from>\S+?)\s*->\s*(?P<to>\S+)(?P<rest>.*)$")
+_DESTINATION_RE = re.compile(r"(?P<to>\S+)(?P<rest>.*)$")
 _SUFFIX_RE = re.compile(r"\s*(?:#.*)?")
 _COMMENT_RE = re.compile(r"#\s*(.*)")
 _LIST_MARKER_RES = (re.compile(r"^[-*]\s+"), re.compile(r"^\d+[.)]\s+"))
@@ -136,6 +136,12 @@ def _resolve_endpoint(token: str, valid_numbers: set[str]) -> str | None:
         return token
     if token.startswith("#") and token[1:] in valid_numbers:
         return token[1:]
+    # Only confirmed code-span wrappers may be removed, never interior ticks.
+    ticks = len(token) - len(token.lstrip("`"))
+    if ticks and token.endswith("`" * ticks) and len(token) > 2 * ticks:
+        inner = token[ticks:-ticks]
+        if inner in valid_numbers:
+            return inner
     return None
 
 
@@ -156,19 +162,24 @@ def _split_destination(token: str, valid_numbers: set[str]) -> tuple[str, str]:
 
 def _match_edge(text: str, valid_numbers: set[str]) -> tuple[str, str, str] | None:
     """Split one edge line into ``(from_token, to_token, rest)``, or None."""
-    match = _ARROW_RE.match(text)
-    if not match:
-        return None
-    to_token, glued = _split_destination(match.group("to"), valid_numbers)
-    rest = glued + match.group("rest")
-    # Only an optional "# reason" may follow — never a further "-> <id>".
-    if not _SUFFIX_RE.fullmatch(rest):
-        return None
-    return match.group("from"), to_token, rest
+    matches: list[tuple[str, str, str]] = []
+    for arrow in re.finditer("->", text):
+        source = text[: arrow.start()].strip()
+        if _resolve_endpoint(source, valid_numbers) is None:
+            continue
+        match = _DESTINATION_RE.fullmatch(text[arrow.end() :].lstrip())
+        if match is None:
+            continue
+        to_token, glued = _split_destination(match.group("to"), valid_numbers)
+        rest = glued + match.group("rest")
+        if _resolve_endpoint(to_token, valid_numbers) is not None and _SUFFIX_RE.fullmatch(rest):
+            matches.append((source, to_token, rest))
+    # Compact syntax is retained only when the analyzed IDs determine one split.
+    return matches[0] if len(matches) == 1 else None
 
 
 def _edge_candidates(line: str) -> list[str]:
-    """The exact line, then the line without a Markdown bullet/number marker.
+    """The exact line, followed by confirmed list/code-span formatting fallbacks.
 
     Punctuation is part of an exact task ID, so ``1. -> 2`` is first tried as an
     edge from task ``1.``; the marker is stripped only as a fallback.
@@ -176,7 +187,17 @@ def _edge_candidates(line: str) -> list[str]:
     stripped = line
     for marker_re in _LIST_MARKER_RES:
         stripped = marker_re.sub("", stripped)
-    return [line] if stripped == line else [line, stripped]
+    candidates = [line] if stripped == line else [line, stripped]
+    for candidate in list(candidates):
+        ticks = len(candidate) - len(candidate.lstrip("`"))
+        if not ticks:
+            continue
+        # A whole edge may be code-wrapped with its comment outside the span.
+        closing = re.search(rf"(?<!`)`{{{ticks}}}(?!`)(?=\s*(?:#.*)?$)", candidate[ticks:])
+        if closing is not None:
+            end = ticks + closing.start()
+            candidates.append(candidate[ticks:end] + candidate[end + ticks :])
+    return candidates
 
 
 def parse_deps_output(
@@ -203,12 +224,11 @@ def parse_deps_output(
         if not line:
             continue
 
-        # Strip markdown formatting (backticks); bullets and numbering are
-        # removed only when the exact line does not already resolve as an edge.
+        # Resolve the exact line first; remove only confirmed outer formatting.
         parsed: tuple[str, str, str] | None = None
         from_id: str | None = None
         to_id: str | None = None
-        for candidate in _edge_candidates(line.replace("`", "")):
+        for candidate in _edge_candidates(line):
             edge_parts = _match_edge(candidate, valid_numbers)
             if edge_parts is None:
                 continue
@@ -329,15 +349,19 @@ def apply_deps_to_issues(
             if new_body == body:
                 continue
             new_body = enforce_body_budget(
-                new_body, warn=console.warn, label=f"issue #{issue_id} body"
+                new_body, warn=console.warn, label=console.escape_markup(f"issue #{issue_id} body")
             )
 
             scan_markdown_structure(new_body)
             provider.update_task(issue_id, body=new_body)
-            console.detail(f"Updated #{issue_id} with dependency refs")
+            console.detail(console.escape_markup(f"Updated #{issue_id} with dependency refs"))
             updated += 1
         except MarkdownStructureError as e:
-            console.warn(f"Skipped #{issue_id}: unsafe dependency body ({e}). Repair it and retry.")
+            console.warn(
+                console.escape_markup(
+                    f"Skipped #{issue_id}: unsafe dependency body ({e}). Repair it and retry."
+                )
+            )
             logger.warning("deps.update_failed", issue=issue_id, error=str(e))
         except Exception as e:
             logger.warning("deps.update_failed", issue=issue_id, error=str(e))

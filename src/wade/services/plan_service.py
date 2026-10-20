@@ -1576,10 +1576,9 @@ def plan(
     if issue_id:
         try:
             existing_issue = provider.read_task(issue_id)
-            safe_title = console.escape_markup(existing_issue.title)
-            console.kv("Issue", f"#{existing_issue.id}: {safe_title}")
+            console.kv("Issue", console.issue_ref(existing_issue.id, existing_issue.title))
         except Exception as e:
-            console.error(f"Could not fetch issue #{issue_id}: {e}")
+            console.error(console.escape_markup(f"Could not fetch issue #{issue_id}: {e}"))
             return False
 
     # Set terminal title for the plan session
@@ -2066,14 +2065,18 @@ def _create_issues_from_plans(
                 # pending marker: retain it so a later recovery retries its PR refresh
                 # instead of missing a closed marker and creating a duplicate.
                 console.warn(
-                    f"Could not create draft PR for #{task.id} — the plan was not "
-                    "persisted; preserving planning output."
+                    console.escape_markup(
+                        f"Could not create draft PR for #{task.id} — the plan was not "
+                        "persisted; preserving planning output."
+                    )
                 )
                 if reconciled is None:
                     try:
                         provider.close_task(task.id, reason=CloseReason.NOT_PLANNED)
                         console.detail(
-                            f"Closed #{task.id} (no plan persisted) to avoid an orphaned issue"
+                            console.escape_markup(
+                                f"Closed #{task.id} (no plan persisted) to avoid an orphaned issue"
+                            )
                         )
                     except Exception as e:
                         logger.warning(
@@ -2205,11 +2208,13 @@ def _base_retarget_is_safe(
         # Base section removed on re-plan. bootstrap_draft_pr won't retarget, so
         # the PR keeps its current (non-main) base. Inform, then proceed.
         console.warn(
-            f"Plan removed the '## Base Branch' section, but PR #{lookup.pr.number} "
-            f"keeps its current base '{current_base}' (wade does not auto-revert an "
-            "existing PR's base). Retarget it explicitly with "
-            f"`wade implement {shlex.quote(issue.id)} --base {main_branch}` if intended."
+            console.escape_markup(
+                f"Plan removed the '## Base Branch' section, but PR #{lookup.pr.number} "
+                f"keeps its current base '{current_base}' (wade does not auto-revert an "
+                "existing PR's base). To retarget it explicitly, run:"
+            )
         )
+        console.command(shlex.join(["wade", "implement", issue.id, "--base", main_branch]))
         return True
 
     if not in_flight:
@@ -2231,10 +2236,12 @@ def _base_retarget_is_safe(
     ):
         return True
     console.info(
-        f"Left PR #{lookup.pr.number} targeting '{current_base}'. "
-        f"To retarget deliberately, run `wade implement {shlex.quote(issue.id)} "
-        f"--base {desired_effective}`."
+        console.escape_markup(
+            f"Left PR #{lookup.pr.number} targeting '{current_base}'. "
+            "To retarget deliberately, run:"
+        )
     )
+    console.command(shlex.join(["wade", "implement", issue.id, "--base", desired_effective]))
     return False
 
 
@@ -2290,10 +2297,12 @@ def _reconcile_inflight_worktree_base(
         # rather than report success on a possibly-divergent pin (#376 review).
         logger.warning("plan.inflight_worktree_lookup_failed", exc_info=True)
         console.error(
-            f"Retargeted the PR to '{declared_base}', but could not read the repo's "
-            f"worktrees to update the in-flight merge-target pin. If a worktree exists "
-            f"for #{issue.id}, set its .wade/base_branch to '{declared_base}' (or delete "
-            "it if the base is the main branch) before resuming implementation."
+            console.escape_markup(
+                f"Retargeted the PR to '{declared_base}', but could not read the repo's "
+                f"worktrees to update the in-flight merge-target pin. If a worktree exists "
+                f"for #{issue.id}, set its .wade/base_branch to '{declared_base}' (or delete "
+                "it if the base is the main branch) before resuming implementation."
+            )
         )
         return False
     if wt_path is None:
@@ -2439,7 +2448,7 @@ def _attach_plan_to_existing_issue(
             # or a transient gh error). The plan lives only in the worktree/plan
             # dir; finalizing now would discard it when the worktree is force-
             # removed. Signal preserve-and-abort instead of reporting success (#376).
-            console.warn(f"Could not create draft PR for #{issue.id}")
+            console.warn(console.escape_markup(f"Could not create draft PR for #{issue.id}"))
             return False
     else:
         console.warn("Not in a git repo — skipping draft PR creation.")
@@ -2496,8 +2505,10 @@ def _supersede_issue_with_plans(
 
     if failed_files:
         console.warn(
-            f"Only {len(created_numbers)}/{len(plan_files)} plan file(s) became issues "
-            f"— leaving #{issue.id} open. Failed: {', '.join(failed_files)}"
+            console.escape_markup(
+                f"Only {len(created_numbers)}/{len(plan_files)} plan file(s) became issues "
+                f"— leaving #{issue.id} open. Failed: {', '.join(failed_files)}"
+            )
         )
         logger.warning(
             "plan.supersede_partial_failure",
@@ -2508,7 +2519,11 @@ def _supersede_issue_with_plans(
         return created_numbers
 
     if superseded_issue_ids is not None and issue.id in superseded_issue_ids:
-        console.info(f"#{issue.id} was already superseded during this planning handoff.")
+        console.info(
+            console.escape_markup(
+                f"#{issue.id} was already superseded during this planning handoff."
+            )
+        )
         return created_numbers
 
     issue_refs = ", ".join(f"#{n}" for n in created_numbers)
@@ -2520,14 +2535,14 @@ def _supersede_issue_with_plans(
         )
     except Exception as e:
         logger.warning("plan.supersede_comment_failed", issue=issue.id, error=str(e))
-        console.warn(f"Could not comment on #{issue.id}: {e}")
+        console.warn(console.escape_markup(f"Could not comment on #{issue.id}: {e}"))
 
     try:
         updated_body = _with_supersede_banner(issue.body or "", issue_refs)
         provider.update_task(issue.id, body=updated_body)
     except Exception as e:
         logger.warning("plan.supersede_banner_failed", issue=issue.id, error=str(e))
-        console.warn(f"Could not update #{issue.id} body: {e}")
+        console.warn(console.escape_markup(f"Could not update #{issue.id} body: {e}"))
 
     console.empty()
     proceed = yolo or prompts.confirm(
@@ -2535,14 +2550,20 @@ def _supersede_issue_with_plans(
         default=True,
     )
     if not proceed:
-        console.info(f"Leaving #{issue.id} open — superseded by {issue_refs}.")
+        console.info(
+            console.escape_markup(f"Leaving #{issue.id} open — superseded by {issue_refs}.")
+        )
     else:
         try:
             provider.close_task(issue.id, reason=CloseReason.NOT_PLANNED)
-            console.success(f"Closed #{issue.id} as not planned — superseded by {issue_refs}")
+            console.success(
+                console.escape_markup(
+                    f"Closed #{issue.id} as not planned — superseded by {issue_refs}"
+                )
+            )
         except Exception as e:
             logger.warning("plan.supersede_close_failed", issue=issue.id, error=str(e))
-            console.warn(f"Could not close #{issue.id}: {e}")
+            console.warn(console.escape_markup(f"Could not close #{issue.id}: {e}"))
             return created_numbers
 
     if superseded_issue_ids is not None:
@@ -2656,7 +2677,11 @@ def _finalize_issues(
                 provider.update_task(issue_id, body=new_body)
                 logger.info("plan.session_id_recorded", issue=issue_id)
             except Exception:
-                console.warn(f"Could not record planning session provenance on issue #{issue_id}.")
+                console.warn(
+                    console.escape_markup(
+                        f"Could not record planning session provenance on issue #{issue_id}."
+                    )
+                )
                 if native_result is not None:
                     return PLAN_FINALIZATION_FAILED
 
@@ -2665,7 +2690,9 @@ def _finalize_issues(
         try:
             add_planned_by_labels(provider, issue_id, ai_tool, model)
         except Exception as e:
-            console.warn(f"Could not apply planned-by labels to #{issue_id}: {e}")
+            console.warn(
+                console.escape_markup(f"Could not apply planned-by labels to #{issue_id}: {e}")
+            )
             logger.warning("plan.planned_by_labels_failed", task_id=issue_id, error=str(e))
 
     # Auto-dependency analysis for 2+ issues

@@ -747,8 +747,9 @@ work is pushed, so you never have to remember `wade review trigger <N>`:
 | the post-session menu (`Merge PR` / `Wait for reviews`) | an extra `Trigger bot reviews (…), then wait` entry |
 | the quiet-PR menu (`Keep polling` / …) | an extra `Trigger bot reviews (…)` entry |
 
-Bot-trigger retry commands print on a separate, literal shell line, preserving
-quoted task IDs even when they contain brackets or shell punctuation.
+Runnable task commands print on a separate, literal shell line, preserving
+quoted task IDs even when they contain brackets or shell punctuation. This
+includes bot retries, worktree recovery, chain resume and plan retargeting.
 
 Both `done` commands also take an explicit override for a single run:
 
@@ -973,6 +974,8 @@ brackets or shell metacharacters.
   Legacy `- [ ] #abc1234` ClickUp checklist items and `**Depends on:**` lines
   are still read for IDs containing only `[A-Za-z0-9_-]`. Ambiguous legacy
   punctuation such as `#a/b` is ignored as a whole; use `clickup:a%2Fb` instead.
+  Malformed qualified references such as `clickup:a/b` are also rejected whole,
+  rather than selecting the unrelated task `a`.
 - **PR references.** Only GitHub tasks get GitHub issue syntax (`Implements #42`,
   `Closes #42`, `Part of #42`). Every other provider — including numeric
   ClickUp and Markdown IDs — gets a qualified, linked reference that GitHub

@@ -1730,7 +1730,12 @@ branch after a failed or stale branch lookup.
 `validate_task_id` before any provider call, and task output passes IDs with
 Rich markup disabled or escaped. Dependency-output parsing
 (`parse_deps_output`) resolves the exact line first, so an ID such as `1.` or
-`*` wins over a Markdown list marker; the marker is stripped only as a fallback.
+`*` wins over a Markdown list marker. Backticks inside IDs stay literal; only
+confirmed outer code spans are removed as a fallback. Arrow splits are checked
+against the analyzed endpoint IDs, preserving embedded `->`; ambiguous compact
+edges are rejected. Task-derived diagnostics escape Rich markup, and runnable
+task commands use shell-quoted argv through `console.command` across planning,
+review/recovery, merge closure and CLI/batch handoffs.
 
 PR content: `lifecycle._apply_pr_refs` edits only WADE-owned reference lines
 outside managed blocks and fences (it rescans the surviving text with
@@ -1761,6 +1766,8 @@ Legacy opaque hash references accept only `[A-Za-z0-9_-]` IDs terminated by a
 structured delimiter (whitespace, end of input, comma separator or Markdown
 code/link closure). Ambiguous punctuation-bearing tokens such as `#a/b` are
 rejected whole, never shortened to `a`; write `clickup:a%2Fb` to name that ID.
+Qualified references require a complete structured token too: unencoded
+punctuation in `clickup:a/b` cannot authorize operations on task `a`.
 
 ## Merge Strategy
 

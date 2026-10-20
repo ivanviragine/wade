@@ -417,7 +417,9 @@ def trigger_bot_reviews(
     if not lookup.is_open or lookup.pr is None:
         console.error_with_fix(
             f"No open PR found for branch {branch_name}",
-            f"Run `wade implementation-session done` for task {task.id} to open a PR first",
+            console.escape_markup(
+                f"Run `wade implementation-session done` for task {task.id} to open a PR first"
+            ),
         )
         return BotTriggerReport(resolution_error="no open PR")
 
@@ -1090,11 +1092,11 @@ def start(
     # --- No review signals: check bot status, commit freshness, quiet-exit ---
     if not effective_threads and not status.has_changes_requested:
         if status.bot_status == ReviewBotStatus.PAUSED:
-            trigger = f"wade review trigger {shlex.quote(task.id)}"
             console.warn(
-                "CodeRabbit review is paused — comments may arrive when resumed.\n"
-                f"    Run `{trigger}` to post a fresh bot review trigger."
+                "CodeRabbit review is paused — comments may arrive when resumed. "
+                "To post a fresh bot review trigger, run:"
             )
+            console.command(shlex.join(["wade", "review", "trigger", task.id]))
             return True
         if status.bot_status == ReviewBotStatus.IN_PROGRESS:
             console.warn("CodeRabbit is still reviewing — try again shortly.")
@@ -1403,7 +1405,7 @@ def start(
 
         console.step(f"Launching {resolved_tool} in new terminal...")
         if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=review_title):
-            console.success(f"Detached review session for #{task.id}")
+            console.success(console.escape_markup(f"Detached review session for #{task.id}"))
             stop_title_keeper()
             return True
         console.warn("Could not launch in new terminal — falling back to inline")
@@ -1558,10 +1560,9 @@ def _show_recovery_command(repo_root: Path, backup_ref: str) -> None:
 
 def _report_recovery_failure(result: RecoveryOutcome, issue_id: str, repo_root: Path) -> None:
     if result.failure == RecoveryFailure.NO_BRANCH:
-        console.error_with_fix(
-            f"No worktree or remote/local branch found for task {issue_id}",
-            f"Run `wade implement {shlex.quote(issue_id)}` first to create a worktree",
-        )
+        console.error(f"No worktree or remote/local branch found for task {issue_id}", markup=False)
+        console.hint("Create a worktree first:")
+        console.command(shlex.join(["wade", "implement", issue_id]))
         return
     console.error(f"Review recovery refused ({result.failure}): {result.detail}", markup=False)
     if result.path is not None:
@@ -1937,7 +1938,9 @@ def _capture_review_session_usage(
                     new_body, phase="Review", ai_tool=ai_tool, session_id=usage.session_id
                 )
             new_body = enforce_body_budget(
-                new_body, warn=console.warn, label=f"issue #{issue_number} body"
+                new_body,
+                warn=console.warn,
+                label=console.escape_markup(f"issue #{issue_number} body"),
             )
             provider.update_task(str(issue_number), body=new_body)
             console.success("Updated issue with review usage stats.")

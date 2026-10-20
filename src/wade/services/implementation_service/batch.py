@@ -398,7 +398,7 @@ def batch(
     else:
         console.warn("Could not launch terminals — run these commands manually:")
         for cmd, _cwd, _title in batch_items:
-            console.detail(f"  {shlex.join(cmd)}", markup=False)
+            console.command(shlex.join(cmd))
 
     # Find tracking issue by checking all batch issues (not just the first)
     tracking_id = _find_tracking_issue(issue_numbers, config)

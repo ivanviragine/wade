@@ -206,7 +206,7 @@ def done(
             from wade.services.task_service import create_from_plan_file
             from wade.utils.conventional import ConventionalTitleError
 
-            console.info(f"Creating issue from plan file: {target}")
+            console.info(console.escape_markup(f"Creating issue from plan file: {target}"))
             # create_from_plan_file now hard-validates the plan's `# Title` — a
             # non-conventional title raises. Surface it as a clean, actionable
             # message (not a traceback) with a non-zero exit.
@@ -217,8 +217,10 @@ def done(
                 # tokens in it are shown literally rather than parsed as markup.
                 console.error(str(e), markup=False)
                 console.hint(
-                    f"Fix the plan file's `# Title` heading in {target} to a "
-                    "conventional-commit title, then re-run done."
+                    console.escape_markup(
+                        f"Fix the plan file's `# Title` heading in {target} to a "
+                        "conventional-commit title, then re-run done."
+                    )
                 )
                 return False
             if not task:
@@ -685,20 +687,24 @@ def _gate_pr_title(
         task = provider.read_task(issue_number)
     except Exception as exc:
         console.warn(
-            f"Could not read issue #{issue_number} to validate its title (non-blocking): {exc}"
+            console.escape_markup(
+                f"Could not read issue #{issue_number} to validate its title (non-blocking): {exc}"
+            )
         )
         logger.debug("done.title_gate_read_failed", exc_info=True)
         return True
     if is_conventional_title(task.title):
         return True
     console.error(
-        f"Issue #{issue_number} title is not a conventional-commit title — "
-        "the PR Title Lint CI check would fail."
+        console.escape_markup(
+            f"Issue #{issue_number} title is not a conventional-commit title — "
+            "the PR Title Lint CI check would fail."
+        )
     )
     # The issue title is provider-derived — render without Rich markup so bracket
     # tokens in it are shown literally, not parsed as markup (which would crash).
     console.detail(conventional_title_error(task.title), markup=False)
-    console.hint(_title_fix_hint(config, issue_number))
+    console.hint(console.escape_markup(_title_fix_hint(config, issue_number)))
     console.hint("Bypass: set `done.require_conventional_title: false` in .wade.yml.")
     return False
 
@@ -1420,8 +1426,10 @@ def _done_via_pr(
     # read likely succeeds now) for a clean, actionable block.
     if config.done.require_conventional_title and not is_conventional_title(task.title):
         console.error(
-            f"Issue #{issue_number} title is not a conventional-commit title — "
-            "refusing to put it on the PR (PR Title Lint would fail)."
+            console.escape_markup(
+                f"Issue #{issue_number} title is not a conventional-commit title — "
+                "refusing to put it on the PR (PR Title Lint would fail)."
+            )
         )
         console.hint("Re-run done — the title gate will re-validate and guide the fix.")
         return False

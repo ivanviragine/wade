@@ -160,7 +160,7 @@ def create(
     if task:
         console.empty()
         console.info("When you're ready to implement, run:")
-        console.detail(f"wade implement {shlex.quote(task.id)}", markup=False)
+        console.command(f"wade implement {shlex.quote(task.id)}")
     raise typer.Exit(0 if task else 1)
 
 

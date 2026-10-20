@@ -191,7 +191,8 @@ class TestMergeTimeClosure:
         with patch("wade.services.implementation_service.lifecycle.console") as console:
             provider = self._run(tmp_path, body)
         provider.close_task.assert_not_called()
-        console.hint.assert_called_once_with("Close it when ready: wade task close abc1234")
+        console.hint.assert_called_once_with("Close it when ready:")
+        console.command.assert_called_once_with("wade task close abc1234")
 
     def test_legacy_body_without_a_reference_keeps_closing(
         self, merge: MagicMock, tmp_path: Path
@@ -207,7 +208,8 @@ class TestMergeTimeClosure:
         ):
             provider = self._run(tmp_path, "Implements [clickup:42](https://x/42)\n")
         provider.close_task.assert_not_called()
-        console.hint.assert_called_once_with("Close it when ready: wade task close abc1234")
+        console.hint.assert_called_once_with("Close it when ready:")
+        console.command.assert_called_once_with("wade task close abc1234")
 
     def test_failed_close_reports_a_retry_command(self, merge: MagicMock, tmp_path: Path) -> None:
         provider = MagicMock()
@@ -223,7 +225,8 @@ class TestMergeTimeClosure:
         assert status == MergeStatus.MERGED
         provider.close_task.assert_called_once_with("abc1234")
         console.warn.assert_called_once_with("Could not close clickup:abc1234 after merge.")
-        console.hint.assert_called_once_with("Close it when ready: wade task close abc1234")
+        console.hint.assert_called_once_with("Close it when ready:")
+        console.command.assert_called_once_with("wade task close abc1234")
 
     def test_failed_merge_never_closes(self, merge: MagicMock, tmp_path: Path) -> None:
         merge.side_effect = RuntimeError("merge blocked")

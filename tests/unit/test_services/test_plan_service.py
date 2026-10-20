@@ -3348,7 +3348,7 @@ class TestSupersedeIssueWithPlans:
         provider.update_task.assert_not_called()
         provider.close_task.assert_not_called()
         mock_console.warn.assert_called_once()
-        assert "PLAN-2.md" in mock_console.warn.call_args.args[0]
+        assert "PLAN-2.md" in mock_console.escape_markup.call_args.args[0]
 
     def test_yolo_skips_confirmation_prompt(self, tmp_path: Path) -> None:
         provider = MagicMock()

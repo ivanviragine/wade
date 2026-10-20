@@ -280,7 +280,9 @@ def _task_ref_regex(provider: str, *, legacy_hash: bool) -> re.Pattern[str]:
     namespace = str(provider)
     alternatives = [
         rf"(?<![\w:/.%-]){re.escape(namespace)}:(?P<qualified>{_QUALIFIED_ID_PATTERN})"
-        r"(?![A-Za-z0-9_%-])"
+        # Raw punctuation may belong to a malformed opaque ID. Never accept
+        # its safe prefix (clickup:a/b must not reference task a).
+        r"(?=$|\s|,(?:\s|$)|[.!?](?=\s|$)|`(?=\s|[,.!?)]|$)|\]\(|\)(?=\s|[,.!?]|$))"
     ]
     if _uses_hash_refs(namespace):
         alternatives.append(_HASH_REF_PATTERN)

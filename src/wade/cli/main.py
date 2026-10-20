@@ -412,7 +412,8 @@ def implement_cmd(
 
         console.empty()
         if not prompts.confirm(f"Start implementation of {next_issue}?", default=True):
-            console.hint(console.escape_markup(f"Resume chain: {shlex.join(resume)}"))
+            console.hint("Resume chain:")
+            console.command(shlex.join(resume))
             break
 
         chain_remaining = rest

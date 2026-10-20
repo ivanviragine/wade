@@ -645,7 +645,11 @@ def _close_task_after_merge(
     or structurally unsafe PR body, or a failed close leaves the task open with a
     retry command rather than risk closing a task the completion kept open.
     """
-    hint = f"Close it when ready: wade task close {shlex.quote(task_id)}"
+
+    def show_retry() -> None:
+        console.hint("Close it when ready:")
+        console.command(shlex.join(["wade", "task", "close", task_id]))
+
     if ref is None:
         console.warn(
             console.escape_markup(
@@ -653,17 +657,17 @@ def _close_task_after_merge(
                 f"'{task_id}'; left open."
             )
         )
-        console.hint(hint)
+        show_retry()
         return
     if pr_body is None:
         console.warn(f"Could not read the PR body to confirm closing {ref.label}; left open.")
-        console.hint(hint)
+        show_retry()
         return
     try:
         intent = task_close_intent(pr_body, ref)
     except MarkdownStructureError:
         console.warn(f"Could not scan the PR body to confirm closing {ref.label}; left open.")
-        console.hint(hint)
+        show_retry()
         return
     if intent is False:
         console.info(f"Left {ref.label} open (completed with --no-close).")
@@ -673,7 +677,7 @@ def _close_task_after_merge(
     except Exception:
         logger.warning("merge.task_close_failed", task_id=ref.task_id, exc_info=True)
         console.warn(f"Could not close {ref.label} after merge.")
-        console.hint(hint)
+        show_retry()
 
 
 SUMMARY_MARKER_START = "<!-- wade:summary:start -->"
