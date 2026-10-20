@@ -18,6 +18,7 @@ segment is considered, and a malformed, non-canonical, or oversized token yields
 
 from __future__ import annotations
 
+import os
 import re
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "decode_task_token",
     "encode_task_id",
     "is_canonical_decimal",
+    "is_explicit_plan_path",
     "task_id_from_branch",
     "validate_task_id",
 ]
@@ -50,14 +52,26 @@ def is_canonical_decimal(value: str) -> bool:
     return _CANONICAL_DECIMAL_RE.fullmatch(value) is not None
 
 
+def is_explicit_plan_path(target: str) -> bool:
+    """Return whether *target* uses anchored syntax reserved for plan files.
+
+    Unanchored tokens such as ``a/b`` and ``plan.md`` remain exact task IDs.
+    Share this predicate with identity validation so a supported ID can never
+    be interpreted as a plan file instead.
+    """
+    separators = (os.sep,) + ((os.altsep,) if os.altsep else ())
+    anchors = tuple(f"{prefix}{sep}" for prefix in (".", "..", "~") for sep in separators)
+    return os.path.isabs(target) or target.startswith(anchors)
+
+
 def validate_task_id(task_id: str) -> str:
     """Return *task_id* unchanged when it is a supported identity, else raise.
 
     Supported IDs are non-empty printable text without whitespace, not starting
-    with ``-``, at most :data:`MAX_TASK_ID_BYTES` UTF-8 bytes, so every ID is one
-    positional argv element (never parsed as an option) and one dependency-output
-    token. Validation never normalizes:
-    case, leading zeros and punctuation are part of the identity.
+    with ``-`` or anchored plan-path syntax, at most :data:`MAX_TASK_ID_BYTES` UTF-8 bytes,
+    so every ID is one positional argv element (never parsed as an option or plan
+    file) and one dependency-output token. Validation never normalizes: case,
+    leading zeros and punctuation are part of the identity.
     """
     if not task_id:
         raise TaskIdentityError("Task ID is empty; pass the exact ID the task provider reports.")
@@ -70,6 +84,11 @@ def validate_task_id(task_id: str) -> str:
         raise TaskIdentityError(
             f"Task ID {task_id!r} starts with '-' and would be parsed as a command-line "
             "option; IDs beginning with '-' are not supported."
+        )
+    if is_explicit_plan_path(task_id):
+        raise TaskIdentityError(
+            f"Task ID {task_id!r} uses anchored path syntax reserved for plan files; "
+            "absolute paths and IDs beginning with './', '../' or '~/' are not supported."
         )
     if len(task_id.encode("utf-8")) > MAX_TASK_ID_BYTES:
         raise TaskIdentityError(

@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.config import BotReviewConfig, ProjectConfig, ReviewBotConfig
@@ -51,10 +53,11 @@ def _mock_service(
     lookup: PRLookup | None = None,
     comment: MagicMock | None = None,
     tmp_path: Path,
+    task_id: str = "42",
 ) -> Iterator[MagicMock]:
     """Patch the resolution/plumbing seams of ``trigger_bot_reviews``."""
     provider = MagicMock()
-    provider.read_task.return_value = MagicMock(id="42", title="feat: widget")
+    provider.read_task.return_value = MagicMock(id=task_id, title="feat: widget")
     comment = comment or MagicMock()
     with (
         patch("wade.services.review_service.load_config", return_value=config),
@@ -79,14 +82,18 @@ def _mock_service(
 
 
 class TestTriggerBotReviews:
-    def test_posts_each_enabled_bot(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("task_id", ["42", "[/]", "[red]"])
+    def test_posts_each_enabled_bot(
+        self, tmp_path: Path, task_id: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         config = _config()
-        with _mock_service(config, tmp_path=tmp_path) as comment:
-            report = trigger_bot_reviews("42")
+        with _mock_service(config, tmp_path=tmp_path, task_id=task_id) as comment:
+            report = trigger_bot_reviews(task_id)
         assert report.exit_code == 0
         assert [r.outcome for r in report.results] == [BotTriggerOutcome.POSTED] * 3
         posted = [c.args[2] for c in comment.call_args_list]
         assert posted == ["@coderabbitai review", "@codex review", "bugbot run"]
+        assert f"review trigger #{task_id}" in capsys.readouterr().out
 
     def test_disabled_bot_reported_skipped_not_posted(self, tmp_path: Path) -> None:
         config = _config(

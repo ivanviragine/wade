@@ -488,7 +488,7 @@ def trigger_bot_reviews(
 
     report = BotTriggerReport(pr_number=pr_number, results=results)
 
-    console.rule(f"review trigger #{task.id}")
+    console.rule(f"review trigger #{console.escape_markup(task.id)}")
     console.kv("PR", f"#{pr_number}")
     for result in results:
         # status_line() embeds the configured bot name (and, on failure, the
@@ -1003,7 +1003,7 @@ def start(
         console.error(f"Could not read task {issue_number}: {e}", markup=False)
         return False
 
-    console.rule(f"review pr-comments {task.id}")
+    console.rule(f"review pr-comments {console.escape_markup(task.id)}")
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # 2. Find existing worktree for the issue (or recover from remote branch)

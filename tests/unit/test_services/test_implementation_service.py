@@ -801,9 +801,12 @@ class TestImplementationStart:
         """ProjectConfig with main_branch set to avoid detect_main_branch subprocess call."""
         return ProjectConfig(project=ProjectSettings(main_branch="main"))
 
-    def test_creates_worktree(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("task_id", ["42", "[/]", "[red]"])
+    def test_creates_worktree(
+        self, tmp_path: Path, task_id: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Happy path: no existing worktree, no draft PR → create_worktree called, returns True."""
-        task = self._make_task()
+        task = Task(id=task_id, title="Test task")
         mock_provider = MagicMock()
         mock_provider.read_task.return_value = task
 
@@ -832,9 +835,11 @@ class TestImplementationStart:
             patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
-            result = start("42", project_root=tmp_path)
+            result = start(task_id, project_root=tmp_path)
             assert result.success is True
             mock_create.assert_called_once()
+
+        assert f"implement #{task_id}" in capsys.readouterr().out
 
     def test_reuses_existing_worktree(self, tmp_path: Path) -> None:
         """Idempotency: list_worktrees returns matching branch → create_worktree NOT called."""

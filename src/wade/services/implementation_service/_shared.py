@@ -8,7 +8,6 @@ import cycles between those modules.
 from __future__ import annotations
 
 import contextlib
-import os
 import re
 from pathlib import Path
 
@@ -21,7 +20,7 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.task import Task, TaskReference
-from wade.utils.task_identity import task_id_from_branch, validate_task_id
+from wade.utils.task_identity import is_explicit_plan_path, task_id_from_branch, validate_task_id
 
 __all__ = [
     "DraftPRTarget",
@@ -52,19 +51,6 @@ def task_reference(
     else:
         task_id = task
     return TaskReference(provider=str(config.provider.name), task_id=task_id, url=url or None)
-
-
-def is_explicit_plan_path(target: str) -> bool:
-    """Whether *target* is an anchored path and may therefore name a plan file.
-
-    Supported task IDs may contain ``/``, start with ``.`` or end in ``.md``, so
-    only an absolute path or one starting with ``./``, ``../`` or ``~/`` selects
-    a plan file. Any other token (``42``, ``abc1234``, ``a/b``, ``plan.md``) is a
-    task ID even when a file with that name exists; pass ``./name`` to select it.
-    """
-    separators = (os.sep,) + ((os.altsep,) if os.altsep else ())
-    anchors = tuple(f"{prefix}{sep}" for prefix in (".", "..", "~") for sep in separators)
-    return os.path.isabs(target) or target.startswith(anchors)
 
 
 class WorktreeTarget(BaseModel):

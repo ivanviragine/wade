@@ -24,6 +24,10 @@ IDS = [
     "86a1b2c3d",
     "DEV-123",
     "a/b",
+    ".plan",
+    "~plan",
+    "plan.md",
+    "[/]",
     "a-b",
     "a.b:c",
     "idv1_3432",
@@ -76,6 +80,17 @@ class TestCodec:
     )
     def test_malformed_tokens_decode_to_none(self, token: str) -> None:
         assert decode_task_token(token) is None
+
+    @pytest.mark.parametrize("task_id", ["./plan.md", "../plan.md", "~/plan.md", "/plan.md"])
+    def test_anchored_paths_are_never_supported_identities(self, task_id: str) -> None:
+        with pytest.raises(TaskIdentityError, match="reserved for plan files"):
+            validate_task_id(task_id)
+        with pytest.raises(TaskIdentityError):
+            make_branch_name("feat", task_id, "title")
+        # Previously encoded path-shaped identities must not authorize completion.
+        token = "idv1_" + task_id.encode("utf-8").hex()
+        assert decode_task_token(token) is None
+        assert task_id_from_branch(f"feat/{token}-title") is None
 
     def test_uppercase_hex_is_not_canonical(self) -> None:
         assert decode_task_token("idv1_7a") == "z"

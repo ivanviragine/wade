@@ -517,7 +517,7 @@ def start(
         if batch_result is not None:
             return ImplementResult(success=batch_result)
 
-        console.rule(f"implement #{task.id}")
+        console.rule(f"implement #{console.escape_markup(task.id)}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
         # Resolve the branch early — needs only config + task, so it can be

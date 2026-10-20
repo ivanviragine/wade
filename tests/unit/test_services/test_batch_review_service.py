@@ -1008,6 +1008,7 @@ class TestReviewBatch:
         assert result.success is False
         assert "Not inside a git repository" in result.feedback
 
+    @pytest.mark.parametrize("task_id", ["99", "[/]", "[red]"])
     @patch("wade.services.batch_review_service.run_coherence_review")
     @patch("wade.services.batch_review_service.create_review_pr")
     @patch("wade.services.batch_review_service.create_integration_branch")
@@ -1022,19 +1023,23 @@ class TestReviewBatch:
         mock_integration: MagicMock,
         mock_pr: MagicMock,
         mock_review: MagicMock,
+        task_id: str,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         from wade.services.batch_review_service import review_batch
 
         config = _batch_review_config(review_batch_enabled=True)
         mock_repo.get_repo_root.return_value = Path("/repo")
         mock_load_review_config.return_value = (config, config.ai.review_batch)
-        mock_gather.return_value = BatchReviewContext(tracking_issue="99")
+        mock_gather.return_value = BatchReviewContext(tracking_issue=task_id)
 
-        result = review_batch("99")
+        result = review_batch(task_id)
 
         assert result.success is True
         assert result.skipped is True
         mock_integration.assert_not_called()
+        mock_gather.assert_called_once_with(task_id, repo_root=Path("/repo"))
+        assert f"tracking {task_id}" in capsys.readouterr().out
 
     @patch("wade.services.batch_review_service.prepare_delegation_method")
     @patch("wade.services.batch_review_service.run_coherence_review")

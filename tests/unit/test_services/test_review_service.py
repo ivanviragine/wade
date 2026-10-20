@@ -559,15 +559,25 @@ class TestReviewServiceStart:
         # Network is no longer a wade-managed axis — it is pinned on either way.
         assert kwargs["network_access"] is True
 
+    @pytest.mark.parametrize(
+        ("task_id", "token"),
+        [("a/b", "idv1_612f62"), ("[/]", "idv1_5b2f5d"), ("[red]", "idv1_5b7265645d")],
+    )
     def test_inline_launch_transcript_name_encodes_opaque_task_id(
-        self, tmp_path: Path, mock_provider: MagicMock, mock_setup: dict[str, MagicMock]
+        self,
+        tmp_path: Path,
+        mock_provider: MagicMock,
+        mock_setup: dict[str, MagicMock],
+        task_id: str,
+        token: str,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """A supported ID containing ``/`` must not become a nested transcript path."""
         from wade.models.permission import PermissionMode
 
-        branch = "feat/idv1_612f62-fix-the-widget"
+        branch = f"feat/{token}-fix-the-widget"
         mock_provider.read_task.return_value = Task(
-            id="a/b", title="Fix the widget", body="", state=TaskState.OPEN
+            id=task_id, title="Fix the widget", body="", state=TaskState.OPEN
         )
         mock_setup["make_branch_name"].return_value = branch
         mock_setup["list_worktrees"].return_value = [
@@ -587,10 +597,11 @@ class TestReviewServiceStart:
             patch("crossby.ai_tools.AbstractAITool.get", return_value=spy),
             patch("wade.services.review_service.deliver_prompt_if_needed"),
         ):
-            start(target="a/b")
+            start(target=task_id)
 
         transcript = spy.launch.call_args.kwargs["transcript_path"]
-        assert transcript.name == "transcript-review-idv1_612f62.log"
+        assert transcript.name == f"transcript-review-{token}.log"
+        assert f"review pr-comments {task_id}" in capsys.readouterr().out
         assert transcript.parent.is_dir()
 
     def test_inline_launch_sandbox_defaults_off(

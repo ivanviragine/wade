@@ -632,7 +632,7 @@ def review_batch(
     if skip is not None:
         return skip
 
-    console.rule(f"Batch coherence review — tracking {tracking_issue_id}")
+    console.rule(f"Batch coherence review — tracking {console.escape_markup(tracking_issue_id)}")
 
     # Step 1: Gather context
     console.step("Gathering batch context...")

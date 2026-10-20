@@ -395,7 +395,7 @@ def done(
         config, worktree_root, pre_sync_head, skip_review, session_type
     )
 
-    console.rule(f"done {issue_number}")
+    console.rule(f"done {console.escape_markup(issue_number)}")
 
     ok = _done_via_pr(
         repo_root=repo_root,

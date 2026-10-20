@@ -945,6 +945,8 @@ The numeric shorthand `wade 42` stays numeric-only; use the explicit commands
 for other IDs. Any target that is not an anchored path is a task ID, even
 `a/b` or `plan.md` — pass `./plan.md` (or an absolute, `../` or `~/` path) to
 start from a plan file.
+Anchored path forms are reserved for plan files and are unsupported as task
+IDs, even when the provider reports such an ID.
 `#42` works as shorthand for `42` only with GitHub and Markdown; ClickUp
 targets are used exactly, and the ClickUp provider percent-encodes each ID in
 its API paths.
@@ -956,7 +958,8 @@ its API paths.
   another task. Resolution decodes only that exact token, which keeps title
   edits, re-entry, remote-only review recovery and cleanup bound to the same
   task. Empty IDs, IDs containing whitespace, IDs starting with `-` (they would
-  parse as CLI options), and IDs over 64 UTF-8 bytes are rejected before any branch, worktree, PR or task mutation.
+  parse as CLI options), anchored path IDs (absolute, `./`, `../` or `~/`), and
+  IDs over 64 UTF-8 bytes are rejected before any branch, worktree, PR or task mutation.
 - **Task-body references.** Dependency sections and tracking checklists use
   `#42` for GitHub and Markdown and `clickup:abc1234` for ClickUp (characters
   outside `[A-Za-z0-9_-]` are percent-encoded). Readers decode only complete

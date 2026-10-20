@@ -132,6 +132,17 @@ class TestDoneTargetAgreement:
         assert ok is True
         assert gates.call_args.kwargs["issue_number"] == "abc1234"
 
+    @pytest.mark.parametrize("task_id", ["[/]", "[red]"])
+    def test_markup_like_id_reaches_pr_finalization(
+        self, tmp_path: Path, task_id: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        branch = "feat/idv1_" + task_id.encode("utf-8").hex() + "-x"
+        match = WorktreeTarget(path=tmp_path, branch=branch, task_id=task_id, by_identity=True)
+        ok, gates = self._done(tmp_path, task_id, branch, match)
+        assert ok is True
+        assert gates.call_args.kwargs["issue_number"] == task_id
+        assert f"done {task_id}" in capsys.readouterr().out
+
     def test_worktree_name_target_uses_the_branch_identity(self, tmp_path: Path) -> None:
         branch = "feat/idv1_61626331323334-x"
         match = WorktreeTarget(path=tmp_path, branch=branch, task_id="abc1234")

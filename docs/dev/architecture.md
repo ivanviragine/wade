@@ -1701,7 +1701,7 @@ Three pieces own the representation, each at the lowest layer that needs it:
 
 | Concern | Owner | Contract |
 |---------|-------|----------|
-| Branch/path identity | `utils/task_identity.py` (leaf, stdlib only) | Canonical decimals stay `feat/42-slug`; any other ID becomes `idv1_<lowercase UTF-8 hex>` before the slug. `task_id_from_branch` decodes only the final segment's token and rejects malformed or non-canonical tokens (no numeric fallback). `encode_task_id` also names review-cycle files (`review-cycle@42.json`, `review-cycle@idv1_….json`) and session transcripts (`transcript-<token>.log`, `transcript-review-<token>.log`). IDs that are empty, contain whitespace, start with `-` (option-like argv), or exceed 64 UTF-8 bytes raise `TaskIdentityError` before any ref/worktree/provider mutation. |
+| Branch/path identity | `utils/task_identity.py` (leaf, stdlib only) | Canonical decimals stay `feat/42-slug`; any other ID becomes `idv1_<lowercase UTF-8 hex>` before the slug. `task_id_from_branch` decodes only the final segment's token and rejects malformed or non-canonical tokens (no numeric fallback). `encode_task_id` also names review-cycle files (`review-cycle@42.json`, `review-cycle@idv1_….json`) and session transcripts (`transcript-<token>.log`, `transcript-review-<token>.log`). IDs that are empty, contain whitespace, start with `-` (option-like argv), use anchored path syntax (reserved for plan files), or exceed 64 UTF-8 bytes raise `TaskIdentityError` before any ref/worktree/provider mutation. |
 | Task-body reference grammar | `models/task.py` (pure) | `format_task_ref` / `parse_task_refs`: `#42` for GitHub and Markdown, `clickup:abc1234` (percent-encoded beyond `[A-Za-z0-9_-]`) otherwise. Only complete tokens of the configured provider's namespace decode; legacy `#<opaque>` is accepted only in checklist items and `**Depends on:**`/`**Blocks:**` lines. `format_issue_heading` / `parse_issue_heading` own the runtime `# Issue #<id>: <title>` heading shared by `PLAN.md`, `.wade/plan-issue.md` and the SessionStart hook. |
 | PR reference policy | `models/task.py::TaskReference`, built by `implementation_service/_shared.py::task_reference` from `config.provider.name` | Only the GitHub provider renders `#N` and closing keywords. External tasks (including numeric ClickUp/Markdown IDs) render `Implements`/`Completes <provider>:<id>` linked to `Task.url`. Never inferred from `id.isdigit()` or the GitHub PR delegate. |
 
@@ -1713,7 +1713,9 @@ exact branch identity, then exact branch name, then exact worktree directory,
 then (only for navigation/plan-title callers) a fuzzy directory fragment. `done`
 uses exact matching only and refuses an explicit target that disagrees with the
 branch it would finalize. Only an anchored path (`is_explicit_plan_path`:
-absolute, `./`, `../` or `~/`) selects a plan file; every other target —
+absolute, `./`, `../` or `~/`, shared from `utils/task_identity.py`) selects a
+plan file. The identity validator rejects those reserved forms as task IDs,
+including when decoding existing branch tokens. Every other target —
 including `a/b` or `plan.md`, which are valid IDs — is a task ID. `models/task.py::task_id_from_target`
 drops one leading `#` only for hash-reference providers (GitHub/Markdown), so an
 opaque ID is passed to the provider exactly. Batch review uses

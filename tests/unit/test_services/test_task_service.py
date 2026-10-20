@@ -525,7 +525,9 @@ class TestUpdateTask:
         result = update_task("42", config=config, provider=mock_provider)
         assert result is False
 
-    @pytest.mark.parametrize("task_id", ["a b", "", "-x"])
+    @pytest.mark.parametrize(
+        "task_id", ["a b", "", "-x", "./plan.md", "../plan.md", "~/plan.md", "/plan.md"]
+    )
     def test_rejects_unsupported_id_before_provider_call(
         self, mock_provider: MagicMock, config: ProjectConfig, task_id: str
     ) -> None:
@@ -598,7 +600,9 @@ class TestCloseTask:
         result = close_task("42", config=config, provider=mock_provider)
         assert result is False
 
-    @pytest.mark.parametrize("task_id", ["a b", "", "-x"])
+    @pytest.mark.parametrize(
+        "task_id", ["a b", "", "-x", "./plan.md", "../plan.md", "~/plan.md", "/plan.md"]
+    )
     def test_rejects_unsupported_id_before_provider_call(
         self, mock_provider: MagicMock, config: ProjectConfig, task_id: str
     ) -> None:
