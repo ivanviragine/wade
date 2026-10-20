@@ -15,8 +15,8 @@ description: >
 
 Convert a finished plan, PRD, or feature spec into one or more PR-sized tasks
 (GitHub Issues, or whatever task provider the project configures) using the
-project's `wade` infrastructure. Task creation itself is provider-neutral;
-**dependency-parent creation is not** — see the scope note in Step 6.
+project's `wade` infrastructure. Task creation and dependency/parent linkage
+are provider-neutral; only the reference syntax differs — see Step 6.
 
 > **This is standalone task creation — not a planning session.** In a
 > `wade plan` session you do **not** run `wade task create`: you write plan
@@ -142,29 +142,24 @@ pass the full plan file — include enough to work from.
 > automatically after the planning session exits. That path does not use this
 > skill.
 
-Collect the issue number and URL from each creation.
+Collect the exact task ID and URL from each creation (a number for GitHub and
+Markdown, an opaque ID such as `abc1234` for ClickUp — never shorten or
+renumber it).
 
 ## Step 6: Create the parent issue (multi-issue only)
 
 A multi-issue set gets **exactly one** parent — never two competing checklists.
 
-> **Scope note:** WADE's dependency **and parent-linkage** automation is
-> numeric-ID only. `wade task deps` (CLI + dependency-graph parser) assumes
-> digits, and parent detection (`find_parent_issue` plus the `- [ ] #<number>`
-> checklist parser behind `done` and batch lifecycle flows) matches only
-> `#<digits>` refs. Providers with opaque task IDs (e.g. ClickUp —
-> `provider.name: clickup` in `.wade.yml`, IDs like `abc123`) can use neither.
-> On such a project, skip `wade task deps` and **use the epic path below even
-> when the issues have dependencies** — but the epic is a **human-readable
-> tracking doc only**: wade will not auto-associate its children, tick its
-> checklist on merge, or auto-close it. Record the dependency order and the
-> sub-task list in the epic body for humans to follow.
+> **Task references:** checklist and dependency references use the configured
+> provider's form — `#<number>` for GitHub and Markdown, `clickup:<id>` for
+> ClickUp (e.g. `clickup:abc1234`). That exact form is what `wade task deps`,
+> parent detection in `done`, and batch flows read; a prose mention or a
+> `#<id>` written for another provider is not a link.
 
-Choose the parent by whether the issues have dependencies (GitHub/numeric-ID
-providers only — see scope note above):
+Choose the parent by whether the issues have dependencies:
 
-**Issues with dependencies → run `wade task deps <issue-numbers>`.** Pass the
-issue numbers explicitly — bare `wade task deps` only falls back to an
+**Issues with dependencies → run `wade task deps <task-ids>`.** Pass the exact
+task IDs explicitly — bare `wade task deps` only falls back to an
 interactive picker, which requires a TTY a running agent doesn't have. This
 matches the `wade plan` lifecycle: it writes cross-references onto each issue
 **and creates a tracking issue** (execution plan + dependency graph) that
@@ -187,9 +182,9 @@ Write an epic with:
   format like any other issue (`wade task create` enforces it); `feat(epic)`
   keeps it self-identifying as the parent
 - Brief summary of the feature
-- Checklist linking each sub-issue: `- [ ] #<number> — <title>` (the `#<number>`
-  form is what drives wade's parent automation on numeric-ID providers; on an
-  opaque-ID provider it is a plain human-readable list — see the scope note above)
+- Checklist linking each sub-issue: `- [ ] <ref> — <title>`, where `<ref>` is the
+  provider's task reference (`#50` on GitHub/Markdown, `clickup:abc1234` on
+  ClickUp) — that form is what drives wade's parent detection
 
 Create it non-interactively — write the epic body to a file first:
 

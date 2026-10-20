@@ -7,6 +7,14 @@ from collections import defaultdict, deque
 
 from pydantic import BaseModel
 
+from wade.models.task import format_task_ref
+
+
+def _mermaid_text(text: str) -> str:
+    """Escape label/edge text so it cannot terminate Mermaid syntax."""
+    flat = " ".join(text.split())
+    return flat.replace('"', "#quot;").replace("|", "#124;")
+
 
 class DependencyEdge(BaseModel):
     """A → B means A must be done before B."""
@@ -67,11 +75,19 @@ class DependencyGraph(BaseModel):
 
         return result
 
-    def generate_mermaid(self, task_titles: dict[str, str] | None = None) -> str:
+    def generate_mermaid(
+        self, task_titles: dict[str, str] | None = None, provider: str = "github"
+    ) -> str:
         """Generate a Mermaid flowchart from the dependency graph.
+
+        Node identifiers are stable safe aliases (``t0``, ``t1``... in sorted ID
+        order), never raw provider IDs, so punctuation in an opaque ID or title
+        cannot change the graph's syntax. The exact task reference stays in each
+        escaped human-readable label.
 
         Args:
             task_titles: Optional mapping of task_id → title for node labels.
+            provider: Task provider whose reference form labels the nodes.
         """
         lines = ["graph TD"]
         titles = task_titles or {}
@@ -82,16 +98,19 @@ class DependencyGraph(BaseModel):
             all_nodes.add(edge.from_task)
             all_nodes.add(edge.to_task)
 
-        for node in sorted(all_nodes):
-            label = titles.get(node, f"#{node}")
-            lines.append(f'    {node}["#{node} {label}"]')
+        aliases = {node: f"t{index}" for index, node in enumerate(sorted(all_nodes))}
+        for node, alias in aliases.items():
+            ref = format_task_ref(node, provider)
+            label = titles.get(node, ref)
+            lines.append(f'    {alias}["{_mermaid_text(f"{ref} {label}")}"]')
 
         # Add edges
         for edge in self.edges:
+            source, target = aliases[edge.from_task], aliases[edge.to_task]
             if edge.reason:
-                lines.append(f"    {edge.from_task} -->|{edge.reason}| {edge.to_task}")
+                lines.append(f"    {source} -->|{_mermaid_text(edge.reason)}| {target}")
             else:
-                lines.append(f"    {edge.from_task} --> {edge.to_task}")
+                lines.append(f"    {source} --> {target}")
 
         return "\n".join(lines)
 

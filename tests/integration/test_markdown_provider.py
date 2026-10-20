@@ -543,7 +543,9 @@ def test_provider_lock_covers_commit_attempt(md_repo, monkeypatch) -> None:
         assert a.result(timeout=10).state == TaskState.CLOSED
         assert b.result(timeout=10).state == TaskState.CLOSED
     assert first.read_task("42").state == first.read_task("43").state == TaskState.CLOSED
-    assert _git_bytes(main, "log", "-2", "--format=%s") == b"chore: close #43\nchore: close #42\n"
+    assert _git_bytes(main, "log", "-2", "--format=%s") == (
+        b"chore: close markdown task 43\nchore: close markdown task 42\n"
+    )
     assert _git_bytes(main, "show", ":unrelated.txt") == b"staged user content\n"
 
 

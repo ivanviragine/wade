@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -321,7 +322,9 @@ def plan_cmd(
 
 @app.command("implement", rich_help_panel="Workflow")
 def implement_cmd(
-    target: str = typer.Argument(..., help="Issue number."),
+    target: str = typer.Argument(
+        ..., help="Task ID (e.g. 42 or abc1234), or an explicit plan-file path (./plan.md)."
+    ),
     ai: list[str] | None = typer.Option(  # noqa: B008
         None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
     ),
@@ -403,12 +406,14 @@ def implement_cmd(
         if next_base is None:
             console.error("Cannot continue chain: previous step did not return a branch name.")
             raise typer.Exit(1)
-        base_flag = f" --base {next_base}"
-        chain_flag = f" --chain {','.join(rest)}" if rest else ""
+        resume = ["wade", "implement", next_issue, "--base", next_base]
+        if rest:
+            resume.extend(["--chain", ",".join(rest)])
 
         console.empty()
-        if not prompts.confirm(f"Start implementation of #{next_issue}?", default=True):
-            console.hint(f"Resume chain: wade implement {next_issue}{base_flag}{chain_flag}")
+        if not prompts.confirm(f"Start implementation of {next_issue}?", default=True):
+            console.hint("Resume chain:")
+            console.command(shlex.join(resume))
             break
 
         chain_remaining = rest
@@ -436,12 +441,12 @@ def implement_cmd(
     raise typer.Exit(0 if result.success else 1)
 
 
-_BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
+_BATCH_NUMBERS = typer.Argument(None, help="Task IDs to work on (e.g. 42 43 or abc1234).")
 
 
 @app.command("implement-batch", rich_help_panel="Workflow")
 def implement_batch_cmd(
-    numbers: list[int] | None = _BATCH_NUMBERS,
+    numbers: list[str] | None = _BATCH_NUMBERS,
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
     ),
@@ -493,7 +498,7 @@ def implement_batch_cmd(
         if not numbers:
             console.error("Provide at least one issue number.")
             raise typer.Exit(1)
-        issue_ids = [str(n) for n in numbers]
+        issue_ids = list(numbers)
     success = do_batch(
         issue_numbers=issue_ids,
         ai_tool=ai,

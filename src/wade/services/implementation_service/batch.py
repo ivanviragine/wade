@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-import re
+import shlex
 import time
 from pathlib import Path
 
@@ -21,6 +21,7 @@ from wade.models.deps import DependencyGraph
 from wade.models.permission import PermissionMode
 from wade.models.task import (
     Task,
+    format_task_ref,
     has_checklist_items,
     is_tracking_issue,
     parse_all_issue_refs,
@@ -41,6 +42,7 @@ from wade.services.ai_resolution import (
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.runtime_env import detect_parent_runtime
+from wade.utils.task_identity import TaskIdentityError, task_id_from_branch, validate_task_id
 from wade.utils.terminal import launch_batch_in_terminals
 
 logger = structlog.get_logger()
@@ -157,11 +159,16 @@ def check_tracking_issue_and_batch(
     if not is_tracking_issue(task.title):
         return None
 
-    child_ids = (
-        parse_tracking_child_ids(task.body)
-        if has_checklist_items(task.body)
-        else parse_all_issue_refs(task.body)
-    )
+    provider_name = str(load_config(project_root).provider.name)
+    child_ids = [
+        child
+        for child in (
+            parse_tracking_child_ids(task.body, provider=provider_name)
+            if has_checklist_items(task.body)
+            else parse_all_issue_refs(task.body, provider=provider_name)
+        )
+        if child != task.id
+    ]
     if not child_ids:
         return None
 
@@ -169,8 +176,9 @@ def check_tracking_issue_and_batch(
         console.info("Tracking issue detected — batch redirect skipped for cd-only mode")
         return None
 
-    refs = ", ".join(f"#{cid}" for cid in child_ids)
-    console.info(f"#{task.id} is a tracking issue for: {refs}")
+    refs = ", ".join(format_task_ref(cid, provider_name) for cid in child_ids)
+    tracking_ref = format_task_ref(task.id, provider_name)
+    console.info(console.escape_markup(f"{tracking_ref} is a tracking issue for: {refs}"))
     if prompts.confirm("Start batch implementation?", default=True):
         return batch(
             issue_numbers=child_ids,
@@ -220,6 +228,16 @@ def batch(
 
     config = load_config(project_root)
     cwd = project_root or Path.cwd()
+    provider_name = str(config.provider.name)
+
+    # Exact IDs travel as argv elements; refuse anything that cannot be carried
+    # safely before launching any session.
+    for issue_id in issue_numbers:
+        try:
+            validate_task_id(issue_id)
+        except TaskIdentityError as exc:
+            console.error(str(exc), markup=False)
+            return False
 
     try:
         repo_root = git_repo.get_repo_root(cwd)
@@ -286,6 +304,17 @@ def batch(
         independent = issue_numbers
         chains = []
 
+    # ``--chain`` carries the remaining IDs comma-separated; a comma inside an
+    # ID would split it into different tasks.
+    chained = [issue_id for chain in chains for issue_id in chain[1:] if "," in issue_id]
+    if chained:
+        console.error(
+            f"Cannot chain task IDs containing ',': {', '.join(chained)}. "
+            "Implement them individually with `wade implement <id>`.",
+            markup=False,
+        )
+        return False
+
     def _build_cmd(issue_id: str, chain_ids: list[str] | None = None) -> list[str]:
         """Build the ``wade implement`` command for a single issue.
 
@@ -311,15 +340,18 @@ def batch(
     batch_items: list[tuple[list[str], str | None, str | None]] = []
 
     for issue_id in independent:
-        console.step(f"Preparing #{issue_id} (independent)")
-        batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade #{issue_id}"))
+        ref = format_task_ref(issue_id, provider_name)
+        console.step(console.escape_markup(f"Preparing {ref} (independent)"))
+        batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade {ref}"))
 
     # Chains: launch only the first item with --chain for auto-continuation
     for chain in chains:
-        console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
+        refs = " → ".join(format_task_ref(n, provider_name) for n in chain)
+        console.info(console.escape_markup(f"Dependency chain: {refs}"))
         chain_rest = chain[1:] if len(chain) > 1 else None
+        first_ref = format_task_ref(chain[0], provider_name)
         batch_items.append(
-            (_build_cmd(chain[0], chain_ids=chain_rest), str(repo_root), f"wade #{chain[0]}")
+            (_build_cmd(chain[0], chain_ids=chain_rest), str(repo_root), f"wade {first_ref}")
         )
 
     if not batch_items:
@@ -366,7 +398,7 @@ def batch(
     else:
         console.warn("Could not launch terminals — run these commands manually:")
         for cmd, _cwd, _title in batch_items:
-            console.detail(f"  {' '.join(cmd)}")
+            console.command(shlex.join(cmd))
 
     # Find tracking issue by checking all batch issues (not just the first)
     tracking_id = _find_tracking_issue(issue_numbers, config)
@@ -453,11 +485,19 @@ def _is_merged_to_main(
     fail at the call site, not silently return False (which reads as
     NOT_STARTED / IN_PROGRESS for an already-merged issue).
     """
-    pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
-    for branch in branch_set:
-        if re.search(pattern, branch) and _branch_merged_into_main(repo_root, branch, main_branch):
+    for branch in _branches_for_task(branch_set, issue_num):
+        if _branch_merged_into_main(repo_root, branch, main_branch):
             return True
     return False
+
+
+def _branches_for_task(branch_set: set[str], issue_num: str) -> list[str]:
+    """Branches (local or ``origin/``) whose identity decodes to exactly *issue_num*.
+
+    No numeric/prefix/zero-padding matching: ``42`` never selects ``0042`` or
+    ``420``, and an opaque ID matches only its own encoded branch.
+    """
+    return sorted(b for b in branch_set if task_id_from_branch(b) == issue_num)
 
 
 def _classify_issue_status(
@@ -498,8 +538,7 @@ def _classify_issue_status(
         return _BATCH_STATUS_DONE
 
     # No PR (or abandoned PR) — check if a branch for the issue exists.
-    pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
-    matching_branches = [b for b in branch_set if re.search(pattern, b)]
+    matching_branches = _branches_for_task(branch_set, issue_num)
     if matching_branches:
         errored = False
         for branch in matching_branches:
@@ -693,7 +732,8 @@ def poll_batch_completion(
         }.get(status, status)
         pr = pr_index.get(num)
         url = f" {pr.url}" if pr and pr.url else ""
-        lines.append(f"  #{num}: {label}{url}")
+        ref = console.escape_markup(format_task_ref(num, str(config.provider.name)))
+        lines.append(f"  {ref}: {label}{url}")
 
     console.panel("\n".join(lines), title=f"Batch summary ({done_count}/{total} done)")
 
@@ -709,7 +749,12 @@ def poll_batch_completion(
 
     # All sessions complete — auto-trigger coherence review
     if tracking_id and done_count == total:
-        console.info(f"All sessions complete. Running coherence review for #{tracking_id}...")
+        tracking_ref = format_task_ref(tracking_id, str(config.provider.name))
+        console.info(
+            console.escape_markup(
+                f"All sessions complete. Running coherence review for {tracking_ref}..."
+            )
+        )
         from wade.services.batch_review_service import review_batch
 
         review_batch(tracking_id, project_root=repo_root)
@@ -733,7 +778,7 @@ def _build_graph_from_issues(
             logger.debug("batch.issue_read_failed", issue_num=num, exc_info=True)
             continue
 
-        refs = parse_dependency_refs(task.body)
+        refs = parse_dependency_refs(task.body, provider=str(config.provider.name))
         for dep_id in refs["depends_on"]:
             if dep_id in valid_set:
                 edges.append(DependencyEdge(from_task=dep_id, to_task=num))

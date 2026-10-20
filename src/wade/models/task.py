@@ -191,11 +191,140 @@ def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
 _TRACKING_PREFIX = "Tracking:"
 """Title prefix that identifies a tracking (epic) issue."""
 
-_CHECKLIST_ISSUE_RE = re.compile(
-    r"^[ \t]*-\s*\[(?P<mark>[ xX])\]\s+`?#(?P<id>\d+)`?",
-    re.MULTILINE,
+
+# ---------------------------------------------------------------------------
+# Task reference grammar
+# ---------------------------------------------------------------------------
+#
+# Task bodies (dependency sections, tracking checklists) reference other tasks
+# of the *same* provider. GitHub and Markdown keep their established
+# ``#<digits>`` form; every other provider uses a namespaced token such as
+# ``clickup:abc1234``. Characters outside ``[A-Za-z0-9_-]`` are percent-encoded
+# (UTF-8, uppercase hex) so a reference is always one complete token, never a
+# prefix of a longer ID: ``#123abc`` is not task ``123``. Readers decode only
+# complete tokens of their own namespace, and only canonical encodings.
+
+HASH_REFERENCE_PROVIDERS = frozenset({"github", "markdown"})
+"""Providers whose task bodies reference tasks as ``#<digits>``."""
+
+_REF_SAFE_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+_QUALIFIED_ID_PATTERN = r"(?:[A-Za-z0-9_-]|%[0-9A-F]{2})+"
+_CANONICAL_DECIMAL_RE = re.compile(r"[1-9][0-9]*")
+# ``(?<![\w&/#])`` rejects ``repo#42``, ``&#42;`` and URL fragments; ``(?!\w)``
+# rejects ``#123abc`` instead of truncating it to ``123``.
+_HASH_REF_PATTERN = r"(?<![\w&/#])#(?P<hash>[0-9]+)(?!\w)"
+# Legacy WADE content wrote ``#<id>`` for every provider. Opaque IDs are read in
+# that form only inside structured positions (checklist items, dependency lines).
+# Require a complete safe ID with a structured delimiter (including code/link
+# wrappers). Ambiguous punctuation-bearing IDs must use qualified encoding;
+# never read ``#a/b`` as ``a`` or a later ``#b`` inside the same token.
+_LEGACY_HASH_PATTERN = (
+    r"(?<!\S)[`\[]?#(?P<legacy>[A-Za-z0-9_-]+)"
+    r"(?=$|\s|,(?:\s|$)|`(?=\s|,|$)|\]\()"
 )
-"""Matches checklist issue refs like ``- [ ] #42`` or ``- [X] `#42```."""
+
+
+def escape_reference_id(task_id: str) -> str:
+    """Percent-encode every character outside ``[A-Za-z0-9_-]`` (UTF-8, uppercase)."""
+    return "".join(
+        char if char in _REF_SAFE_CHARS else "".join(f"%{b:02X}" for b in char.encode("utf-8"))
+        for char in task_id
+    )
+
+
+def unescape_reference_id(token: str) -> str | None:
+    """Decode a canonical escaped ID, or ``None`` for malformed/non-canonical input."""
+    if not token or re.fullmatch(_QUALIFIED_ID_PATTERN, token) is None:
+        return None
+    raw = bytearray()
+    index = 0
+    while index < len(token):
+        if token[index] == "%":
+            raw.append(int(token[index + 1 : index + 3], 16))
+            index += 3
+        else:
+            raw.extend(token[index].encode("ascii"))
+            index += 1
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return decoded if escape_reference_id(decoded) == token else None
+
+
+def _uses_hash_refs(provider: str) -> bool:
+    return str(provider) in HASH_REFERENCE_PROVIDERS
+
+
+def format_task_ref(task_id: str, provider: str = "github") -> str:
+    """Render a task-body reference: ``#42`` (GitHub/Markdown) or ``clickup:abc1234``."""
+    namespace = str(provider)
+    if _uses_hash_refs(namespace) and _CANONICAL_DECIMAL_RE.fullmatch(task_id):
+        return f"#{task_id}"
+    return f"{namespace}:{escape_reference_id(task_id)}"
+
+
+def task_id_from_target(target: str, provider: str = "github") -> str:
+    """Return the exact task ID named by a CLI *target*.
+
+    ``#42`` is reference shorthand only for hash-reference providers, so one
+    leading ``#`` is dropped there; any other provider's target is already the
+    exact opaque ID (``#abc`` stays ``#abc``).
+    """
+    if _uses_hash_refs(str(provider)):
+        return target.removeprefix("#")
+    return target
+
+
+def _task_ref_regex(provider: str, *, legacy_hash: bool) -> re.Pattern[str]:
+    namespace = str(provider)
+    alternatives = [
+        rf"(?<![\w:/.%-]){re.escape(namespace)}:(?P<qualified>{_QUALIFIED_ID_PATTERN})"
+        # Raw punctuation may belong to a malformed opaque ID. Never accept
+        # its safe prefix (clickup:a/b must not reference task a).
+        r"(?=$|\s|,(?:\s|$)|[.!?](?=\s|$)|`(?=\s|[,.!?)]|$)|\]\(|\)(?=\s|[,.!?]|$))"
+    ]
+    if _uses_hash_refs(namespace):
+        alternatives.append(_HASH_REF_PATTERN)
+    elif legacy_hash:
+        alternatives.append(_LEGACY_HASH_PATTERN)
+    return re.compile("|".join(alternatives))
+
+
+def _decode_ref_match(match: re.Match[str]) -> str | None:
+    groups = match.groupdict()
+    if groups.get("qualified") is not None:
+        return unescape_reference_id(groups["qualified"])
+    if groups.get("hash") is not None:
+        value = groups["hash"]
+        return value if _CANONICAL_DECIMAL_RE.fullmatch(value) else None
+    return groups.get("legacy")
+
+
+def parse_task_refs(text: str, provider: str = "github", *, legacy_hash: bool = False) -> list[str]:
+    """Extract exact task IDs referenced in *text*, in order.
+
+    Only complete tokens of *provider*'s namespace are decoded. ``legacy_hash``
+    additionally accepts ``#<opaque-id>`` for non-hash providers — use it only
+    for structured positions that WADE itself generated.
+    """
+    refs: list[str] = []
+    for match in _task_ref_regex(provider, legacy_hash=legacy_hash).finditer(text):
+        decoded = _decode_ref_match(match)
+        if decoded is not None:
+            refs.append(decoded)
+    return refs
+
+
+def _leading_task_ref(text: str, provider: str) -> str | None:
+    """Decode the reference that starts *text* (after an optional `` ` `` or ``[``)."""
+    candidate = text[1:] if text[:1] in ("`", "[") else text
+    match = _task_ref_regex(provider, legacy_hash=True).match(candidate)
+    return _decode_ref_match(match) if match is not None else None
+
+
+_CHECKLIST_ITEM_RE = re.compile(r"^[ \t]*-\s*\[(?P<mark>[ xX])\]\s+(?P<rest>.*)$", re.MULTILINE)
+"""Matches checklist items like ``- [ ] #42`` or ``- [X] `clickup:abc1234```."""
 
 _ANY_CHECKLIST_ITEM_RE = re.compile(r"^[ \t]*-\s*\[[xX ]\]\s+", re.MULTILINE)
 """Matches any checklist item (checked or unchecked), including indented lines."""
@@ -206,21 +335,23 @@ def is_tracking_issue(title: str) -> bool:
     return title.startswith(_TRACKING_PREFIX)
 
 
-def parse_tracking_child_ids(body: str, *, include_checked: bool = False) -> list[str]:
-    """Extract child issue numbers from unchecked checklist items.
+def parse_tracking_child_ids(
+    body: str, *, include_checked: bool = False, provider: str = "github"
+) -> list[str]:
+    """Extract exact child task IDs from checklist items that start with a reference.
 
-    By default, only matches unchecked ``- [ ] #N`` lines and skips checked
-    items. Set ``include_checked=True`` to include checked checklist refs too.
-
-    Supports indented checklist items and optional backticks around ``#N``.
-    Other ``#N`` references elsewhere in the body are ignored.
-
-    Returns issue numbers as strings without ``#`` prefix.
+    By default, only unchecked items are returned; ``include_checked=True``
+    includes checked items too. Supports indented items and optional backticks
+    or link brackets around the reference. Other references elsewhere in the
+    body are ignored.
     """
     child_ids: list[str] = []
-    for match in _CHECKLIST_ISSUE_RE.finditer(body):
-        if include_checked or match.group("mark") == " ":
-            child_ids.append(match.group("id"))
+    for match in _CHECKLIST_ITEM_RE.finditer(body):
+        if not include_checked and match.group("mark") != " ":
+            continue
+        child = _leading_task_ref(match.group("rest"), provider)
+        if child is not None:
+            child_ids.append(child)
     return child_ids
 
 
@@ -228,39 +359,114 @@ def has_checklist_items(body: str) -> bool:
     """Return True if the body contains any checklist items (checked or unchecked).
 
     Use this to distinguish bodies using checklist format from those using
-    plain ``#N`` issue references.
+    plain task references.
     """
     return bool(_ANY_CHECKLIST_ITEM_RE.search(body))
 
 
-def parse_all_issue_refs(body: str) -> list[str]:
-    """Extract all ``#N`` issue references from a body, in order.
-
-    Returns issue numbers as strings without ``#`` prefix.
-    Use this to catch plain references that are not in checklist format.
-    """
-    return re.findall(r"#(\d+)", body)
+def parse_all_issue_refs(body: str, provider: str = "github") -> list[str]:
+    """Extract all complete task references of *provider* from a body, in order."""
+    return parse_task_refs(body, provider)
 
 
 _DEP_LINE_RE = re.compile(r"\*\*Depends on:\*\*\s*(.*?)$", re.MULTILINE)
 _BLOCK_LINE_RE = re.compile(r"\*\*Blocks:\*\*\s*(.*?)$", re.MULTILINE)
-_ISSUE_REF_RE = re.compile(r"#(\d+)")
 
 
-def parse_dependency_refs(body: str) -> dict[str, list[str]]:
-    """Parse ``**Depends on:**`` and ``**Blocks:**`` issue refs from markdown body.
+def parse_dependency_refs(body: str, provider: str = "github") -> dict[str, list[str]]:
+    """Parse ``**Depends on:**`` and ``**Blocks:**`` task refs from markdown body.
 
-    Returns a dict with ``depends_on`` and ``blocks`` keys, each a list of
-    issue number strings (without ``#`` prefix).
+    Returns a dict with ``depends_on`` and ``blocks`` keys, each a list of exact
+    task IDs.
     """
     result: dict[str, list[str]] = {"depends_on": [], "blocks": []}
     dep_match = _DEP_LINE_RE.search(body)
     if dep_match:
-        result["depends_on"] = _ISSUE_REF_RE.findall(dep_match.group(1))
+        result["depends_on"] = parse_task_refs(dep_match.group(1), provider, legacy_hash=True)
     block_match = _BLOCK_LINE_RE.search(body)
     if block_match:
-        result["blocks"] = _ISSUE_REF_RE.findall(block_match.group(1))
+        result["blocks"] = parse_task_refs(block_match.group(1), provider, legacy_hash=True)
     return result
+
+
+_ISSUE_HEADING_RE = re.compile(rf"^#\s*Issue\s+#(?P<id>{_QUALIFIED_ID_PATTERN}):\s*(?P<title>.+)$")
+
+
+def format_issue_heading(task_id: str, title: str) -> str:
+    """Render the runtime ``# Issue #<id>: <title>`` heading with the exact ID.
+
+    Numeric IDs keep the legacy ``# Issue #42: ...`` shape; other IDs are
+    escaped as one complete token (``# Issue #abc1234: ...``,
+    ``# Issue #a%3Ab: ...``) so :func:`parse_issue_heading` recovers them exactly.
+    """
+    return f"# Issue #{escape_reference_id(task_id)}: {title}"
+
+
+def parse_issue_heading(line: str) -> tuple[str, str] | None:
+    """Return ``(task_id, title)`` from a :func:`format_issue_heading` line, or ``None``."""
+    match = _ISSUE_HEADING_RE.match(line)
+    if match is None:
+        return None
+    task_id = unescape_reference_id(match.group("id"))
+    if task_id is None:
+        return None
+    return task_id, match.group("title").strip()
+
+
+class TaskReference(BaseModel):
+    """Provider-aware reference to one task in GitHub PR content.
+
+    Only GitHub-backed tasks are GitHub issues: they render ``#42`` and may use
+    closing keywords. Every other provider — including numeric ClickUp or
+    Markdown IDs — renders a qualified ``<provider>:<id>`` token (linked to the
+    provider URL when known) and never a GitHub closing keyword, so merging the
+    PR cannot close an unrelated GitHub issue that shares the number.
+    """
+
+    model_config = {"frozen": True}
+
+    provider: str = "github"
+    task_id: str
+    url: str | None = None
+
+    @property
+    def is_github_issue(self) -> bool:
+        return self.provider == "github" and bool(_CANONICAL_DECIMAL_RE.fullmatch(self.task_id))
+
+    @property
+    def label(self) -> str:
+        """Plain text form: ``#42`` or ``clickup:abc1234``."""
+        if self.is_github_issue:
+            return f"#{self.task_id}"
+        return f"{self.provider}:{escape_reference_id(self.task_id)}"
+
+    @property
+    def link(self) -> str:
+        """Markdown form: ``#42``, ``[clickup:abc1234](<url>)`` or the plain label."""
+        if self.is_github_issue or not self.url:
+            return self.label
+        return f"[{self.label}]({self.url})"
+
+    def reference_line(self, close: bool) -> str:
+        """The WADE-owned PR line declaring this task and its closure intent.
+
+        GitHub: ``Closes #42`` / ``Implements #42``. External providers:
+        ``Completes <link>`` (WADE closes it through the provider after merge)
+        / ``Implements <link>``.
+        """
+        if self.is_github_issue:
+            return f"{'Closes' if close else 'Implements'} {self.label}"
+        return f"{'Completes' if close else 'Implements'} {self.link}"
+
+    def part_of_line(self) -> str:
+        return f"Part of {self.link}"
+
+    def token_pattern(self) -> str:
+        """Regex matching exactly this reference's label or link (complete token)."""
+        if self.is_github_issue:
+            return rf"#{re.escape(self.task_id)}(?!\w)"
+        label = re.escape(self.label)
+        return rf"(?:\[{label}\]\([^)\s]*\)|{label})(?![A-Za-z0-9_%-])"
 
 
 class PlanFile(BaseModel):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, call, patch
 
+import httpx
 import pytest
 
 from wade.models.config import ProviderConfig, ProviderID
@@ -320,6 +321,36 @@ class TestReadTask:
         assert task.id == "abc123"
         assert task.title == "Test task"
         provider._client.get.assert_called_once()
+
+    def test_opaque_id_is_one_encoded_path_segment(self, provider: ClickUpProvider) -> None:
+        """URL delimiters in an opaque ID never become path, query, or fragment syntax."""
+        provider._client = MagicMock()
+        provider._client.get.return_value = _make_raw_task(task_id="a/b?c#d%e")
+
+        provider.read_task("a/b?c#d%e")
+        provider.update_task("a/b?c#d%e", title="T")
+        provider.comment_on_task("a/b?c#d%e", "hi")
+        provider.add_label("a/b?c#d%e", "x/y")
+
+        encoded = "/api/v2/task/a%2Fb%3Fc%23d%25e"
+        assert provider._client.get.call_args_list[0][0][0] == encoded
+        assert provider._client.put.call_args[0][0] == encoded
+        assert provider._client.post.call_args_list[0][0][0] == f"{encoded}/comment"
+        assert provider._client.post.call_args_list[1][0][0] == f"{encoded}/tag/x%2Fy"
+
+    @pytest.mark.parametrize(("task_id", "encoded"), [(".", "%2E"), ("..", "%2E%2E")])
+    def test_dot_only_id_is_not_a_relative_path_segment(
+        self, provider: ClickUpProvider, task_id: str, encoded: str
+    ) -> None:
+        """HTTP clients drop ``.``/``..`` segments; dot-only IDs must stay addressed."""
+        provider._client = MagicMock()
+        provider._client.get.return_value = _make_raw_task(task_id=task_id)
+
+        provider.read_task(task_id)
+
+        path = provider._client.get.call_args[0][0]
+        assert path == f"/api/v2/task/{encoded}"
+        assert httpx.URL(f"https://api.clickup.com{path}").raw_path == path.encode()
 
 
 class TestUpdateTask:
@@ -768,3 +799,66 @@ def test_filtered_full_page_does_not_hide_later_matches(
     )
     assert [task.id for task in tasks] == ["retained-done"]
     assert [c.kwargs["params"]["page"] for c in provider._client.get.call_args_list] == ["0", "1"]
+
+
+class TestFindParentIssue:
+    """Exact tracking-parent lookup across the configured List (#490)."""
+
+    def test_scans_every_page_for_the_exact_child(self, provider: ClickUpProvider) -> None:
+        provider._client = MagicMock()
+        provider._client.get.side_effect = [
+            {
+                "tasks": [_make_raw_task(task_id="near", description="- [ ] clickup:abc12345")]
+                + [_make_raw_task(task_id=f"filler-{index}") for index in range(99)]
+            },
+            {
+                "tasks": [
+                    _make_raw_task(task_id="abc1234", description="- [ ] clickup:abc1234"),
+                    _make_raw_task(task_id="parent", description="- [x] clickup:abc1234 — done"),
+                ]
+            },
+        ]
+
+        assert provider.find_parent_issue("abc1234", label="feature-plan") == "parent"
+
+        first, second = provider._client.get.call_args_list
+        assert first.kwargs["params"]["page"] == "0"
+        assert second.kwargs["params"]["page"] == "1"
+        assert first.kwargs["params"]["tags[]"] == "feature-plan"
+        assert first.kwargs["params"]["list_ids[]"] == "901"
+        assert first.kwargs["params"]["include_closed"] == "false"
+
+    def test_legacy_hash_checklist_matches_exactly(self, provider: ClickUpProvider) -> None:
+        provider._client = MagicMock()
+        provider._client.get.return_value = {
+            "tasks": [
+                _make_raw_task(task_id="other", description="- [ ] #ABC1234\n- [ ] #abc12"),
+                _make_raw_task(task_id="legacy", description="- [ ] #abc1234 — child"),
+            ]
+        }
+        assert provider.find_parent_issue("abc1234") == "legacy"
+
+    def test_closed_candidates_and_prose_are_ignored(self, provider: ClickUpProvider) -> None:
+        provider._client = MagicMock()
+        provider._client.get.return_value = {
+            "tasks": [
+                _make_raw_task(
+                    task_id="closed",
+                    status="closed",
+                    status_type="closed",
+                    description="- [ ] clickup:abc1234",
+                ),
+                _make_raw_task(task_id="prose", description="Mentions clickup:abc1234 only."),
+            ]
+        }
+        assert provider.find_parent_issue("abc1234") is None
+        assert provider._client.get.call_count == 1
+
+    def test_lookup_failure_is_not_absence(self, provider: ClickUpProvider) -> None:
+        provider._client = MagicMock()
+        provider._client.get.side_effect = [
+            {"tasks": [_make_raw_task(task_id=f"filler-{index}") for index in range(100)]},
+            APIError(500, "outage"),
+        ]
+        with pytest.raises(APIError):
+            provider.find_parent_issue("abc1234")

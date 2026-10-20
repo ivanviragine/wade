@@ -20,6 +20,7 @@ from wade.models.config import DEFAULT_SANDBOX, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.permission import PermissionMode
+from wade.models.task import format_task_ref
 from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -52,6 +53,7 @@ from wade.services.skill_invocation_service import (
 )
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
+from wade.utils.task_identity import TaskIdentityError, validate_task_id
 
 logger = structlog.get_logger()
 
@@ -82,19 +84,23 @@ def build_context(
     provider: AbstractTaskProvider,
     issue_numbers: list[str],
 ) -> str:
-    """Build a context string with issue details for AI consumption."""
+    """Build a context string with task details for AI consumption.
+
+    Each heading presents the exact task ID the edge contract requires
+    (``## Task ID `abc1234`: title``) — never a ``#``-prefixed or numeric form.
+    """
     lines: list[str] = []
     for num in issue_numbers:
         try:
             task = provider.read_task(num)
-            lines.append(f"## Issue #{num}: {task.title}")
+            lines.append(f"## Task ID `{num}`: {task.title}")
             lines.append("")
             if task.body:
                 lines.append(task.body.strip())
             lines.append("")
         except Exception as e:
             logger.warning("deps.context_failed", issue=num, error=str(e))
-            lines.append(f"## Issue #{num}: (could not read)")
+            lines.append(f"## Task ID `{num}`: (could not read)")
             lines.append("")
     return "\n".join(lines)
 
@@ -115,12 +121,83 @@ def build_deps_prompt(context: str, method_section: str) -> str:
 # Edge parsing
 # ---------------------------------------------------------------------------
 
-# Regex for "X -> Y" edges with optional "# reason" comment
-_ARROW_RE = re.compile(
-    r"^\s*(\d+)\s*->\s*(\d+)(.*?)$",
-    re.MULTILINE,
-)
+# "<id> -> <id>" edges with an optional "# reason" comment. Endpoints are
+# whole whitespace-free tokens resolved by :func:`_resolve_endpoint`, so an ID
+# may itself contain ``#`` (``a#b``) and ``123abc`` can never become task ``123``.
+_DESTINATION_RE = re.compile(r"(?P<to>\S+)(?P<rest>.*)$")
+_SUFFIX_RE = re.compile(r"\s*(?:#.*)?")
 _COMMENT_RE = re.compile(r"#\s*(.*)")
+_LIST_MARKER_RES = (re.compile(r"^[-*]\s+"), re.compile(r"^\d+[.)]\s+"))
+
+
+def _resolve_endpoint(token: str, valid_numbers: set[str]) -> str | None:
+    """Exact analyzed task ID for *token*, tolerating one legacy leading ``#``."""
+    if token in valid_numbers:
+        return token
+    if token.startswith("#") and token[1:] in valid_numbers:
+        return token[1:]
+    # Only confirmed code-span wrappers may be removed, never interior ticks.
+    ticks = len(token) - len(token.lstrip("`"))
+    if ticks and token.endswith("`" * ticks) and len(token) > 2 * ticks:
+        inner = token[ticks:-ticks]
+        if inner in valid_numbers:
+            return inner
+    return None
+
+
+def _split_destination(token: str, valid_numbers: set[str]) -> tuple[str, str]:
+    """Split a destination token into ``(endpoint, glued_suffix)``.
+
+    The whole token wins when it is an analyzed ID (``a#b``); otherwise the
+    longest analyzed-ID prefix ending before a ``#`` keeps a glued comment
+    (``2#reason``) working. Unresolvable tokens come back whole.
+    """
+    if _resolve_endpoint(token, valid_numbers) is not None:
+        return token, ""
+    for i in range(len(token) - 1, 0, -1):
+        if token[i] == "#" and _resolve_endpoint(token[:i], valid_numbers) is not None:
+            return token[:i], token[i:]
+    return token, ""
+
+
+def _match_edge(text: str, valid_numbers: set[str]) -> tuple[str, str, str] | None:
+    """Split one edge line into ``(from_token, to_token, rest)``, or None."""
+    matches: list[tuple[str, str, str]] = []
+    for arrow in re.finditer("->", text):
+        source = text[: arrow.start()].strip()
+        if _resolve_endpoint(source, valid_numbers) is None:
+            continue
+        match = _DESTINATION_RE.fullmatch(text[arrow.end() :].lstrip())
+        if match is None:
+            continue
+        to_token, glued = _split_destination(match.group("to"), valid_numbers)
+        rest = glued + match.group("rest")
+        if _resolve_endpoint(to_token, valid_numbers) is not None and _SUFFIX_RE.fullmatch(rest):
+            matches.append((source, to_token, rest))
+    # Compact syntax is retained only when the analyzed IDs determine one split.
+    return matches[0] if len(matches) == 1 else None
+
+
+def _edge_candidates(line: str) -> list[str]:
+    """The exact line, followed by confirmed list/code-span formatting fallbacks.
+
+    Punctuation is part of an exact task ID, so ``1. -> 2`` is first tried as an
+    edge from task ``1.``; the marker is stripped only as a fallback.
+    """
+    stripped = line
+    for marker_re in _LIST_MARKER_RES:
+        stripped = marker_re.sub("", stripped)
+    candidates = [line] if stripped == line else [line, stripped]
+    for candidate in list(candidates):
+        ticks = len(candidate) - len(candidate.lstrip("`"))
+        if not ticks:
+            continue
+        # A whole edge may be code-wrapped with its comment outside the span.
+        closing = re.search(rf"(?<!`)`{{{ticks}}}(?!`)(?=\s*(?:#.*)?$)", candidate[ticks:])
+        if closing is not None:
+            end = ticks + closing.start()
+            candidates.append(candidate[ticks:end] + candidate[end + ticks :])
+    return candidates
 
 
 def parse_deps_output(
@@ -131,35 +208,50 @@ def parse_deps_output(
 
     Args:
         text: Raw AI output containing "X -> Y # reason" lines.
-        valid_numbers: Set of valid issue numbers to filter against.
+        valid_numbers: The exact task IDs that were analyzed; an endpoint must
+            match one of them exactly (no numeric or prefix matching).
 
     Returns:
-        List of validated DependencyEdge objects.
+        Validated, de-duplicated DependencyEdge objects (self-edges dropped).
     """
     edges: list[DependencyEdge] = []
+    seen: set[tuple[str, str]] = set()
 
     for line in text.splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
+        # Comment lines ("# No dependencies found") never match an edge, so they
+        # need no separate skip — which would wrongly drop an ID starting with #.
+        if not line:
             continue
 
-        # Strip markdown formatting (backticks, bullets, numbering)
-        cleaned = line.replace("`", "")
-        cleaned = re.sub(r"^[-*]\s+", "", cleaned)
-        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned)
-
-        match = _ARROW_RE.match(cleaned)
-        if not match:
+        # Resolve the exact line first; remove only confirmed outer formatting.
+        parsed: tuple[str, str, str] | None = None
+        from_id: str | None = None
+        to_id: str | None = None
+        for candidate in _edge_candidates(line):
+            edge_parts = _match_edge(candidate, valid_numbers)
+            if edge_parts is None:
+                continue
+            parsed = edge_parts
+            # Validate both endpoints against the analyzed set
+            from_id = _resolve_endpoint(edge_parts[0], valid_numbers)
+            to_id = _resolve_endpoint(edge_parts[1], valid_numbers)
+            if from_id is not None and to_id is not None:
+                break
+        if parsed is None:
             continue
 
-        from_id = match.group(1)
-        to_id = match.group(2)
-        rest = match.group(3)
-
-        # Validate both numbers
-        if from_id not in valid_numbers or to_id not in valid_numbers:
-            console.warn(f"Skipping invalid edge {from_id} -> {to_id} (unknown issue number)")
+        from_token, to_token, rest = parsed
+        if from_id is None or to_id is None:
+            console.warn(
+                console.escape_markup(
+                    f"Skipping invalid edge {from_token} -> {to_token} (unknown task ID)"
+                )
+            )
             continue
+        if from_id == to_id or (from_id, to_id) in seen:
+            continue
+        seen.add((from_id, to_id))
 
         # Extract comment
         reason = ""
@@ -187,19 +279,21 @@ def strip_deps_section(body: str) -> str:
 def build_deps_section(
     issue_id: str,
     edges: list[DependencyEdge],
+    provider: str = "github",
 ) -> str:
-    """Build the ## Dependencies section for a single issue.
+    """Build the ## Dependencies section for a single task.
 
-    Shows "Depends on" and "Blocks" references.
+    Shows "Depends on" and "Blocks" references in the provider's task-reference
+    form (``#42`` for GitHub/Markdown, ``clickup:abc1234`` otherwise).
     """
     depends_on: list[str] = []
     blocks: list[str] = []
 
     for edge in edges:
         if edge.to_task == issue_id:
-            depends_on.append(f"#{edge.from_task}")
+            depends_on.append(format_task_ref(edge.from_task, provider))
         if edge.from_task == issue_id:
-            blocks.append(f"#{edge.to_task}")
+            blocks.append(format_task_ref(edge.to_task, provider))
 
     if not depends_on and not blocks:
         return ""
@@ -222,6 +316,8 @@ def apply_deps_to_issues(
     provider: AbstractTaskProvider,
     issue_numbers: list[str],
     edges: list[DependencyEdge],
+    *,
+    provider_name: str = "github",
 ) -> int:
     """Update each issue body with dependency cross-references.
 
@@ -239,7 +335,7 @@ def apply_deps_to_issues(
     updated = 0
 
     for issue_id in issue_numbers:
-        deps_inner = build_deps_section(issue_id, edges).strip()
+        deps_inner = build_deps_section(issue_id, edges, provider_name).strip()
 
         try:
             task = provider.read_task(issue_id)
@@ -253,15 +349,19 @@ def apply_deps_to_issues(
             if new_body == body:
                 continue
             new_body = enforce_body_budget(
-                new_body, warn=console.warn, label=f"issue #{issue_id} body"
+                new_body, warn=console.warn, label=console.escape_markup(f"issue #{issue_id} body")
             )
 
             scan_markdown_structure(new_body)
             provider.update_task(issue_id, body=new_body)
-            console.detail(f"Updated #{issue_id} with dependency refs")
+            console.detail(console.escape_markup(f"Updated #{issue_id} with dependency refs"))
             updated += 1
         except MarkdownStructureError as e:
-            console.warn(f"Skipped #{issue_id}: unsafe dependency body ({e}). Repair it and retry.")
+            console.warn(
+                console.escape_markup(
+                    f"Skipped #{issue_id}: unsafe dependency body ({e}). Repair it and retry."
+                )
+            )
             logger.warning("deps.update_failed", issue=issue_id, error=str(e))
         except Exception as e:
             logger.warning("deps.update_failed", issue=issue_id, error=str(e))
@@ -309,9 +409,10 @@ def create_tracking_issue(
     If a tracking issue with the same title already exists, returns
     its ID instead of creating a duplicate.
     """
+    provider_name = str(config.provider.name)
     # Determine title first so we can check for duplicates
     if len(issue_numbers) <= 3:
-        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
+        issue_refs = ", ".join(format_task_ref(n, provider_name) for n in issue_numbers)
         title = f"Tracking: {issue_refs}"
     else:
         title = f"Tracking: {len(issue_numbers)} issues"
@@ -319,7 +420,12 @@ def create_tracking_issue(
     # Check for existing tracking issue with the same title
     existing_id = _find_existing_tracking_issue(provider, config.project.issue_label, title)
     if existing_id:
-        console.info(f"Tracking issue #{existing_id} already exists — skipping creation")
+        console.info(
+            console.escape_markup(
+                f"Tracking issue {format_task_ref(existing_id, provider_name)} already exists "
+                "— skipping creation"
+            )
+        )
         return existing_id
 
     # Compute execution order
@@ -332,12 +438,13 @@ def create_tracking_issue(
     # Build checklist body
     lines = ["## Execution Plan", ""]
     for num in ordered:
-        title_text = task_titles.get(num, f"Issue #{num}")
-        lines.append(f"- [ ] #{num} — {title_text}")
+        ref = format_task_ref(num, provider_name)
+        title_text = task_titles.get(num, f"Task {ref}")
+        lines.append(f"- [ ] {ref} — {title_text}")
     lines.append("")
 
     # Add Mermaid diagram
-    mermaid = graph.generate_mermaid(task_titles)
+    mermaid = graph.generate_mermaid(task_titles, provider_name)
     lines.append("## Dependency Graph")
     lines.append("")
     lines.append("```mermaid")
@@ -354,7 +461,11 @@ def create_tracking_issue(
             body=body,
             labels=[config.project.issue_label],
         )
-        console.success(f"Created tracking issue #{task.id}")
+        console.success(
+            console.escape_markup(
+                f"Created tracking issue {format_task_ref(task.id, provider_name)}"
+            )
+        )
         return task.id
     except Exception as e:
         console.error(f"Failed to create tracking issue: {e}")
@@ -485,6 +596,12 @@ def analyze_deps(
     if len(issue_numbers) < 2:
         console.error("Need at least 2 issues for dependency analysis.")
         return None
+    for issue_id in issue_numbers:
+        try:
+            validate_task_id(issue_id)
+        except TaskIdentityError as exc:
+            console.error(str(exc), markup=False)
+            return None
 
     # Resolve delegation mode (default to headless for deps)
     cmd_config = config.ai.deps
@@ -734,10 +851,10 @@ def analyze_deps(
                 task = provider.read_task(num)
                 task_titles[num] = task.title
                 verified_task_ids.append(task.id)
-                console.step(f"#{num}: {console.escape_markup(task.title)}")
+                console.step(console.escape_markup(f"{num}: {task.title}"))
             except Exception:
                 logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
-                task_titles[num] = f"Issue #{num}"
+                task_titles[num] = f"Task {num}"
 
     # Run AI analysis via delegation infrastructure
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
@@ -914,7 +1031,7 @@ def analyze_deps(
     graph = DependencyGraph(edges=edges)
 
     # Generate Mermaid
-    mermaid = graph.generate_mermaid(task_titles)
+    mermaid = graph.generate_mermaid(task_titles, str(config.provider.name))
     graph.mermaid_diagram = mermaid
     console.empty()
     console.dep_tree([(e.from_task, e.to_task, e.reason) for e in edges], task_titles)
@@ -927,7 +1044,9 @@ def analyze_deps(
         graph.topological_order = issue_numbers
 
     # Apply cross-references to issues
-    updated = apply_deps_to_issues(provider, issue_numbers, edges)
+    updated = apply_deps_to_issues(
+        provider, issue_numbers, edges, provider_name=str(config.provider.name)
+    )
     console.info(f"Updated {updated} issue(s) with dependency refs")
 
     # Create tracking issue (2+ issues)

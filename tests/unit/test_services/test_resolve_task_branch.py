@@ -238,3 +238,106 @@ class TestFindOpenPrBranchForIssue:
             patch(f"{_S}.git_pr.list_prs", return_value=[_pr(1, "feat/99-other")]),
         ):
             assert find_open_pr_branch_for_issue(tmp_path, 42) is None
+
+
+# ---------------------------------------------------------------------------
+# Exact opaque provider IDs (#490)
+# ---------------------------------------------------------------------------
+
+_OPAQUE = "feat/idv1_61626331323334"
+
+
+class TestOpaqueIdentity:
+    def test_resolves_existing_opaque_branch_after_title_drift(self, tmp_path: Path) -> None:
+        with (
+            patch(f"{_S}.git_repo.get_current_branch", return_value="main"),
+            patch(f"{_S}.git_worktree.list_worktrees", return_value=[]),
+            patch(
+                f"{_S}.git_branch.list_branch_names",
+                return_value={
+                    "main",
+                    f"origin/{_OPAQUE}-old-title",
+                    "feat/idv1_41424331323334-other-case",  # ABC1234
+                    "feat/abc1234-raw",
+                    "feat/idv1_zz-bad",
+                },
+            ),
+        ):
+            got = resolve_task_branch(tmp_path, "abc1234", "fix: new title", "feat")
+        assert got == f"{_OPAQUE}-old-title"
+
+    def test_first_time_reconstructs_an_encoded_branch(self, tmp_path: Path) -> None:
+        with (
+            patch(f"{_S}.git_repo.get_current_branch", side_effect=GitError("detached")),
+            patch(f"{_S}.git_worktree.list_worktrees", return_value=[]),
+            patch(f"{_S}.git_branch.list_branch_names", return_value={"main"}),
+        ):
+            got = resolve_task_branch(tmp_path, "abc1234", "fix: opaque", "feat")
+        assert got == f"{_OPAQUE}-fix-opaque"
+
+    def test_leading_zeros_never_conflate(self, tmp_path: Path) -> None:
+        with (
+            patch(f"{_S}.git_repo.get_current_branch", return_value="feat/42-numeric"),
+            patch(f"{_S}.git_worktree.list_worktrees", return_value=[]),
+            patch(f"{_S}.git_branch.list_branch_names", return_value={"feat/42-numeric"}),
+        ):
+            got = resolve_task_branch(tmp_path, "0042", "fix: zeros", "feat")
+        assert got == "feat/idv1_30303432-fix-zeros"
+
+    def test_open_pr_selection_matches_the_exact_opaque_id(self, tmp_path: Path) -> None:
+        prs = [
+            _pr(1, "feat/idv1_41424331323334-upper"),
+            _pr(2, f"{_OPAQUE}-live", "2026-01-02T00:00:00Z"),
+            _pr(3, "feat/abc1234-unencoded"),
+        ]
+        with patch(f"{_S}.git_pr.list_prs", return_value=prs):
+            assert find_open_pr_branch_for_issue(tmp_path, "abc1234") == f"{_OPAQUE}-live"
+
+    def test_unsupported_ids_refuse_before_any_git_query(self, tmp_path: Path) -> None:
+        from wade.utils.task_identity import TaskIdentityError
+
+        with (
+            patch(f"{_S}.git_branch.list_branch_names") as names,
+            patch(f"{_S}.git_pr.list_prs") as prs,
+        ):
+            with pytest.raises(TaskIdentityError):
+                resolve_task_branch(tmp_path, "a b", "title", "feat")
+            with pytest.raises(TaskIdentityError):
+                find_open_pr_branch_for_issue(tmp_path, "")
+        names.assert_not_called()
+        prs.assert_not_called()
+
+
+class TestWorktreeTargetPrecedence:
+    def _match(self, tmp_path: Path, target: str, *, fuzzy: bool) -> str | None:
+        from wade.services.implementation_service._shared import match_worktree_target
+
+        worktrees = [
+            Worktree(path=str(tmp_path / "project"), branch="main"),
+            Worktree(
+                path=str(tmp_path / "feat-7-fix-abc1234-typo"), branch="feat/7-fix-abc1234-typo"
+            ),
+            Worktree(path=str(tmp_path / "feat-42-numeric"), branch="feat/42-numeric"),
+            Worktree(path=str(tmp_path / f"{_OPAQUE.replace('/', '-')}-x"), branch=f"{_OPAQUE}-x"),
+        ]
+        with (
+            patch(f"{_S}.git_repo.get_repo_root", return_value=tmp_path),
+            patch(f"{_S}.git_worktree.list_worktrees", return_value=worktrees),
+        ):
+            match = match_worktree_target(target, tmp_path, fuzzy=fuzzy)
+        return match.branch if match is not None else None
+
+    def test_exact_identity_beats_an_earlier_fuzzy_name(self, tmp_path: Path) -> None:
+        assert self._match(tmp_path, "abc1234", fuzzy=True) == f"{_OPAQUE}-x"
+
+    def test_leading_zero_target_is_not_a_numeric_alias(self, tmp_path: Path) -> None:
+        assert self._match(tmp_path, "0042", fuzzy=False) is None
+        assert self._match(tmp_path, "42", fuzzy=False) == "feat/42-numeric"
+
+    def test_exact_branch_and_directory_names(self, tmp_path: Path) -> None:
+        assert self._match(tmp_path, "feat/42-numeric", fuzzy=False) == "feat/42-numeric"
+        assert self._match(tmp_path, "feat-42-numeric", fuzzy=False) == "feat/42-numeric"
+
+    def test_fuzzy_name_fragments_only_when_allowed(self, tmp_path: Path) -> None:
+        assert self._match(tmp_path, "typo", fuzzy=False) is None
+        assert self._match(tmp_path, "typo", fuzzy=True) == "feat/7-fix-abc1234-typo"

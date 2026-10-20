@@ -41,10 +41,10 @@ class TestPromptTemplate:
 
     def test_build_prompt(self) -> None:
         prompt = build_deps_prompt(
-            "## Issue #1: Add auth\n\nAdd login page.",
+            "## Task ID `1`: Add auth\n\nAdd login page.",
             '<method position="0" ref="builtin:dependency-analysis">\nMethod\n</method>',
         )
-        assert "## Issue #1: Add auth" in prompt
+        assert "## Task ID `1`: Add auth" in prompt
         assert "Add login page" in prompt
         assert "builtin:dependency-analysis" in prompt
         assert "<operation-input>" in prompt
@@ -64,15 +64,15 @@ class TestBuildContext:
             Task(id="2", title="Add DB", body="SQLite schema"),
         ]
         context = build_context(provider, ["1", "2"])
-        assert "## Issue #1: Add auth" in context
-        assert "## Issue #2: Add DB" in context
+        assert "## Task ID `1`: Add auth" in context
+        assert "## Task ID `2`: Add DB" in context
         assert "Login page needed" in context
 
     def test_handles_read_failure(self) -> None:
         provider = MagicMock()
         provider.read_task.side_effect = Exception("not found")
         context = build_context(provider, ["99"])
-        assert "## Issue #99: (could not read)" in context
+        assert "## Task ID `99`: (could not read)" in context
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,27 @@ class TestParseEdges:
         text = "1 -> 2 # valid\n1 -> 99 # invalid\n3 -> 2 # valid\n"
         edges = parse_deps_output(text, {"1", "2", "3"})
         assert len(edges) == 2
+
+    @pytest.mark.parametrize("source", ["1.", "1)", "*"])
+    def test_exact_id_wins_over_list_marker(self, source: str) -> None:
+        edges = parse_deps_output(f"{source} -> child # reason\n", {source, "child"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [(source, "child", "reason")]
+
+    def test_list_marker_stripped_when_exact_line_unresolved(self) -> None:
+        edges = parse_deps_output("1. 3 -> 4\n* 5 -> 4\n", {"1.", "3", "4", "5", "*"})
+        assert [(e.from_task, e.to_task) for e in edges] == [("3", "4"), ("5", "4")]
+
+
+class TestAnalyzeDepsIdValidation:
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_rejects_unsupported_id_before_provider_work(
+        self, mock_config: MagicMock, mock_provider: MagicMock
+    ) -> None:
+        mock_config.return_value = ProjectConfig()
+        assert analyze_deps(["1", "a b"]) is None
+        mock_provider.return_value.read_task.assert_not_called()
+        mock_provider.return_value.update_task.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1538,3 +1559,135 @@ def test_dependencies_refuse_context_shift_hiding_unrelated_plan() -> None:
     provider.read_task.return_value = Task(id="2", title="UI", body=body)
     assert apply_deps_to_issues(provider, ["2"], []) == 0
     provider.update_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Opaque provider IDs (#490)
+# ---------------------------------------------------------------------------
+
+
+class TestOpaqueDependencyIds:
+    def test_parses_exact_opaque_endpoints(self) -> None:
+        text = (
+            "abc1234 -> def5678 # schema first\n"
+            "`DEV-1 -> 0042`\n"
+            "abc1234 -> #0042 # legacy hash prefix\n"
+            "abc1234 -> def5678 # duplicate\n"
+            "abc1234 -> abc1234 # self edge\n"
+        )
+        edges = parse_deps_output(text, {"abc1234", "def5678", "DEV-1", "0042"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
+            ("abc1234", "def5678", "schema first"),
+            ("DEV-1", "0042", ""),
+            ("abc1234", "0042", "legacy hash prefix"),
+        ]
+
+    def test_partial_or_unknown_tokens_are_never_accepted(self) -> None:
+        text = "123abc -> 2\n0042 -> 2\n1 -> 2abc\nABC1234 -> 2\n1->2->3\n"
+        assert parse_deps_output(text, {"123", "42", "2", "abc1234", "1", "3"}) == []
+
+    def test_hash_characters_inside_ids_are_preserved(self) -> None:
+        text = (
+            "a#b -> c # hash in source\n"
+            "c -> a#b\n"
+            "#lead -> c # id starts with a hash\n"
+            "x -> c#glued reason\n"
+            "c -> a # not a#b\n"
+        )
+        edges = parse_deps_output(text, {"a#b", "c", "#lead", "x", "a"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
+            ("a#b", "c", "hash in source"),
+            ("c", "a#b", ""),
+            ("#lead", "c", "id starts with a hash"),
+            ("x", "c", "glued reason"),
+            ("c", "a", "not a#b"),
+        ]
+
+    def test_only_a_comment_may_follow_the_destination(self) -> None:
+        text = (
+            "abc1234 -> def5678 -> ghi9012\n"
+            "abc1234 -> ghi9012 -> def5678 # chained\n"
+            "def5678 -> ghi9012 because schema\n"
+            "def5678 -> abc1234   # spaced reason\n"
+        )
+        edges = parse_deps_output(text, {"abc1234", "def5678", "ghi9012"})
+        assert [(e.from_task, e.to_task, e.reason) for e in edges] == [
+            ("def5678", "abc1234", "spaced reason"),
+        ]
+
+    def test_sections_and_tracking_use_provider_references(self) -> None:
+        edges = [DependencyEdge(from_task="abc1234", to_task="def5678")]
+        assert "**Depends on:** clickup:abc1234" in build_deps_section("def5678", edges, "clickup")
+        assert "**Blocks:** clickup:def5678" in build_deps_section("abc1234", edges, "clickup")
+        assert "**Depends on:** #1" in build_deps_section(
+            "2", [DependencyEdge(from_task="1", to_task="2")], "markdown"
+        )
+
+    def test_composed_prompt_presents_exact_ids_and_the_id_contract(self) -> None:
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="abc1234", title="Schema"),
+            Task(id="def5678", title="API"),
+        ]
+        prompt = build_deps_prompt(
+            build_context(provider, ["abc1234", "def5678"]),
+            '<method position="0" ref="builtin:dependency-analysis">\nMethod\n</method>',
+        )
+        assert "## Task ID `abc1234`: Schema" in prompt
+        assert "## Task ID `def5678`: API" in prompt
+        assert "`<task-id> -> <task-id> # reason`" in prompt
+        assert "copying each" in prompt and "<number>" not in prompt
+        assert "#abc1234" not in prompt
+
+    @patch("wade.services.deps_service.create_tracking_issue", return_value="parent789")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort", return_value=None)
+    @patch("wade.services.deps_service.resolve_model", return_value=None)
+    @patch("wade.services.deps_service.resolve_ai_tool", return_value="claude")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_non_bundle_analysis_persists_the_opaque_edge(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        _tool: MagicMock,
+        _model: MagicMock,
+        _effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        _tracking: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`wade task deps abc1234 def5678` parses model output and writes the edge."""
+        from wade.models.config import AICommandConfig, AIConfig, ProviderConfig, ProviderID
+
+        _stub_ready(monkeypatch)
+        mock_config.return_value = ProjectConfig(
+            provider=ProviderConfig(name=ProviderID.CLICKUP),
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless")),
+        )
+        bodies = {"abc1234": "## Tasks\n- Schema\n", "def5678": "## Tasks\n- API\n"}
+        provider = MagicMock()
+        provider.read_task.side_effect = lambda task_id: Task(
+            id=task_id, title=f"Task {task_id}", body=bodies[task_id]
+        )
+        provider.update_task.side_effect = lambda task_id, body: bodies.__setitem__(task_id, body)
+        mock_provider.return_value = provider
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="abc1234 -> def5678 # schema before API\n123 -> def5678 # unknown\n",
+            mode=DelegationMode.HEADLESS,
+        )
+
+        graph = analyze_deps(["abc1234", "def5678"], planning_worktree=tmp_path)
+
+        assert graph is not None
+        assert [(e.from_task, e.to_task) for e in graph.edges] == [("abc1234", "def5678")]
+        assert graph.tracking_task_id == "parent789"
+        assert "## Task ID `abc1234`" in mock_delegate.call_args[0][0].prompt
+        assert "**Depends on:** clickup:abc1234" in bodies["def5678"]
+        assert "**Blocks:** clickup:def5678" in bodies["abc1234"]
+        assert 't0["clickup:abc1234' in graph.mermaid_diagram

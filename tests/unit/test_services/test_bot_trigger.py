@@ -11,10 +11,15 @@ the shared menu helpers in ``services.bot_trigger``.
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
+from rich.console import Console
 
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
@@ -51,10 +56,11 @@ def _mock_service(
     lookup: PRLookup | None = None,
     comment: MagicMock | None = None,
     tmp_path: Path,
+    task_id: str = "42",
 ) -> Iterator[MagicMock]:
     """Patch the resolution/plumbing seams of ``trigger_bot_reviews``."""
     provider = MagicMock()
-    provider.read_task.return_value = MagicMock(id="42", title="feat: widget")
+    provider.read_task.return_value = MagicMock(id=task_id, title="feat: widget")
     comment = comment or MagicMock()
     with (
         patch("wade.services.review_service.load_config", return_value=config),
@@ -79,14 +85,18 @@ def _mock_service(
 
 
 class TestTriggerBotReviews:
-    def test_posts_each_enabled_bot(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("task_id", ["42", "[/]", "[red]"])
+    def test_posts_each_enabled_bot(
+        self, tmp_path: Path, task_id: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         config = _config()
-        with _mock_service(config, tmp_path=tmp_path) as comment:
-            report = trigger_bot_reviews("42")
+        with _mock_service(config, tmp_path=tmp_path, task_id=task_id) as comment:
+            report = trigger_bot_reviews(task_id)
         assert report.exit_code == 0
         assert [r.outcome for r in report.results] == [BotTriggerOutcome.POSTED] * 3
         posted = [c.args[2] for c in comment.call_args_list]
         assert posted == ["@coderabbitai review", "@codex review", "bugbot run"]
+        assert f"review trigger #{task_id}" in capsys.readouterr().out
 
     def test_disabled_bot_reported_skipped_not_posted(self, tmp_path: Path) -> None:
         config = _config(
@@ -413,6 +423,47 @@ class TestAutoTrigger:
 
 
 class TestDoneTriggerOffer:
+    @pytest.mark.parametrize("scenario", ["declined", "non-tty", "already-triggered"])
+    @pytest.mark.parametrize("task_id", ["[/]", "[red]" + "x" * 50 + "'&"])
+    @pytest.mark.parametrize("width", [40, 80])
+    def test_retry_command_preserves_literal_task_id(
+        self, tmp_path: Path, scenario: str, task_id: str, width: int
+    ) -> None:
+        config = _config(bots=[ReviewBotConfig(name="codex", trigger="@codex review")])
+        if scenario == "already-triggered":
+            assert markers.write_marker(tmp_path, "bot-triggered-codex", "abc123")
+        output = StringIO()
+        with (
+            patch("wade.services.bot_trigger.git_repo.rev_parse", return_value="abc123"),
+            patch("wade.services.bot_trigger.git_pr.comment_on_pr") as post,
+            patch(
+                "wade.services.implementation_service.done.prompts.is_tty",
+                return_value=scenario == "declined",
+            ),
+            patch("wade.services.implementation_service.done.prompts.confirm", return_value=False),
+            patch(
+                "wade.services.implementation_service.done.console.out",
+                Console(file=output, width=width, color_system=None),
+            ),
+        ):
+            _maybe_trigger_bot_reviews(
+                config,
+                tmp_path,
+                "feat/42-x",
+                99,
+                tmp_path,
+                task_id,
+                True if scenario == "already-triggered" else None,
+            )
+        post.assert_not_called()
+        commands = [line for line in output.getvalue().splitlines() if line.startswith("wade ")]
+        suffix = " --bot codex" if scenario == "non-tty" else ""
+        assert commands == [f"wade review trigger {shlex.quote(task_id)}{suffix}"]
+        expected = ["wade", "review", "trigger", task_id]
+        if scenario == "non-tty":
+            expected += ["--bot", "codex"]
+        assert shlex.split(commands[0]) == expected
+
     def test_offer_reports_instead_of_posting(self, tmp_path: Path) -> None:
         """auto_trigger off + offer on + non-TTY: nothing posted, offer surfaced."""
         with patch("wade.services.implementation_service.done.console") as mock_console:
@@ -420,7 +471,9 @@ class TestDoneTriggerOffer:
             comment = _run_done_hook(_config(), tmp_path)
         assert comment.call_count == 0
         offered = " ".join(str(c.args[0]) for c in mock_console.info.call_args_list)
-        assert "wade review trigger 42" in offered
+        mock_console.command.assert_called_once_with(
+            "wade review trigger 42 --bot coderabbit --bot codex --bot bugbot"
+        )
         assert "coderabbit" in offered
 
     def test_non_tty_offer_handoff_limits_trigger_to_pending_bots(self, tmp_path: Path) -> None:
@@ -438,9 +491,7 @@ class TestDoneTriggerOffer:
             comment = _run_done_hook(config, tmp_path)
 
         assert comment.call_count == 0
-        offered = " ".join(str(call.args[0]) for call in mock_console.info.call_args_list)
-        assert "wade review trigger 42 --bot codex" in offered
-        assert "--bot coderabbit" not in offered
+        mock_console.command.assert_called_once_with("wade review trigger 42 --bot codex")
 
     def test_offer_silent_when_opted_out(self, tmp_path: Path) -> None:
         with patch("wade.services.implementation_service.done.console") as mock_console:
@@ -520,8 +571,7 @@ class TestDoneTriggerOffer:
             mock_console.escape_markup.side_effect = lambda s: s
             comment = _run_done_hook(_config(), tmp_path, sha="sha1", trigger_bots=True)
         assert comment.call_count == 0
-        said = " ".join(str(c.args[0]) for c in mock_console.detail.call_args_list)
-        assert "wade review trigger 42" in said
+        mock_console.command.assert_called_once_with("wade review trigger 42")
 
 
 # ---------------------------------------------------------------------------

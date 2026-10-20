@@ -131,7 +131,9 @@ def sync(
 
 @implementation_session_app.command()
 def done(
-    target: str | None = typer.Argument(None, help="Issue number, worktree name, or plan file."),
+    target: str | None = typer.Argument(
+        None, help="Task ID, exact worktree/branch name, or explicit plan-file path."
+    ),
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(
@@ -178,7 +180,7 @@ def done(
         # confirmed" advisory is redundant (and would contradict the gate).
         # Reflect the actual close mode — `--no-close` leaves the issue open, so
         # advertising "closes #N on merge" would be a false completion handle.
-        close_handle = "issue stays open (--no-close)" if no_close else "closes #N on merge"
+        close_handle = "task stays open (--no-close)" if no_close else "closes the task on merge"
         console.info(
             "SESSION COMPLETE. "
             "Report by exception: end with the emoji step-status summary (Review, Docs, "

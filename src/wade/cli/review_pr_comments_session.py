@@ -79,7 +79,9 @@ def sync(
 
 @review_pr_comments_session_app.command()
 def done(
-    target: str | None = typer.Argument(None, help="Issue number, worktree name, or plan file."),
+    target: str | None = typer.Argument(
+        None, help="Task ID, exact worktree/branch name, or explicit plan-file path."
+    ),
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(

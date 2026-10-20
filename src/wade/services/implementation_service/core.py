@@ -27,7 +27,7 @@ from wade.models.config import ProjectConfig
 from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus, SyncEventType, SyncResult
-from wade.models.task import Task
+from wade.models.task import Task, task_id_from_target
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -48,7 +48,9 @@ from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
     find_open_pr_branch_for_issue,
     find_worktree_path,
+    is_explicit_plan_path,
     resolve_task_branch,
+    task_reference,
 )
 from wade.services.implementation_service.bootstrap import (
     _resolve_worktrees_dir,
@@ -86,6 +88,7 @@ from wade.utils.runtime_env import (
     parent_runtime,
     requires_unsandboxed_relaunch,
 )
+from wade.utils.task_identity import TaskIdentityError, encode_task_id
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -227,7 +230,9 @@ def _capture_post_session_usage(
                 has_session,
             )
             new_body = enforce_body_budget(
-                new_body, warn=console.warn, label=f"issue #{issue_number} body"
+                new_body,
+                warn=console.warn,
+                label=console.escape_markup(f"issue #{issue_number} body"),
             )
             provider.update_task(str(issue_number), body=new_body)
             if has_tokens:
@@ -514,7 +519,7 @@ def start(
         if batch_result is not None:
             return ImplementResult(success=batch_result)
 
-        console.rule(f"implement #{task.id}")
+        console.rule(f"implement #{console.escape_markup(task.id)}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
         # Resolve the branch early — needs only config + task, so it can be
@@ -525,9 +530,14 @@ def start(
         # A reconstructed name would then drift from the real branch, so the
         # PR/plan lookup below would miss the live draft PR and re-bootstrap a
         # duplicate — leaving the resumed task with "no plan attached".
-        branch_name = resolve_task_branch(
-            repo_root, task.id, task.title, config.project.branch_prefix
-        )
+        try:
+            branch_name = resolve_task_branch(
+                repo_root, task.id, task.title, config.project.branch_prefix
+            )
+        except TaskIdentityError as exc:
+            # Refuse before any ref, worktree, PR, or provider mutation.
+            console.error(str(exc), markup=False)
+            return ImplementResult(success=False)
 
         # Check for existing draft PR (from plan flow) before AI selection so that
         # "Plan first" can short-circuit without ever showing the AI confirmation menu.
@@ -561,12 +571,12 @@ def start(
                 # same-issue branch we simply cannot see. Abort, like a failed PR
                 # lookup, rather than treat an unknown listing as absence (#428).
                 console.error_with_fix(
-                    f"Could not list open PRs for issue #{task.id}",
+                    console.escape_markup(f"Could not list open PRs for task {task.id}"),
                     "Transient gh error — try again shortly",
                 )
                 return ImplementResult(success=False)
             resume_branch = open_pr_branch or git_branch.make_branch_name(
-                config.project.branch_prefix, int(task.id), task.title
+                config.project.branch_prefix, task.id, task.title
             )
             if resume_branch != branch_name:
                 branch_name = resume_branch
@@ -818,7 +828,11 @@ def start(
             head_ref = git_branch.resolve_start_point(repo_root, branch_name)
             pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
             if not reroot_scaffold_branch_for_retarget(
-                repo_root, branch_name, current_pr_base, resolved_base, task.id
+                repo_root,
+                branch_name,
+                current_pr_base,
+                resolved_base,
+                task_reference(config, task).label,
             ):
                 return ImplementResult(success=False)
             if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):
@@ -837,13 +851,15 @@ def start(
         # Bootstrap the draft PR only after the session skills are known-good.
         if proceed_needs_bootstrap:
             console.step("Bootstrapping draft PR...")
+            reference = task_reference(config, task)
             pr_info = bootstrap_draft_pr(
                 issue_number=task.id,
                 issue_title=task.title,
-                plan_body=task.body or f"Implements #{task.id}: {task.title}",
+                plan_body=task.body or f"Implements {reference.link}: {task.title}",
                 config=config,
                 repo_root=repo_root,
                 base_branch=base_branch,
+                issue_url=task.url,
             )
             if pr_info:
                 console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
@@ -1038,7 +1054,7 @@ def start(
         transcript_path: Path | None = None
         try:
             transcript_dir = tempfile.mkdtemp(prefix="wade-implement-")
-            transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
+            transcript_path = Path(transcript_dir) / f"transcript-{encode_task_id(task.id)}.log"
             console.hint(f"Transcript: {transcript_path}")
         except OSError:
             logger.warning("implementation.transcript_dir_failed")
@@ -1095,7 +1111,7 @@ def start(
                     cwd=str(worktree_path),
                     title=work_title,
                 ):
-                    console.success(f"Detached AI session for #{task.id}")
+                    console.success(console.escape_markup(f"Detached AI session for #{task.id}"))
                     stop_title_keeper()
                     return ImplementResult(success=True)
             console.warn("Could not launch in new terminal — falling back to inline")
@@ -1268,13 +1284,14 @@ def _resolve_task_target(
 
     If the target is a path to a plan file, create the issue first.
     """
-    # Check if target is a file path
-    target_path = Path(target).expanduser()
-    if target_path.is_file():
+    # Only an anchored path selects a plan file, so a provider ID such as
+    # ``abc1234`` stays an ID even if a same-named file exists in the cwd.
+    target_path = Path(target).expanduser() if is_explicit_plan_path(target) else Path(target)
+    if is_explicit_plan_path(target) and target_path.is_file():
         from wade.services.task_service import create_from_plan_file
         from wade.utils.conventional import ConventionalTitleError
 
-        console.info(f"Creating issue from plan file: {target}")
+        console.info(console.escape_markup(f"Creating issue from plan file: {target}"))
         try:
             task = create_from_plan_file(target_path, config=config, provider=provider)
         except ConventionalTitleError as e:
@@ -1282,19 +1299,28 @@ def _resolve_task_target(
             # tokens in it are shown literally rather than parsed as markup.
             console.error(str(e), markup=False)
             console.hint(
-                f"Fix the plan file's `# Title` heading in {target} to a "
-                "conventional-commit title, then re-run."
+                console.escape_markup(
+                    f"Fix the plan file's `# Title` heading in {target} to a "
+                    "conventional-commit title, then re-run."
+                )
             )
             return None
         return task
 
-    # Treat as issue number — strip leading "#" so "#123" and "123" both work
-    issue_id = target.lstrip("#")
+    # Treat as a task ID — "#123" and "123" both work where "#" is reference
+    # syntax; an opaque provider ID is used exactly, even with a leading "#".
+    issue_id = task_id_from_target(target, str(config.provider.name))
     try:
         task = provider.read_task(issue_id)
         return task
     except Exception as e:
-        console.error(f"Could not read issue #{issue_id}: {e}")
+        console.error(f"Could not read task {issue_id}: {e}", markup=False)
+        if target_path.is_file():
+            console.hint(
+                console.escape_markup(
+                    f"To create a task from the plan file, pass a path: ./{target}"
+                )
+            )
         return None
 
 

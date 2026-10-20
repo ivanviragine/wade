@@ -221,7 +221,7 @@ def _remove_target(
     """Remove a specific worktree by issue number or name."""
     wt_path = find_worktree_path(target, project_root=repo_root)
     if not wt_path:
-        console.error(f"No worktree found for: {target}")
+        console.error(console.escape_markup(f"No worktree found for: {target}"))
         return False
 
     if not force and not prompts.confirm(f"Remove worktree {wt_path.name}?"):

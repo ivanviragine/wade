@@ -11,6 +11,7 @@ import re
 import shlex
 import shutil
 import webbrowser
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.session import MergeStatus
-from wade.models.task import Task
+from wade.models.task import Task, TaskReference
 from wade.providers.base import AbstractTaskProvider
 from wade.services import bot_trigger
 from wade.services.implementation_service.bootstrap import (
@@ -36,6 +37,7 @@ from wade.services.implementation_service.bootstrap import (
 from wade.services.implementation_service.cleanup import _preserve_session_data
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils.markdown import MarkdownStructureError, scan_markdown_structure
 
 logger = structlog.get_logger()
 
@@ -56,6 +58,7 @@ __all__ = [
     "_restore_backed_up",
     "_strip_summary_section",
     "_warn_pull_sync_failed",
+    "task_close_intent",
 ]
 
 
@@ -569,6 +572,16 @@ def _merge_pr(
         with contextlib.suppress(Exception):
             git_repo.checkout_detach(worktree_path)
 
+    # Read the completion's recorded closure intent before the irreversible merge.
+    close_task_id = str(issue_number) if issue_number else None
+    close_ref = _merge_close_reference(repo_root, close_task_id) if close_task_id else None
+    pr_body: str | None = None
+    if close_ref is not None:
+        try:
+            pr_body = git_pr.get_pr_body(repo_root, pr_number)
+        except Exception:
+            logger.debug("merge.pr_body_read_failed", exc_info=True)
+
     try:
         git_pr.merge_pr(repo_root=main_root, pr_number=pr_number, strategy="squash")
     except Exception as e:
@@ -598,11 +611,73 @@ def _merge_pr(
 
     _pull_main_after_merge(main_root)
 
-    if issue_number:
-        with contextlib.suppress(Exception):
-            provider.close_task(str(issue_number))
+    if close_task_id is not None:
+        _close_task_after_merge(provider, close_task_id, close_ref, pr_body)
 
     return MergeStatus.MERGED
+
+
+def _merge_close_reference(repo_root: Path, task_id: str) -> TaskReference | None:
+    """The configured provider's reference for the merged task.
+
+    ``None`` when the configuration cannot be loaded: the provider is then
+    unknown, and assuming GitHub would miss a non-GitHub ``--no-close`` marker.
+    """
+    try:
+        from wade.config.loader import load_config
+
+        provider_name = str(load_config(repo_root).provider.name)
+    except Exception:
+        logger.debug("merge.config_load_failed", exc_info=True)
+        return None
+    return TaskReference(provider=provider_name, task_id=task_id)
+
+
+def _close_task_after_merge(
+    provider: AbstractTaskProvider,
+    task_id: str,
+    ref: TaskReference | None,
+    pr_body: str | None,
+) -> None:
+    """Close the task through its provider, honoring the recorded ``--no-close``.
+
+    Uses the exact task ID. An unknown provider (*ref* is ``None``), an unreadable
+    or structurally unsafe PR body, or a failed close leaves the task open with a
+    retry command rather than risk closing a task the completion kept open.
+    """
+
+    def show_retry() -> None:
+        console.hint("Close it when ready:")
+        console.command(shlex.join(["wade", "task", "close", task_id]))
+
+    if ref is None:
+        console.warn(
+            console.escape_markup(
+                f"Could not load the project configuration to confirm closing task "
+                f"'{task_id}'; left open."
+            )
+        )
+        show_retry()
+        return
+    if pr_body is None:
+        console.warn(f"Could not read the PR body to confirm closing {ref.label}; left open.")
+        show_retry()
+        return
+    try:
+        intent = task_close_intent(pr_body, ref)
+    except MarkdownStructureError:
+        console.warn(f"Could not scan the PR body to confirm closing {ref.label}; left open.")
+        show_retry()
+        return
+    if intent is False:
+        console.info(f"Left {ref.label} open (completed with --no-close).")
+        return
+    try:
+        provider.close_task(ref.task_id)
+    except Exception:
+        logger.warning("merge.task_close_failed", task_id=ref.task_id, exc_info=True)
+        console.warn(f"Could not close {ref.label} after merge.")
+        show_retry()
 
 
 SUMMARY_MARKER_START = "<!-- wade:summary:start -->"
@@ -745,47 +820,221 @@ def _strip_summary_section(body: str) -> str:
     return strip_legacy_section(body, "Summary")
 
 
+class _BodyLine(BaseModel):
+    """One physical line of a PR body outside managed blocks and fences."""
+
+    start: int
+    end: int
+    text: str
+
+
+def _editable_lines(body: str) -> list[_BodyLine]:
+    """Lines WADE may edit: never inside a managed wade block or code fence.
+
+    Raises :class:`MarkdownStructureError` for an unsafe body, like every other
+    structural PR-body edit.
+    """
+    structure = scan_markdown_structure(body)
+    protected = [(item.start, item.end) for item in [*structure.blocks, *structure.fences]]
+    lines: list[_BodyLine] = []
+    for match in re.finditer(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z", body):
+        if any(start <= match.start() < end for start, end in protected):
+            continue
+        lines.append(
+            _BodyLine(start=match.start(), end=match.end(), text=match.group().rstrip("\r\n"))
+        )
+    return lines
+
+
+def _edit_lines(body: str, edits: Mapping[int, str | None], lines: list[_BodyLine]) -> str:
+    """Replace (str) or delete (None) the indexed *lines*, keeping their EOLs."""
+    for index in sorted(edits, reverse=True):
+        line = lines[index]
+        replacement = edits[index]
+        if replacement is None:
+            body = body[: line.start] + body[line.end :]
+        else:
+            body = body[: line.start] + replacement + body[line.start + len(line.text) :]
+    return body
+
+
+def _legacy_hash(task_id: str) -> str:
+    return rf"#{re.escape(task_id)}(?!\w)"
+
+
+# Hidden suffix ``--no-close`` appends to the non-closing reference line. The
+# bootstrap draft PR already carries a plain ``Implements …`` line, so only this
+# marker — never the verb alone — records an explicit request to keep the task
+# open; a plain line means no intent was recorded and merge closes as default.
+NO_CLOSE_MARKER = "<!-- wade:no-close -->"
+_NO_CLOSE_SUFFIX = rf"[ \t]+{re.escape(NO_CLOSE_MARKER)}"
+
+
+def _no_close_line(ref: TaskReference) -> str:
+    return f"{ref.reference_line(close=False)} {NO_CLOSE_MARKER}"
+
+
+def _with_no_close_marker(text: str) -> str:
+    return (
+        text
+        if re.search(rf"{_NO_CLOSE_SUFFIX}\s*$", text)
+        else f"{text.rstrip()} {NO_CLOSE_MARKER}"
+    )
+
+
 def _apply_pr_refs(
     body: str,
     issue_number: str,
     close_issue: bool,
     parent_issue: str | None,
+    *,
+    reference: TaskReference | None = None,
+    parent_reference: TaskReference | None = None,
 ) -> str:
-    """Add or update Closes/Part-of references in a PR body.
+    """Add or update the WADE-owned task/parent reference lines in a PR body.
 
-    Idempotent: repeated calls do not duplicate references.
+    Idempotent: repeated calls do not duplicate references. Only lines outside
+    managed blocks and code fences are inspected or rewritten, so embedded plans,
+    summaries, examples and other user content are never edited.
+
+    GitHub issues keep ``Closes #N`` / ``Implements #N``. ``--no-close``
+    downgrades a closing line, marks an existing ``Implements #N`` line, or adds
+    one, always suffixed with :data:`NO_CLOSE_MARKER` so merge-time closure can
+    tell it from the bootstrap draft's plain line. External tasks — including numeric ClickUp and
+    Markdown IDs — use ``Completes``/``Implements`` with a qualified reference
+    and never a GitHub closing keyword; legacy ``Closes #<id>`` / ``Implements
+    #<id>`` lines WADE wrote for them are replaced. A legacy closing line that
+    cannot be corrected unambiguously raises :class:`MarkdownStructureError`
+    instead of publishing closure metadata for an unrelated GitHub issue.
     """
-    updated = body
-
-    # Add "Closes #N" if requested and not already present
-    if close_issue:
-        close_pattern = rf"^Closes\s+#{re.escape(issue_number)}\b"
-        if not re.search(close_pattern, updated, flags=re.MULTILINE):
-            # Strip existing "Implements #N" line when upgrading to "Closes #N"
-            updated = re.sub(
-                rf"^Implements\s+#{re.escape(issue_number)}\s*\n?",
-                "",
-                updated,
-                flags=re.MULTILINE,
-            )
-            updated = f"Closes #{issue_number}\n\n" + updated.lstrip("\n")
-    else:
-        # --no-close: downgrade any existing "Closes #N" to "Implements #N" so
-        # merging the PR does not auto-close the issue against the caller's intent.
-        updated = re.sub(
-            rf"^Closes\s+#{re.escape(issue_number)}\b",
-            f"Implements #{issue_number}",
-            updated,
-            flags=re.MULTILINE,
-        )
-
-    # Add "Part of #parent" if detected and not already present
-    if parent_issue:
-        parent_pattern = rf"^Part of\s+#{re.escape(parent_issue)}\b"
-        if not re.search(parent_pattern, updated, flags=re.MULTILINE):
-            updated = f"Part of #{parent_issue}\n" + updated
-
+    ref = reference or TaskReference(task_id=issue_number)
+    parent = parent_reference or (
+        TaskReference(provider=ref.provider, task_id=parent_issue) if parent_issue else None
+    )
+    updated = (
+        _apply_github_task_ref(body, ref, close_issue)
+        if ref.is_github_issue
+        else _apply_external_task_ref(body, ref, close_issue)
+    )
+    if parent is not None:
+        updated = _apply_parent_ref(updated, parent)
     return updated
+
+
+def _apply_github_task_ref(body: str, ref: TaskReference, close_issue: bool) -> str:
+    token = ref.token_pattern()
+    lines = _editable_lines(body)
+    if close_issue:
+        if any(re.match(rf"Closes\s+{token}", line.text) for line in lines):
+            return body
+        # Upgrading: drop the non-closing "Implements #N" line for this task.
+        stale = {
+            index: None
+            for index, line in enumerate(lines)
+            if re.fullmatch(rf"Implements\s+{token}(?:{_NO_CLOSE_SUFFIX})?\s*", line.text)
+        }
+        updated = _edit_lines(body, stale, lines)
+        return f"{ref.reference_line(close=True)}\n\n" + updated.lstrip("\n")
+    # --no-close: downgrade any closing line so merging cannot auto-close the issue.
+    downgrades = {
+        index: _with_no_close_marker(
+            re.sub(rf"^Closes\s+{token}", ref.reference_line(close=False), line.text)
+        )
+        for index, line in enumerate(lines)
+        if re.match(rf"Closes\s+{token}", line.text)
+    }
+    if downgrades:
+        return _edit_lines(body, dict(downgrades), lines)
+    implements = [
+        index for index, line in enumerate(lines) if re.match(rf"Implements\s+{token}", line.text)
+    ]
+    if implements:
+        # Mark the existing (e.g. bootstrap draft) line as an explicit no-close.
+        first = implements[0]
+        marked = _with_no_close_marker(lines[first].text)
+        return body if marked == lines[first].text else _edit_lines(body, {first: marked}, lines)
+    # No reference yet: record the no-close intent so merge-time closure honors it.
+    return f"{_no_close_line(ref)}\n\n" + body.lstrip("\n")
+
+
+def _apply_external_task_ref(body: str, ref: TaskReference, close_issue: bool) -> str:
+    token = ref.token_pattern()
+    legacy = _legacy_hash(ref.task_id)
+    lines = _editable_lines(body)
+    owned: list[int] = []
+    for index, line in enumerate(lines):
+        if re.fullmatch(
+            rf"(?:Implements|Completes)\s+{token}(?:{_NO_CLOSE_SUFFIX})?\s*", line.text
+        ) or re.fullmatch(
+            rf"(?:Implements|Closes)\s+{legacy}(?:{_NO_CLOSE_SUFFIX})?\s*", line.text
+        ):
+            owned.append(index)
+        elif (
+            re.match(rf"Closes\s+{legacy}", line.text)
+            and ref.task_id.isascii()
+            and (ref.task_id.isdigit())
+        ):
+            raise MarkdownStructureError(
+                f"line {line.text!r} would close GitHub issue #{ref.task_id}, but this PR "
+                f"implements {ref.label}; edit the PR body to remove or reword it"
+            )
+    desired = ref.reference_line(close=True) if close_issue else _no_close_line(ref)
+    if not owned:
+        return f"{desired}\n\n" + body.lstrip("\n")
+    edits: dict[int, str | None] = {index: None for index in owned[1:]}
+    edits[owned[0]] = desired
+    return _edit_lines(body, edits, lines)
+
+
+def _apply_parent_ref(body: str, parent: TaskReference) -> str:
+    token = parent.token_pattern()
+    lines = _editable_lines(body)
+    if parent.is_github_issue:
+        if any(re.match(rf"Part of\s+{token}", line.text) for line in lines):
+            return body
+        return f"{parent.part_of_line()}\n" + body
+    legacy = _legacy_hash(parent.task_id)
+    owned = [
+        index
+        for index, line in enumerate(lines)
+        if re.fullmatch(rf"Part of\s+(?:{token}|{legacy})\s*", line.text)
+    ]
+    if not owned:
+        return f"{parent.part_of_line()}\n" + body
+    edits: dict[int, str | None] = {index: None for index in owned[1:]}
+    edits[owned[0]] = parent.part_of_line()
+    return _edit_lines(body, edits, lines)
+
+
+def task_close_intent(body: str, ref: TaskReference) -> bool | None:
+    """Read the closure intent recorded by the WADE-owned PR reference line.
+
+    ``True`` — completion asked to close the task; ``False`` — completion used
+    ``--no-close`` (the reference line carries :data:`NO_CLOSE_MARKER`); ``None``
+    — no intent was recorded for this task (no reference line, or only the
+    bootstrap draft's plain ``Implements`` line), so the caller's default applies.
+
+    Raises :class:`MarkdownStructureError` when the body is unsafe to scan, so a
+    caller cannot mistake an unreadable intent for a legacy body.
+    """
+    lines = _editable_lines(body)
+    token = ref.token_pattern()
+    if ref.is_github_issue:
+        closing, open_ = rf"Closes\s+{token}", rf"Implements\s+{token}.*{_NO_CLOSE_SUFFIX}\s*"
+        if any(re.match(closing, line.text) for line in lines):
+            return True
+        return False if any(re.fullmatch(open_, line.text) for line in lines) else None
+    legacy = _legacy_hash(ref.task_id)
+    if any(
+        re.fullmatch(rf"(?:Completes\s+{token}|Closes\s+{legacy})\s*", line.text) for line in lines
+    ):
+        return True
+    if any(
+        re.fullmatch(rf"Implements\s+(?:{token}|{legacy}){_NO_CLOSE_SUFFIX}\s*", line.text)
+        for line in lines
+    ):
+        return False
+    return None
 
 
 def _build_pr_body(
@@ -795,12 +1044,15 @@ def _build_pr_body(
     parent_issue: str | None = None,
     *,
     review_status: ReviewStatus | None = None,
+    reference: TaskReference | None = None,
+    parent_reference: TaskReference | None = None,
 ) -> str:
     """Compose the PR body (new-PR fallback path).
 
     Order:
-    1. Part of #parent (if detected)
-    2. Closes #N
+    1. Part of <parent> (if detected)
+    2. The task reference line (``Closes #N`` for GitHub issues; external tasks
+       use a qualified ``Completes``/``Implements`` line, never a closing keyword)
     3. ## Summary (from PR-SUMMARY file)
     4. ## Review Status (from the done-time review classification, if provided)
 
@@ -813,11 +1065,15 @@ def _build_pr_body(
 
     parts: list[str] = []
 
+    ref = reference or TaskReference(task_id=task.id, url=task.url)
+    parent = parent_reference or (
+        TaskReference(provider=ref.provider, task_id=parent_issue) if parent_issue else None
+    )
     ref_lines: list[str] = []
-    if parent_issue:
-        ref_lines.append(f"Part of #{parent_issue}")
-    if close_issue:
-        ref_lines.append(f"Closes #{task.id}")
+    if parent is not None:
+        ref_lines.append(parent.part_of_line())
+    # Always record the closure intent, so a later merge honors --no-close.
+    ref_lines.append(ref.reference_line(close=True) if close_issue else _no_close_line(ref))
     if ref_lines:
         parts.append("\n".join(ref_lines))
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import shlex
 from pathlib import Path
 
 import structlog
@@ -16,6 +17,7 @@ from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.session import ClosingCandidate
 from wade.models.skill import SkillSlot
+from wade.models.task import TaskReference
 from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -23,7 +25,9 @@ from wade.services import bot_trigger
 from wade.services.documentation_receipt_service import read_documentation_receipt
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
-    find_worktree_path,
+    is_explicit_plan_path,
+    match_worktree_target,
+    task_reference,
 )
 from wade.services.implementation_service.bootstrap import (
     _check_tracked_managed_files,
@@ -121,12 +125,13 @@ def resolve_done_worktree(
         return None
     # A plan-*file* target makes ``done`` create the issue first, so no worktree
     # exists to check yet — leave the verdict to the cwd.
-    if not target.isdigit() and Path(target).expanduser().is_file():
+    if is_explicit_plan_path(target) and Path(target).expanduser().is_file():
         return None
     try:
-        return find_worktree_path(target, project_root=repo_root)
+        match = match_worktree_target(target, project_root=repo_root, fuzzy=False)
     except GitError:
         return None
+    return match.path if match is not None else None
 
 
 def done(
@@ -193,14 +198,15 @@ def done(
             console.error(str(e))
             return False
 
-    # If target is a plan file, create issue first (skip if target looks like a number)
-    if target and not target.isdigit():
+    # Only an anchored path creates a task from a plan file, so a provider ID
+    # such as ``abc1234`` is never mistaken for a same-named file in the cwd.
+    if target and is_explicit_plan_path(target):
         target_path = Path(target).expanduser()
         if target_path.is_file():
             from wade.services.task_service import create_from_plan_file
             from wade.utils.conventional import ConventionalTitleError
 
-            console.info(f"Creating issue from plan file: {target}")
+            console.info(console.escape_markup(f"Creating issue from plan file: {target}"))
             # create_from_plan_file now hard-validates the plan's `# Title` — a
             # non-conventional title raises. Surface it as a clean, actionable
             # message (not a traceback) with a non-zero exit.
@@ -211,8 +217,10 @@ def done(
                 # tokens in it are shown literally rather than parsed as markup.
                 console.error(str(e), markup=False)
                 console.hint(
-                    f"Fix the plan file's `# Title` heading in {target} to a "
-                    "conventional-commit title, then re-run done."
+                    console.escape_markup(
+                        f"Fix the plan file's `# Title` heading in {target} to a "
+                        "conventional-commit title, then re-run done."
+                    )
                 )
                 return False
             if not task:
@@ -224,20 +232,24 @@ def done(
     if wt_path is not None:
         cwd = wt_path
 
-    # If target specifies a worktree, navigate to it and extract issue number
+    # Resolve an explicit target to its worktree with exact precedence: a branch
+    # carrying exactly this task ID, then an exact branch or worktree name (whose
+    # branch then supplies the task ID). Never a fuzzy name match — an opaque ID
+    # must not select another task's worktree whose title happens to contain it.
     if target and wt_path is None:
-        wt_path = find_worktree_path(target, project_root=repo_root)
-        if wt_path:
+        match = match_worktree_target(target, project_root=repo_root, fuzzy=False)
+        if match is not None:
+            wt_path = match.path
             cwd = wt_path
-            # Replace non-numeric target with the issue number from the branch
-            if not target.isdigit():
-                try:
-                    wt_branch = git_repo.get_current_branch(wt_path)
-                    extracted = extract_issue_from_branch(wt_branch)
-                    if extracted:
-                        target = extracted
-                except GitError:
-                    pass
+            if not match.by_identity:
+                if match.task_id is None:
+                    console.error(
+                        f"Worktree {match.path.name} (branch {match.branch}) does not carry "
+                        "a WADE task ID; pass the task ID explicitly.",
+                        markup=False,
+                    )
+                    return False
+                target = match.task_id
 
     # If running from inside a linked worktree with no explicit target,
     # use cwd as the worktree path so PR-SUMMARY.md lookup works.
@@ -254,9 +266,19 @@ def done(
         )
         return False
 
-    issue_number = target or extract_issue_from_branch(branch)
+    branch_task = extract_issue_from_branch(branch)
+    if target and branch_task is not None and branch_task != target:
+        # An explicit target must agree with the branch being finalized; never
+        # push or rewrite another task's PR under this task's identity.
+        console.error(
+            f"Task {target} does not match branch {branch} (task {branch_task}).",
+            markup=False,
+        )
+        console.hint("Run done from the task's worktree, or pass the matching task ID.")
+        return False
+    issue_number = target or branch_task
     if not issue_number:
-        console.error(f"Cannot extract issue number from branch: {branch}")
+        console.error(f"Cannot extract issue number from branch: {branch}", markup=False)
         return False
 
     # Check clean — keep the worktree gitignore block in place so wade
@@ -375,7 +397,7 @@ def done(
         config, worktree_root, pre_sync_head, skip_review, session_type
     )
 
-    console.rule(f"done #{issue_number}")
+    console.rule(f"done {console.escape_markup(issue_number)}")
 
     ok = _done_via_pr(
         repo_root=repo_root,
@@ -665,20 +687,24 @@ def _gate_pr_title(
         task = provider.read_task(issue_number)
     except Exception as exc:
         console.warn(
-            f"Could not read issue #{issue_number} to validate its title (non-blocking): {exc}"
+            console.escape_markup(
+                f"Could not read issue #{issue_number} to validate its title (non-blocking): {exc}"
+            )
         )
         logger.debug("done.title_gate_read_failed", exc_info=True)
         return True
     if is_conventional_title(task.title):
         return True
     console.error(
-        f"Issue #{issue_number} title is not a conventional-commit title — "
-        "the PR Title Lint CI check would fail."
+        console.escape_markup(
+            f"Issue #{issue_number} title is not a conventional-commit title — "
+            "the PR Title Lint CI check would fail."
+        )
     )
     # The issue title is provider-derived — render without Rich markup so bracket
     # tokens in it are shown literally, not parsed as markup (which would crash).
     console.detail(conventional_title_error(task.title), markup=False)
-    console.hint(_title_fix_hint(config, issue_number))
+    console.hint(console.escape_markup(_title_fix_hint(config, issue_number)))
     console.hint("Bypass: set `done.require_conventional_title: false` in .wade.yml.")
     return False
 
@@ -1281,8 +1307,9 @@ def _maybe_trigger_bot_reviews(
             if trigger_bots:
                 console.detail(
                     "Bot review triggers already posted for this commit — "
-                    f"run `wade review trigger {issue_number}` to post them again."
+                    "run this command to post them again:"
                 )
+                console.command(f"wade review trigger {shlex.quote(issue_number)}")
             return
         bot_trigger.post_bot_triggers(
             repo_root, pr_number, pending, marker_root=marker_root, sha=sha
@@ -1308,9 +1335,8 @@ def _maybe_trigger_bot_reviews(
                 repo_root, pr_number, pending, marker_root=marker_root, sha=sha
             )
         else:
-            console.detail(
-                f"Skipped — run `wade review trigger {issue_number}` when you want them."
-            )
+            console.detail("Skipped — run this command when you want them:")
+            console.command(f"wade review trigger {shlex.quote(issue_number)}")
         return
 
     # Non-TTY: the AI agent runs `done`, so hand it the decision to surface —
@@ -1319,12 +1345,29 @@ def _maybe_trigger_bot_reviews(
     console.info(
         f"Bot review triggers NOT posted ({names}) — `bot_review.auto_trigger` is off. "
         "Add an extra option to your closing dialog, after the recommended exit one: "
-        f"'Post bot review triggers' → `wade review trigger {issue_number} {bot_args}`."
+        "'Post bot review triggers' → run this command:"
     )
+    console.command(f"wade review trigger {shlex.quote(issue_number)} {bot_args}")
     console.hint(
         "Always post them: `bot_review.auto_trigger: true` (or `done --trigger-bots`). "
         "Never ask again: `bot_review.offer_on_done: false`."
     )
+
+
+def _detect_parent_reference(
+    provider: AbstractTaskProvider, config: ProjectConfig, issue_number: str
+) -> TaskReference | None:
+    """The tracking parent of *issue_number* under the configured provider, if any."""
+    try:
+        parent_issue = provider.find_parent_issue(issue_number, label=config.project.issue_label)
+    except Exception:
+        logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
+        return None
+    if not isinstance(parent_issue, str) or not parent_issue:
+        return None
+    parent = task_reference(config, parent_issue)
+    console.detail(f"Detected parent tracking task: {parent.label}", markup=False)
+    return parent
 
 
 def _done_via_pr(
@@ -1368,8 +1411,9 @@ def _done_via_pr(
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
-        console.error(f"Cannot read issue #{issue_number}: {e}")
+        console.error(f"Cannot read task {issue_number}: {e}", markup=False)
         return False
+    reference = task_reference(config, task)
 
     # Backstop for _gate_pr_title's non-blocking read path. task.title becomes the
     # PR title verbatim — both when syncing an existing PR and when creating a new
@@ -1382,8 +1426,10 @@ def _done_via_pr(
     # read likely succeeds now) for a clean, actionable block.
     if config.done.require_conventional_title and not is_conventional_title(task.title):
         console.error(
-            f"Issue #{issue_number} title is not a conventional-commit title — "
-            "refusing to put it on the PR (PR Title Lint would fail)."
+            console.escape_markup(
+                f"Issue #{issue_number} title is not a conventional-commit title — "
+                "refusing to put it on the PR (PR Title Lint would fail)."
+            )
         )
         console.hint("Re-run done — the title gate will re-validate and guide the fix.")
         return False
@@ -1483,16 +1529,7 @@ def _done_via_pr(
         if pr_summary_path and pr_summary_path.is_file():
             summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
 
-        # Detect parent tracking issue
-        parent_issue: str | None = None
-        try:
-            parent_issue = provider.find_parent_issue(
-                issue_number, label=config.project.issue_label
-            )
-            if parent_issue:
-                console.detail(f"Detected parent tracking issue: #{parent_issue}")
-        except Exception:
-            logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
+        parent_reference = _detect_parent_reference(provider, config, issue_number)
 
         def _transform(body: str) -> str:
             # Select both outgoing ranges from the same original parse. Never
@@ -1526,7 +1563,12 @@ def _done_via_pr(
                     ),
                 ],
                 transform_survivors=lambda surviving: _apply_pr_refs(
-                    surviving, issue_number, close_issue, parent_issue
+                    surviving,
+                    issue_number,
+                    close_issue,
+                    None,
+                    reference=reference,
+                    parent_reference=parent_reference,
                 ),
             )
 
@@ -1565,23 +1607,13 @@ def _done_via_pr(
         # No existing PR — create one (fallback)
         console.warn("No existing draft PR found — creating new PR.")
 
-        # Detect parent tracking issue
-        parent_issue = None
-        try:
-            parent_issue = provider.find_parent_issue(
-                issue_number, label=config.project.issue_label
-            )
-            if parent_issue:
-                console.detail(f"Detected parent tracking issue: #{parent_issue}")
-        except Exception:
-            logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
-
         body = _build_pr_body(
             task,
             pr_summary_path=pr_summary_path,
             close_issue=close_issue,
-            parent_issue=parent_issue,
             review_status=review_status,
+            reference=reference,
+            parent_reference=_detect_parent_reference(provider, config, issue_number),
         )
 
         console.step("Creating pull request...")

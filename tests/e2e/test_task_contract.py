@@ -115,8 +115,8 @@ class TestTaskCommands:
         result = _run(["task", "deps", "11", "12", "--mode", "prompt"], cwd=e2e_repo)
 
         assert result.returncode == 0
-        assert "## Issue #11: Auth layer" in result.stdout
-        assert "## Issue #12: Dashboard UI" in result.stdout
+        assert "## Task ID `11`: Auth layer" in result.stdout
+        assert "## Task ID `12`: Dashboard UI" in result.stdout
         assert "Login has to land first." in result.stdout
         assert "Depends on auth state." in result.stdout
         assert "wade task deps" not in result.stdout

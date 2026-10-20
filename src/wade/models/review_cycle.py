@@ -34,10 +34,11 @@ class ReviewCycleContext(BaseModel, frozen=True):
     @field_validator("issue_number")
     @classmethod
     def _issue_number(cls, value: str) -> str:
-        normalized = value.strip().lstrip("#")
-        if not normalized.isdigit() or int(normalized) <= 0:
-            raise ValueError("Review-cycle issue number must be positive")
-        return str(int(normalized))
+        # The exact provider task ID: never normalize case, leading zeros, or
+        # punctuation, so distinct IDs such as ``42`` and ``0042`` stay distinct.
+        if not value or any(char.isspace() for char in value) or not value.isprintable():
+            raise ValueError("Review-cycle task ID must be non-empty printable text")
+        return value
 
     @field_validator("baseline_commit")
     @classmethod

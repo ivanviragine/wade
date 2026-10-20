@@ -48,6 +48,14 @@ Providers that support planning handoff recovery must also implement
 tasks for the exact durable marker; a bounded task-list page can miss a task
 created before a local recovery-progress write failed, causing a duplicate.
 
+Task IDs are opaque, authoritative strings: return the provider's exact ID in
+`Task.id` and accept it unchanged in every method. Do not assume digits — WADE
+encodes branch/path identity (`utils/task_identity.py`) and renders references
+under the provider's `ProviderID` value as namespace (`<provider>:<id>`; only
+GitHub uses PR closing keywords). Implement `find_parent_issue` with the shared
+`parse_tracking_child_ids(..., provider=...)` parser and an exhaustive scan
+whose failures raise rather than return `None`.
+
 Non-GitHub providers (ClickUp, Markdown) still need PRs and PR-review APIs, which are GitHub-only. They get these by composing `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), which routes PR/review calls through `gh` while task CRUD stays on the provider's own backend.
 
 ## Version Bumping

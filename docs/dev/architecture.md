@@ -741,7 +741,8 @@ The **explicit** `--sandbox`/`--no-sandbox` override (the tri-state
 so it survives instead of the next session silently re-resolving it: the
 post-implementation "Wait for reviews" path forwards it via
 `_post_implementation_lifecycle` → `review_service.start`, and the numeric
-`wade <N>` shorthand forwards it via `SmartStartContext` to whichever route it
+`wade <N>` shorthand (numeric IDs only; other IDs use `wade implement <id>` /
+`wade review pr-comments <id>`) forwards it via `SmartStartContext` to whichever route it
 picks (implement / batch / review). `_build_implement_cmd` keeps the same
 explicit-only rule — an unset value emits no flag, so a child re-resolves from
 its own config rather than freezing the parent's resolved value. `None` (unset)
@@ -1512,6 +1513,8 @@ Consumers, all fed from that one module:
   This offer runs *after* the push and PR finalize, so a Ctrl+C at the confirm is
   treated as a declined offer (`prompts.confirm(cancel_default=False)`) rather
   than aborting `done` and skipping its worktree cleanup for an already-live PR.
+  Task-derived retry commands use `console.command` as separate shell-quoted
+  physical lines so Rich cannot interpret ID markup or wrap inside arguments.
 - `implementation_service.lifecycle._post_implementation_lifecycle_pr` and
   `review_service._post_review_lifecycle` / `_quiet_next_steps_prompt` — each
   **appends** (never inserts) a `Trigger bot reviews (…)` entry, so existing
@@ -1687,6 +1690,84 @@ edges exist. Failures preserve recoverable output and report incomplete
 persistence, rather than pretending already-created external state was rolled
 back. The single-task implementation offer is a separate human confirmation,
 including under YOLO. Successful vote flushing and cleanup remain required.
+
+## Task identity and references
+
+Provider task IDs are authoritative strings end to end (#490): CLI arguments,
+models, graph nodes/edges, plan-bundle mappings, labels, comments, review-cycle
+state, tracking parents, PR references and closure all carry the exact
+`Task.id`. Nothing applies `int()`, case folding or substring matching to a task
+ID; numeric normalization, if any, belongs at a numeric provider's boundary.
+
+Three pieces own the representation, each at the lowest layer that needs it:
+
+| Concern | Owner | Contract |
+|---------|-------|----------|
+| Branch/path identity | `utils/task_identity.py` (leaf, stdlib only) | Canonical decimals stay `feat/42-slug`; any other ID becomes `idv1_<lowercase UTF-8 hex>` before the slug. `task_id_from_branch` decodes only the final segment's token and rejects malformed or non-canonical tokens (no numeric fallback). `encode_task_id` also names review-cycle files (`review-cycle@42.json`, `review-cycle@idv1_….json`) and session transcripts (`transcript-<token>.log`, `transcript-review-<token>.log`). IDs that are empty, contain whitespace, start with `-` (option-like argv), use anchored path syntax (reserved for plan files), or exceed 64 UTF-8 bytes raise `TaskIdentityError` before any ref/worktree/provider mutation. |
+| Task-body reference grammar | `models/task.py` (pure) | `format_task_ref` / `parse_task_refs`: `#42` for GitHub and Markdown, `clickup:abc1234` (percent-encoded beyond `[A-Za-z0-9_-]`) otherwise. Only complete tokens of the configured provider's namespace decode; legacy `#<opaque>` is accepted only in checklist items and `**Depends on:**`/`**Blocks:**` lines. `format_issue_heading` / `parse_issue_heading` own the runtime `# Issue #<id>: <title>` heading shared by `PLAN.md`, `.wade/plan-issue.md` and the SessionStart hook. |
+| PR reference policy | `models/task.py::TaskReference`, built by `implementation_service/_shared.py::task_reference` from `config.provider.name` | Only the GitHub provider renders `#N` and closing keywords. External tasks (including numeric ClickUp/Markdown IDs) render `Implements`/`Completes <provider>:<id>` linked to `Task.url`. Never inferred from `id.isdigit()` or the GitHub PR delegate. |
+
+Resolution (`_shared.py`): `resolve_task_branch`, `find_existing_branch_for_issue`
+and `find_open_pr_branch_for_issue` compare decoded IDs exactly; review, batch
+status/PR indexing, batch review and cleanup reuse them instead of rebuilding
+branch names. `match_worktree_target` fixes precedence for command targets:
+exact branch identity, then exact branch name, then exact worktree directory,
+then (only for navigation/plan-title callers) a fuzzy directory fragment. `done`
+uses exact matching only and refuses an explicit target that disagrees with the
+branch it would finalize. Only an anchored path (`is_explicit_plan_path`:
+absolute, `./`, `../` or `~/`, shared from `utils/task_identity.py`) selects a
+plan file. The identity validator rejects those reserved forms as task IDs,
+including when decoding existing branch tokens. Every other target —
+including `a/b`, `plan.md` or `~clickup490`, which are valid IDs — is a task ID.
+Home-directory expansion runs only after anchored path classification.
+`models/task.py::task_id_from_target`
+drops one leading `#` only for hash-reference providers (GitHub/Markdown), so an
+opaque ID is passed to the provider exactly. Batch review uses
+`find_open_pr_for_issue`'s summary when the open-PR scan confirms the resolved
+branch after a failed or stale branch lookup.
+
+`task_service.update_task`/`close_task` and `deps_service.analyze_deps` run
+`validate_task_id` before any provider call, and task output passes IDs with
+Rich markup disabled or escaped. Dependency-output parsing
+(`parse_deps_output`) resolves the exact line first, so an ID such as `1.` or
+`*` wins over a Markdown list marker. Backticks inside IDs stay literal; only
+confirmed outer code spans are removed as a fallback. Arrow splits are checked
+against the analyzed endpoint IDs, preserving embedded `->`; ambiguous compact
+edges are rejected. Task-derived diagnostics escape Rich markup, and runnable
+task commands use shell-quoted argv through `console.command` across planning,
+review/recovery, merge closure and CLI/batch handoffs.
+
+PR content: `lifecycle._apply_pr_refs` edits only WADE-owned reference lines
+outside managed blocks and fences (it rescans the surviving text with
+`utils/markdown.py`). External tasks replace legacy whole-line `Closes #<id>` /
+`Implements #<id>` lines; a partial legacy closing line for a GitHub-interpretable
+ID raises `MarkdownStructureError` rather than publishing closure metadata.
+`--no-close` always leaves a non-closing line (downgrading, marking or adding
+`Implements …`) suffixed with the hidden `<!-- wade:no-close -->` marker
+(`lifecycle.NO_CLOSE_MARKER`). The bootstrap draft PR already carries a plain
+`Implements …` line, so the marker, never the verb alone, records the request.
+`task_close_intent` reads the recorded intent back (`Closes`/`Completes` →
+close, marked `Implements` → keep open, plain draft line or none → no intent):
+`_merge_pr` reads the PR body before merging and, after a successful merge,
+including a post-session menu merge before `done`, closes the task through the
+configured provider with the exact ID unless the body records `--no-close`; an
+unreadable body, a body `task_close_intent` cannot safely scan (it raises
+`MarkdownStructureError` rather than reporting "no reference"), an unloadable configuration (unknown provider — never assumed
+GitHub), or a failed close leaves the task open with a retry hint. Markdown's optional close commit uses
+`chore: close markdown task N`, never a GitHub `close #N` keyword.
+
+Tracking parents: GitHub and Markdown keep their checklist scans; ClickUp's
+`find_parent_issue` pages through the whole configured List (issue-label tag)
+with the shared checklist parser and propagates API failures instead of
+returning "no parent". Mermaid graphs use stable `t0`, `t1`… node aliases with the
+exact reference in escaped labels.
+
+Legacy opaque hash references accept only `[A-Za-z0-9_-]` IDs terminated by a
+structured delimiter (whitespace, end of input, comma separator or Markdown
+code/link closure). Ambiguous punctuation-bearing tokens such as `#a/b` are
+rejected whole, never shortened to `a`; write `clickup:a%2Fb` to name that ID.
+Qualified references require a complete structured token too: unencoded
+punctuation in `clickup:a/b` cannot authorize operations on task `a`.
 
 ## Merge Strategy
 

@@ -2291,7 +2291,34 @@ class TestOfferToImplement:
             assert result is None
             mock_prompts.confirm.assert_not_called()
             mock_start.assert_not_called()
-            mock_console.detail.assert_called_once_with("wade implement 42")
+            mock_console.command.assert_called_once_with("wade implement 42")
+
+    @pytest.mark.parametrize("is_tty", [False, True])
+    @pytest.mark.parametrize("width", [40, 80])
+    @pytest.mark.parametrize("task_id", ["[/]", "a" * 64, "a" * 60 + "'[/]"])
+    def test_opaque_id_hint_is_literal_when_handoff_is_skipped(
+        self, is_tty: bool, width: int, task_id: str
+    ) -> None:
+        import io
+        import shlex
+
+        from rich.console import Console
+
+        from wade.services import plan_service
+
+        output = io.StringIO()
+        with (
+            patch.object(plan_service.console, "out", Console(file=output, width=width)),
+            patch.object(plan_service.prompts, "is_tty", return_value=is_tty),
+            patch.object(plan_service.prompts, "confirm", return_value=False),
+            patch.object(plan_service, "start_implementation_session") as start,
+        ):
+            assert _offer_to_implement(task_id) is None
+
+        start.assert_not_called()
+        commands = [line for line in output.getvalue().splitlines() if "wade " in line]
+        assert commands == [f"wade implement {shlex.quote(task_id)}"]
+        assert shlex.split(commands[0]) == ["wade", "implement", task_id]
 
     def test_implementation_session_failure_returns_false(self) -> None:
         """If start_implementation_session fails, the failure is propagated."""
@@ -2401,12 +2428,46 @@ class TestFinalizeIssuesHints:
             )
 
             mock_offer.assert_not_called()
-            mock_console.detail.assert_called_with("wade implement-batch 1 2 3")
+            mock_console.command.assert_called_once_with("wade implement-batch 1 2 3")
             assert all(
                 call.args != ("No dependencies found between issues.",)
                 for call in mock_console.info.call_args_list
             )
             assert result is None
+
+    @pytest.mark.parametrize("width", [40, 80])
+    def test_batch_hint_preserves_opaque_ids_on_one_literal_line(self, width: int) -> None:
+        import io
+        import shlex
+
+        from rich.console import Console
+
+        from wade.services import plan_service
+        from wade.ui.console import _theme
+
+        task_ids = ["[/]", "a" * 60 + "'$x"]
+        expected = "wade implement-batch '[/]' '" + "a" * 60 + "'\"'\"'$x'"
+        provider = self._make_provider()
+        provider.read_task.side_effect = [Task(id=task_id, title="Plan") for task_id in task_ids]
+        output = io.StringIO()
+        with (
+            patch.object(
+                plan_service.console, "out", Console(file=output, width=width, theme=_theme)
+            ),
+            patch.object(plan_service, "apply_plan_token_usage"),
+            patch.object(plan_service, "add_planned_by_labels"),
+            patch("wade.services.deps_service.analyze_deps", return_value=None),
+        ):
+            result = _finalize_issues(
+                provider=provider,
+                config=self._make_config(),
+                issue_numbers=task_ids,
+            )
+
+        assert result is None
+        commands = [line for line in output.getvalue().splitlines() if "wade " in line]
+        assert commands == [expected]
+        assert shlex.split(commands[0]) == ["wade", "implement-batch", *task_ids]
 
 
 # ---------------------------------------------------------------------------
@@ -3287,7 +3348,7 @@ class TestSupersedeIssueWithPlans:
         provider.update_task.assert_not_called()
         provider.close_task.assert_not_called()
         mock_console.warn.assert_called_once()
-        assert "PLAN-2.md" in mock_console.warn.call_args.args[0]
+        assert "PLAN-2.md" in mock_console.escape_markup.call_args.args[0]
 
     def test_yolo_skips_confirmation_prompt(self, tmp_path: Path) -> None:
         provider = MagicMock()

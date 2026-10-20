@@ -22,6 +22,7 @@ from wade.models.task import (
     PlanFile,
     Task,
     TaskState,
+    format_task_ref,
     parse_complexity_from_body,
     parse_complexity_from_labels,
 )
@@ -35,6 +36,7 @@ from wade.utils.conventional import (
     is_conventional_title,
 )
 from wade.utils.markdown import remove_marker_block
+from wade.utils.task_identity import TaskIdentityError, validate_task_id
 from wade.utils.token_usage_markdown import build_token_usage_block
 
 logger = structlog.get_logger()
@@ -364,7 +366,7 @@ def apply_plan_token_usage(
 
         try:
             provider.update_task(issue_id, body=new_body)
-            console.detail(f"Updated #{issue_id} with plan summary")
+            console.detail(f"Updated #{issue_id} with plan summary", markup=False)
         except Exception as e:
             logger.warning("token_usage.update_failed", issue=issue_id, error=str(e))
 
@@ -568,7 +570,7 @@ def list_tasks(
 
         for task in tasks:
             if task.body:
-                deps_info = parse_dependency_refs(task.body)
+                deps_info = parse_dependency_refs(task.body, provider=str(config.provider.name))
                 if deps_info["depends_on"] or deps_info["blocks"]:
                     deps_map[task.id] = deps_info
 
@@ -611,12 +613,11 @@ def list_tasks(
             console.detail(label_str)
         if show_deps and task.id in deps_map:
             dep_info = deps_map[task.id]
-            if dep_info["depends_on"]:
-                console.detail(
-                    f"  Depends on: {', '.join(f'#{n}' for n in dep_info['depends_on'])}"
-                )
-            if dep_info["blocks"]:
-                console.detail(f"  Blocks: {', '.join(f'#{n}' for n in dep_info['blocks'])}")
+            provider_name = str(config.provider.name)
+            for heading, key in (("Depends on", "depends_on"), ("Blocks", "blocks")):
+                if dep_info[key]:
+                    refs = ", ".join(format_task_ref(n, provider_name) for n in dep_info[key])
+                    console.detail(f"  {heading}: {refs}", markup=False)
 
     return tasks
 
@@ -685,6 +686,16 @@ def prompt_multi_task_selection(
     return [tasks[i].id for i in indices]
 
 
+def _is_valid_task_id(task_id: str) -> bool:
+    """Report an unsupported caller-supplied task ID before any provider call."""
+    try:
+        validate_task_id(task_id)
+    except TaskIdentityError as exc:
+        console.error(str(exc), markup=False)
+        return False
+    return True
+
+
 def read_task(
     task_id: str,
     config: ProjectConfig | None = None,
@@ -698,7 +709,7 @@ def read_task(
     try:
         task = provider.read_task(task_id)
     except Exception as e:
-        console.error(f"Failed to read issue #{task_id}: {e}")
+        console.error(f"Failed to read issue #{task_id}: {e}", markup=False)
         return None
 
     if json_mode:
@@ -722,7 +733,7 @@ def read_task(
             lines.append(f"  Labels     {', '.join(label.name for label in task.labels)}")
         if task.url:
             lines.append(f"  URL        [url]{task.url}[/]")
-        console.panel("\n".join(lines), title=f"#{task.id}: {console.escape_markup(task.title)}")
+        console.panel("\n".join(lines), title=console.escape_markup(f"#{task.id}: {task.title}"))
         if task.body:
             console.empty()
             console.markdown(task.body)
@@ -738,6 +749,8 @@ def update_task(
     provider: AbstractTaskProvider | None = None,
 ) -> bool:
     """Update a task's body and/or add a comment."""
+    if not _is_valid_task_id(task_id):
+        return False
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -755,17 +768,17 @@ def update_task(
         try:
             plan = PlanFile.from_markdown(body_path)
             provider.update_task(task_id, body=plan.body, title=plan.title)
-            console.success(f"Updated body of #{task_id}")
+            console.success(f"Updated body of #{task_id}", markup=False)
         except Exception as e:
-            console.error(f"Failed to update #{task_id}: {e}")
+            console.error(f"Failed to update #{task_id}: {e}", markup=False)
             success = False
 
     if comment:
         try:
             provider.comment_on_task(task_id, comment)
-            console.success(f"Added comment to #{task_id}")
+            console.success(f"Added comment to #{task_id}", markup=False)
         except Exception as e:
-            console.error(f"Failed to comment on #{task_id}: {e}")
+            console.error(f"Failed to comment on #{task_id}: {e}", markup=False)
             success = False
 
     return success
@@ -778,6 +791,8 @@ def close_task(
     provider: AbstractTaskProvider | None = None,
 ) -> bool:
     """Close a task with optional comment."""
+    if not _is_valid_task_id(task_id):
+        return False
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -788,10 +803,10 @@ def close_task(
         if not isinstance(provider, MarkdownIssueProvider):
             remove_in_progress_label(provider, task_id)
         provider.close_task(task_id)
-        console.success(f"Closed #{task_id}")
+        console.success(f"Closed #{task_id}", markup=False)
         return True
     except Exception as e:
-        console.error(f"Failed to close #{task_id}: {e}")
+        console.error(f"Failed to close #{task_id}: {e}", markup=False)
         return False
 
 

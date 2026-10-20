@@ -98,10 +98,6 @@ def test_done_with_plan_flag_resolves_and_delegates() -> None:
             return_value=(Path("/tmp/wt"), "feat/42-my-plan", "42"),
         ) as mock_resolve,
         patch(
-            "wade.services.implementation_service.done.find_worktree_path",
-            return_value=Path("/tmp/wt"),
-        ),
-        patch(
             "wade.services.implementation_service.done.git_repo.get_current_branch",
             return_value="feat/42-my-plan",
         ),

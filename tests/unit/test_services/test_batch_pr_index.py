@@ -92,3 +92,40 @@ class TestClassifyUnknown:
         ):
             result = _classify_issue_status("42", {}, branches, "main", tmp_path)
         assert result == _BATCH_STATUS_UNKNOWN
+
+
+class TestOpaqueBatchIdentity:
+    """Batch status consumes exact decoded IDs — no prefix or zero-padding matching (#490)."""
+
+    def test_pr_index_maps_opaque_heads_exactly(self, tmp_path: Path) -> None:
+        heads = {
+            1: "feat/idv1_61626331323334-x",  # abc1234
+            2: "feat/idv1_41424331323334-x",  # ABC1234
+            3: "feat/0042-x",
+            4: "feat/42-x",
+        }
+        prs = [
+            _pr(number).model_copy(update={"head_ref_name": head}) for number, head in heads.items()
+        ]
+        with patch("wade.git.pr.list_prs", return_value=prs):
+            index = _build_pr_index(tmp_path, ["abc1234", "0042", "42"])
+        assert {issue: pr.number for issue, pr in index.items()} == {"abc1234": 1, "42": 4}
+
+    def test_branch_status_does_not_conflate_zero_padded_or_longer_ids(
+        self, tmp_path: Path
+    ) -> None:
+        branches = {"origin/feat/0042-x", "feat/420-x", "feat/idv1_61626331323334-x"}
+        with (
+            patch(
+                "wade.services.implementation_service.batch.git_branch.commits_ahead",
+                return_value=1,
+            ),
+            patch(
+                "wade.services.implementation_service.batch.git_branch.is_merged_into",
+                return_value=False,
+            ),
+        ):
+            assert _classify_issue_status("42", {}, branches, "main", tmp_path) == "not_started"
+            assert _classify_issue_status("abc1234", {}, branches, "main", tmp_path) == (
+                "in_progress"
+            )
