@@ -2763,7 +2763,7 @@ def _finalize_issues(
             return result
     elif len(issue_numbers) >= 2:
         console.info("When you're ready to implement, run:")
-        console.detail(f"wade implement-batch {' '.join(issue_numbers)}")
+        console.command(f"wade implement-batch {shlex.join(issue_numbers)}")
 
     return None
 

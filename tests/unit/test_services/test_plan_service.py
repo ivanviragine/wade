@@ -2428,12 +2428,46 @@ class TestFinalizeIssuesHints:
             )
 
             mock_offer.assert_not_called()
-            mock_console.detail.assert_called_with("wade implement-batch 1 2 3")
+            mock_console.command.assert_called_once_with("wade implement-batch 1 2 3")
             assert all(
                 call.args != ("No dependencies found between issues.",)
                 for call in mock_console.info.call_args_list
             )
             assert result is None
+
+    @pytest.mark.parametrize("width", [40, 80])
+    def test_batch_hint_preserves_opaque_ids_on_one_literal_line(self, width: int) -> None:
+        import io
+        import shlex
+
+        from rich.console import Console
+
+        from wade.services import plan_service
+        from wade.ui.console import _theme
+
+        task_ids = ["[/]", "a" * 60 + "'$x"]
+        expected = "wade implement-batch '[/]' '" + "a" * 60 + "'\"'\"'$x'"
+        provider = self._make_provider()
+        provider.read_task.side_effect = [Task(id=task_id, title="Plan") for task_id in task_ids]
+        output = io.StringIO()
+        with (
+            patch.object(
+                plan_service.console, "out", Console(file=output, width=width, theme=_theme)
+            ),
+            patch.object(plan_service, "apply_plan_token_usage"),
+            patch.object(plan_service, "add_planned_by_labels"),
+            patch("wade.services.deps_service.analyze_deps", return_value=None),
+        ):
+            result = _finalize_issues(
+                provider=provider,
+                config=self._make_config(),
+                issue_numbers=task_ids,
+            )
+
+        assert result is None
+        commands = [line for line in output.getvalue().splitlines() if "wade " in line]
+        assert commands == [expected]
+        assert shlex.split(commands[0]) == ["wade", "implement-batch", *task_ids]
 
 
 # ---------------------------------------------------------------------------

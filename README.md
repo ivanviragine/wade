@@ -950,6 +950,9 @@ IDs, even when the provider reports such an ID.
 `#42` works as shorthand for `42` only with GitHub and Markdown; ClickUp
 targets are used exactly, and the ClickUp provider percent-encodes each ID in
 its API paths.
+After planning multiple tasks, the displayed `wade implement-batch` command
+shell-quotes each ID and stays on one literal output line, including IDs with
+brackets or shell metacharacters.
 
 - **Branches and worktrees.** Canonical decimal IDs keep the
   `feat/42-add-auth` shape. Any other ID is encoded as one delimiter-free token,
