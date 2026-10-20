@@ -2771,7 +2771,7 @@ def _finalize_issues(
 def _print_implement_hint(issue_number: str) -> None:
     """Print the hint for manually starting an implementation session."""
     console.info("When you're ready to implement, run:")
-    console.detail(f"wade implement {shlex.quote(issue_number)}")
+    console.detail(f"wade implement {shlex.quote(issue_number)}", markup=False)
 
 
 def _flush_planning_votes_before_implementation(

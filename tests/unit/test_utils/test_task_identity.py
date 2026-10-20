@@ -53,6 +53,19 @@ class TestCodec:
         assert encode_task_id(42) == "42"
         assert encode_task_id("47239185") == "47239185"  # Markdown's generated IDs
 
+    @pytest.mark.parametrize("size", [63, 64, 65])
+    def test_decimal_tokens_obey_the_encoder_size_limit(self, size: int) -> None:
+        token = "1" * size
+        if size <= MAX_TASK_ID_BYTES:
+            assert encode_task_id(token) == token
+            assert decode_task_token(token) == token
+            assert task_id_from_branch(f"feat/{token}-title") == token
+        else:
+            with pytest.raises(TaskIdentityError):
+                encode_task_id(token)
+            assert decode_task_token(token) is None
+            assert task_id_from_branch(f"feat/{token}-title") is None
+
     def test_case_and_leading_zeros_stay_distinct(self) -> None:
         assert encode_task_id("0042") == "idv1_30303432" != encode_task_id("42")
         assert encode_task_id("abc1234") != encode_task_id("ABC1234")

@@ -114,7 +114,7 @@ def encode_task_id(task_id: str | int) -> str:
 def decode_task_token(token: str) -> str | None:
     """Decode an identity token, or ``None`` when it is not a canonical token."""
     if is_canonical_decimal(token):
-        return token
+        return token if len(token) <= MAX_TASK_ID_BYTES else None
     match = _ENCODED_RE.fullmatch(token)
     if match is None:
         return None
