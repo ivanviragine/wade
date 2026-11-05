@@ -15,7 +15,9 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.stats import StatsEventKind
 from wade.models.task import Task, TaskReference
+from wade.services import stats_service
 from wade.services.implementation_service._shared import DraftPRTarget, task_reference
 from wade.ui.console import console
 from wade.utils.body_markers import GITHUB_BODY_MAX, update_body_preserving_markers
@@ -543,6 +545,13 @@ def bootstrap_draft_pr(
             "bootstrap_draft_pr.created",
             branch=branch_name,
             pr=pr_info.get("number"),
+        )
+        stats_service.record_event(
+            StatsEventKind.PR_CREATED,
+            cwd=repo_root,
+            pr_number=number if isinstance(number := pr_info.get("number"), int) else None,
+            branch=branch_name,
+            data={"draft": True, "base": effective_base},
         )
         return pr_info
     except Exception as e:

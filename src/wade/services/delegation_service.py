@@ -24,6 +24,7 @@ from crossby.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
+from wade.models.stats import utc_now
 from wade.services.ai_resolution import LAUNCH_NETWORK_ACCESS, announce_inherited_sandbox
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
@@ -175,14 +176,20 @@ def delegate(request: DelegationRequest) -> DelegationResult:
     saved = {key: os.environ.get(key) for key in keys}
     os.environ[keys[0]] = "1"
     os.environ[keys[1]] = operation_id
+    started_at = utc_now()
     try:
-        return _dispatch(request)
+        result = _dispatch(request)
     finally:
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+    if request.mode is not DelegationMode.PROMPT:
+        from wade.services import stats_service
+
+        stats_service.record_delegation(request, result, started_at)
+    return result
 
 
 def _dispatch(request: DelegationRequest) -> DelegationResult:

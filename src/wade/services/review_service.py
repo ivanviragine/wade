@@ -42,11 +42,12 @@ from wade.models.review import (
     filter_unresolved_threads,
     format_review_threads_markdown,
 )
+from wade.models.stats import StatsSessionKind
 from wade.models.task import Task, task_id_from_target
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services import bot_trigger
+from wade.services import bot_trigger, stats_service
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
@@ -1406,6 +1407,19 @@ def start(
         console.step(f"Launching {resolved_tool} in new terminal...")
         if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=review_title):
             console.success(console.escape_markup(f"Detached review session for #{task.id}"))
+            stats_service.begin_session(
+                kind=StatsSessionKind.REVIEW_PR_COMMENTS,
+                cwd=worktree_path,
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                effort=resolved_effort,
+                permission_mode=resolved_permission_mode.value,
+                task_id=task.id,
+                branch=branch_name,
+                worktree=worktree_path,
+                launch_mode="detached",
+                config=config,
+            ).detached()
             stop_title_keeper()
             return True
         console.warn("Could not launch in new terminal — falling back to inline")
@@ -1417,10 +1431,24 @@ def start(
         adapter: AbstractAITool | None = None
         launch_completed = False
         detected_model: str | None = None
+        stats_tracker: stats_service.SessionTracker | None = None
+        exit_code: int | None = None
         try:
             adapter = AbstractAITool.get(AIToolID(resolved_tool))
 
             deliver_prompt_if_needed(adapter, prompt)
+            stats_tracker = stats_service.begin_session(
+                kind=StatsSessionKind.REVIEW_PR_COMMENTS,
+                cwd=worktree_path,
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                effort=resolved_effort,
+                permission_mode=resolved_permission_mode.value,
+                task_id=task.id,
+                branch=branch_name,
+                worktree=worktree_path,
+                config=config,
+            )
             exit_code = adapter.launch(
                 working_dir=worktree_path,
                 model=resolved_model,
@@ -1467,6 +1495,14 @@ def start(
                     model=resolved_model,
                     issue_number=task.id,
                     provider=provider,
+                    stats=stats_tracker,
+                    github_usage=stats_service.github_usage_enabled(config),
+                )
+            if stats_tracker is not None:
+                stats_tracker.set_model(detected_model)
+                stats_tracker.finish(
+                    exit_code=exit_code,
+                    outcome=stats_service.launch_outcome(launch_completed, exit_code),
                 )
 
         if launch_completed:
@@ -1855,8 +1891,13 @@ def _capture_review_session_usage(
     model: str | None,
     issue_number: str | None = None,
     provider: AbstractTaskProvider | None = None,
+    stats: stats_service.SessionTracker | None = None,
+    github_usage: bool = True,
 ) -> str | None:
     """Post-AI-exit processing: parse transcript, update PR and issue with review usage.
+
+    ``github_usage=False`` (``stats.storage: local``/``off``) keeps the usage
+    table out of PR/issue bodies; the resume-session row is still written.
 
     Returns the primary model detected from the transcript.
     """
@@ -1869,6 +1910,9 @@ def _capture_review_session_usage(
         logger.warning("review.transcript_parse_failed", error=str(e))
         return None
 
+    if stats is not None:
+        stats.set_usage(usage)
+
     has_tokens = usage and (usage.total_tokens or usage.input_tokens)
     has_session = usage and usage.session_id
     if not has_tokens and not has_session:
@@ -1879,11 +1923,15 @@ def _capture_review_session_usage(
     effective_model = model or (
         usage.model_breakdown[0].model if usage and usage.model_breakdown else None
     )
+    # `stats.storage` gates only the usage table; the resume-session row stays.
+    write_tokens = bool(has_tokens) and github_usage
 
     # Update PR body with review usage stats — only on an OPEN PR (a
     # merged/closed PR is not ours to rewrite; a lookup failure is transient).
     lookup = git_pr.get_pr_for_branch(repo_root, branch)
-    if lookup.is_open and lookup.pr is not None:
+    if lookup.is_open and lookup.pr is not None and stats is not None:
+        stats.set_pr(lookup.pr.number)
+    if lookup.is_open and lookup.pr is not None and (write_tokens or has_session):
         pr_number = lookup.pr.number
         assert usage is not None
         usage_val = usage
@@ -1892,9 +1940,10 @@ def _capture_review_session_usage(
         def _review_transform(body: str) -> str:
             # Rewrite only wade's own review-usage / sessions marker blocks so a
             # concurrent edit elsewhere survives (A4).
-            body = append_review_usage_entry(
-                body, ai_tool=ai_tool, model=effective_model, token_usage=usage_val
-            )
+            if write_tokens:
+                body = append_review_usage_entry(
+                    body, ai_tool=ai_tool, model=effective_model, token_usage=usage_val
+                )
             if has_session and session_id is not None:
                 body = append_session_to_body(
                     body, phase="Review", ai_tool=ai_tool, session_id=session_id
@@ -1909,7 +1958,8 @@ def _capture_review_session_usage(
                 warn=console.warn,
                 label=f"PR #{pr_number} body",
             ):
-                console.success("Updated PR with review usage stats.")
+                if write_tokens:
+                    console.success("Updated PR with review usage stats.")
                 logger.info(
                     "review.usage_updated",
                     pr=pr_number,
@@ -1921,17 +1971,18 @@ def _capture_review_session_usage(
         logger.debug("review.no_pr_for_branch", branch=branch)
 
     # Update issue body with review usage stats
-    if issue_number and provider:
+    if issue_number and provider and (write_tokens or has_session):
         with contextlib.suppress(Exception):
             task = provider.read_task(str(issue_number))
             new_body = task.body
             assert usage is not None
-            new_body = append_review_usage_entry(
-                new_body,
-                ai_tool=ai_tool,
-                model=effective_model,
-                token_usage=usage,
-            )
+            if write_tokens:
+                new_body = append_review_usage_entry(
+                    new_body,
+                    ai_tool=ai_tool,
+                    model=effective_model,
+                    token_usage=usage,
+                )
             if has_session:
                 assert usage is not None and usage.session_id is not None
                 new_body = append_session_to_body(
@@ -1943,7 +1994,8 @@ def _capture_review_session_usage(
                 label=console.escape_markup(f"issue #{issue_number} body"),
             )
             provider.update_task(str(issue_number), body=new_body)
-            console.success("Updated issue with review usage stats.")
+            if write_tokens:
+                console.success("Updated issue with review usage stats.")
             logger.info("review.usage_issue_updated", issue=issue_number)
 
     return effective_model

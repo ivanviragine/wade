@@ -20,6 +20,7 @@ from wade.models.merge_evidence import (
     MergedPRLookup,
     MergeEvidenceState,
 )
+from wade.models.stats import PullRequestSnapshot
 
 log = structlog.get_logger(__name__)
 
@@ -704,6 +705,72 @@ def list_prs(
         if raise_on_error:
             raise GhCliError(f"gh pr list returned unparseable output: {e}") from e
         return []
+
+
+_STATS_PR_FIELDS = (
+    "number,title,url,headRefName,baseRefName,state,isDraft,createdAt,mergedAt,"
+    "closedAt,additions,deletions,changedFiles,body"
+)
+
+
+def _parse_gh_time(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def list_prs_for_stats(repo_root: Path, *, limit: int = 300) -> list[PullRequestSnapshot]:
+    """List PRs (all states) with the fields ``wade stats sync`` aggregates.
+
+    Raises :class:`GhCliError` when the listing cannot be performed, so a sync
+    never mistakes a failed listing for "no PRs".
+    """
+    result = _run_gh(
+        "pr",
+        "list",
+        "--state",
+        "all",
+        "--limit",
+        str(limit),
+        "--json",
+        _STATS_PR_FIELDS,
+        cwd=repo_root,
+        retries=2,
+    )
+    try:
+        rows = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise GhCliError(f"gh pr list returned unparseable output: {exc}") from exc
+    if not isinstance(rows, list):
+        raise GhCliError("gh pr list returned a non-array payload")
+    out: list[PullRequestSnapshot] = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("number"), int):
+            continue
+        out.append(
+            PullRequestSnapshot(
+                number=row["number"],
+                title=str(row.get("title") or ""),
+                url=str(row.get("url") or ""),
+                head_ref=str(row.get("headRefName") or ""),
+                base_ref=str(row.get("baseRefName") or ""),
+                state=str(row.get("state") or ""),
+                is_draft=bool(row.get("isDraft")),
+                created_at=_parse_gh_time(row.get("createdAt")),
+                merged_at=_parse_gh_time(row.get("mergedAt")),
+                closed_at=_parse_gh_time(row.get("closedAt")),
+                additions=row.get("additions") if isinstance(row.get("additions"), int) else None,
+                deletions=row.get("deletions") if isinstance(row.get("deletions"), int) else None,
+                changed_files=(
+                    row.get("changedFiles") if isinstance(row.get("changedFiles"), int) else None
+                ),
+                body=str(row.get("body") or ""),
+            )
+        )
+    return out
 
 
 def get_pr_body(repo_root: Path, pr_number: int) -> str | None:

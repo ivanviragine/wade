@@ -53,12 +53,14 @@ from wade.models.interactive_plan import (
 )
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.plan_bundle import PlanBundle, PlanKnowledgeProposal, PlanKnowledgeVote
+from wade.models.stats import StatsOutcome, StatsSessionKind
 from wade.models.task import CloseReason, PlanFile, Task, TaskState, format_issue_heading
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services import interactive_plan_service as interactive_plan
 from wade.services import native_plan_service as native_plan
+from wade.services import stats_service
 from wade.services.ai_resolution import (
     announce_inherited_sandbox,
     build_relaunch_command,
@@ -1732,6 +1734,18 @@ def plan(
     collected: PlanSessionResult | None = None
     usage: TokenUsage | None = None
     handoff_progress: PlanHandoffProgress | None = None
+    plan_stats = stats_service.begin_session(
+        kind=StatsSessionKind.PLAN,
+        cwd=session_cwd,
+        ai_tool=resolved_tool,
+        model=resolved_model,
+        effort=resolved_effort,
+        permission_mode=resolved_permission_mode.value,
+        task_id=existing_issue.id if existing_issue is not None else None,
+        worktree=planning_worktree,
+        launch_mode="interactive" if interactive else "collected",
+        config=config,
+    )
     try:
         request = request.model_copy(update={"working_dir": session_cwd})
         with _plan_dir_fallback_env(plan_dir, planning_worktree):
@@ -1784,6 +1798,9 @@ def plan(
                         bundle.knowledge_votes,
                         bundle.knowledge_proposals,
                     )
+        # The planner itself finished; handoff failures below don't change that.
+        plan_stats.set_usage(usage)
+        plan_stats.finish(exit_code=0)
         if interactive:
             handoff_id = interactive_plan.collect_with_state(
                 session_cwd,
@@ -1826,11 +1843,19 @@ def plan(
             stop_title_keeper()
             return False
     except UncollectableHandoffError as exc:
+        plan_stats.finish(outcome=StatsOutcome.FAILED)
         console.error(native_plan.failure_message(exc), markup=False)
         _retain_uncollectable_handoff(plan_dir, repo_root, planning_worktree)
         stop_title_keeper()
         return False
     except (Exception, KeyboardInterrupt) as exc:
+        plan_stats.finish(
+            outcome=(
+                StatsOutcome.CANCELLED
+                if isinstance(exc, KeyboardInterrupt)
+                else StatsOutcome.FAILED
+            )
+        )
         category = type(exc).__name__
         message = (
             "Cancelled" if isinstance(exc, KeyboardInterrupt) else native_plan.failure_message(exc)
@@ -2622,8 +2647,13 @@ def _finalize_issues(
             )
             return PLAN_FINALIZATION_FAILED
 
-    # Apply token usage to issue bodies
-    if usage is not None and usage.total_tokens:
+    # Attribute the planning session to the tasks it produced (local stats).
+    stats_service.link_plan_tasks(
+        issue_numbers, cwd=planning_worktree or repo_root or Path.cwd(), config=config
+    )
+
+    # Apply token usage to issue bodies (unless `stats.storage` keeps it local-only)
+    if usage is not None and usage.total_tokens and config.stats.writes_github:
         apply_plan_token_usage(
             provider=provider,
             issue_numbers=issue_numbers,

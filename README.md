@@ -393,6 +393,10 @@ as `abc1234` (see [Task IDs and references](#task-ids-and-references)). Only the
 | `wade knowledge reconcile --check --json` | Read-only committed proof/publication report |
 | `wade knowledge proposals list` | Inspect ignored owner-bound observations |
 | `wade knowledge disable` | Disable knowledge capture (keeps existing knowledge file) |
+| `wade stats` | Usage summary: tokens, estimated cost, AI tools, models, costliest tasks, PR flow, insights |
+| `wade stats ui` | Open the local stats dashboard (charts, filters, sessions table, CSV export) |
+| `wade stats migrate` | Import WADE's history from GitHub PRs and issues into the local stats database |
+| `wade stats sessions \| prs \| insights \| export \| info \| prune` | Drill-down lists, raw export (CSV/JSON), storage info, retention |
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
@@ -1456,6 +1460,92 @@ Invalid evidence history is visible in `knowledge get`
 and withholds correctness labels. Legacy logs remain intact and require explicit owner-verified
 `knowledge proposals recover --worktree <original-parent>`. See
 [the knowledge reference](docs/dev/knowledge.md) for proof types and recovery.
+
+## Usage statistics & dashboard
+
+WADE records every AI session it launches — planning, implementation, PR-comment
+review and delegated runs (plan/code/batch reviews, dependency analysis) — in a
+**local SQLite database**, and turns it into reports, insights and a dashboard.
+Nothing is uploaded: the database is a per-user file
+(`~/.local/share/wade/stats.db`, or `$XDG_DATA_HOME/wade/stats.db`,
+or `$WADE_STATS_DB`), shared by all your projects so history survives worktree
+cleanup.
+
+```bash
+wade stats                     # this project, last 30 days
+wade stats -A --since 90d      # every project, last 90 days
+wade stats --tool codex --kind implement --json
+wade stats ui                  # local dashboard in your browser
+wade stats migrate             # import history from GitHub PRs + issues
+wade stats export -f csv -o sessions.csv
+```
+
+**What is collected**
+
+| Data | Source | Used for |
+|------|--------|----------|
+| AI sessions — workflow kind, task, branch, tool, model, effort, permission mode, launch mode (inline/detached/resume/headless), start/end, duration, exit code, outcome | Recorded at launch | Time spent, failure rate per tool, detached/abandoned launches |
+| Tokens — input, output, cached, total, premium requests, per-model breakdown, tool session ID | Parsed from the session transcript | Spend, cache efficiency, model mix, cost estimates |
+| Lifecycle events — worktree created/removed, PR created/ready/merged, tasks created by a plan | Recorded by WADE | Funnel and timing |
+| Pull requests — state, draft, created/merged/closed, size, linked task, WADE-managed or not | `wade stats migrate` (via `gh`) | Lead time, WADE vs non-WADE PRs, cost per merged task |
+| Tasks — state, created/updated, labels, planned/implemented/review-addressed tool + model | `wade stats migrate` (via your task provider) | Cycle time (task → merge), attribution |
+
+**Reports and insights.** `wade stats` and the dashboard show totals with change
+vs the previous period of equal length; breakdowns by workflow kind, AI tool,
+model and project (sessions, tokens, cache-hit share, estimated cost, average
+duration, failure rate); the most expensive tasks with their plan/implement/review
+split; and PR flow (lead time, task→merge cycle time, review rounds per PR, cost
+per merged task). Insights flag what deserves attention: spend trends, review
+rework costing more than implementation, tools with high failure rates, cache
+efficiency gaps, models that cost several times more per session, one task
+dominating spend, and WADE vs other PR lead times. Filters (date range, project,
+tool, model, workflow, task) apply to everything; `export` hands the raw
+sessions (with resolved tokens and cost) to a spreadsheet or notebook.
+
+**Where usage is kept** — choose per project in `.wade.yml`:
+
+```yaml
+stats:
+  storage: both   # both (default) | github | local | off
+```
+
+| `storage` | PR/issue bodies get usage tables | Local database records sessions |
+|-----------|:---:|:---:|
+| `both` | ✓ | ✓ |
+| `github` | ✓ | — (the pre-stats behaviour) |
+| `local` | — | ✓ (keeps PRs and issues free of usage tables) |
+| `off` | — | — |
+
+The `## Sessions` resume block in PR bodies is always written — `wade <N>` resumes
+from it. `WADE_STATS_DISABLE=1` turns local recording off everywhere.
+
+**Migrating from GitHub.** `wade stats migrate` reads every PR (via `gh`) and every
+task (via your provider — GitHub, ClickUp or Markdown) of the current project and
+imports their metadata plus every usage table WADE wrote into them: implementation
+and review tables from PR bodies, and planning/implementation/review tables from
+issue bodies. It is idempotent — re-run it any time to refresh (`wade stats ui
+--migrate` does it before opening the dashboard). A session that appears in a PR
+body, its issue body *and* the local database is stored once (matched by its
+usage numbers); a multi-issue plan's usage, copied into each issue, counts once.
+Usage tables carry no timestamps, so imported sessions are dated from their
+PR/issue. `--dry-run` shows what would be imported.
+
+**Cost estimates.** Costs use built-in list prices for Anthropic Claude models
+(first-party API, USD per million tokens). They are estimates — CLI subscriptions,
+discounts, cache-write surcharges and long-context tiers are not modelled. Other
+models show `—` until you price them in `~/.config/wade/pricing.yml`
+(or `$WADE_STATS_PRICING`); keys match exactly or as a prefix:
+
+```yaml
+models:
+  gpt-5-codex: {input: 1.25, output: 10.0, cached: 0.125}
+  gemini-3-pro: {input: 2.0, output: 12.0}
+```
+
+**The dashboard** (`wade stats ui`) is a single local page served from
+`127.0.0.1` with a one-time access token in its URL; it works offline and
+follows your light/dark preference. `wade stats prune --older-than 1y` trims old
+data; `wade stats info` shows the database path, row counts and storage mode.
 
 ## Supported AI Tools
 

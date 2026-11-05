@@ -30,6 +30,7 @@ from wade.models.config import (
     ReviewBotConfig,
     SessionsConfig,
     SkillsConfig,
+    StatsConfig,
 )
 from wade.models.permission import coerce_permission_mode
 from wade.models.project import GitHubProjectsConfig
@@ -304,6 +305,11 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         path=knowledge_raw.get("path", "KNOWLEDGE.md"),
     )
 
+    # Parse stats section (where AI usage is kept; default both).
+    stats_raw = _section_mapping(raw, "stats")
+    _stats_storage = stats_raw.get("storage")
+    stats = StatsConfig() if _stats_storage is None else StatsConfig(storage=_stats_storage)
+
     # Parse done section (completion gates). All gates default on. A key present
     # but null (e.g. `require_sync:` with no value → None) is normalized to the
     # default so DoneConfig's non-optional bool fields never receive None, which
@@ -366,6 +372,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         permissions=permissions,
         hooks=hooks,
         knowledge=knowledge,
+        stats=stats,
         skills=skills,
         sessions=sessions,
         delegations=delegations,

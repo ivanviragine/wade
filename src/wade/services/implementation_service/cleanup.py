@@ -18,10 +18,12 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.merge_evidence import MergeAssessment, MergeAssessmentCache, MergeEvidenceState
 from wade.models.session import WorktreeState
+from wade.models.stats import StatsEventKind
 from wade.models.task import Task
 from wade.models.worktree import Worktree
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import stats_service
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
     find_worktree_path,
@@ -471,6 +473,12 @@ def _cleanup_worktree(
     except GitError as e:
         console.warn(f"Worktree removal failed: {e}")
         return False
+    stats_service.record_event(
+        StatsEventKind.WORKTREE_REMOVED,
+        cwd=main_root,
+        branch=branch_name or None,
+        data={"reason": "cleanup", "forced": bool(discard_dirty)},
+    )
 
     if branch_name and branch_name != main_branch:
         # `-d` refuses to delete an unmerged branch (safe); `-D` (force) is used

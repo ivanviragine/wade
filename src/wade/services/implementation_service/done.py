@@ -17,11 +17,12 @@ from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.session import ClosingCandidate
 from wade.models.skill import SkillSlot
+from wade.models.stats import StatsEventKind
 from wade.models.task import TaskReference
 from wade.models.workflow import DelegationKind, SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services import bot_trigger
+from wade.services import bot_trigger, stats_service
 from wade.services.documentation_receipt_service import read_documentation_receipt
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -1633,6 +1634,15 @@ def _done_via_pr(
             pr_url = str(pr_info.get("url", ""))
             pr_number = int(pr_info["number"])
             console.success(f"PR created: {pr_url}")
+            stats_service.record_event(
+                StatsEventKind.PR_CREATED,
+                cwd=repo_root,
+                task_id=issue_number,
+                pr_number=pr_number,
+                branch=branch,
+                data={"draft": draft, "base": main_branch},
+                config=config,
+            )
         except Exception as e:
             markers.clear_markers(marker_root, "done")
             console.error(f"PR creation failed: {e}")
@@ -1667,6 +1677,14 @@ def _done_via_pr(
             return False
         is_draft = False
         console.success("PR marked as ready for review.")
+        stats_service.record_event(
+            StatsEventKind.PR_READY,
+            cwd=repo_root,
+            task_id=issue_number,
+            pr_number=pr_number,
+            branch=branch,
+            config=config,
+        )
 
     if expected_head is not None:
         final_root = worktree_path or repo_root

@@ -170,6 +170,42 @@ class KnowledgeConfig(BaseModel):
     path: str = "KNOWLEDGE.md"
 
 
+class StatsStorage(StrEnum):
+    """Where AI usage (tokens, tools, models) is kept.
+
+    - ``both`` (default): usage tables in PR/issue bodies *and* the local database;
+    - ``github``: only PR/issue bodies (the pre-``wade stats`` behavior);
+    - ``local``: only the local database — PR/issue bodies stay free of usage tables;
+    - ``off``: neither.
+
+    The ``## Sessions`` resume block in PR bodies is functional (smart-start
+    resumes from it) and is written in every mode.
+    """
+
+    BOTH = "both"
+    GITHUB = "github"
+    LOCAL = "local"
+    OFF = "off"
+
+
+class StatsConfig(BaseModel):
+    """Usage statistics settings (``stats:`` in ``.wade.yml``).
+
+    The local database is a per-user SQLite file that never leaves the machine;
+    ``WADE_STATS_DISABLE=1`` additionally stops local recording everywhere.
+    """
+
+    storage: StatsStorage = StatsStorage.BOTH
+
+    @property
+    def records_local(self) -> bool:
+        return self.storage in (StatsStorage.BOTH, StatsStorage.LOCAL)
+
+    @property
+    def writes_github(self) -> bool:
+        return self.storage in (StatsStorage.BOTH, StatsStorage.GITHUB)
+
+
 class ProjectSkillDiscoveryConfig(BaseModel):
     """Read-only discovery policy for project-owned Agent Skills."""
 
@@ -524,6 +560,7 @@ class ProjectConfig(BaseModel):
     permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
+    stats: StatsConfig = Field(default_factory=StatsConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     delegations: DelegationsConfig = Field(default_factory=DelegationsConfig)

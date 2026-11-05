@@ -28,6 +28,35 @@ def _neutral_sandbox_signals(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_stats(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Never let the suite write to the developer's real stats database.
+
+    Local stats recording is disabled suite-wide (it would add git calls and
+    SQLite writes to tests that patch subprocess/git with exact call lists);
+    tests that exercise it use the ``stats_db`` fixture, which re-enables it.
+    ``WADE_STATS_DB`` still points at a temp file as a second guard, and the
+    env change is inherited by e2e subprocesses.
+    """
+    monkeypatch.setenv("WADE_STATS_DISABLE", "1")
+    monkeypatch.setenv("WADE_STATS_DB", str(tmp_path_factory.mktemp("stats") / "stats.db"))
+    monkeypatch.setenv("WADE_STATS_PRICING", str(tmp_path_factory.mktemp("pricing") / "none.yml"))
+
+
+@pytest.fixture
+def stats_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Enable local stats recording against an isolated database file."""
+    db = tmp_path / "stats.db"
+    monkeypatch.delenv("WADE_STATS_DISABLE", raising=False)
+    monkeypatch.setenv("WADE_STATS_DB", str(db))
+    from wade.services import stats_service
+
+    stats_service._resolve_project_cached.cache_clear()
+    return db
+
+
 @pytest.fixture
 def tmp_git_repo(tmp_path: Path) -> Path:
     """Create a temporary git repository with an initial commit.

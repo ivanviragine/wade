@@ -77,6 +77,7 @@ src/wade/
 │   ├── review_recovery.py # Typed guarded-recovery phases and incomplete record
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
+│   ├── stats.py         # Usage-stats records, filters and report models
 │   └── events.py        # Typed event models
 ├── services/            # Business logic (orchestration)
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
@@ -101,6 +102,8 @@ src/wade/
 │   ├── check_service.py # Safety checks, config validation
 │   ├── ai_resolution.py # AI tool/model/effort resolution logic
 │   ├── delegation_service.py # Delegation mode resolution
+│   ├── stats_service.py # Usage-stats recording facade, GitHub migration, reports, export
+│   ├── stats_dashboard.py # Loopback HTTP server for `wade stats ui`
 │   └── prompt_delivery.py   # Initial message delivery for AI tools
 ├── providers/           # Task backend providers (ABC + registry)
 │   ├── base.py          # AbstractTaskProvider
@@ -132,8 +135,15 @@ src/wade/
 │   ├── loader.py        # Find + parse .wade.yml (walk up from CWD)
 │   ├── schema.py        # Re-exports from models (Pydantic Settings)
 │   └── migrations.py    # Config migration pipeline (ensure version key)
+├── stats/               # Local usage statistics (SQLite store + pure aggregation)
+│   ├── store.py         # Per-user SQLite schema, migrations, typed reads/writes
+│   ├── pricing.py       # Token → USD estimates (built-in Claude prices + pricing.yml)
+│   ├── usage_parser.py  # Parse WADE usage tables back out of PR/issue bodies
+│   ├── report.py        # Sessions + PRs + tasks → StatsReport
+│   └── insights.py      # StatsReport → data-backed observations
 ├── ui/                  # Terminal UI (Rich)
 │   ├── console.py       # Console class
+│   ├── stats_view.py    # `wade stats` tables
 │   └── prompts.py       # confirm, input, select, menu
 ├── logging/             # Structured logging
 │   ├── setup.py         # structlog configuration
@@ -178,8 +188,67 @@ admits only concrete material findings and fixes the review scope.
 > `SessionRepository.get_by_worktree_path` lookup in
 > `implementation_service/cleanup._preserve_session_data`, which always returned
 > empty — were removed in **#357 C5**; that function now detects the AI tool by
-> worktree directory presence alone. Real persisted state lives in GitHub
-> (PR/issue body markers, labels) and worktree files — never SQLite.
+> worktree directory presence alone. Real **workflow** state lives in GitHub
+> (PR/issue body markers, labels) and worktree files — never SQLite. The
+> `stats/` package's SQLite file is a separate, per-user *analytics* store
+> (see *Usage statistics* below): no workflow decision ever reads it.
+
+## Usage statistics (`wade stats`)
+
+Local analytics over everything WADE launches. Three layers:
+
+- **`stats/`** (beside `git/`/`providers/`; imports `models`, `logging` and leaf
+  `utils` only, never services). `store.py` owns the per-user SQLite file
+  (`$WADE_STATS_DB` → `$XDG_DATA_HOME/wade/stats.db` → `~/.local/share/wade/stats.db`),
+  WAL mode + busy timeout for concurrent terminals, schema versioned with
+  `PRAGMA user_version` (a newer schema is refused, never downgraded). Tables:
+  `projects` (main-checkout root + `owner/repo` slug, so worktrees roll up),
+  `ai_sessions` + `ai_session_models`, `events`, `pull_requests`, `tasks`.
+  `report.py`/`insights.py`/`pricing.py`/`usage_parser.py` are pure.
+- **`services/stats_service.py`** decides *when* to record. Its recording API
+  (`begin_session` → `SessionTracker.set_usage/set_pr/finish/detached`,
+  `record_event`, `record_delegation`, `link_plan_tasks`) is **best-effort by
+  contract**: it never raises and only logs at debug, so stats can never break a
+  workflow. The session row is inserted at launch (crashes stay visible as
+  `running`) and completed in the launch site's `finally`.
+- **Presentation**: `cli/stats.py` (thin Typer dispatch), `ui/stats_view.py`
+  (Rich tables) and `services/stats_dashboard.py` + `templates/stats/dashboard.html`
+  (stdlib `ThreadingHTTPServer` on `127.0.0.1`; per-run token from the URL
+  fragment on every `/api/*` call; `Host`/`Origin` checks against DNS rebinding;
+  the static page holds no data).
+
+**Recording sites.** Implementation and PR-comment review launches (inline,
+resume, detached) in `implementation_service/core.py` and `review_service.py`;
+planning (interactive and collected) in `plan_service.py`, linked to the created
+tasks in `_finalize_issues`; every non-prompt delegation in
+`delegation_service.delegate()` (duration + outcome; delegated runs expose no
+transcript). Events: worktree created/removed, PR created (draft bootstrap and
+`done` fallback), PR ready, PR merged. Token usage reaches the tracker through the
+existing transcript capture (`_capture_post_session_usage` /
+`_capture_review_session_usage` take `stats=`), so transcripts are parsed once.
+
+**Storage selector.** `stats.storage` (`both` | `github` | `local` | `off`,
+`models/config.py::StatsStorage`) gates the two sinks independently:
+`StatsConfig.records_local` for the database (plus the `WADE_STATS_DISABLE`
+kill-switch) and `StatsConfig.writes_github` for the usage tables in PR/issue
+bodies (`github_usage=` on the capture helpers; `_finalize_issues` for the
+planning block). The `## Sessions` resume block is functional (smart-start reads
+it) and is written in every mode.
+
+**Migration.** `migrate_from_github` lists PRs via `git/pr.list_prs_for_stats`
+and tasks via the configured provider's `list_tasks(state=None)`, upserts their
+metadata (WADE attribution from `planned-by:`/`implemented-model:`… labels) and
+imports every usage table from PR bodies (implement/review) and task bodies
+(plan/implement/review). Dedupe is by **usage fingerprint**
+(`usage_parser.usage_fingerprint`: kind, tool, input/output/cached/total — model
+excluded because bodies hold the effective model) within a scope: per task (or
+per PR), and project-wide for planning (one planning block is copied into every
+issue it created). Local sessions participate in the same fingerprint set, so a
+session recorded locally and also written to its PR is stored once. Token-less
+rows have no fingerprint and use a positional key; their issue copy is skipped
+when the task has a PR. The parser only recognizes WADE's own renderers; a unit
+test pins its marker strings to the writers' constants and round-trips their
+output.
 
 ## AI Tool Layer (external: crossby)
 
@@ -1386,6 +1455,8 @@ hooks:
 knowledge:
   enabled: true
   path: KNOWLEDGE.md
+stats:                       # usage statistics (`wade stats`); fully defaulted
+  storage: both              # both | github (PR/issue bodies only) | local (SQLite only) | off
 skills:                      # optional project-skill discovery policy
   project:
     discover: true

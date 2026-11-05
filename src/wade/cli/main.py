@@ -790,6 +790,7 @@ from wade.cli.review import review_app  # noqa: E402
 from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
 from wade.cli.session import session_app  # noqa: E402
 from wade.cli.skills import skills_app  # noqa: E402
+from wade.cli.stats import stats_app  # noqa: E402
 from wade.cli.task import task_app  # noqa: E402
 from wade.cli.worktree import worktree_app  # noqa: E402
 
@@ -854,6 +855,12 @@ app.add_typer(
     name="skills",
     help="Inspect dynamic Agent Skill discovery and bindings.",
     rich_help_panel="Setup",
+)
+app.add_typer(
+    stats_app,
+    name="stats",
+    help="Local usage statistics, insights and dashboard (tokens, tools, models, PRs).",
+    rich_help_panel="Insights",
 )
 app.add_typer(
     session_app,

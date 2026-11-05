@@ -27,10 +27,12 @@ from wade.models.config import ProjectConfig
 from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus, SyncEventType, SyncResult
+from wade.models.stats import StatsEventKind, StatsSessionKind
 from wade.models.task import Task, task_id_from_target
 from wade.models.workflow import SessionKind
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
+from wade.services import stats_service
 from wade.services.ai_resolution import (
     LAUNCH_NETWORK_ACCESS,
     SandboxCapabilityError,
@@ -156,8 +158,13 @@ def _capture_post_session_usage(
     model: str | None,
     issue_number: str | None = None,
     provider: AbstractTaskProvider | None = None,
+    stats: stats_service.SessionTracker | None = None,
+    github_usage: bool = True,
 ) -> str | None:
     """Post-AI-exit processing: parse transcript, update PR and issue with token usage.
+
+    ``github_usage=False`` (``stats.storage: local``/``off``) keeps usage tables
+    out of PR/issue bodies; the resume-session row is still written.
 
     Returns the primary model detected from the transcript (for implemented-model label),
     or the explicitly passed model if no breakdown is available.
@@ -172,6 +179,9 @@ def _capture_post_session_usage(
         logger.warning("implementation.transcript_parse_failed", error=str(e))
         return None
 
+    if stats is not None:
+        stats.set_usage(usage)
+
     has_tokens = _usage_has_token_metrics(usage)
     has_session = bool(usage and usage.session_id)
     if not has_tokens and not has_session:
@@ -183,42 +193,47 @@ def _capture_post_session_usage(
     effective_model = model or (
         usage.model_breakdown[0].model if usage and usage.model_breakdown else None
     )
+    # `stats.storage` gates only the usage tables; the resume-session row stays.
+    write_tokens = has_tokens and github_usage
 
     # Update PR body with usage stats and session ID — only on an OPEN PR
     # (a merged/closed PR is not ours to rewrite; a lookup failure is transient).
     lookup = git_pr.get_pr_for_branch(repo_root, branch)
     if lookup.is_open and lookup.pr is not None:
         pr_number = lookup.pr.number
-        try:
-            # Re-read the body immediately before writing and rewrite only wade's
-            # own usage marker block, so a concurrent edit outside it survives
-            # (A4); enforce GitHub's size cap with a visible warning (A5).
-            updated = update_body_preserving_markers(
-                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
-                write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
-                transform=lambda b: _enrich_body_with_usage(
-                    b, ai_tool, effective_model, usage, has_tokens, has_session
-                ),
-                warn=console.warn,
-                label=f"PR #{pr_number} body",
-            )
-            if updated:
-                if has_tokens:
-                    console.success("Updated PR with implementation usage stats.")
-                logger.info(
-                    "implementation.impl_usage_updated",
-                    pr=pr_number,
-                    total_tokens=usage.total_tokens if usage else None,
+        if stats is not None:
+            stats.set_pr(pr_number)
+        if write_tokens or has_session:
+            try:
+                # Re-read the body immediately before writing and rewrite only wade's
+                # own usage marker block, so a concurrent edit outside it survives
+                # (A4); enforce GitHub's size cap with a visible warning (A5).
+                updated = update_body_preserving_markers(
+                    read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                    write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+                    transform=lambda b: _enrich_body_with_usage(
+                        b, ai_tool, effective_model, usage, write_tokens, has_session
+                    ),
+                    warn=console.warn,
+                    label=f"PR #{pr_number} body",
                 )
-        except Exception:
-            logger.debug("implementation.pr_body_read_failed", exc_info=True)
+                if updated:
+                    if write_tokens:
+                        console.success("Updated PR with implementation usage stats.")
+                    logger.info(
+                        "implementation.impl_usage_updated",
+                        pr=pr_number,
+                        total_tokens=usage.total_tokens if usage else None,
+                    )
+            except Exception:
+                logger.debug("implementation.pr_body_read_failed", exc_info=True)
     elif lookup.lookup_failed:
         logger.debug("implementation.pr_lookup_failed", branch=branch)
     else:
         logger.debug("implementation.no_pr_for_branch", branch=branch)
 
     # Embed usage stats and session ID in the issue body
-    if issue_number and provider:
+    if issue_number and provider and (write_tokens or has_session):
         with contextlib.suppress(Exception):
             task = provider.read_task(str(issue_number))
             new_body = _enrich_body_with_usage(
@@ -226,7 +241,7 @@ def _capture_post_session_usage(
                 ai_tool,
                 effective_model,
                 usage,
-                has_tokens,
+                write_tokens,
                 has_session,
             )
             new_body = enforce_body_budget(
@@ -235,7 +250,7 @@ def _capture_post_session_usage(
                 label=console.escape_markup(f"issue #{issue_number} body"),
             )
             provider.update_task(str(issue_number), body=new_body)
-            if has_tokens:
+            if write_tokens:
                 console.success("Updated issue with implementation usage stats.")
             logger.info("implementation.impl_usage_issue_updated", issue=issue_number)
 
@@ -757,6 +772,14 @@ def start(
             except GitError as e:
                 console.error(f"Failed to create worktree: {e}")
                 return ImplementResult(success=False)
+            stats_service.record_event(
+                StatsEventKind.WORKTREE_CREATED,
+                cwd=repo_root,
+                task_id=task.id,
+                branch=branch_name,
+                data={"base": effective_base},
+                config=config,
+            )
 
         # Resolve the immutable session bundle before any provider-side mutation.
         # Discovery must happen against the actual target worktree (not merely the
@@ -1112,6 +1135,20 @@ def start(
                     title=work_title,
                 ):
                     console.success(console.escape_markup(f"Detached AI session for #{task.id}"))
+                    stats_service.begin_session(
+                        kind=StatsSessionKind.IMPLEMENT,
+                        cwd=worktree_path,
+                        ai_tool=resolved_tool,
+                        model=resolved_model,
+                        effort=resolved_effort,
+                        permission_mode=resolved_permission_mode.value,
+                        task_id=task.id,
+                        branch=branch_name,
+                        worktree=worktree_path,
+                        launch_mode="detached",
+                        resumed=bool(resume_session_id),
+                        config=config,
+                    ).detached()
                     stop_title_keeper()
                     return ImplementResult(success=True)
             console.warn("Could not launch in new terminal — falling back to inline")
@@ -1127,6 +1164,8 @@ def start(
             adapter: AbstractAITool | None = None
             launch_completed = False
             detected_model: str | None = None
+            stats_tracker: stats_service.SessionTracker | None = None
+            exit_code: int | None = None
             try:
                 adapter = AbstractAITool.get(AIToolID(resolved_tool))
 
@@ -1154,6 +1193,21 @@ def start(
                         # resolved permission mode and run at the default tier.
                         resume_cmd += _resume_autonomy_args(adapter, resolved_permission_mode)
 
+                resuming = bool(resume_session_id and resume_cmd is not None)
+                stats_tracker = stats_service.begin_session(
+                    kind=StatsSessionKind.IMPLEMENT,
+                    cwd=worktree_path,
+                    ai_tool=resolved_tool,
+                    model=resolved_model,
+                    effort=resolved_effort,
+                    permission_mode=resolved_permission_mode.value,
+                    task_id=task.id,
+                    branch=branch_name,
+                    worktree=worktree_path,
+                    launch_mode="resume" if resuming else "inline",
+                    resumed=resuming,
+                    config=config,
+                )
                 if resume_session_id and resume_cmd is not None:
                     logger.info(
                         "ai_tool.resume",
@@ -1221,6 +1275,14 @@ def start(
                         model=resolved_model,
                         issue_number=task.id,
                         provider=provider,
+                        stats=stats_tracker,
+                        github_usage=stats_service.github_usage_enabled(config),
+                    )
+                if stats_tracker is not None:
+                    stats_tracker.set_model(detected_model)
+                    stats_tracker.finish(
+                        exit_code=exit_code,
+                        outcome=stats_service.launch_outcome(launch_completed, exit_code),
                     )
 
                 if launch_completed:

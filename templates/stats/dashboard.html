@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WADE Stats</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --text-1: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --wash: rgba(11,11,11,0.04);
+  --accent: #2a78d6;
+  --good: #006300;
+  --bad: #d03b3b;
+  --warn-ink: #8a5a00;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --other: #b5b3ab;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --wash: rgba(255,255,255,0.05); --accent: #3987e5; --good: #0ca30c; --warn-ink: #fab219;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5f5e59;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7;
+  --muted: #898781; --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --wash: rgba(255,255,255,0.05); --accent: #3987e5; --good: #0ca30c; --warn-ink: #fab219;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5f5e59;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--text-1);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; }
+h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+.sub { color: var(--text-2); font-size: 12px; }
+.muted { color: var(--muted); }
+header .spacer { flex: 1; }
+button, select, input {
+  font: inherit; color: var(--text-1); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover, select:hover { background: var(--wash); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.filters label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); gap: 2px; }
+.filters .grow { flex: 1; }
+a.btn { color: var(--text-1); text-decoration: none; border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; background: var(--surface); align-self: flex-end; }
+a.btn:hover { background: var(--wash); }
+.grid { display: grid; gap: 12px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 12px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; min-width: 0; }
+.card + .card, .grid + .card, .card + .grid { margin-top: 12px; }
+.grid > .card { margin-top: 0; }
+.tile .label { color: var(--text-2); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .delta { font-size: 12px; margin-top: 2px; color: var(--text-2); }
+.delta.up-bad, .delta.down-bad { color: var(--bad); }
+.delta.up-good, .delta.down-good { color: var(--good); }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  margin-bottom: 8px; flex-wrap: wrap; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .lbl { fill: var(--text-2); }
+.chart .val { fill: var(--text-1); }
+.tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: none; min-width: 140px; }
+.tip .t { color: var(--text-2); margin-bottom: 4px; }
+.tip .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.tip .r b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tip .k { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.tip .k i { width: 12px; height: 2px; display: inline-block; border-radius: 1px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--text-2); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--surface); }
+th.sortable { cursor: pointer; user-select: none; }
+th.sorted::after { content: " ↓"; } th.sorted.asc::after { content: " ↑"; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+td .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; }
+.scroll { overflow: auto; max-height: 460px; }
+.insights { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.insights li { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; }
+.insights .ic { grid-row: span 2; width: 20px; height: 20px; border-radius: 50%; display: grid;
+  place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
+.ic.good { background: #0ca30c; } .ic.warning { background: #fab219; color: #0b0b0b; } .ic.info { background: var(--accent); }
+.insights b { font-weight: 600; }
+.insights span { color: var(--text-2); font-size: 13px; }
+details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin-top: 8px; }
+.loading { opacity: 0.55; transition: opacity .15s; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.banner { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 12px; }
+.tag { font-size: 11px; color: var(--text-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+.statrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.statrow .label { color: var(--text-2); font-size: 12px; }
+.statrow .value { font-size: 18px; font-weight: 600; }
+@media (max-width: 520px) { .tile .value { font-size: 22px; } .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>WADE stats</h1>
+    <span class="sub" id="dbpath"></span>
+    <span class="spacer"></span>
+    <button id="theme" type="button" title="Toggle light/dark theme">Theme</button>
+  </header>
+
+  <div class="banner" id="authError" hidden>
+    This page needs the link printed by <code>wade stats ui</code> (it carries a one-time access token).
+  </div>
+
+  <div class="filters" id="filters">
+    <label>Range
+      <select id="f-since">
+        <option value="7d">Last 7 days</option>
+        <option value="30d" selected>Last 30 days</option>
+        <option value="90d">Last 90 days</option>
+        <option value="1y">Last 12 months</option>
+        <option value="all">All time</option>
+      </select>
+    </label>
+    <label>Project <select id="f-project"><option value="">All projects</option></select></label>
+    <label>AI tool <select id="f-tool"><option value="">All tools</option></select></label>
+    <label>Model <select id="f-model"><option value="">All models</option></select></label>
+    <label>Workflow <select id="f-kind"><option value="">All workflows</option></select></label>
+    <span class="grow"></span>
+    <a class="btn" id="export" href="#" download>Export CSV</a>
+  </div>
+
+  <div id="main">
+    <div class="grid kpis" id="kpis"></div>
+
+    <div class="card">
+      <div class="card-head"><h2>Insights</h2><span class="sub">Generated from the filtered data</span></div>
+      <ul class="insights" id="insights"></ul>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Tokens over time</h2><div class="sub" id="dailySub">By AI tool</div></div>
+        <div class="legend" id="dailyLegend"></div>
+      </div>
+      <div class="chart" id="dailyChart"></div>
+      <details><summary>Show as table</summary><div class="scroll"><table id="dailyTable"></table></div></details>
+    </div>
+
+    <div class="grid two" style="margin-top:12px">
+      <div class="card">
+        <div class="card-head"><div><h2>Tokens by workflow</h2><div class="sub">Plan · implement · PR-comment review · delegated runs</div></div></div>
+        <div class="chart" id="kindChart"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2>Tokens by model</h2><div class="sub">Per-model attribution from transcripts</div></div></div>
+        <div class="chart" id="modelChart"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>AI tools</h2><div class="sub">Efficiency and reliability per tool</div></div></div>
+      <div class="scroll"><table id="toolTable"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>Models</h2><div class="sub">Estimated cost uses list prices; unpriced models show —</div></div></div>
+      <div class="scroll"><table id="modelTable"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>Most expensive tasks</h2><div class="sub">All sessions for a task: planning, implementation and review</div></div></div>
+      <div class="scroll"><table id="taskTable"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h2>Pull requests</h2><div class="sub">From <code>wade stats migrate</code> (PRs created in range)</div></div></div>
+      <div class="statrow" id="prStats"></div>
+      <div class="scroll"><table id="prTable"></table></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div><h2>Sessions</h2><div class="sub" id="sessSub"></div></div>
+        <input id="sessSearch" type="search" placeholder="Filter rows…" aria-label="Filter sessions">
+      </div>
+      <div class="scroll"><table id="sessTable"></table></div>
+    </div>
+  </div>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+(() => {
+  "use strict";
+  const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+  const $ = (id) => document.getElementById(id);
+  const SVG = "http://www.w3.org/2000/svg";
+  const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  let toolColor = {};
+  let lastReport = null;
+
+  // ---------- theme ----------
+  const themeBtn = $("theme");
+  try { const t = localStorage.getItem("wade-stats-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  themeBtn.addEventListener("click", () => {
+    const cur = document.documentElement.dataset.theme ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("wade-stats-theme", next); } catch (e) {}
+    if (lastReport) renderCharts(lastReport);
+  });
+
+  // ---------- formatting ----------
+  const fmtTok = (n) => n == null ? "—" : n >= 1e9 ? (n/1e9).toFixed(1)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
+    : n >= 1e4 ? Math.round(n/1e3)+"K" : n >= 1e3 ? (n/1e3).toFixed(1)+"K" : String(Math.round(n));
+  const fmtAxis = (n) => fmtTok(n).replace(/\.0(?=[KMB]$)/, "");
+  const fmtUsd = (x, covered = true) => (x == null || !covered) ? "—" : x > 0 && x < 0.01 ? "<$0.01"
+    : "$" + x.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const fmtPct = (x) => x == null ? "—" : Math.round(x*100) + "%";
+  const fmtDur = (s) => s == null ? "—" : s < 60 ? Math.round(s)+"s" : s < 3600 ? Math.round(s/60)+"m" : (s/3600).toFixed(1)+"h";
+  const fmtHours = (h) => h == null ? "—" : h >= 48 ? (h/24).toFixed(1)+" d" : h.toFixed(1)+" h";
+  const el = (tag, attrs = {}, text) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const svgEl = (tag, attrs = {}) => {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+
+  // ---------- data ----------
+  async function api(path, params) {
+    const qs = new URLSearchParams(params);
+    const res = await fetch(`/api/${path}?${qs}`, {headers: {"X-Wade-Token": token}});
+    if (res.status === 401) { $("authError").hidden = false; throw new Error("unauthorized"); }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res.json();
+  }
+  function params() {
+    const p = {since: $("f-since").value};
+    for (const [id, key] of [["f-project","project"],["f-tool","tool"],["f-model","model"],["f-kind","kind"]]) {
+      if ($(id).value) p[key] = $(id).value;
+    }
+    return p;
+  }
+  function fillSelect(id, values, label) {
+    const sel = $(id);
+    sel.replaceChildren(el("option", {value: ""}, label));
+    for (const v of values) sel.appendChild(el("option", {value: v}, v));
+  }
+
+  async function init() {
+    if (!token) { $("authError").hidden = false; return; }
+    const opts = await api("options", {});
+    $("dbpath").textContent = opts.db_path || "";
+    fillSelect("f-project", opts.projects, "All projects");
+    fillSelect("f-tool", opts.tools, "All tools");
+    fillSelect("f-model", opts.models, "All models");
+    fillSelect("f-kind", opts.kinds, "All workflows");
+    if (opts.default_project) $("f-project").value = opts.default_project;
+    // Color follows the entity: a fixed slot per tool, never re-assigned by rank or filter.
+    opts.tools.forEach((t, i) => { toolColor[t] = i < SLOTS.length ? SLOTS[i] : "--other"; });
+    for (const id of ["f-since","f-project","f-tool","f-model","f-kind"]) $(id).addEventListener("change", load);
+    $("sessSearch").addEventListener("input", () => renderSessions(sessionsCache));
+    new ResizeObserver(() => { if (lastReport) renderCharts(lastReport); }).observe($("dailyChart"));
+    load();
+  }
+
+  let sessionsCache = [];
+  async function load() {
+    const p = params();
+    $("export").href = `/api/export.csv?${new URLSearchParams({...p, token})}`;
+    $("main").classList.add("loading");
+    try {
+      const [report, sessions, prs] = await Promise.all([api("report", p), api("sessions", p), api("prs", p)]);
+      lastReport = report;
+      sessionsCache = sessions;
+      renderKpis(report);
+      renderInsights(report);
+      renderCharts(report);
+      renderTables(report);
+      renderPRs(report, prs);
+      renderSessions(sessions);
+    } catch (e) {
+      if (e.message !== "unauthorized") console.error(e);
+    } finally {
+      $("main").classList.remove("loading");
+    }
+  }
+
+  // ---------- KPI tiles ----------
+  function tile(label, value, deltaText, cls) {
+    const t = el("div", {class: "card tile"});
+    t.appendChild(el("div", {class: "label"}, label));
+    t.appendChild(el("div", {class: "value"}, value));
+    t.appendChild(el("div", {class: "delta " + (cls || "")}, deltaText || " "));
+    return t;
+  }
+  function delta(now, before, upIsGood) {
+    if (!before) return ["", ""];
+    const ch = (now - before) / before;
+    if (!isFinite(ch) || Math.abs(ch) < 0.005) return ["no change vs previous period", ""];
+    const up = ch > 0;
+    const cls = up ? (upIsGood ? "up-good" : "up-bad") : (upIsGood ? "down-bad" : "down-good");
+    return [`${up ? "▲" : "▼"} ${Math.abs(Math.round(ch*100))}% vs previous period`, cls];
+  }
+  function renderKpis(r) {
+    const t = r.totals, p = r.previous_totals || {};
+    const box = $("kpis"); box.replaceChildren();
+    const [dt, ct] = delta(t.total_tokens, p.total_tokens, false);
+    box.appendChild(tile("Tokens", fmtTok(t.total_tokens), dt, ct));
+    const [dc, cc] = delta(t.cost_usd, p.cost_usd, false);
+    box.appendChild(tile("Est. cost", fmtUsd(t.cost_usd, t.priced_tokens > 0),
+      t.total_tokens ? (dc || `${fmtPct(t.price_coverage)} of tokens priced`) : "", cc));
+    const [ds, cs] = delta(t.sessions, p.sessions, true);
+    box.appendChild(tile("AI sessions", String(t.sessions), ds, cs));
+    box.appendChild(tile("Cache hit share", fmtPct(t.cache_ratio), "of prompt tokens served from cache"));
+    box.appendChild(tile("Failure rate", fmtPct(t.failure_rate), `${t.failures} of ${t.finished} finished sessions`));
+    box.appendChild(tile("Merged PRs", String(r.prs.merged), `median lead time ${fmtHours(r.prs.median_lead_time_h)}`));
+  }
+
+  function renderInsights(r) {
+    const ul = $("insights"); ul.replaceChildren();
+    const icons = {good: "✓", warning: "!", info: "i"};
+    for (const ins of r.insights) {
+      const li = el("li");
+      li.appendChild(el("span", {class: "ic " + ins.level, "aria-label": ins.level}, icons[ins.level] || "i"));
+      li.appendChild(el("b", {}, ins.title));
+      li.appendChild(el("span", {}, ins.detail));
+      ul.appendChild(li);
+    }
+    if (!r.insights.length) ul.appendChild(el("li", {class: "muted"}, "Not enough data for insights yet."));
+  }
+
+  // ---------- tooltip ----------
+  const tip = $("tip");
+  function showTip(evt, title, rows) {
+    tip.replaceChildren(el("div", {class: "t"}, title));
+    for (const r of rows) {
+      const row = el("div", {class: "r"});
+      const k = el("span", {class: "k"});
+      if (r.color) { const i = el("i"); i.style.background = r.color; k.appendChild(i); }
+      k.appendChild(document.createTextNode(r.label));
+      row.appendChild(k);
+      row.appendChild(el("b", {}, r.value));
+      tip.appendChild(row);
+    }
+    tip.style.display = "block";
+    const x = Math.min(evt.clientX + 14, innerWidth - tip.offsetWidth - 8);
+    const y = Math.min(evt.clientY + 14, innerHeight - tip.offsetHeight - 8);
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.display = "none"; };
+
+  // ---------- charts ----------
+  function niceScale(v, maxTicks = 5) {
+    // Clean tick step (1/2/5 × 10^n) so axis labels read 0 / 1M / 2M, never 1.3M.
+    if (v <= 0) return {max: 1, step: 1};
+    const raw = v / maxTicks, p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw);
+    return {max: Math.ceil(v / step) * step, step};
+  }
+  function roundedTopBar(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h);
+    return `M${x},${y+h}V${y+r}Q${x},${y} ${x+r},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h}Z`;
+  }
+  function roundedEndBar(x, y, w, h, r) {
+    r = Math.min(r, h / 2, w);
+    return `M${x},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h-r}Q${x+w},${y+h} ${x+w-r},${y+h}H${x}Z`;
+  }
+
+  function buckets(daily, since) {
+    // Fill gaps so time reads as time; use weeks when the span is long.
+    if (!daily.length) return {unit: "day", rows: []};
+    const day = (s) => new Date(s + "T00:00:00Z");
+    let start = day(daily[0].day);
+    const end = day(daily[daily.length - 1].day);
+    const preset = {"7d": 7, "30d": 30, "90d": 90, "1y": 365}[since];
+    if (preset) start = new Date(Math.min(start, end - (preset - 1) * 864e5));
+    const spanDays = Math.round((end - start) / 864e5) + 1;
+    const unit = spanDays > 120 ? "week" : "day";
+    const key = (d) => {
+      if (unit === "day") return d.toISOString().slice(0, 10);
+      const w = new Date(d); w.setUTCDate(w.getUTCDate() - ((w.getUTCDay() + 6) % 7));
+      return w.toISOString().slice(0, 10);
+    };
+    const map = new Map();
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      const k = key(d); if (!map.has(k)) map.set(k, {day: k, tokens: {}, sessions: 0, cost_usd: 0});
+    }
+    for (const p of daily) {
+      const b = map.get(key(day(p.day)));
+      for (const [t, v] of Object.entries(p.tokens)) b.tokens[t] = (b.tokens[t] || 0) + v;
+      b.sessions += p.sessions; b.cost_usd += p.cost_usd;
+    }
+    return {unit, rows: [...map.values()]};
+  }
+
+  function renderDaily(r) {
+    const host = $("dailyChart"); host.replaceChildren();
+    const {unit, rows} = buckets(r.daily, $("f-since").value);
+    $("dailySub").textContent = `By AI tool, per ${unit}`;
+    const legend = $("dailyLegend"); legend.replaceChildren();
+    const tools = r.by_tool.map((b) => b.key);
+    const colorOf = (t) => css(toolColor[t] || "--other");
+    if (tools.length > 1) for (const t of tools) {
+      const s = el("span"); const i = el("i"); i.style.background = colorOf(t);
+      s.appendChild(i); s.appendChild(document.createTextNode(t)); legend.appendChild(s);
+    }
+    if (!rows.length) { host.appendChild(el("div", {class: "empty"}, "No sessions in this range.")); return; }
+    const W = Math.max(host.clientWidth, 300), H = 240, m = {l: 44, r: 8, t: 10, b: 24};
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const totals = rows.map((b) => Object.values(b.tokens).reduce((a, v) => a + v, 0));
+    const scale = niceScale(Math.max(...totals)), ymax = scale.max;
+    const svg = svgEl("svg", {viewBox: `0 0 ${W} ${H}`, height: H, role: "img",
+      "aria-label": "Stacked column chart of tokens over time by AI tool"});
+    for (let v = 0; v <= ymax + scale.step / 2; v += scale.step) {
+      const y = m.t + ih - ih * v / ymax, i = v;
+      svg.appendChild(svgEl("line", {x1: m.l, x2: W - m.r, y1: y, y2: y,
+        stroke: i === 0 ? css("--axis") : css("--grid"), "stroke-width": 1}));
+      const t = svgEl("text", {x: m.l - 6, y: y + 4, "text-anchor": "end"}); t.textContent = fmtAxis(v); svg.appendChild(t);
+    }
+    const band = iw / rows.length, bw = Math.max(2, Math.min(24, band * 0.7));
+    const every = Math.ceil(rows.length / Math.max(1, Math.floor(iw / 64)));
+    rows.forEach((b, i) => {
+      const x = m.l + i * band + (band - bw) / 2;
+      let y = m.t + ih;
+      const present = tools.filter((t) => b.tokens[t]);
+      present.forEach((t, j) => {
+        const h = ih * b.tokens[t] / ymax;
+        const top = j === present.length - 1;
+        const gap = j > 0 ? 2 : 0;  // 2px surface gap between stacked segments
+        const hh = Math.max(0, h - gap);
+        y -= h;
+        svg.appendChild(svgEl("path", {d: top ? roundedTopBar(x, y, bw, hh, 4) : `M${x},${y}h${bw}v${hh}h${-bw}Z`,
+          fill: colorOf(t)}));
+      });
+      if (i % every === 0) {
+        const t = svgEl("text", {x: m.l + i * band + band / 2, y: H - 6, "text-anchor": "middle"});
+        t.textContent = b.day.slice(5); svg.appendChild(t);
+      }
+      const hit = svgEl("rect", {x: m.l + i * band, y: m.t, width: band, height: ih, fill: "transparent", tabindex: 0});
+      const show = (e) => {
+        hit.setAttribute("fill", css("--wash"));
+        const rowsT = tools.filter((t) => b.tokens[t]).map((t) => ({label: t, value: fmtTok(b.tokens[t]), color: colorOf(t)}));
+        rowsT.push({label: "sessions", value: String(b.sessions)});
+        if (b.cost_usd) rowsT.push({label: "est. cost", value: fmtUsd(b.cost_usd)});
+        const rect = hit.getBoundingClientRect();
+        showTip(e.clientX ? e : {clientX: rect.right, clientY: rect.top + 20}, (unit === "week" ? "Week of " : "") + b.day, rowsT);
+      };
+      hit.addEventListener("pointermove", show); hit.addEventListener("focus", show);
+      hit.addEventListener("pointerleave", () => { hit.setAttribute("fill", "transparent"); hideTip(); });
+      hit.addEventListener("blur", () => { hit.setAttribute("fill", "transparent"); hideTip(); });
+      svg.appendChild(hit);
+    });
+    host.appendChild(svg);
+    // Table twin.
+    const tbl = $("dailyTable"); tbl.replaceChildren();
+    const head = el("tr"); head.appendChild(el("th", {}, unit === "week" ? "Week" : "Day"));
+    for (const t of tools) head.appendChild(el("th", {class: "n"}, t));
+    head.appendChild(el("th", {class: "n"}, "Sessions")); head.appendChild(el("th", {class: "n"}, "Est. cost"));
+    tbl.appendChild(head);
+    for (const b of [...rows].reverse()) {
+      if (!b.sessions) continue;
+      const tr = el("tr"); tr.appendChild(el("td", {}, b.day));
+      for (const t of tools) tr.appendChild(el("td", {class: "n"}, b.tokens[t] ? fmtTok(b.tokens[t]) : "—"));
+      tr.appendChild(el("td", {class: "n"}, String(b.sessions)));
+      tr.appendChild(el("td", {class: "n"}, fmtUsd(b.cost_usd)));
+      tbl.appendChild(tr);
+    }
+  }
+
+  function renderHBars(hostId, rows, limit = 8) {
+    const host = $(hostId); host.replaceChildren();
+    let data = rows.map((r) => ({key: r.key, v: r.totals.total_tokens, t: r.totals})).filter((d) => d.v > 0);
+    if (!data.length) { host.appendChild(el("div", {class: "empty"}, "No token data in this range.")); return; }
+    if (data.length > limit) {
+      const rest = data.slice(limit - 1);
+      data = data.slice(0, limit - 1);
+      data.push({key: `${rest.length} others`, v: rest.reduce((a, d) => a + d.v, 0),
+        t: {sessions: rest.reduce((a, d) => a + d.t.sessions, 0), cost_usd: rest.reduce((a, d) => a + d.t.cost_usd, 0), priced_tokens: 1}});
+    }
+    const W = Math.max(host.clientWidth, 280), rowH = 30, labelW = Math.min(170, W * 0.38), valW = 56;
+    const H = data.length * rowH + 4, iw = W - labelW - valW - 8;
+    const max = Math.max(...data.map((d) => d.v));
+    const svg = svgEl("svg", {viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": "Bar chart of tokens"});
+    const color = css("--s1");
+    data.forEach((d, i) => {
+      const y = i * rowH + 4, bh = 16, w = Math.max(2, iw * d.v / max);
+      const name = d.key.length > 26 ? d.key.slice(0, 25) + "…" : d.key;
+      const lt = svgEl("text", {x: 0, y: y + 12, class: "lbl"}); lt.textContent = name; svg.appendChild(lt);
+      svg.appendChild(svgEl("path", {d: roundedEndBar(labelW, y, w, bh, 4), fill: color}));
+      const vt = svgEl("text", {x: labelW + w + 6, y: y + 12, class: "val"}); vt.textContent = fmtTok(d.v); svg.appendChild(vt);
+      const hit = svgEl("rect", {x: 0, y: y - 6, width: W, height: rowH, fill: "transparent", tabindex: 0});
+      const show = (e) => {
+        const rect = hit.getBoundingClientRect();
+        showTip(e.clientX ? e : {clientX: rect.left + labelW + w, clientY: rect.top}, d.key, [
+          {label: "tokens", value: fmtTok(d.v)}, {label: "sessions", value: String(d.t.sessions)},
+          {label: "est. cost", value: fmtUsd(d.t.cost_usd, (d.t.priced_tokens || 0) > 0)}]);
+      };
+      hit.addEventListener("pointermove", show); hit.addEventListener("focus", show);
+      hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
+      svg.appendChild(hit);
+    });
+    host.appendChild(svg);
+  }
+
+  function renderCharts(r) {
+    renderDaily(r);
+    renderHBars("kindChart", r.by_kind);
+    renderHBars("modelChart", r.by_model);
+  }
+
+  // ---------- tables ----------
+  function table(id, columns, rows) {
+    const tbl = $(id); tbl.replaceChildren();
+    const head = el("tr");
+    for (const c of columns) head.appendChild(el("th", {class: c.n ? "n" : ""}, c.label));
+    tbl.appendChild(head);
+    if (!rows.length) {
+      const tr = el("tr"); const td = el("td", {colspan: columns.length, class: "empty"}, "Nothing here for this filter.");
+      tr.appendChild(td); tbl.appendChild(tr); return;
+    }
+    for (const row of rows) {
+      const tr = el("tr");
+      for (const c of columns) {
+        const td = el("td", {class: c.n ? "n" : ""});
+        const v = c.get(row);
+        if (v instanceof Node) td.appendChild(v); else td.textContent = v == null ? "—" : String(v);
+        tr.appendChild(td);
+      }
+      tbl.appendChild(tr);
+    }
+  }
+  const totalsCols = [
+    {label: "Sessions", n: 1, get: (r) => r.totals.sessions},
+    {label: "Tokens", n: 1, get: (r) => fmtTok(r.totals.total_tokens)},
+    {label: "Input", n: 1, get: (r) => fmtTok(r.totals.input_tokens)},
+    {label: "Output", n: 1, get: (r) => fmtTok(r.totals.output_tokens)},
+    {label: "Cache share", n: 1, get: (r) => fmtPct(r.totals.cache_ratio)},
+    {label: "Est. cost", n: 1, get: (r) => fmtUsd(r.totals.cost_usd, r.totals.priced_tokens > 0)},
+    {label: "Avg time", n: 1, get: (r) => fmtDur(r.totals.avg_duration_s)},
+    {label: "Fail rate", n: 1, get: (r) => fmtPct(r.totals.failure_rate)},
+  ];
+  function keyWithDot(key) {
+    const s = el("span"); const d = el("span", {class: "dot"}); d.style.background = css(toolColor[key] || "--other");
+    s.appendChild(d); s.appendChild(document.createTextNode(key)); return s;
+  }
+  function renderTables(r) {
+    table("toolTable", [{label: "Tool", get: (row) => keyWithDot(row.key)}, ...totalsCols,
+      {label: "Premium req.", n: 1, get: (row) => row.totals.premium_requests || "—"}], r.by_tool);
+    table("modelTable", [{label: "Model", get: (row) => row.key}, ...totalsCols], r.by_model);
+    table("taskTable", [
+      {label: "Task", get: (t) => t.task_id},
+      {label: "Project", get: (t) => t.project},
+      {label: "Sessions", n: 1, get: (t) => t.totals.sessions},
+      {label: "Plan", n: 1, get: (t) => fmtTok(t.by_kind_tokens.plan)},
+      {label: "Implement", n: 1, get: (t) => fmtTok(t.by_kind_tokens.implement)},
+      {label: "Review", n: 1, get: (t) => fmtTok(t.by_kind_tokens.review_pr_comments)},
+      {label: "Tokens", n: 1, get: (t) => fmtTok(t.totals.total_tokens)},
+      {label: "Est. cost", n: 1, get: (t) => fmtUsd(t.totals.cost_usd, t.totals.priced_tokens > 0)},
+      {label: "PRs", get: (t) => t.pr_numbers.map((n) => "#" + n).join(", ") + (t.merged ? " · merged" : "")},
+    ], r.top_tasks);
+  }
+
+  function renderPRs(r, prs) {
+    const f = r.prs, box = $("prStats"); box.replaceChildren();
+    const stat = (label, value) => { const d = el("div"); d.appendChild(el("div", {class: "label"}, label)); d.appendChild(el("div", {class: "value"}, value)); box.appendChild(d); };
+    stat("Opened / merged / open", `${f.opened} / ${f.merged} / ${f.open}`);
+    stat("Median lead time", fmtHours(f.median_lead_time_h));
+    stat("WADE vs other PRs", `${fmtHours(f.wade_median_lead_time_h)} vs ${fmtHours(f.other_median_lead_time_h)}`);
+    stat("Task → merge (median)", fmtHours(f.median_cycle_time_h));
+    stat("Est. cost per merged task", fmtUsd(f.cost_per_merged_pr));
+    stat("Review rounds per PR", f.avg_review_sessions_per_pr == null ? "—" : f.avg_review_sessions_per_pr.toFixed(1));
+    stat("Median size (lines)", f.median_changed_lines == null ? "—" : Math.round(f.median_changed_lines).toLocaleString());
+    table("prTable", [
+      {label: "PR", n: 1, get: (p) => { const a = el("a", {href: p.url, target: "_blank", rel: "noopener noreferrer"}, "#" + p.number); return p.url ? a : "#" + p.number; }},
+      {label: "Title", get: (p) => p.title.length > 70 ? p.title.slice(0, 69) + "…" : p.title},
+      {label: "Task", get: (p) => p.task_id},
+      {label: "State", get: (p) => (p.is_draft && p.state === "OPEN") ? "draft" : p.state.toLowerCase()},
+      {label: "Created", get: (p) => (p.created_at || "").slice(0, 10)},
+      {label: "Lead time", n: 1, get: (p) => fmtHours(p.lead_time_h)},
+      {label: "+/−", n: 1, get: (p) => p.additions == null ? "—" : `+${p.additions}/−${p.deletions}`},
+      {label: "WADE", get: (p) => p.wade_managed ? el("span", {class: "tag"}, "wade") : ""},
+    ], prs.slice(0, 100));
+  }
+
+  // ---------- sessions (sortable, searchable) ----------
+  let sortKey = "started_at", sortAsc = false;
+  const sessCols = [
+    {key: "started_at", label: "Started", get: (s) => s.started_at.slice(0, 16).replace("T", " ")},
+    {key: "kind", label: "Workflow", get: (s) => s.kind + (s.operation ? ":" + s.operation : "")},
+    {key: "task_id", label: "Task", get: (s) => s.task_id},
+    {key: "ai_tool", label: "Tool", get: (s) => s.ai_tool ? keyWithDot(s.ai_tool) : "—"},
+    {key: "model", label: "Model", get: (s) => s.model},
+    {key: "duration_s", label: "Time", n: 1, get: (s) => fmtDur(s.duration_s)},
+    {key: "total_tokens", label: "Tokens", n: 1, get: (s) => s.total_tokens ? fmtTok(s.total_tokens) : "—"},
+    {key: "cost_usd", label: "Est. cost", n: 1, get: (s) => s.cost_usd == null ? "—" : fmtUsd(s.cost_usd)},
+    {key: "outcome", label: "Outcome", get: (s) => s.outcome},
+    {key: "source", label: "Source", get: (s) => s.source === "local" ? "recorded" : "migrated"},
+  ];
+  function renderSessions(all) {
+    const q = $("sessSearch").value.trim().toLowerCase();
+    let rows = q ? all.filter((s) => [s.kind, s.operation, s.task_id, s.ai_tool, s.model, s.outcome, s.branch, s.project]
+      .some((v) => v && String(v).toLowerCase().includes(q))) : all;
+    rows = [...rows].sort((a, b) => {
+      const x = a[sortKey], y = b[sortKey];
+      const c = x == null ? -1 : y == null ? 1 : x < y ? -1 : x > y ? 1 : 0;
+      return sortAsc ? c : -c;
+    });
+    $("sessSub").textContent = `${rows.length} of ${all.length} sessions` + (rows.length > 300 ? " · showing 300" : "");
+    const tbl = $("sessTable"); tbl.replaceChildren();
+    const head = el("tr");
+    for (const c of sessCols) {
+      const th = el("th", {class: "sortable" + (c.n ? " n" : "") + (c.key === sortKey ? " sorted" + (sortAsc ? " asc" : "") : ""), tabindex: 0}, c.label);
+      const act = () => { if (sortKey === c.key) sortAsc = !sortAsc; else { sortKey = c.key; sortAsc = false; } renderSessions(all); };
+      th.addEventListener("click", act); th.addEventListener("keydown", (e) => { if (e.key === "Enter") act(); });
+      head.appendChild(th);
+    }
+    tbl.appendChild(head);
+    if (!rows.length) {
+      const tr = el("tr"); tr.appendChild(el("td", {colspan: sessCols.length, class: "empty"},
+        all.length ? "No rows match." : "No sessions yet — run a WADE workflow, or `wade stats migrate` to import history."));
+      tbl.appendChild(tr); return;
+    }
+    for (const s of rows.slice(0, 300)) {
+      const tr = el("tr");
+      for (const c of sessCols) {
+        const td = el("td", {class: c.n ? "n" : ""}); const v = c.get(s);
+        if (v instanceof Node) td.appendChild(v); else td.textContent = v == null ? "—" : String(v);
+        tr.appendChild(td);
+      }
+      tbl.appendChild(tr);
+    }
+  }
+
+  init().catch((e) => console.error(e));
+})();
+</script>
+</body>
+</html>

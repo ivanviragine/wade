@@ -349,6 +349,8 @@ Key fixtures in `tests/conftest.py`:
 | `tmp_wade_project` | Git repo with `.wade.yml` config file (extends `tmp_git_repo`) |
 | `monkeypatch_env` | Clears all `WADE_*` env vars to prevent test runner leakage |
 | `mock_gh` | Creates a mock `gh` CLI binary that logs invocations; returns path to log file |
+| `_isolated_stats` (autouse) | Sets `WADE_STATS_DISABLE=1` and points `WADE_STATS_DB`/`WADE_STATS_PRICING` at temp files, so no test (or e2e subprocess) records usage stats or touches the developer's real database |
+| `stats_db` | Re-enables local stats recording against an isolated temp database; returns its path (see `tests/unit/test_stats/`) |
 
 ## Writing New Tests
 

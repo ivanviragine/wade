@@ -59,22 +59,26 @@ does not bump the version or create a draft release. Follow
 
 ```
 CLI Layer      ->  can import: services, models, config, logging, ui
-Service Layer  ->  can import: providers, crossby (AI tool adapters), git, models, config, logging
+Service Layer  ->  can import: providers, crossby (AI tool adapters), git, stats, models, config, logging
 Provider Layer ->  can import: models, config, logging  (NO service imports)
+Stats Layer    ->  can import: models, logging, leaf utils  (NO service imports)
 Git Layer      ->  can import: models, config, logging  (NO service imports)
 Models Layer   ->  can import: nothing (leaf dependency)
 ```
 
 No circular dependencies. Models are pure data. Services orchestrate. **Never import a higher layer from a lower layer.**
 
-> **The `db/` package is unused scaffolding** — intentionally left out of the
-> layering rules above. No code path under `services/` or `cli/` writes
-> session/worktree/PR rows, so its sole reader
-> (`implementation_service/cleanup._preserve_session_data`, a single
-> `SessionRepository.get_by_worktree_path` call) always gets an empty result and
-> falls back to directory-presence detection. Real persisted state lives in
-> GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
-> code still exists but is inert; removal is tracked as #357 C5.
+> **Workflow state never lives in SQLite.** Real persisted state lives in GitHub
+> (PR/issue body markers, labels) and worktree files. The only SQLite file is the
+> per-user **usage-statistics** store (`wade stats`): `stats/` is a storage layer
+> beside `git/`/`providers/` (imports `models`, `logging`, leaf `utils` — never
+> services); `services/stats_service.py` records and reports. Recording is
+> best-effort by contract (never raises into a workflow), and no workflow decision
+> may read the stats database. `stats.storage` (`both`/`github`/`local`/`off`)
+> independently gates PR/issue-body usage tables and local recording; the
+> `## Sessions` resume block is always written. Tests run with stats disabled
+> (autouse fixture); use the `stats_db` fixture to exercise recording. See
+> `docs/dev/architecture.md` ("Usage statistics").
 
 **Knowledge authority** lives in typed append-only receipts and committed Git
 snapshots. Main/detached/bounded workers observe via ignored Git-common-dir

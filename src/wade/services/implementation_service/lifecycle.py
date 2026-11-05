@@ -26,9 +26,10 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.session import MergeStatus
+from wade.models.stats import StatsEventKind
 from wade.models.task import Task, TaskReference
 from wade.providers.base import AbstractTaskProvider
-from wade.services import bot_trigger
+from wade.services import bot_trigger, stats_service
 from wade.services.implementation_service.bootstrap import (
     _format_uncommitted_summary,
     _get_dirty_file_paths,
@@ -593,6 +594,15 @@ def _merge_pr(
         console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
         return MergeStatus.MERGE_FAILED
 
+    stats_service.record_event(
+        StatsEventKind.PR_MERGED,
+        cwd=main_root,
+        task_id=close_task_id,
+        pr_number=pr_number,
+        branch=branch,
+        data={"strategy": "squash"},
+    )
+
     # Remove the worktree only after a successful merge.
     if worktree_path:
         _preserve_session_data(main_root, worktree_path)
@@ -607,6 +617,13 @@ def _merge_pr(
         else:
             with contextlib.suppress(Exception):
                 git_worktree.prune_worktrees(main_root)
+            stats_service.record_event(
+                StatsEventKind.WORKTREE_REMOVED,
+                cwd=main_root,
+                task_id=close_task_id,
+                branch=branch,
+                data={"reason": "merged"},
+            )
             console.success(f"Removed {worktree_path.name}")
 
     _pull_main_after_merge(main_root)
