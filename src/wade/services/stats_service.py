@@ -48,6 +48,7 @@ from wade.stats.insights import build_insights
 from wade.stats.pricing import PriceBook
 from wade.stats.report import (
     build_report,
+    normalize_session,
     session_cost,
     session_fresh_tokens,
     session_tokens,
@@ -860,9 +861,10 @@ def session_rows(
     """Flatten sessions for tables/CSV/JSON (with resolved tokens and cost)."""
     prices = prices or PriceBook.load()
     rows: list[dict[str, Any]] = []
-    for s in sessions:
+    for raw in sessions:
+        s = normalize_session(raw)
         inp, out, cac, total = session_tokens(s)
-        usd, priced, _ = session_cost(s, prices)
+        usd, priced, _fresh, _ = session_cost(s, prices)
         rows.append(
             {
                 "id": s.id,

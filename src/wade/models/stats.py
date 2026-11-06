@@ -247,6 +247,8 @@ class UsageTotals(BaseModel):
     premium_requests: int = 0
     cost_usd: float = 0.0
     priced_tokens: int = 0  # tokens covered by a known price
+    priced_fresh_tokens: int = 0
+    cache_prompt_tokens: int = 0  # input + cached of sessions that reported cache reads
     duration_s: float = 0.0
     timed_sessions: int = 0  # sessions contributing to duration_s
 
@@ -259,7 +261,11 @@ class UsageTotals(BaseModel):
         not that the cache went unused.
         """
         prompt = self.input_tokens + self.cached_tokens
-        return self.cached_tokens / prompt if prompt and self.cached_tokens else None
+        # Only trust the ratio when sessions that reported cache reads carry at
+        # least half of the prompt volume (a handful of stray rows don't count).
+        if not self.cached_tokens or self.cache_prompt_tokens * 2 < prompt:
+            return None
+        return self.cached_tokens / self.cache_prompt_tokens
 
     @property
     def failure_rate(self) -> float | None:
@@ -271,7 +277,8 @@ class UsageTotals(BaseModel):
 
     @property
     def price_coverage(self) -> float | None:
-        return self.priced_tokens / self.total_tokens if self.total_tokens else None
+        """Share of fresh tokens (the cost drivers) covered by a known price."""
+        return self.priced_fresh_tokens / self.fresh_tokens if self.fresh_tokens else None
 
     def as_dict(self) -> dict[str, Any]:
         data = self.model_dump()

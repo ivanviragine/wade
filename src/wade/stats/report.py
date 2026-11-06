@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import statistics
 from collections import defaultdict
 from collections.abc import Callable, Iterable
@@ -10,6 +11,7 @@ from wade.models.stats import (
     AISessionRecord,
     BreakdownRow,
     DailyPoint,
+    ModelUsageRow,
     PRFlowSummary,
     PullRequestRecord,
     StatsFilter,
@@ -26,6 +28,50 @@ from wade.stats.pricing import PriceBook
 TOP_TASKS = 15
 _FINISHED = {StatsOutcome.SUCCESS, StatsOutcome.FAILED, StatsOutcome.TIMEOUT}
 _FAILED = {StatsOutcome.FAILED, StatsOutcome.TIMEOUT}
+
+# Tools whose reported *input* already includes cache reads (Copilot prints
+# "53.7k in, 86 out, 33.8k cached", where the cached part is inside "in").
+# Every other supported tool reports cache reads alongside fresh input
+# (Codex: "input=5,213 (+ 18,304 cached)"). Normalized at read time, so stored
+# rows stay exactly as recorded and dedupe fingerprints keep matching.
+INPUT_INCLUDES_CACHED = frozenset({"copilot"})
+
+UNKNOWN_MODEL = "unknown"
+
+
+def clean_model_name(name: str | None) -> str | None:
+    """Drop names that cannot be a model (old transcripts produced `1`, `20`…)."""
+    if name is None:
+        return None
+    name = name.strip()
+    return name if re.search(r"[A-Za-z]", name) else None
+
+
+def normalize_session(s: AISessionRecord) -> AISessionRecord:
+    """Read-time view with disjoint input/cached counts and sane model names."""
+    inclusive = (s.ai_tool or "").lower() in INPUT_INCLUDES_CACHED
+    models = []
+    for m in s.models:
+        name = clean_model_name(m.model) or UNKNOWN_MODEL
+        inp = max(0, m.input_tokens - m.cached_tokens) if inclusive else m.input_tokens
+        models.append(m.model_copy(update={"model": name, "input_tokens": inp}))
+    merged: dict[str, ModelUsageRow] = {}
+    for m in models:
+        if m.model in merged:
+            prev = merged[m.model]
+            prev.input_tokens += m.input_tokens
+            prev.output_tokens += m.output_tokens
+            prev.cached_tokens += m.cached_tokens
+            prev.premium_requests += m.premium_requests
+        else:
+            merged[m.model] = m
+    update: dict[str, object] = {
+        "models": list(merged.values()),
+        "model": clean_model_name(s.model),
+    }
+    if inclusive and s.input_tokens is not None:
+        update["input_tokens"] = max(0, s.input_tokens - (s.cached_tokens or 0))
+    return s.model_copy(update=update)
 
 
 def _components(s: AISessionRecord) -> tuple[int | None, int | None, int | None]:
@@ -60,34 +106,36 @@ def session_fresh_tokens(s: AISessionRecord) -> int:
     return (inp or 0) + (out or 0)
 
 
-def session_cost(s: AISessionRecord, prices: PriceBook) -> tuple[float, int, set[str]]:
-    """(usd, priced_tokens, unpriced_model_names) for one session."""
-    unpriced: set[str] = set()
+def session_cost(s: AISessionRecord, prices: PriceBook) -> tuple[float, int, int, dict[str, int]]:
+    """(usd, priced_tokens, priced_fresh_tokens, {unpriced_model: fresh_tokens})."""
+    unpriced: dict[str, int] = {}
+    day = s.started_at.date()  # scheduled price changes apply by session date
     if s.models:
         usd = 0.0
-        priced = 0
+        priced = priced_fresh = 0
         for m in s.models:
-            c = prices.cost(m.model, m.input_tokens, m.output_tokens, m.cached_tokens)
+            c = prices.cost(m.model, m.input_tokens, m.output_tokens, m.cached_tokens, on=day)
             if c is None:
                 if m.input_tokens + m.output_tokens + m.cached_tokens:
-                    unpriced.add(m.model)
+                    unpriced[m.model] = unpriced.get(m.model, 0) + m.input_tokens + m.output_tokens
                 continue
             usd += c
             priced += m.input_tokens + m.output_tokens + m.cached_tokens
-        return usd, priced, unpriced
+            priced_fresh += m.input_tokens + m.output_tokens
+        return usd, priced, priced_fresh, unpriced
     inp, out, cac, total = session_tokens(s)
     model = s.effective_model
-    c = prices.cost(model, inp, out, cac)
+    c = prices.cost(model, inp, out, cac, on=day)
     if c is None:
         if total:
-            unpriced.add(model or "unknown")
-        return 0.0, 0, unpriced
-    return c, inp + out + cac, unpriced
+            unpriced[model or UNKNOWN_MODEL] = session_fresh_tokens(s)
+        return 0.0, 0, 0, unpriced
+    return c, inp + out + cac, inp + out, unpriced
 
 
-def _add(t: UsageTotals, s: AISessionRecord, prices: PriceBook) -> set[str]:
+def _add(t: UsageTotals, s: AISessionRecord, prices: PriceBook) -> dict[str, int]:
     inp, out, cac, total = session_tokens(s)
-    usd, priced, unpriced = session_cost(s, prices)
+    usd, priced, priced_fresh, unpriced = session_cost(s, prices)
     t.sessions += 1
     if s.source is StatsSource.LOCAL:
         t.local_sessions += 1
@@ -98,11 +146,14 @@ def _add(t: UsageTotals, s: AISessionRecord, prices: PriceBook) -> set[str]:
     t.input_tokens += inp
     t.output_tokens += out
     t.cached_tokens += cac
+    if cac:
+        t.cache_prompt_tokens += inp + cac
     t.total_tokens += total
     t.fresh_tokens += session_fresh_tokens(s)
     t.premium_requests += s.premium_requests or 0
     t.cost_usd += usd
     t.priced_tokens += priced
+    t.priced_fresh_tokens += priced_fresh
     if s.duration_s is not None:
         t.duration_s += s.duration_s
         t.timed_sessions += 1
@@ -185,12 +236,15 @@ def build_report(
 ) -> StatsReport:
     """Aggregate everything the CLI and dashboard show (insights added separately)."""
     report = StatsReport(filter=flt or StatsFilter())
-    unpriced: set[str] = set()
+    sessions = [normalize_session(s) for s in sessions]
+    unpriced: dict[str, int] = defaultdict(int)
     for s in sessions:
-        unpriced |= _add(report.totals, s, prices)
-    report.unpriced_models = sorted(unpriced)
+        for name, fresh in _add(report.totals, s, prices).items():
+            unpriced[name] += fresh
+    # Biggest gaps first: those are the prices worth adding.
+    report.unpriced_models = sorted(unpriced, key=lambda n: (-unpriced[n], n))
     if previous is not None:
-        report.previous_totals = totals_for(previous, prices)
+        report.previous_totals = totals_for([normalize_session(s) for s in previous], prices)
 
     report.by_tool = _breakdown(sessions, prices, lambda s: s.ai_tool or "unknown")
     report.by_kind = _breakdown(

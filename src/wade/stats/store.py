@@ -630,8 +630,10 @@ class StatsStore:
             "projects": col("SELECT COALESCE(slug, root) FROM projects ORDER BY last_seen DESC"),
             "tools": col("SELECT DISTINCT ai_tool FROM ai_sessions ORDER BY 1"),
             "models": sorted(
-                set(col("SELECT DISTINCT model FROM ai_sessions"))
+                name
+                for name in set(col("SELECT DISTINCT model FROM ai_sessions"))
                 | set(col("SELECT DISTINCT model FROM ai_session_models"))
+                if any(ch.isalpha() for ch in name)  # old transcripts produced "1", "20"…
             ),
             "kinds": col("SELECT DISTINCT kind FROM ai_sessions ORDER BY 1"),
         }

@@ -167,3 +167,48 @@ def test_fingerprint_ignores_model_and_tool_case() -> None:
     b = usage_fingerprint("implement", "claude", 1, 2, None, 3)
     assert a == b
     assert a != usage_fingerprint("review_pr_comments", "claude", 1, 2, None, 3)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("gpt-5.6-terra", (2.0, 12.0, 0.20)),
+        ("gpt-6.1-sol", (2.0, 10.0, 0.10)),
+        ("github-copilot/gpt-6.1-sol", (2.0, 10.0, 0.10)),  # routing prefix stripped
+        ("gpt-5.3-codex-high", (1.75, 14.0, 0.175)),  # effort suffix is price-neutral
+        ("gemini-3.1-pro-preview", (2.0, 12.0, 0.20)),
+        ("google/gemini-2.5-flash", (0.30, 2.50, 0.03)),
+        ("grok-4.7", (2.0, 6.0, 0.50)),
+        ("google/antigravity-claude-opus-4-6-thinking", (5.0, 25.0, 0.50)),
+    ],
+)
+def test_builtin_non_claude_prices(name: str, expected: tuple[float, float, float]) -> None:
+    price = PriceBook().price_for(name)
+    assert price is not None
+    assert (price.input, price.output, price.cached) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "gpt-5.6",  # unlisted base name must not fall back to gpt-5
+        "gpt-5-codex",  # unknown variant must not borrow gpt-5's price
+        "openai/gpt-5.6-sol-fast",  # speed tiers cost more: left unpriced
+        "gemini-3.7-flash",
+        "kimi-k3",
+    ],
+)
+def test_ambiguous_variants_stay_unpriced(name: str) -> None:
+    assert PriceBook().price_for(name) is None
+
+
+def test_scheduled_price_changes_apply_by_date() -> None:
+    from datetime import date
+
+    book = PriceBook()
+    before = book.price_for("gemini-4-argon", date(2026, 11, 30))
+    after = book.price_for("gemini-4-argon", date(2026, 12, 1))
+    assert before is not None and after is not None
+    assert (before.input, after.input) == (2.0, 4.0)
+    flash = book.price_for("gemini-3.8-flash", date(2027, 1, 1))
+    assert flash is not None and flash.output == 7.50

@@ -10,6 +10,9 @@ from __future__ import annotations
 from wade.models.stats import Insight, InsightLevel, StatsReport
 
 MIN_SESSIONS = 3
+# Per-session cost comparisons need enough sessions that workload size averages
+# out; three huge sessions make any model look "50x more expensive".
+MIN_MODEL_SESSIONS = 10
 
 
 def _pct(x: float) -> str:
@@ -146,7 +149,7 @@ def build_insights(report: StatsReport) -> list[Insight]:
     priced_models = [
         r
         for r in report.by_model
-        if r.totals.sessions >= MIN_SESSIONS and r.totals.cost_usd > 0 and r.key != "unknown"
+        if r.totals.sessions >= MIN_MODEL_SESSIONS and r.totals.cost_usd > 0 and r.key != "unknown"
     ]
     if len(priced_models) >= 2:
         per = sorted(priced_models, key=lambda r: r.totals.cost_usd / r.totals.sessions)
@@ -217,7 +220,7 @@ def build_insights(report: StatsReport) -> list[Insight]:
         for r in report.by_tool
         if r.totals.sessions >= MIN_SESSIONS
         and r.totals.input_tokens
-        and not r.totals.cached_tokens
+        and r.totals.cache_ratio is None
     ]
     if silent and len(silent) < len(report.by_tool):
         names = ", ".join(silent)
@@ -231,14 +234,14 @@ def build_insights(report: StatsReport) -> list[Insight]:
             )
         )
     # 8. Data-quality note: costs are only as complete as the price table.
-    if (cov := t.price_coverage) is not None and cov < 0.5:
-        names = ", ".join(report.unpriced_models[:4])
+    named = [n for n in report.unpriced_models if n != "unknown"][:4]
+    if (cov := t.price_coverage) is not None and cov < 0.8 and named:
         out.append(
             Insight(
-                title=f"Only {_pct(cov)} of tokens have a known price",
+                title=f"Only {_pct(cov)} of fresh tokens have a known price",
                 detail=(
-                    f"Add prices for {names} to ~/.config/wade/pricing.yml to include them "
-                    "in cost estimates."
+                    f"Add prices for {', '.join(named)} to ~/.config/wade/pricing.yml to "
+                    "include them in cost estimates."
                 ),
             )
         )

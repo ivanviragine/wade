@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from wade.models.stats import (
     AISessionRecord,
     InsightLevel,
@@ -18,7 +20,7 @@ from wade.models.stats import (
 )
 from wade.stats.insights import build_insights
 from wade.stats.pricing import PriceBook
-from wade.stats.report import build_report, session_cost, session_tokens
+from wade.stats.report import build_report, normalize_session, session_cost, session_tokens
 
 P = ProjectRef(root="/r", slug="o/r")
 NOW = utc_now()
@@ -68,8 +70,9 @@ def test_cost_prefers_breakdown_and_reports_unpriced() -> None:
             ModelUsageRow(model="mystery", input_tokens=10),
         ],
     )
-    usd, priced, unpriced = session_cost(s, PriceBook())
-    assert usd == 4.0 and priced == 1_000_000 and unpriced == {"mystery"}
+    usd, priced, priced_fresh, unpriced = session_cost(s, PriceBook())
+    assert usd == 4.0 and priced == priced_fresh == 1_000_000
+    assert unpriced == {"mystery": 10}
 
 
 def test_build_report_breakdowns_tasks_and_prs() -> None:
@@ -118,7 +121,7 @@ def test_build_report_breakdowns_tasks_and_prs() -> None:
         "delegation:plan_review",
     }
     assert report.by_tool[0].key == "codex"  # ranked by fresh tokens, not cache reads
-    assert "gpt-5" in report.unpriced_models
+    assert report.unpriced_models == []  # gpt-5 and the Claude models are all priced
 
     top = {t.task_id: t for t in report.top_tasks}
     assert top["1"].review_sessions == 2 and top["1"].merged and top["1"].pr_numbers == [9]
@@ -187,3 +190,64 @@ def test_breakdowns_rank_by_fresh_tokens() -> None:
     report = build_report([heavy_cache, heavy_work], [], PriceBook())
     assert [r.key for r in report.by_tool] == ["claude", "codex"]
     assert report.totals.local_sessions == 2
+
+
+def test_copilot_input_includes_cache_reads() -> None:
+    # Copilot prints "53.7k in, 86 out, 33.8k cached" with cached inside "in".
+    raw = _s(
+        "c",
+        tool="copilot",
+        model=None,
+        inp=53_700,
+        out=86,
+        cac=33_800,
+        models=[
+            ModelUsageRow(
+                model="claude-opus-4.6", input_tokens=53_700, output_tokens=86, cached_tokens=33_800
+            )
+        ],
+    )
+    s = normalize_session(raw)
+    assert s.input_tokens == 19_900 and s.models[0].input_tokens == 19_900
+    report = build_report([raw], [], PriceBook())
+    assert report.totals.fresh_tokens == 19_986
+    assert report.totals.cache_ratio == pytest.approx(33_800 / 53_700)
+    usd, *_ = session_cost(s, PriceBook())
+    assert usd == pytest.approx((19_900 * 5 + 86 * 25 + 33_800 * 0.5) / 1e6)
+
+
+def test_stray_cache_rows_do_not_make_a_cache_share() -> None:
+    sessions = [_s(f"a{n}", tool="claude", cac=0) for n in range(5)]
+    sessions.append(_s("stray", tool="claude", inp=10, cac=219))
+    by_tool = {r.key: r.totals for r in build_report(sessions, [], PriceBook()).by_tool}
+    assert by_tool["claude"].cache_ratio is None  # 219 cached tokens is not evidence
+
+
+def test_numeric_model_names_become_unknown() -> None:
+    junk = _s(
+        "j",
+        model=None,
+        models=[ModelUsageRow(model="1", input_tokens=2), ModelUsageRow(model="3", input_tokens=4)],
+    )
+    report = build_report([junk], [], PriceBook())
+    assert [r.key for r in report.by_model] == ["unknown"]
+    assert report.unpriced_models == ["unknown"]
+    assert not any("Add prices" in i.detail for i in build_insights(report))
+
+
+def test_price_coverage_uses_fresh_tokens_and_ranks_unpriced_by_volume() -> None:
+    sessions = [
+        _s("p", model="claude-opus-5.5", inp=1000, out=0, cac=0),
+        _s("big", tool="codex", model="mystery-big", inp=5000, out=0, cac=900_000),
+        _s("small", tool="codex", model="mystery-small", inp=100, out=0, cac=0),
+    ]
+    report = build_report(sessions, [], PriceBook())
+    assert report.totals.price_coverage == pytest.approx(1000 / 6100)
+    assert report.unpriced_models == ["mystery-big", "mystery-small"]
+
+
+def test_model_cost_insight_needs_enough_sessions() -> None:
+    few = [_s(f"o{n}", model="claude-opus-4.1", inp=900_000) for n in range(3)]
+    few += [_s(f"s{n}", model="claude-sonnet-5", inp=1000) for n in range(3)]
+    titles = [i.title for i in build_insights(build_report(few, [], PriceBook()))]
+    assert not any("more per session" in t for t in titles)

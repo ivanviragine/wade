@@ -1493,9 +1493,11 @@ wade stats export -f csv -o sessions.csv
 **Fresh tokens vs cache reads.** The headline metric is *fresh tokens* (input +
 output). Cache reads are reported separately with their share of prompt tokens,
 because tools disagree on them: some transcripts (e.g. Claude's terminal output)
-don't report cache reads at all — shown as `—`, not 0% — and tools define their own
-"total" differently. Totals are therefore always recomputed as input + output +
-cached, so the parts always add up.
+don't report cache reads at all — shown as `—`, not 0% — Copilot's "input" already
+includes its cache reads (WADE subtracts them), and tools define their own "total"
+differently. Totals are therefore always recomputed as input + output + cached, so
+the parts always add up. Model names that can't be models (old transcripts
+occasionally recorded `1` or `20`) are grouped as `unknown`.
 
 **Reports and insights.** `wade stats` and the dashboard show totals with change
 vs the previous period of equal length; breakdowns by workflow kind, AI tool,
@@ -1537,17 +1539,22 @@ usage numbers); a multi-issue plan's usage, copied into each issue, counts once.
 Usage tables carry no timestamps, so imported sessions are dated from their
 PR/issue. `--dry-run` shows what would be imported.
 
-**Cost estimates.** Costs use built-in list prices for Anthropic Claude models
-from Opus/Sonnet 4 onward (first-party API, USD per million tokens) — API-equivalent
-spend, not what a subscription bills. They are estimates — CLI subscriptions,
-discounts, cache-write surcharges and long-context tiers are not modelled. Other
-models show `—` until you price them in `~/.config/wade/pricing.yml`
+**Cost estimates.** Costs are API-equivalent estimates from the providers'
+published standard-tier list prices (USD per million tokens, checked 2026-11-06):
+Anthropic Claude (Opus/Sonnet 4 onward), OpenAI GPT/Codex (GPT-4.1 through
+GPT-6.1), Google Gemini (2.5 through 4 Argon, with scheduled price increases
+applied by session date) and xAI Grok. They are not what a subscription bills,
+and batch/fast tiers, cache writes and long-context surcharges aren't modelled
+(the base tier is used). Speed-tier variants such as `…-fast` stay unpriced
+rather than being under-estimated, as do models whose pricing couldn't be
+verified (e.g. Moonshot Kimi). Unpriced models show `—`; `wade stats` lists the
+biggest gaps first. Add or override prices in `~/.config/wade/pricing.yml`
 (or `$WADE_STATS_PRICING`); keys match exactly or as a prefix:
 
 ```yaml
 models:
-  gpt-5-codex: {input: 1.25, output: 10.0, cached: 0.125}
-  gemini-3-pro: {input: 2.0, output: 12.0}
+  kimi-k3: {input: 0.60, output: 2.50, cached: 0.15}   # your negotiated/actual rates
+  gpt-5.6-sol: {input: 4.0, output: 20.0, cached: 0.40}  # overrides the built-in
 ```
 
 **The dashboard** (`wade stats ui`) is a single local page served from

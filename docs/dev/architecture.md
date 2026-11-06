@@ -232,8 +232,15 @@ reads; Copilot's and Claude's include them), and some transcripts never report
 cache reads. `stats/report.py::session_tokens` therefore recomputes total as
 input + output + cached whenever any component is known (a reported total is only
 a fallback), rankings/charts/trends use *fresh* tokens (input + output), and
-`UsageTotals.cache_ratio` is `None` — rendered `—` — when a group reported no
-cache reads at all.
+`UsageTotals.cache_ratio` is `None` — rendered `—` — unless sessions that reported
+cache reads carry at least half of the group's prompt tokens. Read-time
+normalization (`report.normalize_session`) subtracts cache reads from input for
+tools whose input includes them (`INPUT_INCLUDES_CACHED`, currently Copilot) and
+maps letterless model names to `unknown`; stored rows stay as recorded so
+migration fingerprints keep matching. `stats/pricing.py` holds dated price
+schedules (applied by session date) for Claude, OpenAI, Gemini and Grok; its
+name matcher strips routing prefixes and only accepts price-neutral suffixes
+(effort/thinking/preview), so speed tiers and unknown variants stay unpriced.
 
 **Storage selector.** `stats.storage` (`both` | `github` | `local` | `off`,
 `models/config.py::StatsStorage`) gates the two sinks independently:
