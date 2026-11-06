@@ -321,6 +321,8 @@ class PRFlowSummary(BaseModel):
     wade_median_lead_time_h: float | None = None
     other_median_lead_time_h: float | None = None
     median_changed_lines: float | None = None
+    wade_median_changed_lines: float | None = None
+    other_median_changed_lines: float | None = None
     tokens_per_merged_pr: float | None = None
     cost_per_merged_pr: float | None = None
     avg_review_sessions_per_pr: float | None = None
@@ -363,6 +365,8 @@ class StatsReport(BaseModel):
     by_model: list[BreakdownRow] = Field(default_factory=list)
     by_kind: list[BreakdownRow] = Field(default_factory=list)
     by_project: list[BreakdownRow] = Field(default_factory=list)
+    # Model breakdown within each workflow kind; key is "<kind>|<model>".
+    by_kind_model: list[BreakdownRow] = Field(default_factory=list)
     daily: list[DailyPoint] = Field(default_factory=list)
     top_tasks: list[TaskRow] = Field(default_factory=list)
     tasks_created: int = 0

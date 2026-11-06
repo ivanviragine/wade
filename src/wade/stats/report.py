@@ -258,6 +258,14 @@ def build_report(
     )
     report.by_project = _breakdown(sessions, prices, lambda s: s.project.label)
     report.by_model = _model_breakdown(sessions, prices)
+    by_kind: dict[str, list[AISessionRecord]] = defaultdict(list)
+    for s in sessions:
+        by_kind[s.kind.value].append(s)
+    report.by_kind_model = [
+        BreakdownRow(key=f"{kind}|{row.key}", totals=row.totals)
+        for kind, group in by_kind.items()
+        for row in _model_breakdown(group, prices)
+    ]
     report.daily = _daily(sessions, prices)
 
     # --- tasks ------------------------------------------------------------
@@ -295,6 +303,8 @@ def build_report(
     lead_wade: list[float] = []
     lead_other: list[float] = []
     changed: list[float] = []
+    changed_wade: list[float] = []
+    changed_other: list[float] = []
     for pr in prs:
         flow.opened += 1
         if pr.wade_managed:
@@ -311,11 +321,16 @@ def build_report(
         else:
             flow.open += 1
         if pr.additions is not None or pr.deletions is not None:
-            changed.append(float((pr.additions or 0) + (pr.deletions or 0)))
+            size = float((pr.additions or 0) + (pr.deletions or 0))
+            changed.append(size)
+            if pr.merged_at is not None:
+                (changed_wade if pr.wade_managed else changed_other).append(size)
     flow.median_lead_time_h = _median(lead_all)
     flow.wade_median_lead_time_h = _median(lead_wade)
     flow.other_median_lead_time_h = _median(lead_other)
     flow.median_changed_lines = _median(changed)
+    flow.wade_median_changed_lines = _median(changed_wade)
+    flow.other_median_changed_lines = _median(changed_other)
 
     # --- tasks (from `wade stats migrate`) -----------------------------------
     for task in task_records or []:

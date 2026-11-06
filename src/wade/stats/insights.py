@@ -7,12 +7,21 @@ how actionable they usually are.
 
 from __future__ import annotations
 
-from wade.models.stats import Insight, InsightLevel, StatsReport
+from wade.models.stats import BreakdownRow, Insight, InsightLevel, StatsReport
 
 MIN_SESSIONS = 3
 # Per-session cost comparisons need enough sessions that workload size averages
 # out; three huge sessions make any model look "50x more expensive".
 MIN_MODEL_SESSIONS = 10
+# Tool-vs-tool comparisons (cache efficiency) need the same depth on both sides.
+MIN_COMPARE_SESSIONS = 10
+
+_KIND_LABELS = {
+    "implement": "implementation",
+    "plan": "planning",
+    "review_pr_comments": "PR-comment review",
+    "delegation": "delegated",
+}
 
 
 def _pct(x: float) -> str:
@@ -117,11 +126,11 @@ def build_insights(report: StatsReport) -> list[Insight]:
                 )
             )
 
-    # 4. Cache efficiency, best vs worst tool.
+    # 4. Cache efficiency, best vs worst tool (enough sessions on both sides).
     cached = [
         r
         for r in report.by_tool
-        if r.totals.sessions >= MIN_SESSIONS and r.totals.cache_ratio is not None
+        if r.totals.sessions >= MIN_COMPARE_SESSIONS and r.totals.cache_ratio is not None
     ]
     if len(cached) >= 2:
         best = max(cached, key=lambda r: r.totals.cache_ratio or 0)
@@ -132,7 +141,8 @@ def build_insights(report: StatsReport) -> list[Insight]:
                     title=f"{best.key} reuses its prompt cache far more than {worst.key}",
                     detail=(
                         f"Cache hit share {_pct(best.totals.cache_ratio or 0)} vs "
-                        f"{_pct(worst.totals.cache_ratio or 0)} of prompt tokens."
+                        f"{_pct(worst.totals.cache_ratio or 0)} of prompt tokens, over "
+                        f"{best.totals.sessions} and {worst.totals.sessions} sessions."
                     ),
                 )
             )
@@ -145,25 +155,45 @@ def build_insights(report: StatsReport) -> list[Insight]:
             )
         )
 
-    # 5. Model cost efficiency for implementation sessions.
-    priced_models = [
-        r
-        for r in report.by_model
-        if r.totals.sessions >= MIN_MODEL_SESSIONS and r.totals.cost_usd > 0 and r.key != "unknown"
-    ]
-    if len(priced_models) >= 2:
-        per = sorted(priced_models, key=lambda r: r.totals.cost_usd / r.totals.sessions)
-        cheap, pricey = per[0], per[-1]
+    # 5. Model cost within the same workflow: comparing a planning model with an
+    #    implementation model says more about the work than about the model.
+    pick: tuple[float, str, BreakdownRow, BreakdownRow] | None = None
+    kind_rows: dict[str, list[BreakdownRow]] = {}
+    for row in report.by_kind_model:
+        kind, _, model = row.key.partition("|")
+        if (
+            model != "unknown"
+            and row.totals.sessions >= MIN_MODEL_SESSIONS
+            and row.totals.cost_usd > 0
+        ):
+            kind_rows.setdefault(kind, []).append(row)
+    for kind, rows in kind_rows.items():
+        if len(rows) < 2:
+            continue
+        per = sorted(rows, key=lambda r: r.totals.cost_usd / r.totals.sessions)
+        ratio = (per[-1].totals.cost_usd / per[-1].totals.sessions) / (
+            per[0].totals.cost_usd / per[0].totals.sessions
+        )
+        if ratio >= 2 and (pick is None or ratio > pick[0]):
+            pick = (ratio, kind, per[0], per[-1])
+    if pick is not None:
+        ratio, kind, cheap, pricey = pick
+        label = _KIND_LABELS.get(kind, kind)
         c_cost = cheap.totals.cost_usd / cheap.totals.sessions
         p_cost = pricey.totals.cost_usd / pricey.totals.sessions
-        if c_cost > 0 and p_cost / c_cost >= 2:
-            out.append(
-                Insight(
-                    title=f"{pricey.key} costs {p_cost / c_cost:.1f}x more per session than "
-                    f"{cheap.key}",
-                    detail=f"≈${p_cost:.2f} vs ≈${c_cost:.2f} per session (estimated).",
-                )
+        out.append(
+            Insight(
+                title=(
+                    f"In {label} sessions, {pricey.key.partition('|')[2]} costs {ratio:.1f}x "
+                    f"more than {cheap.key.partition('|')[2]}"
+                ),
+                detail=(
+                    f"≈${p_cost:.2f} vs ≈${c_cost:.2f} per session over "
+                    f"{pricey.totals.sessions} and {cheap.totals.sessions} sessions (estimated). "
+                    "Worth checking whether the cheaper model's results hold up."
+                ),
             )
+        )
 
     # 6. Concentration: one task dominating spend.
     if report.top_tasks and t.fresh_tokens:
@@ -180,20 +210,30 @@ def build_insights(report: StatsReport) -> list[Insight]:
                 )
             )
 
-    # 7. Lead time, WADE vs other PRs.
+    # 7. Lead time, WADE vs other PRs — with size context, since "other" PRs are
+    #    often release/dependency bumps that merge in minutes.
     flow = report.prs
     if flow.wade_median_lead_time_h is not None and flow.other_median_lead_time_h:
         ratio = flow.wade_median_lead_time_h / flow.other_median_lead_time_h
-        level = InsightLevel.GOOD if ratio < 1 else InsightLevel.INFO
+        ws, os_ = flow.wade_median_changed_lines, flow.other_median_changed_lines
+        sizes = ""
+        comparable = True
+        if ws is not None and os_ is not None:
+            sizes = f" Median size {ws:,.0f} vs {os_:,.0f} changed lines."
+            comparable = max(ws, os_) <= 3 * max(min(ws, os_), 1)
+        base = (
+            f"WADE PRs merge in {_hours(flow.wade_median_lead_time_h)} (median) vs "
+            f"{_hours(flow.other_median_lead_time_h)} for other PRs"
+        )
         out.append(
             Insight(
-                level=level,
-                title=(
-                    f"WADE PRs merge in {_hours(flow.wade_median_lead_time_h)} (median) vs "
-                    f"{_hours(flow.other_median_lead_time_h)} for other PRs"
+                level=InsightLevel.GOOD if ratio < 1 and comparable else InsightLevel.INFO,
+                title=base if comparable else base + ", which are much smaller",
+                detail=(
+                    f"{flow.wade_merged} WADE and {flow.merged - flow.wade_merged} other "
+                    f"merged PRs in this window.{sizes}"
+                    + ("" if comparable else " Lead times of PRs that different aren't comparable.")
                 ),
-                detail=f"{flow.wade_merged} WADE and {flow.merged - flow.wade_merged} other "
-                "merged PRs in this window.",
             )
         )
     elif flow.median_lead_time_h is not None:

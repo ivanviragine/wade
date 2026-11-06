@@ -251,3 +251,47 @@ def test_model_cost_insight_needs_enough_sessions() -> None:
     few += [_s(f"s{n}", model="claude-sonnet-5", inp=1000) for n in range(3)]
     titles = [i.title for i in build_insights(build_report(few, [], PriceBook()))]
     assert not any("more per session" in t for t in titles)
+
+
+def test_model_cost_compared_only_within_a_workflow() -> None:
+    # Cheap haiku planning vs expensive opus implementation: not comparable.
+    sessions = [
+        _s(f"p{n}", kind=StatsSessionKind.PLAN, model="claude-haiku-4.5") for n in range(10)
+    ]
+    sessions += [_s(f"i{n}", model="claude-opus-4.1", inp=500_000) for n in range(10)]
+    titles = [i.title for i in build_insights(build_report(sessions, [], PriceBook()))]
+    assert not any("costs" in t and "more" in t for t in titles)
+
+    # Same workflow, two models with enough sessions: comparable.
+    sessions += [_s(f"j{n}", model="claude-sonnet-5", inp=50_000) for n in range(10)]
+    titles = [i.title for i in build_insights(build_report(sessions, [], PriceBook()))]
+    assert any(t.startswith("In implementation sessions, claude-opus-4.1 costs") for t in titles), (
+        titles
+    )
+
+
+def test_cache_comparison_needs_enough_sessions_per_tool() -> None:
+    sessions = [_s(f"c{n}", tool="codex", model=None, cac=90_000) for n in range(10)]
+    sessions += [_s(f"g{n}", tool="gemini", model=None, cac=1_000) for n in range(3)]
+    titles = [i.title for i in build_insights(build_report(sessions, [], PriceBook()))]
+    assert not any("reuses its prompt cache" in t for t in titles)
+
+
+def test_pr_lead_time_insight_flags_size_mismatch() -> None:
+    def pr(n: int, wade: bool, hours: float, size: int) -> PullRequestRecord:
+        return PullRequestRecord(
+            project=P,
+            number=n,
+            wade_managed=wade,
+            state="MERGED",
+            created_at=NOW - timedelta(hours=hours),
+            merged_at=NOW,
+            additions=size,
+            deletions=0,
+        )
+
+    prs = [pr(1, True, 4, 400), pr(2, True, 5, 300), pr(3, False, 0.5, 2), pr(4, False, 0.4, 3)]
+    report = build_report([_s("a")], prs, PriceBook())
+    [lead] = [i for i in build_insights(report) if i.title.startswith("WADE PRs merge")]
+    assert lead.title.endswith("which are much smaller")
+    assert "aren't comparable" in lead.detail and "350 vs 2" in lead.detail

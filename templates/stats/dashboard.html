@@ -569,7 +569,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
     {label: "Fresh", n: 1, get: (r) => fmtTok(r.totals.fresh_tokens)},
     {label: "Input", n: 1, get: (r) => fmtTok(r.totals.input_tokens)},
     {label: "Output", n: 1, get: (r) => fmtTok(r.totals.output_tokens)},
-    {label: "Cache reads", n: 1, get: (r) => r.totals.cached_tokens ? fmtTok(r.totals.cached_tokens) : "—"},
+    {label: "Cache reads", n: 1, get: (r) => r.totals.cache_ratio != null ? fmtTok(r.totals.cached_tokens) : "—"},
     {label: "Cache share", n: 1, get: (r) => fmtPct(r.totals.cache_ratio)},
     {label: "Est. cost", n: 1, get: (r) => fmtUsd(r.totals.cost_usd, r.totals.priced_tokens > 0)},
     {label: "Avg time", n: 1, get: (r) => fmtDur(r.totals.avg_duration_s)},

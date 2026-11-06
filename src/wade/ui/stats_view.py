@@ -65,40 +65,47 @@ def _delta(now: float, before: float | None) -> str:
     return f" {arrow}{abs(change) * 100:.0f}%"
 
 
-def _breakdown_table(title: str, rows: list[BreakdownRow], *, limit: int = 10) -> Table:
+def _breakdown_table(
+    title: str, rows: list[BreakdownRow], *, limit: int = 10, timing: bool = True
+) -> Table:
+    """Breakdown table; ``timing=False`` drops Avg time/Fail when nothing was timed."""
     table = Table(title=title, title_justify="left", title_style="header.title", box=None)
     table.add_column(title.split(" ")[-1].capitalize(), no_wrap=True)
-    for name in ("Sessions", "Fresh", "Cache reads", "Cache %", "Est. cost", "Avg time", "Fail"):
+    names = ["Sessions", "Fresh", "Cache reads", "Cache %", "Est. cost"]
+    if timing:
+        names += ["Avg time", "Fail"]
+    for name in names:
         table.add_column(name, justify="right")
-    shown = rows[:limit]
-    for row in shown:
+    for row in rows[:limit]:
         t = row.totals
-        table.add_row(
+        cells: list[Text | str] = [
             Text(row.key),
             str(t.sessions),
             fmt_tokens(t.fresh_tokens),
-            fmt_tokens(t.cached_tokens) if t.cached_tokens else "—",
+            # A count next to an unknown share would read as "measured": hide both.
+            fmt_tokens(t.cached_tokens) if t.cache_ratio is not None else "—",
             fmt_pct(t.cache_ratio),
             fmt_usd(t.cost_usd, covered=t.priced_tokens > 0),
-            fmt_duration(t.avg_duration_s),
-            fmt_pct(t.failure_rate),
-        )
+        ]
+        if timing:
+            cells += [fmt_duration(t.avg_duration_s), fmt_pct(t.failure_rate)]
+        table.add_row(*cells)
     if len(rows) > limit:
         rest = UsageTotals()
         for row in rows[limit:]:
             for field in ("sessions", "fresh_tokens", "cached_tokens", "cost_usd"):
                 setattr(rest, field, getattr(rest, field) + getattr(row.totals, field))
-        table.add_row(
+        cells = [
             Text(f"{len(rows) - limit} more"),
             str(rest.sessions),
             fmt_tokens(rest.fresh_tokens),
             fmt_tokens(rest.cached_tokens) if rest.cached_tokens else "—",
             "",
             fmt_usd(rest.cost_usd),
-            "",
-            "",
-            style="dim",
-        )
+        ]
+        if timing:
+            cells += ["", ""]
+        table.add_row(*cells, style="dim")
     return table
 
 
@@ -164,17 +171,18 @@ def render_report(report: StatsReport, *, scope: str) -> None:
         )
     console.summary_table(rows)
     out.print()
+    timing = t.timed_sessions > 0 or t.finished > 0
     if report.by_kind:
-        out.print(_breakdown_table("By workflow kind", report.by_kind))
+        out.print(_breakdown_table("By workflow kind", report.by_kind, timing=timing))
         out.print()
     if report.by_tool:
-        out.print(_breakdown_table("By AI tool", report.by_tool))
+        out.print(_breakdown_table("By AI tool", report.by_tool, timing=timing))
         out.print()
     if report.by_model:
-        out.print(_breakdown_table("By model", report.by_model))
+        out.print(_breakdown_table("By model", report.by_model, timing=timing))
         out.print()
     if len(report.by_project) > 1:
-        out.print(_breakdown_table("By project", report.by_project))
+        out.print(_breakdown_table("By project", report.by_project, timing=timing))
         out.print()
     if report.top_tasks:
         table = Table(
