@@ -26,6 +26,7 @@ from wade.models.stats import (
 from wade.stats.pricing import PriceBook
 
 TOP_TASKS = 15
+REVIEW_HEAVY_ROUNDS = 5
 _FINISHED = {StatsOutcome.SUCCESS, StatsOutcome.FAILED, StatsOutcome.TIMEOUT}
 _FAILED = {StatsOutcome.FAILED, StatsOutcome.TIMEOUT}
 
@@ -296,6 +297,11 @@ def build_report(
     report.top_tasks = sorted(
         tasks.values(), key=lambda r: (r.totals.cost_usd, r.totals.fresh_tokens), reverse=True
     )[:TOP_TASKS]
+    report.review_heavy_tasks = sorted(
+        (r for r in tasks.values() if r.review_sessions >= REVIEW_HEAVY_ROUNDS),
+        key=lambda r: (r.review_sessions, r.totals.cost_usd),
+        reverse=True,
+    )
 
     # --- pull requests ----------------------------------------------------
     flow = PRFlowSummary()

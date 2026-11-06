@@ -369,6 +369,8 @@ class StatsReport(BaseModel):
     by_kind_model: list[BreakdownRow] = Field(default_factory=list)
     daily: list[DailyPoint] = Field(default_factory=list)
     top_tasks: list[TaskRow] = Field(default_factory=list)
+    # Tasks with the most PR-comment review sessions (>= REVIEW_HEAVY_ROUNDS).
+    review_heavy_tasks: list[TaskRow] = Field(default_factory=list)
     tasks_created: int = 0
     tasks_closed: int = 0
     prs: PRFlowSummary = Field(default_factory=PRFlowSummary)

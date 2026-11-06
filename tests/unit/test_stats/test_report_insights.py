@@ -246,30 +246,6 @@ def test_price_coverage_uses_fresh_tokens_and_ranks_unpriced_by_volume() -> None
     assert report.unpriced_models == ["mystery-big", "mystery-small"]
 
 
-def test_model_cost_insight_needs_enough_sessions() -> None:
-    few = [_s(f"o{n}", model="claude-opus-4.1", inp=900_000) for n in range(3)]
-    few += [_s(f"s{n}", model="claude-sonnet-5", inp=1000) for n in range(3)]
-    titles = [i.title for i in build_insights(build_report(few, [], PriceBook()))]
-    assert not any("more per session" in t for t in titles)
-
-
-def test_model_cost_compared_only_within_a_workflow() -> None:
-    # Cheap haiku planning vs expensive opus implementation: not comparable.
-    sessions = [
-        _s(f"p{n}", kind=StatsSessionKind.PLAN, model="claude-haiku-4.5") for n in range(10)
-    ]
-    sessions += [_s(f"i{n}", model="claude-opus-4.1", inp=500_000) for n in range(10)]
-    titles = [i.title for i in build_insights(build_report(sessions, [], PriceBook()))]
-    assert not any("costs" in t and "more" in t for t in titles)
-
-    # Same workflow, two models with enough sessions: comparable.
-    sessions += [_s(f"j{n}", model="claude-sonnet-5", inp=50_000) for n in range(10)]
-    titles = [i.title for i in build_insights(build_report(sessions, [], PriceBook()))]
-    assert any(t.startswith("In implementation sessions, claude-opus-4.1 costs") for t in titles), (
-        titles
-    )
-
-
 def test_cache_comparison_needs_enough_sessions_per_tool() -> None:
     sessions = [_s(f"c{n}", tool="codex", model=None, cac=90_000) for n in range(10)]
     sessions += [_s(f"g{n}", tool="gemini", model=None, cac=1_000) for n in range(3)]
@@ -295,3 +271,32 @@ def test_pr_lead_time_insight_flags_size_mismatch() -> None:
     [lead] = [i for i in build_insights(report) if i.title.startswith("WADE PRs merge")]
     assert lead.title.endswith("which are much smaller")
     assert "aren't comparable" in lead.detail and "350 vs 2" in lead.detail
+
+
+def test_no_per_session_model_cost_comparisons() -> None:
+    # Big models get big jobs; per-session cost ratios are confounded by size.
+    sessions = [_s(f"h{n}", model="claude-haiku-4.5", inp=1_000) for n in range(10)]
+    sessions += [_s(f"o{n}", model="claude-opus-4.1", inp=900_000) for n in range(10)]
+    titles = [i.title for i in build_insights(build_report(sessions, [], PriceBook()))]
+    assert not any("more per session" in t or ("costs" in t and "x more" in t) for t in titles)
+
+
+def test_spend_concentration_by_model() -> None:
+    sessions = [_s(f"o{n}", model="claude-opus-4.1", inp=900_000) for n in range(3)]
+    sessions += [_s(f"s{n}", model="claude-sonnet-5", inp=50_000) for n in range(3)]
+    sessions += [_s(f"h{n}", model="claude-haiku-4.5", inp=1_000) for n in range(3)]
+    insights = build_insights(build_report(sessions, [], PriceBook()))
+    [conc] = [i for i in insights if "of estimated spend" in i.title]
+    assert conc.title.startswith("claude-opus-4.1 and claude-sonnet-5 account for")
+
+
+def test_review_heavy_tasks_are_flagged() -> None:
+    sessions = [
+        _s(f"r{n}", kind=StatsSessionKind.REVIEW_PR_COMMENTS, task="515") for n in range(16)
+    ]
+    sessions += [_s("i", task="515"), _s("r", kind=StatsSessionKind.REVIEW_PR_COMMENTS, task="9")]
+    report = build_report(sessions, [], PriceBook())
+    assert [t.task_id for t in report.review_heavy_tasks] == ["515"]
+    [heavy] = [i for i in build_insights(report) if "review rounds" in i.title]
+    assert heavy.title == "1 task needed 5+ PR-comment review rounds"
+    assert heavy.detail.startswith("515 (16 rounds,")

@@ -7,21 +7,12 @@ how actionable they usually are.
 
 from __future__ import annotations
 
-from wade.models.stats import BreakdownRow, Insight, InsightLevel, StatsReport
+from wade.models.stats import Insight, InsightLevel, StatsReport
+from wade.stats.report import REVIEW_HEAVY_ROUNDS
 
 MIN_SESSIONS = 3
-# Per-session cost comparisons need enough sessions that workload size averages
-# out; three huge sessions make any model look "50x more expensive".
-MIN_MODEL_SESSIONS = 10
 # Tool-vs-tool comparisons (cache efficiency) need the same depth on both sides.
 MIN_COMPARE_SESSIONS = 10
-
-_KIND_LABELS = {
-    "implement": "implementation",
-    "plan": "planning",
-    "review_pr_comments": "PR-comment review",
-    "delegation": "delegated",
-}
 
 
 def _pct(x: float) -> str:
@@ -155,42 +146,50 @@ def build_insights(report: StatsReport) -> list[Insight]:
             )
         )
 
-    # 5. Model cost within the same workflow: comparing a planning model with an
-    #    implementation model says more about the work than about the model.
-    pick: tuple[float, str, BreakdownRow, BreakdownRow] | None = None
-    kind_rows: dict[str, list[BreakdownRow]] = {}
-    for row in report.by_kind_model:
-        kind, _, model = row.key.partition("|")
-        if (
-            model != "unknown"
-            and row.totals.sessions >= MIN_MODEL_SESSIONS
-            and row.totals.cost_usd > 0
-        ):
-            kind_rows.setdefault(kind, []).append(row)
-    for kind, rows in kind_rows.items():
-        if len(rows) < 2:
-            continue
-        per = sorted(rows, key=lambda r: r.totals.cost_usd / r.totals.sessions)
-        ratio = (per[-1].totals.cost_usd / per[-1].totals.sessions) / (
-            per[0].totals.cost_usd / per[0].totals.sessions
+    # 5. Spend concentration by model. (Per-session model comparisons were
+    #    dropped: big models get big jobs, and tools differ in whether cache
+    #    reads are reported, so "X costs 60x more per session" is confounded.)
+    priced = sorted(
+        (r for r in report.by_model if r.totals.cost_usd > 0 and r.key != "unknown"),
+        key=lambda r: r.totals.cost_usd,
+        reverse=True,
+    )
+    if t.cost_usd > 0 and len(priced) >= 3:
+        leaders = priced[:2]
+        share = sum(r.totals.cost_usd for r in leaders) / t.cost_usd
+        if share >= 0.4:
+            out.append(
+                Insight(
+                    title=(
+                        f"{leaders[0].key} and {leaders[1].key} account for {_pct(share)} of "
+                        "estimated spend"
+                    ),
+                    detail=(
+                        f"${leaders[0].totals.cost_usd:,.0f} and "
+                        f"${leaders[1].totals.cost_usd:,.0f} of ${t.cost_usd:,.0f}. Routing "
+                        "routine work to cheaper models moves cost the most."
+                    ),
+                )
+            )
+
+    # 5b. Review-round outliers: tasks that went back and forth many times.
+    heavy = report.review_heavy_tasks
+    if heavy:
+        listed = ", ".join(
+            f"{r.task_id} ({r.review_sessions} rounds, ${r.totals.cost_usd:,.0f})"
+            for r in heavy[:3]
         )
-        if ratio >= 2 and (pick is None or ratio > pick[0]):
-            pick = (ratio, kind, per[0], per[-1])
-    if pick is not None:
-        ratio, kind, cheap, pricey = pick
-        label = _KIND_LABELS.get(kind, kind)
-        c_cost = cheap.totals.cost_usd / cheap.totals.sessions
-        p_cost = pricey.totals.cost_usd / pricey.totals.sessions
+        n = len(heavy)
         out.append(
             Insight(
+                level=InsightLevel.WARNING,
                 title=(
-                    f"In {label} sessions, {pricey.key.partition('|')[2]} costs {ratio:.1f}x "
-                    f"more than {cheap.key.partition('|')[2]}"
+                    f"{n} task{'s' if n != 1 else ''} needed "
+                    f"{REVIEW_HEAVY_ROUNDS}+ PR-comment review rounds"
                 ),
                 detail=(
-                    f"≈${p_cost:.2f} vs ≈${c_cost:.2f} per session over "
-                    f"{pricey.totals.sessions} and {cheap.totals.sessions} sessions (estimated). "
-                    "Worth checking whether the cheaper model's results hold up."
+                    f"{listed}. Reading their review threads usually shows feedback worth "
+                    "capturing as a skill or knowledge entry."
                 ),
             )
         )
