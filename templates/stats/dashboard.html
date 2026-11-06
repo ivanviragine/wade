@@ -164,7 +164,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
 
     <div class="card">
       <div class="card-head">
-        <div><h2>Tokens over time</h2><div class="sub" id="dailySub">By AI tool</div></div>
+        <div><h2>Fresh tokens over time</h2><div class="sub" id="dailySub">By AI tool</div></div>
         <div class="legend" id="dailyLegend"></div>
       </div>
       <div class="chart" id="dailyChart"></div>
@@ -173,11 +173,11 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
 
     <div class="grid two" style="margin-top:12px">
       <div class="card">
-        <div class="card-head"><div><h2>Tokens by workflow</h2><div class="sub">Plan · implement · PR-comment review · delegated runs</div></div></div>
+        <div class="card-head"><div><h2>Fresh tokens by workflow</h2><div class="sub">Plan · implement · PR-comment review · delegated runs</div></div></div>
         <div class="chart" id="kindChart"></div>
       </div>
       <div class="card">
-        <div class="card-head"><div><h2>Tokens by model</h2><div class="sub">Per-model attribution from transcripts</div></div></div>
+        <div class="card-head"><div><h2>Fresh tokens by model</h2><div class="sub">Per-model attribution from transcripts</div></div></div>
         <div class="chart" id="modelChart"></div>
       </div>
     </div>
@@ -337,15 +337,17 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
   function renderKpis(r) {
     const t = r.totals, p = r.previous_totals || {};
     const box = $("kpis"); box.replaceChildren();
-    const [dt, ct] = delta(t.total_tokens, p.total_tokens, false);
-    box.appendChild(tile("Tokens", fmtTok(t.total_tokens), dt, ct));
+    const [dt, ct] = delta(t.fresh_tokens, p.fresh_tokens, false);
+    box.appendChild(tile("Fresh tokens", fmtTok(t.fresh_tokens), dt || "input + output, excluding cache reads", ct));
     const [dc, cc] = delta(t.cost_usd, p.cost_usd, false);
     box.appendChild(tile("Est. cost", fmtUsd(t.cost_usd, t.priced_tokens > 0),
       t.total_tokens ? (dc || `${fmtPct(t.price_coverage)} of tokens priced`) : "", cc));
     const [ds, cs] = delta(t.sessions, p.sessions, true);
     box.appendChild(tile("AI sessions", String(t.sessions), ds, cs));
-    box.appendChild(tile("Cache hit share", fmtPct(t.cache_ratio), "of prompt tokens served from cache"));
-    box.appendChild(tile("Failure rate", fmtPct(t.failure_rate), `${t.failures} of ${t.finished} finished sessions`));
+    box.appendChild(tile("Cache hit share", fmtPct(t.cache_ratio),
+      t.cached_tokens ? `${fmtTok(t.cached_tokens)} cache reads` : "not reported by these tools"));
+    box.appendChild(tile("Failure rate", fmtPct(t.failure_rate), t.finished
+      ? `${t.failures} of ${t.finished} finished sessions` : "only for sessions recorded after upgrading"));
     box.appendChild(tile("Merged PRs", String(r.prs.merged), `median lead time ${fmtHours(r.prs.median_lead_time_h)}`));
   }
 
@@ -429,7 +431,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
   function renderDaily(r) {
     const host = $("dailyChart"); host.replaceChildren();
     const {unit, rows} = buckets(r.daily, $("f-since").value);
-    $("dailySub").textContent = `By AI tool, per ${unit}`;
+    $("dailySub").textContent = `Input + output by AI tool, per ${unit} · cache reads excluded (not every tool reports them)`;
     const legend = $("dailyLegend"); legend.replaceChildren();
     const tools = r.by_tool.map((b) => b.key);
     const colorOf = (t) => css(toolColor[t] || "--other");
@@ -502,7 +504,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
 
   function renderHBars(hostId, rows, limit = 8) {
     const host = $(hostId); host.replaceChildren();
-    let data = rows.map((r) => ({key: r.key, v: r.totals.total_tokens, t: r.totals})).filter((d) => d.v > 0);
+    let data = rows.map((r) => ({key: r.key, v: r.totals.fresh_tokens, t: r.totals})).filter((d) => d.v > 0);
     if (!data.length) { host.appendChild(el("div", {class: "empty"}, "No token data in this range.")); return; }
     if (data.length > limit) {
       const rest = data.slice(limit - 1);
@@ -525,7 +527,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
       const show = (e) => {
         const rect = hit.getBoundingClientRect();
         showTip(e.clientX ? e : {clientX: rect.left + labelW + w, clientY: rect.top}, d.key, [
-          {label: "tokens", value: fmtTok(d.v)}, {label: "sessions", value: String(d.t.sessions)},
+          {label: "fresh tokens", value: fmtTok(d.v)}, {label: "sessions", value: String(d.t.sessions)},
           {label: "est. cost", value: fmtUsd(d.t.cost_usd, (d.t.priced_tokens || 0) > 0)}]);
       };
       hit.addEventListener("pointermove", show); hit.addEventListener("focus", show);
@@ -564,9 +566,10 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
   }
   const totalsCols = [
     {label: "Sessions", n: 1, get: (r) => r.totals.sessions},
-    {label: "Tokens", n: 1, get: (r) => fmtTok(r.totals.total_tokens)},
+    {label: "Fresh", n: 1, get: (r) => fmtTok(r.totals.fresh_tokens)},
     {label: "Input", n: 1, get: (r) => fmtTok(r.totals.input_tokens)},
     {label: "Output", n: 1, get: (r) => fmtTok(r.totals.output_tokens)},
+    {label: "Cache reads", n: 1, get: (r) => r.totals.cached_tokens ? fmtTok(r.totals.cached_tokens) : "—"},
     {label: "Cache share", n: 1, get: (r) => fmtPct(r.totals.cache_ratio)},
     {label: "Est. cost", n: 1, get: (r) => fmtUsd(r.totals.cost_usd, r.totals.priced_tokens > 0)},
     {label: "Avg time", n: 1, get: (r) => fmtDur(r.totals.avg_duration_s)},
@@ -587,7 +590,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
       {label: "Plan", n: 1, get: (t) => fmtTok(t.by_kind_tokens.plan)},
       {label: "Implement", n: 1, get: (t) => fmtTok(t.by_kind_tokens.implement)},
       {label: "Review", n: 1, get: (t) => fmtTok(t.by_kind_tokens.review_pr_comments)},
-      {label: "Tokens", n: 1, get: (t) => fmtTok(t.totals.total_tokens)},
+      {label: "Fresh", n: 1, get: (t) => fmtTok(t.totals.fresh_tokens)},
       {label: "Est. cost", n: 1, get: (t) => fmtUsd(t.totals.cost_usd, t.totals.priced_tokens > 0)},
       {label: "PRs", get: (t) => t.pr_numbers.map((n) => "#" + n).join(", ") + (t.merged ? " · merged" : "")},
     ], r.top_tasks);
@@ -624,7 +627,8 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
     {key: "ai_tool", label: "Tool", get: (s) => s.ai_tool ? keyWithDot(s.ai_tool) : "—"},
     {key: "model", label: "Model", get: (s) => s.model},
     {key: "duration_s", label: "Time", n: 1, get: (s) => fmtDur(s.duration_s)},
-    {key: "total_tokens", label: "Tokens", n: 1, get: (s) => s.total_tokens ? fmtTok(s.total_tokens) : "—"},
+    {key: "fresh_tokens", label: "Fresh", n: 1, get: (s) => s.fresh_tokens ? fmtTok(s.fresh_tokens) : "—"},
+    {key: "cached_tokens", label: "Cache reads", n: 1, get: (s) => s.cached_tokens ? fmtTok(s.cached_tokens) : "—"},
     {key: "cost_usd", label: "Est. cost", n: 1, get: (s) => s.cost_usd == null ? "—" : fmtUsd(s.cost_usd)},
     {key: "outcome", label: "Outcome", get: (s) => s.outcome},
     {key: "source", label: "Source", get: (s) => s.source === "local" ? "recorded" : "migrated"},

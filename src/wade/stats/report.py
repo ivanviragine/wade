@@ -16,6 +16,7 @@ from wade.models.stats import (
     StatsOutcome,
     StatsReport,
     StatsSessionKind,
+    StatsSource,
     TaskRecord,
     TaskRow,
     UsageTotals,
@@ -27,18 +28,36 @@ _FINISHED = {StatsOutcome.SUCCESS, StatsOutcome.FAILED, StatsOutcome.TIMEOUT}
 _FAILED = {StatsOutcome.FAILED, StatsOutcome.TIMEOUT}
 
 
-def session_tokens(s: AISessionRecord) -> tuple[int, int, int, int]:
-    """(input, output, cached, total) with breakdown fallbacks."""
-    inp = s.input_tokens
-    out = s.output_tokens
-    cac = s.cached_tokens
+def _components(s: AISessionRecord) -> tuple[int | None, int | None, int | None]:
+    inp, out, cac = s.input_tokens, s.output_tokens, s.cached_tokens
     if s.models:
         inp = inp if inp is not None else sum(m.input_tokens for m in s.models)
         out = out if out is not None else sum(m.output_tokens for m in s.models)
         cac = cac if cac is not None else sum(m.cached_tokens for m in s.models)
+    return inp, out, cac
+
+
+def session_tokens(s: AISessionRecord) -> tuple[int, int, int, int]:
+    """(input, output, cached, total) — total is always the sum of the parts.
+
+    A tool's own "total" is ignored whenever any component is known: Codex's
+    excludes cache reads while Copilot's and Claude's include them, so trusting
+    it would make totals disagree with their own parts. It is only the fallback
+    for rows that recorded nothing else.
+    """
+    inp, out, cac = _components(s)
+    if inp is None and out is None and cac is None:
+        return 0, 0, 0, s.total_tokens or 0
     inp, out, cac = inp or 0, out or 0, cac or 0
-    total = s.total_tokens if s.total_tokens is not None else inp + out + cac
-    return inp, out, cac, total
+    return inp, out, cac, inp + out + cac
+
+
+def session_fresh_tokens(s: AISessionRecord) -> int:
+    """Input + output (no cache reads); a bare reported total when nothing else is known."""
+    inp, out, cac = _components(s)
+    if inp is None and out is None:
+        return 0 if cac is not None else (s.total_tokens or 0)
+    return (inp or 0) + (out or 0)
 
 
 def session_cost(s: AISessionRecord, prices: PriceBook) -> tuple[float, int, set[str]]:
@@ -70,6 +89,8 @@ def _add(t: UsageTotals, s: AISessionRecord, prices: PriceBook) -> set[str]:
     inp, out, cac, total = session_tokens(s)
     usd, priced, unpriced = session_cost(s, prices)
     t.sessions += 1
+    if s.source is StatsSource.LOCAL:
+        t.local_sessions += 1
     if s.outcome in _FINISHED:
         t.finished += 1
     if s.outcome in _FAILED:
@@ -78,6 +99,7 @@ def _add(t: UsageTotals, s: AISessionRecord, prices: PriceBook) -> set[str]:
     t.output_tokens += out
     t.cached_tokens += cac
     t.total_tokens += total
+    t.fresh_tokens += session_fresh_tokens(s)
     t.premium_requests += s.premium_requests or 0
     t.cost_usd += usd
     t.priced_tokens += priced
@@ -103,7 +125,7 @@ def _breakdown(
     for s in sessions:
         _add(groups[key(s)], s, prices)
     rows = [BreakdownRow(key=k, totals=v) for k, v in groups.items()]
-    rows.sort(key=lambda r: (r.totals.total_tokens, r.totals.sessions), reverse=True)
+    rows.sort(key=lambda r: (r.totals.fresh_tokens, r.totals.sessions), reverse=True)
     return rows
 
 
@@ -128,7 +150,7 @@ def _model_breakdown(sessions: list[AISessionRecord], prices: PriceBook) -> list
             )
             _add(groups[m.model], part, prices)
     rows = [BreakdownRow(key=k, totals=v) for k, v in groups.items()]
-    rows.sort(key=lambda r: (r.totals.total_tokens, r.totals.sessions), reverse=True)
+    rows.sort(key=lambda r: (r.totals.fresh_tokens, r.totals.sessions), reverse=True)
     return rows
 
 
@@ -138,7 +160,7 @@ def _daily(sessions: list[AISessionRecord], prices: PriceBook) -> list[DailyPoin
         day = s.started_at.strftime("%Y-%m-%d")
         point = days.setdefault(day, DailyPoint(day=day))
         tool = s.ai_tool or "unknown"
-        point.tokens[tool] = point.tokens.get(tool, 0) + session_tokens(s)[3]
+        point.tokens[tool] = point.tokens.get(tool, 0) + session_fresh_tokens(s)
         point.sessions += 1
         point.cost_usd += session_cost(s, prices)[0]
     return [days[d] for d in sorted(days)]
@@ -198,7 +220,7 @@ def build_report(
         row = tasks.setdefault(k, TaskRow(task_id=s.task_id, project=s.project.label))
         _add(row.totals, s, prices)
         kind = s.kind.value
-        row.by_kind_tokens[kind] = row.by_kind_tokens.get(kind, 0) + session_tokens(s)[3]
+        row.by_kind_tokens[kind] = row.by_kind_tokens.get(kind, 0) + session_fresh_tokens(s)
         if s.kind is StatsSessionKind.REVIEW_PR_COMMENTS:
             row.review_sessions += 1
         if s.pr_number is not None and s.pr_number not in row.pr_numbers:
@@ -210,7 +232,7 @@ def build_report(
             row.merged = row.merged or pr.merged_at is not None
         row.pr_numbers.sort()
     report.top_tasks = sorted(
-        tasks.values(), key=lambda r: (r.totals.cost_usd, r.totals.total_tokens), reverse=True
+        tasks.values(), key=lambda r: (r.totals.cost_usd, r.totals.fresh_tokens), reverse=True
     )[:TOP_TASKS]
 
     # --- pull requests ----------------------------------------------------
@@ -260,7 +282,7 @@ def build_report(
 
     merged_rows = [r for r in tasks.values() if r.merged]
     if merged_rows:
-        flow.tokens_per_merged_pr = sum(r.totals.total_tokens for r in merged_rows) / len(
+        flow.tokens_per_merged_pr = sum(r.totals.fresh_tokens for r in merged_rows) / len(
             merged_rows
         )
         flow.cost_per_merged_pr = sum(r.totals.cost_usd for r in merged_rows) / len(merged_rows)

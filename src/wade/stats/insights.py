@@ -44,16 +44,17 @@ def build_insights(report: StatsReport) -> list[Insight]:
 
     # 1. Trend vs the previous window of equal length.
     prev = report.previous_totals
-    if prev is not None and prev.total_tokens > 0 and t.total_tokens > 0:
-        change = (t.total_tokens - prev.total_tokens) / prev.total_tokens
+    if prev is not None and prev.fresh_tokens > 0 and t.fresh_tokens > 0:
+        change = (t.fresh_tokens - prev.fresh_tokens) / prev.fresh_tokens
         if change >= 0.5:
             out.append(
                 Insight(
                     level=InsightLevel.WARNING,
-                    title=f"Token usage up {_pct(change)} vs the previous period",
+                    title=f"Fresh token usage up {_pct(change)} vs the previous period",
                     detail=(
-                        f"{_tokens(t.total_tokens)} tokens now vs {_tokens(prev.total_tokens)} "
-                        f"before, over {t.sessions} vs {prev.sessions} sessions."
+                        f"{_tokens(t.fresh_tokens)} fresh tokens (input + output) now vs "
+                        f"{_tokens(prev.fresh_tokens)} before, over {t.sessions} vs "
+                        f"{prev.sessions} sessions."
                     ),
                 )
             )
@@ -61,10 +62,10 @@ def build_insights(report: StatsReport) -> list[Insight]:
             out.append(
                 Insight(
                     level=InsightLevel.GOOD,
-                    title=f"Token usage down {_pct(-change)} vs the previous period",
+                    title=f"Fresh token usage down {_pct(-change)} vs the previous period",
                     detail=(
-                        f"{_tokens(t.total_tokens)} tokens now vs {_tokens(prev.total_tokens)} "
-                        "before."
+                        f"{_tokens(t.fresh_tokens)} fresh tokens (input + output) now vs "
+                        f"{_tokens(prev.fresh_tokens)} before."
                     ),
                 )
             )
@@ -73,16 +74,16 @@ def build_insights(report: StatsReport) -> list[Insight]:
     kinds = {r.key: r.totals for r in report.by_kind}
     impl = kinds.get("implement")
     review = kinds.get("review_pr_comments")
-    if impl and review and impl.total_tokens and review.sessions >= MIN_SESSIONS:
-        ratio = review.total_tokens / impl.total_tokens
+    if impl and review and impl.fresh_tokens and review.sessions >= MIN_SESSIONS:
+        ratio = review.fresh_tokens / impl.fresh_tokens
         if ratio >= 0.5:
             out.append(
                 Insight(
                     level=InsightLevel.WARNING if ratio >= 1 else InsightLevel.INFO,
                     title=f"Review rework is {ratio:.1f}x implementation spend",
                     detail=(
-                        f"Addressing PR comments used {_tokens(review.total_tokens)} tokens "
-                        f"across {review.sessions} sessions vs {_tokens(impl.total_tokens)} for "
+                        f"Addressing PR comments used {_tokens(review.fresh_tokens)} fresh tokens "
+                        f"across {review.sessions} sessions vs {_tokens(impl.fresh_tokens)} for "
                         "implementation. Tighter plans or a stronger closing review usually "
                         "pay off here."
                     ),
@@ -162,16 +163,16 @@ def build_insights(report: StatsReport) -> list[Insight]:
             )
 
     # 6. Concentration: one task dominating spend.
-    if report.top_tasks and t.total_tokens:
+    if report.top_tasks and t.fresh_tokens:
         top = report.top_tasks[0]
-        share = top.totals.total_tokens / t.total_tokens
+        share = top.totals.fresh_tokens / t.fresh_tokens
         if share >= 0.25 and len(report.top_tasks) >= 3:
             out.append(
                 Insight(
-                    title=f"Task {top.task_id} alone used {_pct(share)} of all tokens",
+                    title=f"Task {top.task_id} alone used {_pct(share)} of all fresh tokens",
                     detail=(
-                        f"{_tokens(top.totals.total_tokens)} tokens over {top.totals.sessions} "
-                        "sessions — large tasks are cheaper when split."
+                        f"{_tokens(top.totals.fresh_tokens)} fresh tokens over "
+                        f"{top.totals.sessions} sessions — large tasks are cheaper when split."
                     ),
                 )
             )
@@ -204,12 +205,31 @@ def build_insights(report: StatsReport) -> list[Insight]:
             Insight(
                 title=f"≈${flow.cost_per_merged_pr:.2f} of AI spend per merged task",
                 detail=(
-                    f"≈{_tokens(flow.tokens_per_merged_pr or 0)} tokens across plan, implement "
-                    "and review sessions (estimated)."
+                    f"≈{_tokens(flow.tokens_per_merged_pr or 0)} fresh tokens across plan, "
+                    "implement and review sessions (estimated)."
                 ),
             )
         )
 
+    # 8. Data-quality notes: cache reporting gaps and the price table.
+    silent = [
+        r.key
+        for r in report.by_tool
+        if r.totals.sessions >= MIN_SESSIONS
+        and r.totals.input_tokens
+        and not r.totals.cached_tokens
+    ]
+    if silent and len(silent) < len(report.by_tool):
+        names = ", ".join(silent)
+        out.append(
+            Insight(
+                title=f"No cache reads reported for {names}",
+                detail=(
+                    "Their transcripts didn't include cache usage, so cache share shows — and "
+                    "their totals and costs exclude cache reads. Compare tools by fresh tokens."
+                ),
+            )
+        )
     # 8. Data-quality note: costs are only as complete as the price table.
     if (cov := t.price_coverage) is not None and cov < 0.5:
         names = ", ".join(report.unpriced_models[:4])

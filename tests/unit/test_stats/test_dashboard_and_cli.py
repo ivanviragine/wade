@@ -74,7 +74,8 @@ def test_dashboard_api(server: tuple[int, str]) -> None:
     status, body = _get(port, "/api/report?since=all&tool=claude", h)
     report = json.loads(body)
     assert report["totals"]["sessions"] == 1
-    assert report["by_tool"][0]["totals"]["cache_ratio"] == 0
+    assert report["by_tool"][0]["totals"]["cache_ratio"] is None  # no cache reads reported
+    assert report["totals"]["fresh_tokens"] == 1100
     status, body = _get(port, "/api/sessions?since=all", h)
     assert json.loads(body)[0]["ai_tool"] == "claude"
     status, body = _get(port, f"/api/export.csv?since=all&token={token}")

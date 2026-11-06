@@ -227,6 +227,14 @@ transcript). Events: worktree created/removed, PR created (draft bootstrap and
 existing transcript capture (`_capture_post_session_usage` /
 `_capture_review_session_usage` take `stats=`), so transcripts are parsed once.
 
+**Token semantics.** Tools disagree on what "total" means (Codex's excludes cache
+reads; Copilot's and Claude's include them), and some transcripts never report
+cache reads. `stats/report.py::session_tokens` therefore recomputes total as
+input + output + cached whenever any component is known (a reported total is only
+a fallback), rankings/charts/trends use *fresh* tokens (input + output), and
+`UsageTotals.cache_ratio` is `None` — rendered `—` — when a group reported no
+cache reads at all.
+
 **Storage selector.** `stats.storage` (`both` | `github` | `local` | `off`,
 `models/config.py::StatsStorage`) gates the two sinks independently:
 `StatsConfig.records_local` for the database (plus the `WADE_STATS_DISABLE`

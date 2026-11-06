@@ -1490,6 +1490,13 @@ wade stats export -f csv -o sessions.csv
 | Pull requests — state, draft, created/merged/closed, size, linked task, WADE-managed or not | `wade stats migrate` (via `gh`) | Lead time, WADE vs non-WADE PRs, cost per merged task |
 | Tasks — state, created/updated, labels, planned/implemented/review-addressed tool + model | `wade stats migrate` (via your task provider) | Cycle time (task → merge), attribution |
 
+**Fresh tokens vs cache reads.** The headline metric is *fresh tokens* (input +
+output). Cache reads are reported separately with their share of prompt tokens,
+because tools disagree on them: some transcripts (e.g. Claude's terminal output)
+don't report cache reads at all — shown as `—`, not 0% — and tools define their own
+"total" differently. Totals are therefore always recomputed as input + output +
+cached, so the parts always add up.
+
 **Reports and insights.** `wade stats` and the dashboard show totals with change
 vs the previous period of equal length; breakdowns by workflow kind, AI tool,
 model and project (sessions, tokens, cache-hit share, estimated cost, average
@@ -1531,7 +1538,8 @@ Usage tables carry no timestamps, so imported sessions are dated from their
 PR/issue. `--dry-run` shows what would be imported.
 
 **Cost estimates.** Costs use built-in list prices for Anthropic Claude models
-(first-party API, USD per million tokens). They are estimates — CLI subscriptions,
+from Opus/Sonnet 4 onward (first-party API, USD per million tokens) — API-equivalent
+spend, not what a subscription bills. They are estimates — CLI subscriptions,
 discounts, cache-write surcharges and long-context tiers are not modelled. Other
 models show `—` until you price them in `~/.config/wade/pricing.yml`
 (or `$WADE_STATS_PRICING`); keys match exactly or as a prefix:

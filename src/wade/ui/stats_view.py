@@ -68,7 +68,7 @@ def _delta(now: float, before: float | None) -> str:
 def _breakdown_table(title: str, rows: list[BreakdownRow], *, limit: int = 10) -> Table:
     table = Table(title=title, title_justify="left", title_style="header.title", box=None)
     table.add_column(title.split(" ")[-1].capitalize(), no_wrap=True)
-    for name in ("Sessions", "Tokens", "Cached", "Est. cost", "Avg time", "Fail"):
+    for name in ("Sessions", "Fresh", "Cache reads", "Cache %", "Est. cost", "Avg time", "Fail"):
         table.add_column(name, justify="right")
     shown = rows[:limit]
     for row in shown:
@@ -76,7 +76,8 @@ def _breakdown_table(title: str, rows: list[BreakdownRow], *, limit: int = 10) -
         table.add_row(
             Text(row.key),
             str(t.sessions),
-            fmt_tokens(t.total_tokens),
+            fmt_tokens(t.fresh_tokens),
+            fmt_tokens(t.cached_tokens) if t.cached_tokens else "—",
             fmt_pct(t.cache_ratio),
             fmt_usd(t.cost_usd, covered=t.priced_tokens > 0),
             fmt_duration(t.avg_duration_s),
@@ -85,12 +86,13 @@ def _breakdown_table(title: str, rows: list[BreakdownRow], *, limit: int = 10) -
     if len(rows) > limit:
         rest = UsageTotals()
         for row in rows[limit:]:
-            for field in ("sessions", "total_tokens", "cost_usd"):
+            for field in ("sessions", "fresh_tokens", "cached_tokens", "cost_usd"):
                 setattr(rest, field, getattr(rest, field) + getattr(row.totals, field))
         table.add_row(
             Text(f"{len(rows) - limit} more"),
             str(rest.sessions),
-            fmt_tokens(rest.total_tokens),
+            fmt_tokens(rest.fresh_tokens),
+            fmt_tokens(rest.cached_tokens) if rest.cached_tokens else "—",
             "",
             fmt_usd(rest.cost_usd),
             "",
@@ -108,21 +110,39 @@ def render_report(report: StatsReport, *, scope: str) -> None:
     rows: list[tuple[str, str]] = [
         ("AI sessions", f"{t.sessions}{_delta(t.sessions, prev.sessions if prev else None)}"),
         (
-            "Tokens",
-            f"{fmt_tokens(t.total_tokens)}"
-            f"{_delta(t.total_tokens, prev.total_tokens if prev else None)}"
-            f"  (in {fmt_tokens(t.input_tokens)} · out {fmt_tokens(t.output_tokens)}"
-            f" · cached {fmt_tokens(t.cached_tokens)})",
+            "Fresh tokens",
+            f"{fmt_tokens(t.fresh_tokens)}"
+            f"{_delta(t.fresh_tokens, prev.fresh_tokens if prev else None)}"
+            f"  (in {fmt_tokens(t.input_tokens)} · out {fmt_tokens(t.output_tokens)})",
+        ),
+        (
+            "Cache reads",
+            f"{fmt_tokens(t.cached_tokens)}  ({fmt_pct(t.cache_ratio)} of prompt tokens;"
+            f" total incl. cache {fmt_tokens(t.total_tokens)})"
+            if t.cached_tokens
+            else "— (not reported by these tools)",
         ),
         (
             "Est. cost",
             f"{fmt_usd(t.cost_usd, covered=t.priced_tokens > 0)}"
             f"  ({fmt_pct(t.price_coverage)} of tokens priced)",
         ),
-        ("Cache hit share", fmt_pct(t.cache_ratio)),
-        ("AI time", fmt_duration(t.duration_s) if t.timed_sessions else "—"),
-        ("Failure rate", fmt_pct(t.failure_rate)),
     ]
+    migrated = t.sessions - t.local_sessions
+    if t.timed_sessions:
+        rows.append(("AI time", fmt_duration(t.duration_s)))
+        rows.append(("Failure rate", fmt_pct(t.failure_rate)))
+    elif t.sessions:
+        rows.append(
+            ("AI time / failures", "— (only recorded for sessions launched after upgrading)")
+        )
+    if migrated:
+        rows.append(
+            (
+                "Sources",
+                f"{t.local_sessions} recorded locally · {migrated} migrated from PR/issue bodies",
+            )
+        )
     if t.premium_requests:
         rows.append(("Premium requests", str(t.premium_requests)))
     flow = report.prs
@@ -164,7 +184,7 @@ def render_report(report: StatsReport, *, scope: str) -> None:
             ("Task", "left"),
             ("Project", "left"),
             ("Sessions", "right"),
-            ("Tokens", "right"),
+            ("Fresh", "right"),
             ("Est. cost", "right"),
             ("Reviews", "right"),
             ("PRs", "left"),
@@ -175,7 +195,7 @@ def render_report(report: StatsReport, *, scope: str) -> None:
                 Text(row.task_id),
                 Text(row.project),
                 str(row.totals.sessions),
-                fmt_tokens(row.totals.total_tokens),
+                fmt_tokens(row.totals.fresh_tokens),
                 fmt_usd(row.totals.cost_usd, covered=row.totals.priced_tokens > 0),
                 str(row.review_sessions),
                 Text(", ".join(f"#{n}" for n in row.pr_numbers) + (" ✓" if row.merged else "")),
@@ -208,7 +228,7 @@ def render_sessions(rows: list[dict[str, Any]]) -> None:
         ("Tool", "left"),
         ("Model", "left"),
         ("Time", "right"),
-        ("Tokens", "right"),
+        ("Fresh", "right"),
         ("Est. cost", "right"),
         ("Outcome", "left"),
         ("Source", "left"),
@@ -223,7 +243,7 @@ def render_sessions(rows: list[dict[str, Any]]) -> None:
             Text(str(r["ai_tool"] or "—")),
             Text(str(r["model"] or "—")),
             fmt_duration(r["duration_s"]),
-            fmt_tokens(r["total_tokens"]) if r["total_tokens"] else "—",
+            fmt_tokens(r["fresh_tokens"]) if r["fresh_tokens"] else "—",
             fmt_usd(r["cost_usd"]) if r["cost_usd"] is not None else "—",
             r["outcome"],
             r["source"],

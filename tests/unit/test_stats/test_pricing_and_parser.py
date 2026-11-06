@@ -45,6 +45,11 @@ from wade.stats.usage_parser import (
         ("claude-sonnet-5", 2.0),
         ("claude-haiku-5.5", 0.10),
         ("sonnet-4-6", 3.0),
+        ("claude-sonnet-4.5", 3.0),
+        ("claude-opus-4-5", 5.0),
+        ("claude-opus-4-1-20250805", 15.0),
+        ("claude-opus-4-20250514", 15.0),  # date suffix is not a minor version
+        ("claude-sonnet-4-20250514", 3.0),
     ],
 )
 def test_builtin_claude_prices(name: str, expected_input: float) -> None:
@@ -52,7 +57,7 @@ def test_builtin_claude_prices(name: str, expected_input: float) -> None:
     assert price is not None and price.input == expected_input
 
 
-@pytest.mark.parametrize("name", ["gpt-5-codex", "auto", "claude-opus-4-20250514", "", None])
+@pytest.mark.parametrize("name", ["gpt-5-codex", "auto", "claude-3-7-sonnet", "", None])
 def test_unknown_models_are_unpriced(name: str | None) -> None:
     assert PriceBook().price_for(name) is None
 

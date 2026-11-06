@@ -46,7 +46,12 @@ from wade.models.stats import (
 )
 from wade.stats.insights import build_insights
 from wade.stats.pricing import PriceBook
-from wade.stats.report import build_report, session_cost, session_tokens
+from wade.stats.report import (
+    build_report,
+    session_cost,
+    session_fresh_tokens,
+    session_tokens,
+)
 from wade.stats.store import StatsStore, default_db_path
 from wade.stats.usage_parser import (
     IMPL_USAGE_MARKERS,
@@ -842,6 +847,7 @@ EXPORT_COLUMNS = [
     "output_tokens",
     "cached_tokens",
     "total_tokens",
+    "fresh_tokens",
     "premium_requests",
     "cost_usd",
     "wade_version",
@@ -882,6 +888,7 @@ def session_rows(
                 "output_tokens": out,
                 "cached_tokens": cac,
                 "total_tokens": total,
+                "fresh_tokens": session_fresh_tokens(s),
                 "premium_requests": s.premium_requests,
                 "cost_usd": round(usd, 4) if priced else None,
                 "wade_version": s.wade_version,

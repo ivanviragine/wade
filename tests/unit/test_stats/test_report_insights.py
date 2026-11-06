@@ -117,7 +117,7 @@ def test_build_report_breakdowns_tasks_and_prs() -> None:
         "review_pr_comments",
         "delegation:plan_review",
     }
-    assert report.by_tool[0].key == "claude"
+    assert report.by_tool[0].key == "codex"  # ranked by fresh tokens, not cache reads
     assert "gpt-5" in report.unpriced_models
 
     top = {t.task_id: t for t in report.top_tasks}
@@ -150,8 +150,40 @@ def test_insights_fire_on_rework_failures_and_trend() -> None:
     previous = [_s("old", inp=100, out=10)]
     report = build_report(sessions, [], PriceBook(), previous=previous)
     titles = [i.title for i in build_insights(report)]
-    assert any("Token usage up" in t for t in titles)
+    assert any("Fresh token usage up" in t for t in titles)
     assert any("Review rework" in t for t in titles)
     assert any(t.startswith("codex sessions fail 100%") for t in titles)
     levels = {i.level for i in build_insights(report)}
     assert InsightLevel.WARNING in levels
+
+
+def test_total_is_sum_of_parts_even_when_tool_reports_otherwise() -> None:
+    # Codex reports total=input+output (excluding cache reads); Copilot includes them.
+    codex = _s("c", tool="codex", inp=100, out=50, cac=10_000, total_tokens=150)
+    assert session_tokens(codex) == (100, 50, 10_000, 10_150)
+    bare = _s("b", inp=None, out=None, cac=None, total_tokens=777)  # type: ignore[arg-type]
+    assert session_tokens(bare) == (0, 0, 0, 777)
+    report = build_report([codex, bare], [], PriceBook())
+    t = report.totals
+    assert t.total_tokens == t.input_tokens + t.output_tokens + t.cached_tokens + 777
+    assert t.fresh_tokens == 150 + 777
+
+
+def test_cache_share_unknown_when_tool_reports_no_cache_reads() -> None:
+    sessions = [_s(f"a{n}", tool="claude", cac=0) for n in range(3)]
+    sessions += [_s(f"b{n}", tool="codex", model=None, cac=50_000) for n in range(3)]
+    report = build_report(sessions, [], PriceBook())
+    by_tool = {r.key: r.totals for r in report.by_tool}
+    assert by_tool["claude"].cache_ratio is None
+    assert by_tool["codex"].cache_ratio is not None and by_tool["codex"].cache_ratio > 0.9
+    titles = [i.title for i in build_insights(report)]
+    assert "No cache reads reported for claude" in titles
+    assert not any("reuses its prompt cache" in t for t in titles)  # no bogus 97% vs 0%
+
+
+def test_breakdowns_rank_by_fresh_tokens() -> None:
+    heavy_cache = _s("h", tool="codex", model=None, inp=10, out=10, cac=1_000_000)
+    heavy_work = _s("w", tool="claude", inp=50_000, out=5_000)
+    report = build_report([heavy_cache, heavy_work], [], PriceBook())
+    assert [r.key for r in report.by_tool] == ["claude", "codex"]
+    assert report.totals.local_sessions == 2

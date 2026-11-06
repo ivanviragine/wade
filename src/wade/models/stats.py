@@ -227,15 +227,23 @@ class StatsFilter(BaseModel):
 
 
 class UsageTotals(BaseModel):
-    """Aggregate metrics over a set of sessions."""
+    """Aggregate metrics over a set of sessions.
+
+    ``total_tokens`` is always ``input + output + cached`` (tools disagree on
+    what their own "total" means). ``fresh_tokens`` is ``input + output`` —
+    the comparable measure across tools, because not every transcript reports
+    cache reads and cache reads are billed at a fraction of fresh input.
+    """
 
     sessions: int = 0
     finished: int = 0
     failures: int = 0
+    local_sessions: int = 0  # recorded at launch (vs migrated from GitHub)
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
     total_tokens: int = 0
+    fresh_tokens: int = 0
     premium_requests: int = 0
     cost_usd: float = 0.0
     priced_tokens: int = 0  # tokens covered by a known price
@@ -244,9 +252,14 @@ class UsageTotals(BaseModel):
 
     @property
     def cache_ratio(self) -> float | None:
-        """Share of prompt-side tokens served from cache."""
+        """Share of prompt-side tokens served from cache.
+
+        ``None`` when no cache reads were reported at all: agentic CLIs always
+        hit the prompt cache, so zero means the transcript didn't report it,
+        not that the cache went unused.
+        """
         prompt = self.input_tokens + self.cached_tokens
-        return self.cached_tokens / prompt if prompt else None
+        return self.cached_tokens / prompt if prompt and self.cached_tokens else None
 
     @property
     def failure_rate(self) -> float | None:
@@ -282,7 +295,7 @@ class DailyPoint(BaseModel):
     """Per-day totals split by a series dimension (AI tool)."""
 
     day: str  # YYYY-MM-DD (UTC)
-    tokens: dict[str, int] = Field(default_factory=dict)
+    tokens: dict[str, int] = Field(default_factory=dict)  # fresh tokens per tool
     sessions: int = 0
     cost_usd: float = 0.0
 
@@ -312,7 +325,7 @@ class TaskRow(BaseModel):
     task_id: str
     project: str
     totals: UsageTotals = Field(default_factory=UsageTotals)
-    by_kind_tokens: dict[str, int] = Field(default_factory=dict)
+    by_kind_tokens: dict[str, int] = Field(default_factory=dict)  # fresh tokens per kind
     review_sessions: int = 0
     pr_numbers: list[int] = Field(default_factory=list)
     merged: bool = False
