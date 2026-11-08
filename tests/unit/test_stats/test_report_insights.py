@@ -360,3 +360,44 @@ def test_rework_index_adjusts_for_task_size() -> None:
     )
     assert rows["claude-opus-4.8"].rework_index == pytest.approx(1.0)
     assert rows["claude-haiku-4.5"].rework_index == pytest.approx(1.0)
+
+
+def test_task_rows_carry_pr_and_task_links() -> None:
+    sessions = [_s("a", task="1", pr_number=9), _s("b", task="1", pr_number=12)]
+    prs = [
+        PullRequestRecord(
+            project=P,
+            number=9,
+            task_id="1",
+            url="https://github.example.com/o/r/pull/9",  # GitHub's own URL wins
+            state="MERGED",
+            created_at=NOW,
+            merged_at=NOW,
+        )
+    ]
+    tasks = [TaskRecord(project=P, task_id="1", url="https://github.com/o/r/issues/1")]
+    [row] = build_report(sessions, prs, PriceBook(), all_task_records=tasks).top_tasks
+    assert row.pr_numbers == [9, 12]
+    assert row.pr_urls == {
+        9: "https://github.example.com/o/r/pull/9",
+        12: "https://github.com/o/r/pull/12",  # no record: built from the owner/repo slug
+    }
+    assert row.task_url == "https://github.com/o/r/issues/1"
+
+
+def test_no_guessed_links_without_a_repo_slug() -> None:
+    local = ProjectRef(root="/no/remote")
+    [row] = build_report([_s("a", task="1", pr_number=3, project=local)], [], PriceBook()).top_tasks
+    assert row.pr_urls == {} and row.task_url is None
+
+
+def test_cli_task_table_renders_hyperlinks() -> None:
+    from wade.models.stats import TaskRow
+    from wade.ui.stats_view import _pr_links
+
+    text = _pr_links(
+        TaskRow(task_id="1", project="o/r", pr_numbers=[4, 5], pr_urls={4: "https://x/4"})
+    )
+    assert text.plain == "#4, #5"
+    links = [span.style.link for span in text.spans if hasattr(span.style, "link")]
+    assert links == ["https://x/4"]  # #5 has no URL and stays plain

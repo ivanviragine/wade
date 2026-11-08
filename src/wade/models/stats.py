@@ -389,6 +389,8 @@ class TaskRow(BaseModel):
     by_kind_tokens: dict[str, int] = Field(default_factory=dict)  # fresh tokens per kind
     review_sessions: int = 0
     pr_numbers: list[int] = Field(default_factory=list)
+    pr_urls: dict[int, str] = Field(default_factory=dict)
+    task_url: str | None = None
     merged: bool = False
 
 

@@ -223,6 +223,18 @@ def _median(values: list[float]) -> float | None:
     return statistics.median(values) if values else None
 
 
+_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def github_pr_url(project: str, number: int) -> str | None:
+    """Best-effort PR link for a project label that is an ``owner/repo`` slug.
+
+    Used only when no PR record (with GitHub's own URL) is stored, e.g. a PR
+    seen in a session but created outside the report's date window.
+    """
+    return f"https://github.com/{project}/pull/{number}" if _SLUG.fullmatch(project) else None
+
+
 def _pr_key(project: str, task_id: str | None) -> tuple[str, str] | None:
     return (project, task_id) if task_id else None
 
@@ -356,12 +368,23 @@ def build_report(
             row.review_sessions += 1
         if s.pr_number is not None and s.pr_number not in row.pr_numbers:
             row.pr_numbers.append(s.pr_number)
+    task_urls = {
+        (t.project.label, t.task_id): t.url
+        for t in (all_task_records or task_records or [])
+        if t.url
+    }
     for k, row in tasks.items():
         for pr in pr_by_task.get(k, []):
             if pr.number not in row.pr_numbers:
                 row.pr_numbers.append(pr.number)
+            if pr.url:
+                row.pr_urls[pr.number] = pr.url
             row.merged = row.merged or pr.merged_at is not None
         row.pr_numbers.sort()
+        for n in row.pr_numbers:
+            if n not in row.pr_urls and (url := github_pr_url(row.project, n)):
+                row.pr_urls[n] = url
+        row.task_url = task_urls.get(k)
     report.top_tasks = sorted(
         tasks.values(), key=lambda r: (r.totals.cost_usd, r.totals.fresh_tokens), reverse=True
     )[:TOP_TASKS]

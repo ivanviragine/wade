@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
@@ -13,6 +14,7 @@ from wade.models.stats import (
     PullRequestRecord,
     ReworkRow,
     StatsReport,
+    TaskRow,
     UsageTotals,
 )
 from wade.ui.console import console
@@ -110,6 +112,22 @@ def _breakdown_table(
     return table
 
 
+def _link(label: str, url: str | None) -> Text:
+    """Terminal hyperlink (OSC 8); plain text where the terminal doesn't support it."""
+    return Text(label, style=Style(link=url)) if url else Text(label)
+
+
+def _pr_links(row: TaskRow) -> Text:
+    out = Text()
+    for i, n in enumerate(row.pr_numbers):
+        if i:
+            out.append(", ")
+        out.append_text(_link(f"#{n}", row.pr_urls.get(n)))
+    if row.merged:
+        out.append(" ✓")
+    return out
+
+
 def render_report(report: StatsReport, *, scope: str) -> None:
     out = console.out
     t = report.totals
@@ -204,13 +222,13 @@ def render_report(report: StatsReport, *, scope: str) -> None:
             table.add_column(name, justify=justify)  # type: ignore[arg-type]
         for row in report.top_tasks[:8]:
             table.add_row(
-                Text(row.task_id),
+                _link(row.task_id, row.task_url),
                 Text(row.project),
                 str(row.totals.sessions),
                 fmt_tokens(row.totals.fresh_tokens),
                 fmt_usd(row.totals.cost_usd, covered=row.totals.priced_tokens > 0),
                 str(row.review_sessions),
-                Text(", ".join(f"#{n}" for n in row.pr_numbers) + (" ✓" if row.merged else "")),
+                _pr_links(row),
             )
         out.print(table)
         out.print()

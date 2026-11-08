@@ -584,6 +584,21 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
     const s = el("span"); const d = el("span", {class: "dot"}); d.style.background = css(toolColor[key] || "--other");
     s.appendChild(d); s.appendChild(document.createTextNode(key)); return s;
   }
+  function linkTo(label, url) {
+    // Only http(s) URLs become links; anything else stays text.
+    if (!url || !/^https?:\/\//.test(url)) return label;
+    return el("a", {href: url, target: "_blank", rel: "noopener noreferrer"}, label);
+  }
+  function prLinks(t) {
+    const span = el("span");
+    t.pr_numbers.forEach((n, i) => {
+      if (i) span.appendChild(document.createTextNode(", "));
+      const node = linkTo("#" + n, (t.pr_urls || {})[String(n)]);
+      span.appendChild(node instanceof Node ? node : document.createTextNode(node));
+    });
+    if (t.merged) span.appendChild(document.createTextNode(" · merged"));
+    return span;
+  }
   function renderTables(r) {
     table("toolTable", [{label: "Tool", get: (row) => keyWithDot(row.key)}, ...totalsCols,
       {label: "Premium req.", n: 1, get: (row) => row.totals.premium_requests || "—"}], r.by_tool);
@@ -601,7 +616,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
       {label: "Review cost", n: 1, get: (m) => fmtUsd(m.review_cost_usd)},
     ], rework);
     table("taskTable", [
-      {label: "Task", get: (t) => t.task_id},
+      {label: "Task", get: (t) => linkTo(t.task_id, t.task_url)},
       {label: "Project", get: (t) => t.project},
       {label: "Sessions", n: 1, get: (t) => t.totals.sessions},
       {label: "Plan", n: 1, get: (t) => fmtTok(t.by_kind_tokens.plan)},
@@ -609,7 +624,7 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
       {label: "Review", n: 1, get: (t) => fmtTok(t.by_kind_tokens.review_pr_comments)},
       {label: "Fresh", n: 1, get: (t) => fmtTok(t.totals.fresh_tokens)},
       {label: "Est. cost", n: 1, get: (t) => fmtUsd(t.totals.cost_usd, t.totals.priced_tokens > 0)},
-      {label: "PRs", get: (t) => t.pr_numbers.map((n) => "#" + n).join(", ") + (t.merged ? " · merged" : "")},
+      {label: "PRs", get: (t) => prLinks(t)},
     ], r.top_tasks);
   }
 
