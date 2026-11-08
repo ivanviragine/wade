@@ -172,6 +172,38 @@ def build_insights(report: StatsReport) -> list[Insight]:
                 )
             )
 
+    # 5a. Rework by implementing model, size-adjusted: bigger implementations
+    #     draw more review, so models are compared against the average for
+    #     tasks of the same size rather than by raw rounds per task.
+    eligible = [
+        r
+        for r in report.rework_by_model
+        if r.tasks >= MIN_COMPARE_SESSIONS and r.rework_index is not None
+    ]
+    if eligible:
+        most = max(eligible, key=lambda r: r.rework_index or 0)
+        lowest = min(eligible, key=lambda r: r.rework_index or 0)
+        hi = most.rework_index or 0
+        if hi >= 1.3:
+            out.append(
+                Insight(
+                    level=InsightLevel.WARNING,
+                    title=(
+                        f"Tasks implemented by {most.model} needed {hi:.1f}x the review rounds "
+                        "typical for their size"
+                    ),
+                    detail=(
+                        f"{most.review_rounds} rounds over {most.tasks} tasks vs "
+                        f"{most.expected_rounds:.0f} expected for tasks of the same size"
+                        + (
+                            f"; {lowest.model} came in at {lowest.rework_index:.1f}x."
+                            if lowest is not most and lowest.rework_index is not None
+                            else "."
+                        )
+                    ),
+                )
+            )
+
     # 5b. Review-round outliers: tasks that went back and forth many times.
     heavy = report.review_heavy_tasks
     if heavy:

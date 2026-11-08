@@ -14,6 +14,7 @@ from wade.models.stats import (
     ModelUsageRow,
     PRFlowSummary,
     PullRequestRecord,
+    ReworkRow,
     StatsFilter,
     StatsOutcome,
     StatsReport,
@@ -226,6 +227,73 @@ def _pr_key(project: str, task_id: str | None) -> tuple[str, str] | None:
     return (project, task_id) if task_id else None
 
 
+def _implementing_model(impl: list[AISessionRecord], label: str | None) -> str | None:
+    """Model that did most of a task's implementation (by fresh tokens)."""
+    weight: dict[str, int] = defaultdict(int)
+    for s in impl:
+        if s.models:
+            for m in s.models:
+                if m.model != UNKNOWN_MODEL:
+                    weight[m.model] += m.input_tokens + m.output_tokens
+        elif s.model:
+            weight[s.model] += session_fresh_tokens(s)
+    if weight:
+        return max(weight, key=lambda k: (weight[k], k))
+    return clean_model_name(label)
+
+
+def _size_bucket(size: int, cuts: list[float]) -> int:
+    return sum(1 for c in cuts if size > c)
+
+
+def _rework_by_model(
+    sessions: list[AISessionRecord], prices: PriceBook, task_records: list[TaskRecord]
+) -> list[ReworkRow]:
+    """Attribute each task's PR-comment review rounds to its implementing model.
+
+    Also accumulates each model's *size-expected* rounds: the mean rounds of all
+    tasks in the same implementation-size quartile, so models that mostly get
+    small (or large) tasks are compared fairly.
+    """
+    labels = {(t.project.label, t.task_id): t.implemented_model for t in task_records}
+    per_task: dict[tuple[str, str], list[AISessionRecord]] = defaultdict(list)
+    for s in sessions:
+        if s.task_id:
+            per_task[(s.project.label, s.task_id)].append(s)
+    facts: list[tuple[str, list[AISessionRecord], list[AISessionRecord], int]] = []
+    for key, group in per_task.items():
+        impl = [s for s in group if s.kind is StatsSessionKind.IMPLEMENT]
+        if not impl:
+            continue  # rework is only meaningful relative to an implementation
+        model = _implementing_model(impl, labels.get(key))
+        if model is None:
+            continue
+        review = [s for s in group if s.kind is StatsSessionKind.REVIEW_PR_COMMENTS]
+        facts.append((model, impl, review, sum(session_fresh_tokens(s) for s in impl)))
+
+    cuts: list[float] = []
+    if len(facts) >= 8:
+        cuts = statistics.quantiles([f[3] for f in facts], n=4)
+    bucket_rounds: dict[int, list[int]] = defaultdict(list)
+    for _model, _impl, review, size in facts:
+        bucket_rounds[_size_bucket(size, cuts)].append(len(review))
+    bucket_mean = {b: sum(v) / len(v) for b, v in bucket_rounds.items()}
+
+    rows: dict[str, ReworkRow] = {}
+    for model, impl, review, size in facts:
+        row = rows.setdefault(model, ReworkRow(model=model))
+        row.tasks += 1
+        row.review_rounds += len(review)
+        row.expected_rounds += bucket_mean[_size_bucket(size, cuts)]
+        row.tasks_reviewed += 1 if review else 0
+        row.heavy_tasks += 1 if len(review) >= REVIEW_HEAVY_ROUNDS else 0
+        row.implement_fresh_tokens += size
+        row.review_fresh_tokens += sum(session_fresh_tokens(s) for s in review)
+        row.implement_cost_usd += sum(session_cost(s, prices)[0] for s in impl)
+        row.review_cost_usd += sum(session_cost(s, prices)[0] for s in review)
+    return sorted(rows.values(), key=lambda r: (r.tasks, r.review_rounds), reverse=True)
+
+
 def build_report(
     sessions: list[AISessionRecord],
     prs: list[PullRequestRecord],
@@ -301,6 +369,9 @@ def build_report(
         (r for r in tasks.values() if r.review_sessions >= REVIEW_HEAVY_ROUNDS),
         key=lambda r: (r.review_sessions, r.totals.cost_usd),
         reverse=True,
+    )
+    report.rework_by_model = _rework_by_model(
+        sessions, prices, all_task_records or task_records or []
     )
 
     # --- pull requests ----------------------------------------------------

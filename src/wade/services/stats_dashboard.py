@@ -64,6 +64,7 @@ def report_json(report: StatsReport) -> dict[str, Any]:
         "by_project": _rows_json(report.by_project),
         "daily": [d.model_dump(mode="json") for d in report.daily],
         "top_tasks": [_task_json(t) for t in report.top_tasks],
+        "rework_by_model": [r.as_dict() for r in report.rework_by_model],
         "tasks_created": report.tasks_created,
         "tasks_closed": report.tasks_closed,
         "prs": report.prs.model_dump(mode="json"),

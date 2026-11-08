@@ -328,6 +328,58 @@ class PRFlowSummary(BaseModel):
     avg_review_sessions_per_pr: float | None = None
 
 
+class ReworkRow(BaseModel):
+    """PR-comment rework that followed tasks implemented by one model.
+
+    A task is attributed to the model that did most of its implementation
+    (by fresh tokens), falling back to WADE's ``implemented-model:`` label.
+    """
+
+    model: str
+    tasks: int = 0
+    tasks_reviewed: int = 0  # tasks with >= 1 PR-comment review session
+    heavy_tasks: int = 0  # tasks with >= REVIEW_HEAVY_ROUNDS review sessions
+    review_rounds: int = 0
+    # Rounds an average task of the same implementation size would have needed
+    # (sum over this model's tasks of their size-quartile mean). Bigger tasks
+    # draw more review, so raw rounds/task mostly says which model gets big jobs.
+    expected_rounds: float = 0.0
+    implement_fresh_tokens: int = 0
+    review_fresh_tokens: int = 0
+    implement_cost_usd: float = 0.0
+    review_cost_usd: float = 0.0
+
+    @property
+    def rounds_per_task(self) -> float | None:
+        return self.review_rounds / self.tasks if self.tasks else None
+
+    @property
+    def rework_index(self) -> float | None:
+        """Actual / size-expected review rounds: 1.0 is typical, 2.0 twice the norm."""
+        return self.review_rounds / self.expected_rounds if self.expected_rounds else None
+
+    @property
+    def reviewed_share(self) -> float | None:
+        return self.tasks_reviewed / self.tasks if self.tasks else None
+
+    @property
+    def rework_ratio(self) -> float | None:
+        """Review fresh tokens per implementation fresh token."""
+        if not self.implement_fresh_tokens:
+            return None
+        return self.review_fresh_tokens / self.implement_fresh_tokens
+
+    def as_dict(self) -> dict[str, Any]:
+        data = self.model_dump()
+        data.update(
+            rounds_per_task=self.rounds_per_task,
+            rework_index=self.rework_index,
+            reviewed_share=self.reviewed_share,
+            rework_ratio=self.rework_ratio,
+        )
+        return data
+
+
 class TaskRow(BaseModel):
     """Per-task rollup: what one task cost across plan/implement/review."""
 
@@ -371,6 +423,8 @@ class StatsReport(BaseModel):
     top_tasks: list[TaskRow] = Field(default_factory=list)
     # Tasks with the most PR-comment review sessions (>= REVIEW_HEAVY_ROUNDS).
     review_heavy_tasks: list[TaskRow] = Field(default_factory=list)
+    # Rework grouped by the model that implemented each task.
+    rework_by_model: list[ReworkRow] = Field(default_factory=list)
     tasks_created: int = 0
     tasks_closed: int = 0
     prs: PRFlowSummary = Field(default_factory=PRFlowSummary)

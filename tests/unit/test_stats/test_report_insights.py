@@ -300,3 +300,63 @@ def test_review_heavy_tasks_are_flagged() -> None:
     [heavy] = [i for i in build_insights(report) if "review rounds" in i.title]
     assert heavy.title == "1 task needed 5+ PR-comment review rounds"
     assert heavy.detail.startswith("515 (16 rounds,")
+
+
+def test_rework_attributed_to_implementing_model() -> None:
+    def task(tid: str, model: str, rounds: int) -> list[AISessionRecord]:
+        out = [_s(f"i{tid}", task=tid, model=model, inp=10_000)]
+        out += [
+            _s(
+                f"r{tid}{n}",
+                kind=StatsSessionKind.REVIEW_PR_COMMENTS,
+                task=tid,
+                model="gpt-5",
+                inp=500,
+            )
+            for n in range(rounds)
+        ]
+        return out
+
+    sessions: list[AISessionRecord] = []
+    for n in range(10):
+        sessions += task(f"a{n}", "claude-opus-4.8", 3)
+        sessions += task(f"b{n}", "claude-sonnet-5", 0 if n < 8 else 1)
+    # Implementation without a recorded model falls back to the implemented-model label.
+    sessions.append(_s("ix", task="x", model=None, inp=100))
+    labels = [TaskRecord(project=P, task_id="x", implemented_model="claude-haiku-4.5")]
+    report = build_report(sessions, [], PriceBook(), all_task_records=labels)
+    rows = {r.model: r for r in report.rework_by_model}
+    assert rows["claude-opus-4.8"].rounds_per_task == 3
+    assert rows["claude-opus-4.8"].rework_ratio == pytest.approx(3 * 600 / 10_100)
+    assert rows["claude-sonnet-5"].tasks == 10 and rows["claude-sonnet-5"].tasks_reviewed == 2
+    assert rows["claude-haiku-4.5"].tasks == 1  # rework is keyed by implementer, not reviewer
+    assert "gpt-5" not in rows
+    titles = [i.title for i in build_insights(report)]
+    # One size bucket holds all 21 tasks, so the norm is 32 rounds / 21 tasks.
+    norm = 32 / 21
+    assert rows["claude-opus-4.8"].rework_index == pytest.approx(30 / (10 * norm))
+    assert rows["claude-sonnet-5"].rework_index == pytest.approx(2 / (10 * norm))
+    assert any(t.startswith("Tasks implemented by claude-opus-4.8 needed 2.0x") for t in titles)
+
+
+def test_rework_index_adjusts_for_task_size() -> None:
+    # "small" model only ever gets small tasks, "big" only large ones; both match
+    # the norm for their size, so neither should be flagged.
+    sessions: list[AISessionRecord] = []
+    for n in range(8):
+        sessions.append(_s(f"si{n}", task=f"s{n}", model="claude-haiku-4.5", inp=1_000))
+        sessions.append(
+            _s(f"sr{n}", kind=StatsSessionKind.REVIEW_PR_COMMENTS, task=f"s{n}", inp=10)
+        )
+        sessions.append(_s(f"bi{n}", task=f"b{n}", model="claude-opus-4.8", inp=900_000))
+        sessions += [
+            _s(f"br{n}{k}", kind=StatsSessionKind.REVIEW_PR_COMMENTS, task=f"b{n}", inp=10)
+            for k in range(4)
+        ]
+    rows = {r.model: r for r in build_report(sessions, [], PriceBook()).rework_by_model}
+    assert (
+        rows["claude-opus-4.8"].rounds_per_task == 4
+        and rows["claude-haiku-4.5"].rounds_per_task == 1
+    )
+    assert rows["claude-opus-4.8"].rework_index == pytest.approx(1.0)
+    assert rows["claude-haiku-4.5"].rework_index == pytest.approx(1.0)

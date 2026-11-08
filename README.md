@@ -1503,8 +1503,11 @@ occasionally recorded `1` or `20`) are grouped as `unknown`.
 vs the previous period of equal length; breakdowns by workflow kind, AI tool,
 model and project (sessions, tokens, cache-hit share, estimated cost, average
 duration, failure rate); the most expensive tasks with their plan/implement/review
-split; and PR flow (lead time, task→merge cycle time, review rounds per PR, cost
-per merged task). Insights flag what deserves attention: spend trends, review
+split; **rework by implementing model** (PR-comment review rounds after each
+model's implementations, with a size-adjusted index — rounds relative to the norm
+for tasks of the same implementation size, since bigger tasks draw more review);
+and PR flow (lead time, task→merge cycle time, review rounds per PR, cost per
+merged task). Insights flag what deserves attention: spend trends, review
 rework costing more than implementation, tools with high failure rates, cache
 efficiency gaps, models that cost several times more per session, one task
 dominating spend, and WADE vs other PR lead times. Filters (date range, project,

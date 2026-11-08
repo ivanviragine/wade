@@ -11,6 +11,7 @@ from wade.models.stats import (
     BreakdownRow,
     InsightLevel,
     PullRequestRecord,
+    ReworkRow,
     StatsReport,
     UsageTotals,
 )
@@ -184,6 +185,9 @@ def render_report(report: StatsReport, *, scope: str) -> None:
     if len(report.by_project) > 1:
         out.print(_breakdown_table("By project", report.by_project, timing=timing))
         out.print()
+    if report.rework_by_model:
+        out.print(render_rework_table(report.rework_by_model))
+        out.print()
     if report.top_tasks:
         table = Table(
             title="Most expensive tasks", title_justify="left", title_style="header.title", box=None
@@ -211,6 +215,49 @@ def render_report(report: StatsReport, *, scope: str) -> None:
         out.print(table)
         out.print()
     render_insights(report)
+
+
+REWORK_MIN_TASKS = 3
+
+
+def render_rework_table(rows: list[ReworkRow], *, min_tasks: int = REWORK_MIN_TASKS) -> Table:
+    """PR-comment rework after each implementing model, most rework first."""
+    table = Table(
+        title="Rework by implementing model",
+        title_justify="left",
+        title_style="header.title",
+        box=None,
+        caption=f"Models with {min_tasks}+ implemented tasks · rounds = PR-comment review "
+        "sessions after implementation · size norm = rounds typical for tasks of the same "
+        "implementation size (1.00x = average)",
+        caption_justify="left",
+        caption_style="dim",
+    )
+    for name, justify in (
+        ("Model", "left"),
+        ("Tasks", "right"),
+        ("Rounds/task", "right"),
+        ("vs size norm", "right"),
+        ("Reviewed", "right"),
+        ("5+ rounds", "right"),
+        ("Review/impl tokens", "right"),
+        ("Review cost", "right"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+    shown = [r for r in rows if r.tasks >= min_tasks]
+    shown.sort(key=lambda r: (r.rework_index or 0, r.tasks), reverse=True)
+    for r in shown:
+        table.add_row(
+            Text(r.model),
+            str(r.tasks),
+            f"{r.rounds_per_task:.2f}" if r.rounds_per_task is not None else "—",
+            f"{r.rework_index:.2f}x" if r.rework_index is not None else "—",
+            fmt_pct(r.reviewed_share),
+            str(r.heavy_tasks) if r.heavy_tasks else "—",
+            f"{r.rework_ratio:.2f}" if r.rework_ratio is not None else "—",
+            fmt_usd(r.review_cost_usd),
+        )
+    return table
 
 
 def render_insights(report: StatsReport) -> None:

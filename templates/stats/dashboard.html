@@ -193,6 +193,11 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
     </div>
 
     <div class="card">
+      <div class="card-head"><div><h2>Rework by implementing model</h2><div class="sub">PR-comment review rounds after each model's implementations · models with 3+ tasks · "vs size norm" compares with tasks of the same implementation size (1.00x = average)</div></div></div>
+      <div class="scroll"><table id="reworkTable"></table></div>
+    </div>
+
+    <div class="card">
       <div class="card-head"><div><h2>Most expensive tasks</h2><div class="sub">All sessions for a task: planning, implementation and review</div></div></div>
       <div class="scroll"><table id="taskTable"></table></div>
     </div>
@@ -583,6 +588,18 @@ details summary { cursor: pointer; color: var(--text-2); font-size: 12px; margin
     table("toolTable", [{label: "Tool", get: (row) => keyWithDot(row.key)}, ...totalsCols,
       {label: "Premium req.", n: 1, get: (row) => row.totals.premium_requests || "—"}], r.by_tool);
     table("modelTable", [{label: "Model", get: (row) => row.key}, ...totalsCols], r.by_model);
+    const rework = (r.rework_by_model || []).filter((m) => m.tasks >= 3)
+      .sort((a, b) => (b.rework_index || 0) - (a.rework_index || 0));
+    table("reworkTable", [
+      {label: "Implementing model", get: (m) => m.model},
+      {label: "Tasks", n: 1, get: (m) => m.tasks},
+      {label: "Rounds / task", n: 1, get: (m) => m.rounds_per_task == null ? "—" : m.rounds_per_task.toFixed(2)},
+      {label: "vs size norm", n: 1, get: (m) => m.rework_index == null ? "—" : m.rework_index.toFixed(2) + "x"},
+      {label: "Reviewed", n: 1, get: (m) => fmtPct(m.reviewed_share)},
+      {label: "5+ rounds", n: 1, get: (m) => m.heavy_tasks || "—"},
+      {label: "Review / impl tokens", n: 1, get: (m) => m.rework_ratio == null ? "—" : m.rework_ratio.toFixed(2)},
+      {label: "Review cost", n: 1, get: (m) => fmtUsd(m.review_cost_usd)},
+    ], rework);
     table("taskTable", [
       {label: "Task", get: (t) => t.task_id},
       {label: "Project", get: (t) => t.project},
