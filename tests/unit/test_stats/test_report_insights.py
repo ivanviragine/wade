@@ -401,3 +401,37 @@ def test_cli_task_table_renders_hyperlinks() -> None:
     assert text.plain == "#4, #5"
     links = [span.style.link for span in text.spans if hasattr(span.style, "link")]
     assert links == ["https://x/4"]  # #5 has no URL and stays plain
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({"TERM_PROGRAM": "iTerm.app"}, True),
+        ({"TERM_PROGRAM": "vscode"}, True),
+        ({"TERM_PROGRAM": "Apple_Terminal"}, False),
+        ({"TERM": "xterm-kitty"}, True),
+        ({"VTE_VERSION": "7600"}, True),
+        ({"WT_SESSION": "abc"}, True),
+        ({}, False),
+        ({"TERM_PROGRAM": "Apple_Terminal", "WADE_HYPERLINKS": "1"}, True),
+        ({"TERM_PROGRAM": "iTerm.app", "WADE_HYPERLINKS": "0"}, False),
+    ],
+)
+def test_hyperlink_detection(env: dict[str, str], expected: bool) -> None:
+    from wade.ui.stats_view import hyperlinks_supported
+
+    assert hyperlinks_supported(env) is expected
+
+
+def test_plain_url_fallback_lines() -> None:
+    from wade.models.stats import TaskRow
+    from wade.ui.stats_view import _pr_links, task_link_lines
+
+    rows = [
+        TaskRow(task_id="515", project="o/r", pr_numbers=[516], pr_urls={516: "https://x/516"}),
+        TaskRow(task_id="9", project="/local", task_url="https://x/issues/9"),
+        TaskRow(task_id="7", project="/local"),
+    ]
+    assert task_link_lines(rows) == ["   515  #516 https://x/516", "     9  https://x/issues/9"]
+    plain = _pr_links(rows[0], hyperlink=False)
+    assert plain.plain == "#516" and not any(getattr(sp.style, "link", None) for sp in plain.spans)

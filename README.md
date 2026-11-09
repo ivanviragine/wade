@@ -1560,6 +1560,11 @@ models:
   gpt-5.6-sol: {input: 4.0, output: 20.0, cached: 0.40}  # overrides the built-in
 ```
 
+PR numbers and task IDs in the task tables are clickable links in terminals that
+support them (iTerm2, VS Code, Ghostty, WezTerm, kitty, Warp, Windows Terminal,
+GNOME Terminal); elsewhere (e.g. macOS Terminal.app) the full URLs are listed
+under the table. `WADE_HYPERLINKS=1` or `0` overrides the detection.
+
 **The dashboard** (`wade stats ui`) is a single local page served from
 `127.0.0.1` with a one-time access token in its URL; it works offline and
 follows your light/dark preference. `wade stats prune --older-than 1y` trims old

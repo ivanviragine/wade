@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from typing import Any
 
 from rich.style import Style
@@ -112,20 +114,60 @@ def _breakdown_table(
     return table
 
 
-def _link(label: str, url: str | None) -> Text:
-    """Terminal hyperlink (OSC 8); plain text where the terminal doesn't support it."""
-    return Text(label, style=Style(link=url)) if url else Text(label)
+# Terminals known to render OSC 8 hyperlinks (keyed by $TERM_PROGRAM). Others,
+# e.g. macOS Terminal.app, get plain URLs printed under the table instead —
+# every terminal can open a plain URL.
+_HYPERLINK_TERM_PROGRAMS = frozenset(
+    {"iTerm.app", "WezTerm", "vscode", "ghostty", "Hyper", "Tabby", "WarpTerminal", "rio"}
+)
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
 
 
-def _pr_links(row: TaskRow) -> Text:
+def hyperlinks_supported(env: Mapping[str, str] | None = None) -> bool:
+    """Best-effort OSC 8 detection; ``WADE_HYPERLINKS=1|0`` overrides it."""
+    env = os.environ if env is None else env
+    override = env.get("WADE_HYPERLINKS", "").strip().lower()
+    if override in _TRUE:
+        return True
+    if override in _FALSE:
+        return False
+    if env.get("TERM_PROGRAM") in _HYPERLINK_TERM_PROGRAMS:
+        return True
+    if env.get("KITTY_WINDOW_ID") or env.get("WT_SESSION") or env.get("WEZTERM_PANE"):
+        return True
+    if "kitty" in env.get("TERM", ""):
+        return True
+    vte = env.get("VTE_VERSION", "")  # GNOME Terminal & other VTE terminals
+    return vte.isdigit() and int(vte) >= 5000
+
+
+def _link(label: str, url: str | None, *, hyperlink: bool = True) -> Text:
+    """Terminal hyperlink (OSC 8) when supported; otherwise plain text."""
+    return Text(label, style=Style(link=url)) if url and hyperlink else Text(label)
+
+
+def _pr_links(row: TaskRow, *, hyperlink: bool = True) -> Text:
     out = Text()
     for i, n in enumerate(row.pr_numbers):
         if i:
             out.append(", ")
-        out.append_text(_link(f"#{n}", row.pr_urls.get(n)))
+        out.append_text(_link(f"#{n}", row.pr_urls.get(n), hyperlink=hyperlink))
     if row.merged:
         out.append(" ✓")
     return out
+
+
+def task_link_lines(rows: list[TaskRow]) -> list[str]:
+    """Plain-URL fallback lines: ``515  #516 https://…``."""
+    lines: list[str] = []
+    for row in rows:
+        urls = [f"#{n} {row.pr_urls[n]}" for n in row.pr_numbers if n in row.pr_urls]
+        if not urls and row.task_url:
+            urls = [row.task_url]
+        if urls:
+            lines.append(f"{row.task_id:>6}  " + "  ".join(urls))
+    return lines
 
 
 def render_report(report: StatsReport, *, scope: str) -> None:
@@ -220,17 +262,28 @@ def render_report(report: StatsReport, *, scope: str) -> None:
             ("PRs", "left"),
         ):
             table.add_column(name, justify=justify)  # type: ignore[arg-type]
-        for row in report.top_tasks[:8]:
+        shown_tasks = report.top_tasks[:8]
+        hyperlink = hyperlinks_supported()
+        for row in shown_tasks:
             table.add_row(
-                _link(row.task_id, row.task_url),
+                _link(row.task_id, row.task_url, hyperlink=hyperlink),
                 Text(row.project),
                 str(row.totals.sessions),
                 fmt_tokens(row.totals.fresh_tokens),
                 fmt_usd(row.totals.cost_usd, covered=row.totals.priced_tokens > 0),
                 str(row.review_sessions),
-                _pr_links(row),
+                _pr_links(row, hyperlink=hyperlink),
             )
         out.print(table)
+        if not hyperlink and (lines := task_link_lines(shown_tasks)):
+            out.print(
+                Text(
+                    "  Links (set WADE_HYPERLINKS=1 if your terminal supports clickable links)",
+                    style="dim",
+                )
+            )
+            for line in lines:
+                out.print(Text(line, style="dim"), soft_wrap=True)
         out.print()
     render_insights(report)
 
