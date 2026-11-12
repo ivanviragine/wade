@@ -1461,6 +1461,11 @@ and withholds correctness labels. Legacy logs remain intact and require explicit
 
 Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are powered by [`crossby`](https://github.com/ivanviragine/crossby), WADE's AI-tool-integration dependency.
 
+The model catalog includes GPT-6.1 Terra for Codex, Copilot, and OpenCode,
+Claude Fable 5.2, Gemini 4 Carbon, and current Cursor/OpenCode variants. These
+are available in model selection and autocomplete. Existing default models
+remain unchanged; choose `--model gpt-6.1-terra` explicitly for Codex.
+
 | Tool | Binary |
 |------|--------|
 | [Claude Code](https://claude.com/product/claude-code) | `claude` |
