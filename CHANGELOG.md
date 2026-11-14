@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.13] — 2026-11-14
+
+### Chores
+
+- adopt Crossby 0.59.1 (#556) (9bc39c2)
+
 ## [v1.4.12] — 2026-11-13
 
 ### Chores
