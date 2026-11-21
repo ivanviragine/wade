@@ -128,10 +128,9 @@ def _tool_honors_effort(tool: str | None, level: EffortLevel) -> bool:
     """Whether *tool* can actually honor the effort *level*.
 
     Returns ``False`` when the tool has no effort concept, or restricts its
-    efforts and *level* is excluded (e.g. ``antigravity-cli`` rejects ``xhigh``
-    and ``max`` — ``agy --effort xhigh`` is rejected by the CLI). Unknown or
-    absent tools are treated permissively — capability gating is best-effort,
-    matching the resolvers' other tool lookups.
+    efforts and *level* is excluded (e.g. ``antigravity-cli`` rejects ``max``).
+    Unknown or absent tools are treated permissively — capability gating is
+    best-effort, matching the resolvers' other tool lookups.
     """
     if not tool:
         return True
@@ -163,7 +162,7 @@ def resolve_effort(
 
     When *tool* is provided and it cannot honor the resolved level — the tool
     has no effort concept, or restricts efforts to a subset that excludes the
-    level (e.g. ``antigravity-cli`` rejects ``xhigh``/``max``) — the level is
+    level (e.g. ``antigravity-cli`` rejects ``max``) — the level is
     dropped and ``None`` is returned, so config/CLI input can never forward an
     unsupported level.
     """
@@ -197,7 +196,7 @@ def resolve_effort(
         return None
 
     # Check tool support — the tool must expose effort AND accept this specific
-    # level (antigravity-cli rejects xhigh/max), else drop it.
+    # level (antigravity-cli rejects max), else drop it.
     if tool and not _tool_honors_effort(tool, level):
         logger.info("effort.unsupported", tool=tool, effort=resolved)
         return None
@@ -686,7 +685,7 @@ def confirm_ai_selection(
                 # Clear stale effort when the new tool can't honor it — either it
                 # has no effort concept, or it restricts efforts to a subset that
                 # excludes the retained level (e.g. antigravity-cli rejects
-                # xhigh/max). This prevents Proceed from returning an unsupported
+                # max). This prevents Proceed from returning an unsupported
                 # level without reopening the effort picker. The permission mode
                 # is left as requested — crossby downgrades any unsupported tier
                 # at launch (WADE must not reimplement that).
