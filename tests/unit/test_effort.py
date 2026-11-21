@@ -209,14 +209,14 @@ class TestResolveEffort:
     def test_excluded_level_for_restricted_tool_returns_none(self) -> None:
         """A tool that supports effort but excludes a level drops it.
 
-        antigravity-cli honors only low/medium/high — an explicit xhigh must
-        not be forwarded (``agy --effort xhigh`` is rejected by the CLI).
+        antigravity-cli honors low/medium/high/xhigh — an explicit max must
+        not be forwarded.
         """
         from wade.models.config import ProjectConfig
         from wade.services.ai_resolution import resolve_effort
 
         config = ProjectConfig()
-        result = resolve_effort("xhigh", config, tool="antigravity-cli")
+        result = resolve_effort("max", config, tool="antigravity-cli")
         assert result is None
 
     def test_supported_level_for_restricted_tool_returns_effort(self) -> None:
@@ -225,8 +225,8 @@ class TestResolveEffort:
         from wade.services.ai_resolution import resolve_effort
 
         config = ProjectConfig()
-        result = resolve_effort("high", config, tool="antigravity-cli")
-        assert result is EffortLevel.HIGH
+        assert resolve_effort("high", config, tool="antigravity-cli") is EffortLevel.HIGH
+        assert resolve_effort("xhigh", config, tool="antigravity-cli") is EffortLevel.XHIGH
 
     def test_config_excluded_level_for_restricted_tool_returns_none(self) -> None:
         """Config-sourced (not just CLI) excluded levels are validated too."""

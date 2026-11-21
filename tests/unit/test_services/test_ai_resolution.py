@@ -560,12 +560,12 @@ class TestChangeEffort:
                 _MODEL_A,
                 tool_explicit=False,
                 model_explicit=False,
-                resolved_effort=EffortLevel.XHIGH,
+                resolved_effort=EffortLevel.MAX,
                 effort_explicit=False,
             )
 
         assert tool == _ANTIGRAVITY_CLI
-        assert effort is None  # xhigh is excluded by antigravity-cli → cleared
+        assert effort is None  # max is excluded by antigravity-cli → cleared
 
     def test_tool_switch_keeps_effort_when_new_tool_honors_level(self) -> None:
         """Switching to a restricted tool keeps a retained level it still honors."""
@@ -611,11 +611,12 @@ class TestValidEffortLevels:
     """valid_effort_levels reflects each tool's crossby supported_efforts."""
 
     def test_antigravity_cli_restricted(self) -> None:
-        """antigravity-cli supports only low/medium/high."""
+        """antigravity-cli supports low/medium/high/xhigh (excludes max)."""
         assert valid_effort_levels("antigravity-cli") == [
             EffortLevel.LOW,
             EffortLevel.MEDIUM,
             EffortLevel.HIGH,
+            EffortLevel.XHIGH,
         ]
 
     def test_claude_supports_all_levels(self) -> None:
